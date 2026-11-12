@@ -71,7 +71,7 @@ implementation returns an explicit error rather than reporting a payment complet
 | R7 | Optional daily/monthly limits | Disabled by default; enforced through signed quotas and persistent counters when enabled (§7). |
 | R8 | Optional attestation expiry | Disabled by default; an enabled lease can require renewal before future sending (§7). |
 | R9 | Compact payment | Canonical binary Payment is at most 10,034 bytes, independent of history (§8). |
-| R10 | Stock OS in the proof | Every transition's issuer-signed credential, recording the platform evidence verified at enrollment or the last renewal, is verified natively by every party that consumes the package. In-circuit, the lineage proof verifies the credential and its certificate in the step that introduces the credential (Bootstrap and RefreshCredential); every other step binds the credential digest and payment key by continuity from that verification (owner decision 2026-10-17, lean lineage). Λ_recv accepts the quoted receiver credential of a Request issued before a renewal by membership of its digest in the wallet's prior-credential array, which RefreshCredential extends with each credential it replaces, instead of re-verifying its signatures (owner decision 2026-11-08, credential continuity). The step proof binds the credential digest (§§2.2, 3.2). Android: hardware key, locked bootloader, verified vendor boot, patch levels and app signing identity, as the attestation records them. iPhone: an App Attest key of this app on genuine Apple hardware, bound to the payment key; no boot, patch or jailbreak field exists. This proves recorded evidence, not live absence of compromise. Load finality has the explicit §6.1 native-verification carve-out: the released app on a stock uncompromised vendor OS verifies CommitQC and receipt inclusion before its hardware-backed payment key signs Advance; the lineage proof does not independently prove BLS finality. Other R10 credential and attestation obligations remain unchanged. |
+| R10 | Stock OS in the proof | Every transition's issuer-signed credential, recording the platform evidence verified at enrollment or the last renewal, is verified natively by every party that consumes the package. In-circuit, the lineage proof verifies the credential and its certificate in the step that introduces the credential (Bootstrap and RefreshCredential); every other step binds the credential digest and payment key by continuity from that verification (owner decision 2026-10-17, lean lineage). The credential also certifies the payment key's comb tables by their commitment, `key_table_commitment`, which the issuer computes natively from the attested key. Λ verifies every in-circuit signature under a payment key against the tables that its wallet's commitment binds; Bootstrap binds the commitment to the credential and every later step carries it by continuity, so no step derives the tables from the key and one set of verifying keys serves every wallet (owner decision 2026-11-12, issuer-certified key tables). Λ_recv accepts the quoted receiver credential of a Request issued before a renewal by membership of its digest in the wallet's prior-credential array, which RefreshCredential extends with each credential it replaces, instead of re-verifying its signatures (owner decision 2026-11-08, credential continuity). The step proof binds the credential digest (§§2.2, 3.2). Android: hardware key, locked bootloader, verified vendor boot, patch levels and app signing identity, as the attestation records them. iPhone: an App Attest key of this app on genuine Apple hardware, bound to the payment key; no boot, patch or jailbreak field exists. This proves recorded evidence, not live absence of compromise. Load finality has the explicit §6.1 native-verification carve-out: the released app on a stock uncompromised vendor OS verifies CommitQC and receipt inclusion before its hardware-backed payment key signs Advance; the lineage proof does not independently prove BLS finality. Other R10 credential and attestation obligations remain unchanged. |
 
 For a payment from A to B, the following define completion:
 
@@ -204,11 +204,15 @@ concern, not a cryptographic limitation or a legal classification made by the co
 The issuer verifies platform evidence and issues a compact signed credential:
 
 `(scheme, asset_incarnation, wallet_id, account_id, payment_key,
-provider_contract, platform_evidence_kind, evidence_digest, app_policy,
-regulatory_policy,
+key_table_commitment, provider_contract, platform_evidence_kind,
+evidence_digest, app_policy, regulatory_policy,
 enrollment_id)`.
 
-`wallet_id` binds the public key and unique incarnation. `provider_contract`
+`wallet_id` binds the public key and unique incarnation.
+`key_table_commitment` commits to the payment key's comb tables (wire §3.1):
+the issuer computes it from the attested payment key, the wallet recomputes it
+before accepting the credential, and every credential of an incarnation
+carries the same value (R10). `provider_contract`
 names the §4 Advance contract and receipt format of the scheme. It is fixed for
 the scheme's lifetime, so app and adapter updates never require reenrollment.
 The credential conveys exactly the evidence verified, including its time and
@@ -788,9 +792,10 @@ check runs.
   - scope, relation identity, operation tag and provider contract, and the
     credential (R10): in-circuit at least at Bootstrap and RefreshCredential,
     and in every step whose route still re-verifies it; a lean step (Load,
-    Send, Unload and Retiring today) carries the credential digest and payment
-    key by continuity, and Λ_recv binds a Request's pre-renewal receiver
-    credential by prior-credential membership (credential continuity, below);
+    Send, Unload and Retiring today) carries the credential digest, payment
+    key and key-table commitment by continuity, and Λ_recv binds a Request's
+    pre-renewal receiver credential by prior-credential membership (credential
+    continuity, below);
   - the predecessor Ω and receipt, or the unique zero-state enrollment base
     case;
   - this step's σ, or for a lean step its transition relation proved directly
@@ -821,6 +826,19 @@ check runs.
     verified in-circuit, with its certificate, by the step that introduced
     it, and was the wallet's credential, so membership carries the same
     assurance as re-verification;
+  - the payment key's comb tables (owner decision 2026-11-12, issuer-certified
+    key tables): `key_table_commitment` (wire §3.1) is a public input of every
+    proof of the wallet's lineage. Bootstrap requires it to equal the value in
+    its credential, whose in-circuit signature covers it; every other step
+    requires it to equal its predecessor's; and RefreshCredential
+    also requires the replacement credential's to equal it. Every in-circuit
+    signature under a payment key reads that key's comb tables from a table
+    bound to the commitment of the key's wallet: for the wallet's own
+    signatures (its τ, and in Λ_recv its Request) the one its lineage carries,
+    and for a counterparty's τ the one that the counterparty's Ω(pred)
+    exposes. No step derives the tables from the key or fixes them in a
+    verifying key. The issuer certifies the commitment as it certifies
+    `payment_key`, so the tables add no trust;
   - exact map membership and nonmembership updates and every root transition,
     unchanged unrelated fields (opening the rest digest) and exact operation
     effects from §§5–7;
@@ -837,12 +855,15 @@ consumes its gross sending quota. Delivery, replay and outbox cleanup cannot
 increase the payer's balance or restore that quota. No substituted app approval
 or arbitrary hardware signature satisfies the receipt interface.
 
-Ω publicly exposes: the head commitment; `wallet_id`, credential digest and
-`payment_key`; scheme and relation identity; the policy facts (lifecycle,
-policy epoch and enabled-controls mask); and the lineage-adjusted
-`burned_total`, pending-outgoing root and credit-digest root. Ω's public digest
-also binds the lineage verifying-key digest, which every native verifier
-recomputes with the artifact-set constant. Every consumer of
+Ω publicly exposes: the head commitment; `wallet_id`, credential digest,
+`payment_key` and `key_table_commitment`; scheme and relation identity; the
+policy facts (lifecycle, policy epoch and enabled-controls mask); and the
+lineage-adjusted `burned_total`, pending-outgoing root and credit-digest root.
+Ω's public digest also binds the lineage verifying-key digest, which every
+native verifier recomputes with the artifact-set constant. Ω's bytes do not
+carry `key_table_commitment`, which the credential digest binds: a native
+verifier takes it from the credential it verifies for Ω's wallet, whose
+`payment_key` is Ω's, and Λ takes it from the Ω it verifies. Every consumer of
 a package carrying Ω(pred), natively and in Λ, checks before mutation:
 
 - `σ.predecessor = Ω.head` and `statement.credential_digest = Ω.credential`;
@@ -945,7 +966,8 @@ Post-commit failure is contained:
   input the native verifier accepts.
 
 The zero-state proof binds its unique enrolled incarnation, zero balance and
-`burned_total`, empty maps and chains, and zero ordinals. The provider installs
+`burned_total`, empty maps and chains, zero ordinals, and its credential's
+`key_table_commitment` as the lineage's table commitment. The provider installs
 this base state once, by
 Advance from an enrollment marker made durable with the payment key before the
 credential request. From then until custody is deleted, the key is always
@@ -2332,6 +2354,16 @@ genuine multi-hop proofs and physical carriers. It also covers:
   receiver credential absent from the prior-credential array, presented at
   another `renewal_sequence` or with an altered byte, which is rejected; and a
   RefreshCredential at the array's 2^16 capacity, which is refused;
+- the payment key's comb tables: shared native and in-circuit vectors for the
+  tables and `key_table_commitment` of fixed keys; a credential whose
+  `key_table_commitment` does not recompute from its `payment_key`, which the
+  issuer's pre-delivery check and the wallet's E6 intake reject; a lineage
+  proof whose table holds another key's tables, a step whose commitment
+  differs from its predecessor's, a Bootstrap whose commitment differs from
+  its credential's, an Ω checked under another wallet's commitment, and a
+  replacement credential with another commitment, each rejected; and two
+  wallets with different keys proving every operation under the same
+  verifying keys;
 - a σ successor root that differs from the authenticated store, a stale native
   store against the head roots, and a receipt that fails self-verification;
 - crash and restore between commit and fold, and fold-witness loss;

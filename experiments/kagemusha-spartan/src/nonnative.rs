@@ -16,8 +16,10 @@
 //! - The digits array holds both scalars' signed-digit bits (boolean, 16 per
 //!   scalar and step) and a Horner accumulator, giving `u = 2 B - (2^256 - 1)`
 //!   in three limbs; the four table selections per step are lookups whose
-//!   index is read from these bits, into one merged table of the wallet key's
-//!   and G's comb points (constant columns).
+//!   index is read from these bits: the two of the wallet key's tables into
+//!   the wallet table (a witness table of 512 rows, the circuit's wallet row,
+//!   whose commitment the instance names), G's two into G's table (constant
+//!   columns).
 //! - Instances are indexed slot-major, `r = slot * 16 + step`, so a check's
 //!   inputs are links whose maps factor into a slot table and a step relation
 //!   (the same step, or the previous step's final point).
@@ -42,7 +44,25 @@ const L: usize = 88;
 pub(crate) const CHUNK: usize = 11;
 pub const STEPS: usize = 16;
 pub const RANGE_TABLE: u32 = 0;
+/// G's comb tables (constant columns).
 pub const POINT_TABLE: u32 = 1;
+/// The wallet key's comb tables: a witness table, the wallet row.
+pub const WALLET_TABLE: u32 = 7;
+
+/// The lookup table holding one signature family's public key multiples.
+/// Families for different keys must use different table ids, distinct from
+/// every other table in their circuit. The range and generator tables remain
+/// shared.
+#[derive(Clone, Copy, Debug)]
+pub enum KeyTable {
+    /// Witness values. The caller must authenticate the table commitment,
+    /// as the wallet row does; this choice alone does not authenticate a key.
+    Witness { id: u32 },
+    /// Circuit constants, authenticated by the circuit's verification key.
+    /// Changing this public key changes that circuit; this is not a mechanism
+    /// for accepting a newly certified issuer in an existing circuit.
+    Fixed { id: u32 },
+}
 
 pub(crate) fn pow2(k: usize) -> BigUint {
     BigUint::one() << k
@@ -962,10 +982,11 @@ fn extra_checks(c: &Point) -> Vec<CheckSpec> {
     ]
 }
 
-/// The comb's arrays (family `fam`, one instance per signature): value,
-/// selection, one-product checks, four-product checks, digits and integer
-/// additions; then the range table and the merged point table (global family
-/// `gfam`).
+/// The comb's arrays (family `fam`, one instance per signature): value, the
+/// public key's selections, one-product checks, four-product checks, digits
+/// and integer additions; then the range table and G's point table (global
+/// family `gfam`), G's selections, and the public-key table (global; a
+/// witness table for the wallet row or explicitly fixed circuit material).
 pub struct Comb {
     pub arrays: Vec<Array<Fp>>,
     pub tables: Vec<(usize, u32)>,
@@ -987,6 +1008,34 @@ pub const A_DIGITS: usize = 4;
 pub const A_ADD: usize = 5;
 pub const A_RANGE: usize = 6;
 pub const A_TABLE: usize = 7;
+pub const A_SELG: usize = 8;
+/// The family's public-key table; the default comb uses the wallet row.
+pub const A_WTABLE: usize = 9;
+
+/// The wallet table's cells per row: the row (`256 t + index`), then x's and
+/// y's limbs.
+pub const WALLET_CELLS: usize = 7;
+/// The wallet table's rows (two tables of 256 entries).
+pub const WALLET_ROWS: usize = 512;
+
+/// The wallet table's values, cell-major (`WALLET_CELLS` vectors of
+/// `WALLET_ROWS`): the wallet key's two comb tables (m = 16).
+pub fn wallet_table_values(q: &Point) -> Vec<Vec<Fp>> {
+    let qt = crate::operation::comb_tables(q, 16);
+    let mut vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
+    for (t, entries) in qt.iter().enumerate() {
+        for (idx, pt) in entries.iter().enumerate() {
+            let row = t * 256 + idx;
+            vals[0][row] = Fp::from(row as u64);
+            let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
+            for k in 0..3 {
+                vals[1 + k][row] = fp_u(&xl[k]);
+                vals[4 + k][row] = fp_u(&yl[k]);
+            }
+        }
+    }
+    vals
+}
 
 /// Digit bit `K` of a step sits in accumulator limb `ACC_LIMB[K]` with
 /// weight `2^(16 K - 88 ACC_LIMB[K])`.
@@ -994,8 +1043,10 @@ fn acc_limb(k: usize) -> usize {
     (16 * k) / L
 }
 
-/// Builds the comb from array index `first` for `(Q, z, r, s)` per signature
-/// (one wallet key per family: its tables are constant columns here).
+/// Builds the wallet comb from array index `first` for `(Q, z, r, s)` per
+/// signature, using the wallet witness table (`WALLET_TABLE`). The caller
+/// authenticates its commitment. Every input in this family has the same
+/// public key.
 pub fn comb(
     first: usize,
     fam: usize,
@@ -1003,6 +1054,43 @@ pub fn comb(
     gfam: usize,
     inputs: &[(Point, BigUint, BigUint, BigUint)],
 ) -> Comb {
+    comb_with_key_table(
+        first,
+        fam,
+        pi,
+        gfam,
+        inputs,
+        KeyTable::Witness { id: WALLET_TABLE },
+    )
+}
+
+/// Builds one signature family with its own public-key table. Compose
+/// separate families with distinct table ids to check signatures from
+/// different keys in the same circuit. This does not check a signer
+/// certificate or bind a witness table to an authority; the caller must do
+/// so before using a witness table for issuer or root signatures.
+pub fn comb_with_key_table(
+    first: usize,
+    fam: usize,
+    pi: usize,
+    gfam: usize,
+    inputs: &[(Point, BigUint, BigUint, BigUint)],
+    key_table: KeyTable,
+) -> Comb {
+    assert!(
+        !inputs.is_empty(),
+        "a comb family needs at least one signature"
+    );
+    let (key_table_id, key_table_fixed) = match key_table {
+        KeyTable::Witness { id } => (id, false),
+        KeyTable::Fixed { id } => (id, true),
+    };
+    assert!(
+        key_table_id != RANGE_TABLE
+            && key_table_id != POINT_TABLE
+            && key_table_id < crate::uniform::COPY_TABLE,
+        "a public-key table must not alias a shared or reserved table"
+    );
     let p = p256::p();
     let nn = p256::n();
     let m = 16usize;
@@ -1036,18 +1124,20 @@ pub fn comb(
     let gt = crate::operation::comb_tables(&p256::generator(), m);
     let qt = crate::operation::comb_tables(&inputs[0].0, m);
     for (q, _, _, _) in inputs {
-        assert_eq!(q, &inputs[0].0, "one wallet key per comb family");
+        assert_eq!(q, &inputs[0].0, "one public key per comb family");
     }
     let tables: Vec<&Vec<Point>> = vec![&qt[0], &qt[1], &gt[0], &gt[1]];
+    let selg_a = at(A_SELG);
     // Selection j reads scalar u2 (digit slot 1) for the key's tables and u1
     // (slot 0) for G's; its index bits are the digits' K = 8 (j % 2) + k.
     let scalar_of = |j: usize| if j < 2 { 1usize } else { 0 };
     let (rho_v, rho_s, rho_1, rho_4, rho_d, rho_a) =
-        (8usize, 6usize, 8usize, 6usize, 5usize, 2usize);
+        (8usize, 5usize, 8usize, 6usize, 5usize, 2usize);
     let n1 = one_specs.len() * STEPS + extra_specs.len();
     let vcount = value_cells_count();
     let mut value = vec![vec![Fp::from(0u64); slots << rho_v]; vcount];
     let mut sel = vec![vec![Fp::from(0u64); slots << rho_s]; 6];
+    let mut selg = vec![vec![Fp::from(0u64); slots << rho_s]; 6];
     let mut chk1 = vec![vec![Fp::from(0u64); slots << rho_1]; s1.cells];
     let mut chk4 = vec![vec![Fp::from(0u64); slots << rho_4]; s4.cells];
     let mut digits = vec![vec![Fp::from(0u64); slots << rho_d]; 16 + 3];
@@ -1118,11 +1208,12 @@ pub fn comb(
             ];
             let e: Vec<Point> = (0..4).map(|j| tables[j][idx[j]].clone()).collect();
             for j in 0..4 {
-                let rr = (sig << rho_s) | (j << 4) | step;
+                let rr = (sig << rho_s) | ((j % 2) << 4) | step;
+                let store = if j < 2 { &mut sel } else { &mut selg };
                 let (xl, yl) = (limbs(&e[j].x), limbs(&e[j].y));
                 for k in 0..3 {
-                    sel[k][rr] = fp_u(&xl[k]);
-                    sel[3 + k][rr] = fp_u(&yl[k]);
+                    store[k][rr] = fp_u(&xl[k]);
+                    store[3 + k][rr] = fp_u(&yl[k]);
                 }
             }
             // double_add(acc, e0) = 2 acc + e0, then + e1, e2, e3.
@@ -1312,11 +1403,13 @@ pub fn comb(
             consts: [vec![zero; n], vec![zero; n], vec![zero; n]],
         };
         for q in 0..width {
-            for class in 0..7 {
+            for class in 0..9 {
                 let target = match class {
                     0 | 3 | 4 | 5 => (value_a, 0),
                     1 => (sel_a, 0),
                     2 => (sel_a, 3),
+                    7 => (selg_a, 0),
+                    8 => (selg_a, 3),
                     _ => (digits_a, 16),
                 };
                 let mut map = vec![None; n];
@@ -1326,8 +1419,13 @@ pub fn comb(
                     let Some(s) = list.get(q) else { continue };
                     let to = match (&s.kind, class, step) {
                         (Kind::Value, 0, Some(st)) => (s.slot << 4) | st,
-                        (Kind::Sel(0), 1, Some(st)) | (Kind::Sel(1), 2, Some(st)) => {
+                        (Kind::Sel(0), 1, Some(st)) | (Kind::Sel(1), 2, Some(st)) if s.slot < 2 => {
                             (s.slot << 4) | st
+                        }
+                        (Kind::Sel(0), 7, Some(st)) | (Kind::Sel(1), 8, Some(st))
+                            if s.slot >= 2 =>
+                        {
+                            ((s.slot - 2) << 4) | st
                         }
                         (Kind::Acc, 3, Some(st)) if *st > 0 => ((FINAL_X + s.slot) << 4) | (st - 1),
                         (Kind::Final, 4, None) => ((FINAL_X + s.slot) << 4) | (STEPS - 1),
@@ -1389,16 +1487,19 @@ pub fn comb(
     let (r1, l1) = build_checks(&s1, &instances(&one_specs, &extra_specs), rho_1);
     let (r4, l4) = build_checks(&s4, &instances(&four_specs, &[]), rho_4);
     let (vr, vl) = value_template(1 << rho_v);
-    // Selection: (table j, index from the digit bits, limbs) in the merged table.
-    let sel_lookup = {
+    // Selections: (the table's row 256 t + index from the digit bits, limbs),
+    // the wallet key's tables (j = 0, 1) in the wallet table, G's (j = 2, 3)
+    // in G's table; instance (t << 4) | step with t = j % 2.
+    let sel_lookup = |half: usize, table: u32| {
         let ns = 1usize << rho_s;
         let mut index: Lin<Fp> = Vec::new();
         for k in 0..16 {
             let mut map = vec![None; ns];
-            for j in 0..4 {
-                if k / 8 == j % 2 {
+            for tt in 0..2 {
+                let j = 2 * half + tt;
+                if k / 8 == tt {
                     for step in 0..STEPS {
-                        map[(j << 4) | step] = Some((scalar_of(j) << 4) | step);
+                        map[(tt << 4) | step] = Some((scalar_of(j) << 4) | step);
                     }
                 }
             }
@@ -1411,14 +1512,14 @@ pub fn comb(
                 coef: vec![Fp::from(1u64 << (k % 8)); ns],
             });
         }
-        let mut t = vec![
-            constant((0..ns).map(|r| Fp::from((r >> 4) as u64)).collect()),
-            compact(index),
-        ];
+        let mut t = vec![plus(
+            &constant((0..ns).map(|r| Fp::from(256 * (r >> 4) as u64)).collect()),
+            &compact(index),
+        )];
         for k in 0..6 {
             t.push(own(k, ns));
         }
-        (POINT_TABLE, t)
+        (table, t)
     };
     // Digits: booleanity and the Horner rows.
     let (dr, dwidths) = {
@@ -1516,16 +1617,16 @@ pub fn comb(
         }
         rows
     };
-    let mut table_vals = vec![vec![Fp::from(0u64); 1024]; 8];
-    for (t, entries) in tables.iter().enumerate() {
+    // G's table: rows 256 t + index for G's two tables.
+    let mut table_vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
+    for (t, entries) in tables[2..].iter().enumerate() {
         for (idx, pt) in entries.iter().enumerate() {
             let row = t * 256 + idx;
-            table_vals[0][row] = Fp::from(t as u64);
-            table_vals[1][row] = Fp::from(idx as u64);
+            table_vals[0][row] = Fp::from(row as u64);
             let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
             for k in 0..3 {
-                table_vals[2 + k][row] = fp_u(&xl[k]);
-                table_vals[5 + k][row] = fp_u(&yl[k]);
+                table_vals[1 + k][row] = fp_u(&xl[k]);
+                table_vals[4 + k][row] = fp_u(&yl[k]);
             }
         }
     }
@@ -1545,9 +1646,9 @@ pub fn comb(
             name: "comb selection",
             family: fam,
             rho: rho_s,
-            r_count: 4 * STEPS,
+            r_count: 2 * STEPS,
             fixed: false,
-            lookups: vec![sel_lookup],
+            lookups: vec![sel_lookup(0, key_table_id)],
             widths: vec![88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
             values: sel,
@@ -1610,18 +1711,48 @@ pub fn comb(
         Array {
             name: "point table",
             family: gfam,
-            rho: 10,
-            r_count: 1024,
+            rho: 9,
+            r_count: WALLET_ROWS,
             fixed: true,
             lookups: Vec::new(),
-            widths: vec![2, 8, 88, 88, 80, 88, 88, 80],
+            widths: vec![9, 88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
             values: table_vals,
+        },
+        Array {
+            name: "comb selection G",
+            family: fam,
+            rho: rho_s,
+            r_count: 2 * STEPS,
+            fixed: false,
+            lookups: vec![sel_lookup(1, POINT_TABLE)],
+            widths: vec![88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: selg,
+        },
+        Array {
+            name: if key_table_id == WALLET_TABLE && !key_table_fixed {
+                "wallet table"
+            } else {
+                "public-key table"
+            },
+            family: gfam,
+            rho: 9,
+            r_count: WALLET_ROWS,
+            fixed: key_table_fixed,
+            lookups: Vec::new(),
+            widths: vec![9, 88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: wallet_table_values(&inputs[0].0),
         },
     ];
     Comb {
         arrays,
-        tables: vec![(at(A_RANGE), RANGE_TABLE), (at(A_TABLE), POINT_TABLE)],
+        tables: vec![
+            (at(A_RANGE), RANGE_TABLE),
+            (at(A_TABLE), POINT_TABLE),
+            (at(A_WTABLE), key_table_id),
+        ],
         results,
         offset,
         check_counts: (one_specs.len(), four_specs.len(), extra_specs.len()),
@@ -2356,6 +2487,776 @@ pub fn sample_binding(count: usize) -> (BigUint, BigUint, Vec<u128>) {
     )
 }
 
+// ------------------------------------------------- Bootstrap's key tables
+
+/// The table id of Bootstrap's key points, a witness table: the bases
+/// `B_k` (rows 0..16) and their doubles `2 B_k` (rows 16..32).
+pub const KEY_POINTS_TABLE: u32 = 6;
+
+/// Array offsets of the key-table derivation from `first`.
+pub const KT_DVAL: usize = 0;
+pub const KT_D1: usize = 1;
+pub const KT_D2: usize = 2;
+pub const KT_POINTS: usize = 3;
+pub const KT_IVAL: usize = 4;
+pub const KT_I1: usize = 5;
+pub const KT_I4: usize = 6;
+pub const KT_GSEL: usize = 7;
+pub const KT_GVAL: usize = 8;
+pub const KT_G1: usize = 9;
+pub const KT_G4: usize = 10;
+
+/// The doubling chain `P_(s + 1) = 2 P_s` from `P_0 = Q`: the bases
+/// `B_k = 2^(16 k) Q = P_(16 k)` and their doubles `2 B_k = P_(16 k + 1)`
+/// all lie on it, the last one at `s = 241`.
+pub const KT_DOUBLINGS: usize = 241;
+
+/// Bootstrap's derivation of a wallet's comb tables from its key (Lever 1).
+pub struct KeyTables {
+    pub arrays: Vec<Array<Fp>>,
+    pub tables: Vec<(usize, u32)>,
+    /// The derived tables: `operation::comb_tables(Q, 16)`.
+    pub entries: Vec<Vec<Point>>,
+    /// Per table `j`, the Gray step whose sum is entry `h` (the Gray
+    /// values' instance `(slot << 9) | (j << 8) | step[h]`).
+    pub step_of: Vec<Vec<usize>>,
+    /// Doublings, additions, then the one-, two- and four-product checks.
+    pub counts: [usize; 5],
+}
+
+/// An already authenticated, canonical P-256 public key, represented by
+/// little-endian limbs of widths 88, 88 and 80. The source and table
+/// derivation must belong to the same global family.
+///
+/// This descriptor supplies no authority by itself. For an issuer, the
+/// caller must bind these cells to the key in a verified root certificate.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyLimbSource {
+    pub array: usize,
+    pub x: [usize; 3],
+    pub y: [usize; 3],
+    pub instance: usize,
+}
+
+/// Bind a `key_tables` derivation to an authenticated key and to the exact
+/// witness table consumed by a `comb_with_key_table` signature family.
+///
+/// `derivation_first` is the first array returned by `key_tables`;
+/// `witness_table` is the comb's absolute `A_WTABLE` array. This adds ordinary
+/// constraints, not a new table commitment or certificate field. The table
+/// stays in the witness: it must not also be installed as an omitted wallet
+/// row. Its lookup id remains the caller's distinct `KeyTable::Witness` id.
+///
+/// Every row index is fixed, and all six coordinate limbs are linked to the
+/// matching Gray-walk output. Merely checking the table's native construction
+/// or its fingerprint outside the relation would not establish this binding.
+pub fn bind_derived_key_table(
+    arrays: &mut [Array<Fp>],
+    derivation_first: usize,
+    witness_table: usize,
+    source: KeyLimbSource,
+) {
+    use ff::Field;
+
+    let chain = derivation_first + KT_DVAL;
+    let walk = derivation_first + KT_GVAL;
+    let family = arrays[chain].family;
+    assert_eq!(arrays[source.array].family, family, "key source family");
+    assert_eq!(arrays[walk].family, family, "key derivation family");
+    assert_eq!(arrays[witness_table].family, family, "key table family");
+    assert!(
+        !arrays[witness_table].fixed,
+        "a derived key table must remain a witness table"
+    );
+    assert_eq!(arrays[witness_table].rho, 9);
+    assert_eq!(arrays[witness_table].r_count, WALLET_ROWS);
+    assert_eq!(arrays[witness_table].cells(), WALLET_CELLS);
+    assert!(source.instance < arrays[source.array].r_count);
+    for cell in source.x.into_iter().chain(source.y) {
+        assert!(cell < arrays[source.array].cells());
+    }
+    let n = 1usize << arrays[chain].rho;
+    for (slot, cells) in [(1usize, source.x), (2, source.y)] {
+        let row = slot << 8;
+        assert!(row < arrays[chain].r_count);
+        let mut selected = vec![Fp::ZERO; n];
+        selected[row] = Fp::ONE;
+        let mut map = vec![None; n];
+        map[row] = Some(source.instance);
+        for (limb, cell) in cells.into_iter().enumerate() {
+            arrays[chain].rows.push([
+                constant(selected.clone()),
+                plus(
+                    &own(limb, n),
+                    &link(source.array, cell, map.clone(), -Fp::ONE),
+                ),
+                Vec::new(),
+            ]);
+        }
+    }
+    // The derivation visits h = gray(t) XOR 255 at step t. This inverse
+    // mapping is circuit material, never a witness-selected permutation.
+    let mut step_of = [0usize; 256];
+    for t in 0..256 {
+        step_of[(t ^ (t >> 1)) ^ 255] = t;
+    }
+    let ones = constant(vec![Fp::ONE; WALLET_ROWS]);
+    arrays[witness_table].rows.push([
+        plus(
+            &own(0, WALLET_ROWS),
+            &constant((0..WALLET_ROWS).map(|r| -Fp::from(r as u64)).collect()),
+        ),
+        ones.clone(),
+        Vec::new(),
+    ]);
+    for (cell, slot) in [(1usize, 1usize), (4, 2)] {
+        let map: Vec<_> = (0..WALLET_ROWS)
+            .map(|r| Some((slot << 9) | ((r >> 8) << 8) | step_of[r & 255]))
+            .collect();
+        for limb in 0..3 {
+            arrays[witness_table].rows.push([
+                plus(
+                    &own(cell + limb, WALLET_ROWS),
+                    &link(walk, limb, map.clone(), -Fp::ONE),
+                ),
+                ones.clone(),
+                Vec::new(),
+            ]);
+        }
+    }
+}
+
+/// A read of a non-native value by a key-table check: (array, first limb
+/// cell, instance, coefficient).
+type KRead = (usize, usize, usize, i64);
+
+/// One input of a key-table check: reads plus constant values, each with
+/// its coefficient.
+#[derive(Clone, Default)]
+struct KPort {
+    reads: Vec<KRead>,
+    consts: Vec<(BigUint, i64)>,
+}
+
+fn kport(reads: &[KRead]) -> KPort {
+    KPort {
+        reads: reads.to_vec(),
+        consts: Vec::new(),
+    }
+}
+
+/// One key-table check: `sum_i pc_i a_i b_i + lin + cst = 0 (mod p)`.
+#[derive(Clone)]
+struct KCheck {
+    a: Vec<KPort>,
+    b: Vec<KPort>,
+    pc: Vec<i64>,
+    lin: KPort,
+    cst: i64,
+}
+
+/// A reader of one coordinate of a key-table point: its read at a
+/// coefficient.
+type Rd<'a> = &'a dyn Fn(i64) -> KRead;
+
+/// The four checks of an addition `o = a + c` with slope `l`: the chord,
+/// the sum's x and y, then the second slope equation (both points on the
+/// curve), which leaves equal points only the tangent.
+#[allow(clippy::too_many_arguments)]
+fn kt_addition(
+    l: Rd<'_>,
+    ax: Rd<'_>,
+    ay: Rd<'_>,
+    cx: Rd<'_>,
+    cy: Rd<'_>,
+    ox: Rd<'_>,
+    oy: Rd<'_>,
+) -> [KCheck; 4] {
+    [
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[cx(1), ax(-1)])],
+            pc: vec![1],
+            lin: kport(&[cy(-1), ay(1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[l(1)])],
+            pc: vec![1],
+            lin: kport(&[ax(-1), cx(-1), ox(-1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[ax(1), ox(-1)])],
+            pc: vec![1],
+            lin: kport(&[ay(-1), oy(-1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![
+                kport(&[l(1)]),
+                kport(&[ax(1)]),
+                kport(&[ax(1)]),
+                kport(&[cx(1)]),
+            ],
+            b: vec![
+                kport(&[ay(1), cy(1)]),
+                kport(&[ax(1)]),
+                kport(&[cx(1)]),
+                kport(&[cx(1)]),
+            ],
+            pc: vec![1, -1, -1, -1],
+            lin: KPort::default(),
+            cst: 3,
+        },
+    ]
+}
+
+/// The smallest `rho` with `count <= 2^rho`.
+fn rho_of(count: usize) -> usize {
+    count.max(1).next_power_of_two().trailing_zeros() as usize
+}
+
+/// A value array (three limbs from range-checked chunks per instance); idle
+/// instances (`None`) hold zero.
+fn kt_value_array(name: &'static str, fam: usize, vals: &[Option<BigUint>]) -> Array<Fp> {
+    let rho = rho_of(vals.len());
+    let n = 1usize << rho;
+    let (rows, lookups) = value_template(n);
+    let mut values = vec![vec![Fp::from(0u64); n]; value_cells_count()];
+    for (r, v) in vals.iter().enumerate() {
+        if let Some(v) = v {
+            for (k, cell) in value_cells(v).into_iter().enumerate() {
+                values[k][r] = cell;
+            }
+        }
+    }
+    Array {
+        name,
+        family: fam,
+        rho,
+        r_count: vals.len(),
+        fixed: false,
+        lookups,
+        widths: value_widths(),
+        rows,
+        values,
+    }
+}
+
+/// A check array of `shape` over `checks`, an idle instance (`None`) having
+/// every input zero, which holds trivially. A port's reads are links grouped
+/// by (array, first limb cell, position in the port); `value_of(array,
+/// first, instance)` gives a read's native value.
+fn kt_check_array(
+    name: &'static str,
+    fam: usize,
+    shape: &CheckShape,
+    checks: &[Option<KCheck>],
+    value_of: &dyn Fn(usize, usize, usize) -> BigUint,
+) -> Array<Fp> {
+    let rho = rho_of(checks.len());
+    let n = 1usize << rho;
+    let zero = Fp::from(0u64);
+    let port = |get: &dyn Fn(&KCheck) -> &KPort| -> Port {
+        let width = checks
+            .iter()
+            .flatten()
+            .map(|c| get(c).reads.len())
+            .max()
+            .unwrap_or(0);
+        let mut links = Vec::new();
+        for q in 0..width {
+            let mut groups: Vec<((usize, usize), Vec<Option<usize>>, Vec<Fp>)> = Vec::new();
+            for (r, c) in checks.iter().enumerate() {
+                let Some(c) = c else { continue };
+                let Some(&(a, first, inst, coef)) = get(c).reads.get(q) else {
+                    continue;
+                };
+                let g = match groups.iter().position(|g| g.0 == (a, first)) {
+                    Some(i) => i,
+                    None => {
+                        groups.push(((a, first), vec![None; n], vec![zero; n]));
+                        groups.len() - 1
+                    }
+                };
+                groups[g].1[r] = Some(inst);
+                groups[g].2[r] = fp_i(&BigInt::from(coef));
+            }
+            for ((a, first), map, coef) in groups {
+                links.push((a, first, map, coef));
+            }
+        }
+        let mut consts = [vec![zero; n], vec![zero; n], vec![zero; n]];
+        for (r, c) in checks.iter().enumerate() {
+            let Some(c) = c else { continue };
+            for (x, coef) in &get(c).consts {
+                let l = limbs(x);
+                for k in 0..3 {
+                    consts[k][r] += fp_i(&(BigInt::from(l[k].clone()) * BigInt::from(*coef)));
+                }
+            }
+        }
+        Port { links, consts }
+    };
+    let products = shape.products;
+    let a: Vec<Port> = (0..products).map(|i| port(&|c| &c.a[i])).collect();
+    let b: Vec<Port> = (0..products).map(|i| port(&|c| &c.b[i])).collect();
+    let lin = port(&|c| &c.lin);
+    let mut pc = vec![vec![zero; n]; products];
+    let mut cst = vec![zero; n];
+    for (r, c) in checks.iter().enumerate() {
+        let Some(c) = c else { continue };
+        assert_eq!(c.pc.len(), products, "{name}: one coefficient per product");
+        for i in 0..products {
+            pc[i][r] = fp_i(&BigInt::from(c.pc[i]));
+        }
+        cst[r] = fp_i(&BigInt::from(c.cst));
+    }
+    let (rows, lookups) = shape.template(&a, &b, &pc, &lin, &cst, &vec![0; n], n);
+    let eval = |pt: &KPort| -> [BigInt; 3] {
+        let mut out: [BigInt; 3] = Default::default();
+        for &(a, first, inst, coef) in &pt.reads {
+            let l = limbs(&value_of(a, first, inst));
+            for k in 0..3 {
+                out[k] += BigInt::from(l[k].clone()) * BigInt::from(coef);
+            }
+        }
+        for (x, coef) in &pt.consts {
+            let l = limbs(x);
+            for k in 0..3 {
+                out[k] += BigInt::from(l[k].clone()) * BigInt::from(*coef);
+            }
+        }
+        out
+    };
+    let mut values = vec![vec![zero; n]; shape.cells];
+    let zeros: Vec<[BigInt; 3]> = vec![Default::default(); products];
+    for r in 0..checks.len() {
+        let cells = match &checks[r] {
+            Some(c) => {
+                let av: Vec<[BigInt; 3]> = c.a.iter().map(eval).collect();
+                let bv: Vec<[BigInt; 3]> = c.b.iter().map(eval).collect();
+                shape.witness(&av, &bv, &c.pc, &eval(&c.lin), c.cst, 0)
+            }
+            None => shape.witness(
+                &zeros,
+                &zeros,
+                &vec![0; products],
+                &Default::default(),
+                0,
+                0,
+            ),
+        };
+        for (k, cell) in cells.into_iter().enumerate() {
+            values[k][r] = cell;
+        }
+    }
+    Array {
+        name,
+        family: fam,
+        rho,
+        r_count: checks.len(),
+        fixed: false,
+        lookups,
+        widths: shape.widths(),
+        rows,
+        values,
+    }
+}
+
+/// Bootstrap's derivation of the wallet's comb tables (m = 16) from its key
+/// `Q`, as uniform arrays from index `first` in family `fam` (range lookups
+/// into the circuit's range table):
+///
+/// - the doubling chain (`KT_DOUBLINGS` doublings), with `Q` on the curve:
+///   value slots per step `s` are the slope (`t = x^2` at `s = 0`), `x`, `y`;
+///   each doubling checks `l (2 y) - 3 x^2 + 3 = 0`, `x' = l^2 - 2 x` and
+///   `y' = l (x - x') - y`;
+/// - the key points, a witness table of the bases and their doubles, tied to
+///   the chain;
+/// - per table `j` (bases `8 j..8 j + 8`), the sum `S_j` of its bases by
+///   seven additions (six in the initial array, the seventh at the Gray
+///   walk's step 0): `S_j` is entry 255;
+/// - the Gray walk, steps 1..255: step `t` flips bit `k_t` of the index
+///   (`h_t = gray(t) ^ 255`) and adds `+-2 B_(8 j + k_t)`, so that every
+///   entry `sum_k (2 bit_k(h) - 1) B_(8 j + k)` is one step's sum. The addend
+///   is looked up in the key points by a per-step index; its sign is a
+///   per-step coefficient on its `y`.
+///
+/// Every addition checks both slope equations (the chord and, with both
+/// points on the curve, `l (a.y + c.y) = a.x^2 + a.x c.x + c.x^2 - 3`), so
+/// equal points can only double.
+pub fn key_tables(first: usize, fam: usize, q: &Point) -> KeyTables {
+    let p = p256::p();
+    let at = |k: usize| first + k;
+    // The native chain.
+    let mut dp: Vec<Point> = vec![q.clone()];
+    let mut dl: Vec<BigUint> = vec![&q.x * &q.x % &p];
+    for s in 1..=KT_DOUBLINGS {
+        let prev = dp[s - 1].clone();
+        dl.push(slope(&prev, &prev));
+        dp.push(p256::double(&prev));
+    }
+    let step_of_point = |i: usize| if i < 16 { 16 * i } else { 16 * (i - 16) + 1 };
+    let key_point = |i: usize| dp[step_of_point(i)].clone();
+    // The additions: (the addend c before its sign, the sign, slope, sum),
+    // per table.
+    struct Add {
+        c: Point,
+        sign: i64,
+        lam: BigUint,
+        out: Point,
+    }
+    let add = |a: &Point, c: &Point, sign: i64| -> Add {
+        let cs = if sign < 0 { p256::neg(c) } else { c.clone() };
+        let lam = slope(a, &cs);
+        let out =
+            p256::add_any(Some(a.clone()), Some(cs)).expect("a table entry is not the identity");
+        Add {
+            c: c.clone(),
+            sign,
+            lam,
+            out,
+        }
+    };
+    let mut init: Vec<Vec<Add>> = Vec::new();
+    let mut gray: Vec<Vec<Add>> = Vec::new();
+    let mut gray_row: Vec<Vec<usize>> = Vec::new();
+    let mut entries: Vec<Vec<Point>> = Vec::new();
+    let mut step_of: Vec<Vec<usize>> = Vec::new();
+    for j in 0..2 {
+        let mut cur = key_point(8 * j);
+        let mut iv = Vec::new();
+        for s in 0..6 {
+            let x = add(&cur, &key_point(8 * j + s + 1), 1);
+            cur = x.out.clone();
+            iv.push(x);
+        }
+        let (mut gv, mut rows) = (Vec::new(), Vec::new());
+        let mut table: Vec<Option<Point>> = vec![None; 256];
+        let mut steps = vec![0usize; 256];
+        let (mut h, mut prev_gray) = (255usize, 0usize);
+        for t in 0..256usize {
+            let (row, sign) = if t == 0 {
+                (8 * j + 7, 1)
+            } else {
+                let g = t ^ (t >> 1);
+                let k = (g ^ prev_gray).trailing_zeros() as usize;
+                prev_gray = g;
+                h ^= 1 << k;
+                (16 + 8 * j + k, if h & (1 << k) != 0 { 1 } else { -1 })
+            };
+            let x = add(&cur, &key_point(row), sign);
+            cur = x.out.clone();
+            assert!(table[h].is_none(), "each entry once");
+            table[h] = Some(cur.clone());
+            steps[h] = t;
+            gv.push(x);
+            rows.push(row);
+        }
+        init.push(iv);
+        gray.push(gv);
+        gray_row.push(rows);
+        entries.push(table.into_iter().map(|e| e.expect("every entry")).collect());
+        step_of.push(steps);
+    }
+    assert_eq!(
+        entries,
+        crate::operation::comb_tables(q, 16),
+        "the walk derives the comb tables"
+    );
+    // Native values by (array, first limb cell, instance).
+    let mut native: std::collections::HashMap<(usize, usize, usize), BigUint> =
+        std::collections::HashMap::new();
+    let n_d = 256usize;
+    let mut dvals: Vec<Option<BigUint>> = vec![None; 3 * n_d];
+    for s in 0..=KT_DOUBLINGS {
+        for (slot, x) in [&dl[s], &dp[s].x, &dp[s].y].into_iter().enumerate() {
+            dvals[(slot << 8) | s] = Some(x.clone());
+            native.insert((at(KT_DVAL), 0, (slot << 8) | s), x.clone());
+        }
+    }
+    let mut ivals: Vec<Option<BigUint>> = vec![None; 48];
+    for (j, iv) in init.iter().enumerate() {
+        for (s, x) in iv.iter().enumerate() {
+            for (slot, v) in [&x.lam, &x.out.x, &x.out.y].into_iter().enumerate() {
+                let r = (slot << 4) | (j << 3) | s;
+                ivals[r] = Some(v.clone());
+                native.insert((at(KT_IVAL), 0, r), v.clone());
+            }
+        }
+    }
+    let mut gvals: Vec<Option<BigUint>> = vec![None; 3 << 9];
+    let mut gsel = vec![vec![Fp::from(0u64); 512]; 6];
+    for (j, gv) in gray.iter().enumerate() {
+        for (t, x) in gv.iter().enumerate() {
+            for (slot, v) in [&x.lam, &x.out.x, &x.out.y].into_iter().enumerate() {
+                let r = (slot << 9) | (j << 8) | t;
+                gvals[r] = Some(v.clone());
+                native.insert((at(KT_GVAL), 0, r), v.clone());
+            }
+            let r = (j << 8) | t;
+            let (xl, yl) = (limbs(&x.c.x), limbs(&x.c.y));
+            for k in 0..3 {
+                gsel[k][r] = fp_u(&xl[k]);
+                gsel[3 + k][r] = fp_u(&yl[k]);
+            }
+            native.insert((at(KT_GSEL), 0, r), x.c.x.clone());
+            native.insert((at(KT_GSEL), 3, r), x.c.y.clone());
+        }
+    }
+    let value_of = |a: usize, first: usize, inst: usize| -> BigUint {
+        native
+            .get(&(a, first, inst))
+            .unwrap_or_else(|| panic!("a native value at ({a}, {first}, {inst})"))
+            .clone()
+    };
+    // Reads.
+    let dv = |slot: usize, s: usize, coef: i64| (at(KT_DVAL), 0, (slot << 8) | s, coef);
+    let iv = |slot: usize, j: usize, s: usize, coef: i64| {
+        (at(KT_IVAL), 0, (slot << 4) | (j << 3) | s, coef)
+    };
+    let gv = |slot: usize, j: usize, t: usize, coef: i64| {
+        (at(KT_GVAL), 0, (slot << 9) | (j << 8) | t, coef)
+    };
+    let gs = |cell: usize, j: usize, t: usize, coef: i64| (at(KT_GSEL), cell, (j << 8) | t, coef);
+    // The doubling chain's checks.
+    let mut d1: Vec<Option<KCheck>> = vec![None; 2 * n_d];
+    let mut d2: Vec<Option<KCheck>> = vec![None; n_d];
+    d1[0] = Some(KCheck {
+        a: vec![kport(&[dv(1, 0, 1)])],
+        b: vec![kport(&[dv(1, 0, 1)])],
+        pc: vec![1],
+        lin: kport(&[dv(0, 0, -1)]),
+        cst: 0,
+    });
+    d2[0] = Some(KCheck {
+        a: vec![kport(&[dv(2, 0, 1)]), kport(&[dv(1, 0, 1)])],
+        b: vec![kport(&[dv(2, 0, 1)]), kport(&[dv(0, 0, 1)])],
+        pc: vec![1, -1],
+        lin: KPort {
+            reads: vec![dv(1, 0, 3)],
+            consts: vec![(p256::b(), -1)],
+        },
+        cst: 0,
+    });
+    for s in 1..=KT_DOUBLINGS {
+        let l = dv(0, s, 1);
+        d1[s] = Some(KCheck {
+            a: vec![kport(&[l])],
+            b: vec![kport(&[l])],
+            pc: vec![1],
+            lin: kport(&[dv(1, s - 1, -2), dv(1, s, -1)]),
+            cst: 0,
+        });
+        d1[n_d + s] = Some(KCheck {
+            a: vec![kport(&[l])],
+            b: vec![kport(&[dv(1, s - 1, 1), dv(1, s, -1)])],
+            pc: vec![1],
+            lin: kport(&[dv(2, s - 1, -1), dv(2, s, -1)]),
+            cst: 0,
+        });
+        d2[s] = Some(KCheck {
+            a: vec![kport(&[l]), kport(&[dv(1, s - 1, 1)])],
+            b: vec![kport(&[dv(2, s - 1, 2)]), kport(&[dv(1, s - 1, 3)])],
+            pc: vec![1, -1],
+            lin: KPort::default(),
+            cst: 3,
+        });
+    }
+    // The initial sums: a = B_(8 j) at s = 0, else the previous sum; c =
+    // B_(8 j + s + 1), read from the chain.
+    let mut i1: Vec<Option<KCheck>> = vec![None; 48];
+    let mut i4: Vec<Option<KCheck>> = vec![None; 16];
+    for j in 0..2 {
+        for s in 0..6 {
+            let s0 = step_of_point(8 * j);
+            let a_at = |slot: usize, c: i64| {
+                if s == 0 {
+                    dv(slot, s0, c)
+                } else {
+                    iv(slot, j, s - 1, c)
+                }
+            };
+            let st = step_of_point(8 * j + s + 1);
+            let checks = kt_addition(
+                &|c| iv(0, j, s, c),
+                &|c| a_at(1, c),
+                &|c| a_at(2, c),
+                &|c| dv(1, st, c),
+                &|c| dv(2, st, c),
+                &|c| iv(1, j, s, c),
+                &|c| iv(2, j, s, c),
+            );
+            let [c0, c1, c2, c3] = checks;
+            for (spec, c) in [c0, c1, c2].into_iter().enumerate() {
+                i1[(spec << 4) | (j << 3) | s] = Some(c);
+            }
+            i4[(j << 3) | s] = Some(c3);
+        }
+    }
+    // The Gray walk: a = the last initial sum at t = 0, else the previous
+    // step's sum; c = the selected key point, its y signed per step.
+    let mut g1: Vec<Option<KCheck>> = vec![None; 3 << 9];
+    let mut g4: Vec<Option<KCheck>> = vec![None; 512];
+    for j in 0..2 {
+        for t in 0..256 {
+            let a_at = |slot: usize, c: i64| {
+                if t == 0 {
+                    iv(slot, j, 5, c)
+                } else {
+                    gv(slot, j, t - 1, c)
+                }
+            };
+            let sign = gray[j][t].sign;
+            let checks = kt_addition(
+                &|c| gv(0, j, t, c),
+                &|c| a_at(1, c),
+                &|c| a_at(2, c),
+                &|c| gs(0, j, t, c),
+                &|c| gs(3, j, t, c * sign),
+                &|c| gv(1, j, t, c),
+                &|c| gv(2, j, t, c),
+            );
+            let [c0, c1, c2, c3] = checks;
+            for (spec, c) in [c0, c1, c2].into_iter().enumerate() {
+                g1[(spec << 9) | (j << 8) | t] = Some(c);
+            }
+            g4[(j << 8) | t] = Some(c3);
+        }
+    }
+    // Shapes (modulus p only).
+    let moduli = vec![p.clone()];
+    let s1 = CheckShape::new(
+        &[(sources(1, 1), sources(2, 1))],
+        &sources(3, 2),
+        3,
+        &moduli,
+    );
+    let s2 = CheckShape::new(
+        &[
+            (sources(1, 1), sources(1, 2)),
+            (sources(1, 1), sources(1, 3)),
+        ],
+        &sources(2, 3),
+        3,
+        &moduli,
+    );
+    let s4 = CheckShape::new(
+        &[
+            (sources(1, 1), sources(2, 1)),
+            (sources(1, 1), sources(1, 1)),
+            (sources(1, 1), sources(1, 1)),
+            (sources(1, 1), sources(1, 1)),
+        ],
+        &sources(3, 2),
+        3,
+        &moduli,
+    );
+    // The key points: a witness table (index, x limbs, y limbs), tied to the
+    // chain's values.
+    let one = Fp::from(1u64);
+    let n_k = 32usize;
+    let mut kvals = vec![vec![Fp::from(0u64); n_k]; 7];
+    for i in 0..n_k {
+        let pt = key_point(i);
+        kvals[0][i] = Fp::from(i as u64);
+        let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
+        for k in 0..3 {
+            kvals[1 + k][i] = fp_u(&xl[k]);
+            kvals[4 + k][i] = fp_u(&yl[k]);
+        }
+    }
+    let chain_map = |slot: usize| -> Vec<Option<usize>> {
+        (0..n_k)
+            .map(|i| Some((slot << 8) | step_of_point(i)))
+            .collect()
+    };
+    let mut krows: Vec<[Lin<Fp>; 3]> = vec![[
+        plus(
+            &own(0, n_k),
+            &constant((0..n_k).map(|i| -Fp::from(i as u64)).collect()),
+        ),
+        constant(vec![one; n_k]),
+        Vec::new(),
+    ]];
+    for (base, slot) in [(1usize, 1usize), (4, 2)] {
+        for k in 0..3 {
+            krows.push([
+                plus(
+                    &own(base + k, n_k),
+                    &link(at(KT_DVAL), k, chain_map(slot), -one),
+                ),
+                constant(vec![one; n_k]),
+                Vec::new(),
+            ]);
+        }
+    }
+    // The Gray walk's addends: looked up in the key points by row.
+    let gs_lookup = {
+        let mut t = vec![constant(
+            (0..512)
+                .map(|r| Fp::from(gray_row[r >> 8][r & 255] as u64))
+                .collect(),
+        )];
+        for k in 0..6 {
+            t.push(own(k, 512));
+        }
+        (KEY_POINTS_TABLE, t)
+    };
+    let arrays = vec![
+        kt_value_array("key-table chain value", fam, &dvals),
+        kt_check_array("key-table chain check 1", fam, &s1, &d1, &value_of),
+        kt_check_array("key-table chain check 2", fam, &s2, &d2, &value_of),
+        Array {
+            name: "key points",
+            family: fam,
+            rho: rho_of(n_k),
+            r_count: n_k,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![5, 88, 88, 80, 88, 88, 80],
+            rows: krows,
+            values: kvals,
+        },
+        kt_value_array("key-table sum value", fam, &ivals),
+        kt_check_array("key-table sum check 1", fam, &s1, &i1, &value_of),
+        kt_check_array("key-table sum check 4", fam, &s4, &i4, &value_of),
+        Array {
+            name: "key-table walk addend",
+            family: fam,
+            rho: 9,
+            r_count: 512,
+            fixed: false,
+            lookups: vec![gs_lookup],
+            widths: vec![88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: gsel,
+        },
+        kt_value_array("key-table walk value", fam, &gvals),
+        kt_check_array("key-table walk check 1", fam, &s1, &g1, &value_of),
+        kt_check_array("key-table walk check 4", fam, &s4, &g4, &value_of),
+    ];
+    let count = |v: &[Option<KCheck>]| v.iter().flatten().count();
+    let counts = [
+        KT_DOUBLINGS,
+        2 * (6 + 256),
+        count(&d1) + count(&i1) + count(&g1),
+        count(&d2),
+        count(&i4) + count(&g4),
+    ];
+    KeyTables {
+        arrays,
+        tables: vec![(at(KT_POINTS), KEY_POINTS_TABLE)],
+        entries,
+        step_of,
+        counts,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2414,6 +3315,103 @@ mod tests {
         );
         assert_eq!(s1.widths().len(), s1.cells);
         assert_eq!(s4.widths().len(), s4.cells);
+    }
+
+    fn keyed_input(label: &str) -> (Point, BigUint, BigUint, BigUint) {
+        let n = p256::n();
+        let d = p256::scalar_below(label, &n);
+        let q = p256::mul(&p256::generator(), &d).unwrap();
+        let z = p256::scalar_below(&format!("{label}-message"), &pow2(256));
+        let nonce = p256::scalar_below(&format!("{label}-nonce"), &n);
+        let sig = p256::sign(&d, &z, &nonce);
+        (q, z, sig.r, sig.s)
+    }
+
+    #[test]
+    fn custom_witness_key_table_routes_its_lookups() {
+        let input = keyed_input("witness-key-table");
+        let id = 8;
+        let family = comb_with_key_table(10, 0, 1, 1, &[input], KeyTable::Witness { id });
+        assert_eq!(family.arrays[A_SEL].lookups[0].0, id);
+        assert!(family.tables.contains(&(10 + A_WTABLE, id)));
+        assert!(!family.arrays[A_WTABLE].fixed);
+        assert_eq!(family.arrays[A_SELG].lookups[0].0, POINT_TABLE);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not alias a shared or reserved table")]
+    fn key_table_rejects_a_shared_table_id() {
+        let inputs = sample_inputs(1);
+        let _ = comb_with_key_table(0, 0, 1, 1, &inputs, KeyTable::Fixed { id: POINT_TABLE });
+    }
+
+    /// Two different authority keys use distinct lookup families. Their
+    /// fixed tables are authenticated by the circuit key: an honest proof
+    /// cannot be verified after swapping the two keys' tables. This tests
+    /// the generic fixed-table mechanism, not a certificate trust chain.
+    #[test]
+    fn distinct_fixed_key_tables_prove_and_reject_swaps() {
+        let inputs = [keyed_input("issuer-comb"), keyed_input("root-comb")];
+        assert_ne!(inputs[0].0, inputs[1].0);
+        let build = |swap_tables: bool| {
+            let mut arrays = Vec::new();
+            let mut tables = Vec::new();
+            for fam in 0..inputs.len() {
+                let input = &inputs[if swap_tables { 1 - fam } else { fam }];
+                let first = arrays.len();
+                let id = 8 + fam as u32;
+                let family = comb_with_key_table(
+                    first,
+                    fam,
+                    1,
+                    2,
+                    std::slice::from_ref(input),
+                    KeyTable::Fixed { id },
+                );
+                assert_eq!(family.arrays[A_SEL].lookups[0].0, id);
+                assert!(family.arrays[A_WTABLE].fixed);
+                arrays.extend(family.arrays);
+                for table in family.tables {
+                    if !tables.iter().any(|&(_, id)| id == table.1) {
+                        tables.push(table);
+                    }
+                }
+            }
+            let (c, inst, wit) = UniformCircuit::build(
+                "distinct-key-tables",
+                arrays,
+                vec![1, 1, 0],
+                vec![1, 1, 1],
+                tables,
+                14,
+                4,
+                b"distinct-key-tables",
+            );
+            (c, inst, wit)
+        };
+        let (c, inst, wit) = build(false);
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let mut rng = SpikeRng::new(b"distinct key tables prove");
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut rng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "signatures under both distinct fixed keys verify"
+        );
+        let (swapped, swapped_inst, _) = build(true);
+        assert_eq!(c.shape.sx, swapped.shape.sx);
+        assert_eq!(c.shape.rows(), swapped.shape.rows());
+        assert_eq!(c.shape.cols(), swapped.shape.cols());
+        assert!(
+            crate::spartan::verify_circuit(
+                &swapped.shape,
+                &gens,
+                &swapped_inst,
+                &proof.to_bytes(),
+                &swapped
+            )
+            .is_err(),
+            "swapping the issuer and root tables changes the authenticated circuit"
+        );
     }
 
     /// Proves a witness with one cell changed (array, cell, instance).
@@ -2641,6 +3639,314 @@ mod tests {
         assert!(
             refused(&c, &inst, &wit, &gens, A_ADD, 2, 3, one),
             "flipped flag"
+        );
+    }
+
+    /// A valid signature and valid table derivation are insufficient unless
+    /// both use the externally authenticated issuer key. These tests exercise
+    /// the complete R1CS, without generating a large Spartan proof.
+    #[test]
+    fn derived_issuer_table_is_bound_to_authenticated_key_and_every_row() {
+        use crate::r1cs::Instance;
+        use crate::uniform::Copies;
+
+        let fixture = |authenticated: &Point,
+                       derived: &Point,
+                       signature: &(Point, BigUint, BigUint, BigUint)| {
+            let coordinates: Vec<_> = limbs(&authenticated.x)
+                .into_iter()
+                .chain(limbs(&authenticated.y))
+                .map(|x| fp_u(&x))
+                .collect();
+            let mut public = coordinates.clone();
+            public.resize(8, Fp::ZERO);
+            let mut arrays = vec![
+                Array {
+                    name: "authenticated issuer limbs",
+                    family: 0,
+                    rho: 0,
+                    r_count: 1,
+                    fixed: false,
+                    lookups: vec![],
+                    widths: vec![88, 88, 80, 88, 88, 80],
+                    rows: (0..6)
+                        .map(|k| {
+                            [
+                                plus(&own(k, 1), &link(1, 0, vec![Some(k)], -Fp::ONE)),
+                                constant(vec![Fp::ONE]),
+                                vec![],
+                            ]
+                        })
+                        .collect(),
+                    values: coordinates.into_iter().map(|v| vec![v]).collect(),
+                },
+                Array {
+                    name: "authenticated issuer public input",
+                    family: 0,
+                    rho: 3,
+                    r_count: 6,
+                    fixed: false,
+                    lookups: vec![],
+                    widths: vec![88],
+                    rows: vec![],
+                    values: vec![public],
+                },
+            ];
+            let first = arrays.len();
+            let derivation = key_tables(first, 0, derived);
+            let mut tables = derivation.tables;
+            arrays.extend(derivation.arrays);
+            let comb_first = arrays.len();
+            let comb = comb_with_key_table(
+                comb_first,
+                1,
+                1,
+                0,
+                std::slice::from_ref(signature),
+                KeyTable::Witness { id: 9 },
+            );
+            assert_eq!(comb.arrays[A_SEL].lookups[0].0, 9);
+            tables.extend(comb.tables);
+            arrays.extend(comb.arrays);
+            let table = comb_first + A_WTABLE;
+            bind_derived_key_table(
+                &mut arrays,
+                first,
+                table,
+                KeyLimbSource {
+                    array: 0,
+                    x: [0, 1, 2],
+                    y: [3, 4, 5],
+                    instance: 0,
+                },
+            );
+            let (c, inst, wit) = UniformCircuit::build_with_copies(
+                "authenticated-issuer-table",
+                arrays,
+                vec![0, 1],
+                vec![1, 1],
+                tables,
+                Copies {
+                    io_arrays: vec![(1, 8)],
+                    ..Copies::default()
+                },
+                14,
+                16,
+                b"authenticated issuer table",
+            );
+            (c, inst, wit, table)
+        };
+        let holds = |c: &UniformCircuit<Fp>, inst: &Instance<Fp>, wit: &Witness<Fp>| {
+            let mut witness = wit.w.clone();
+            let rel = c.instantiate(&c.shape, &[Fp::from(31), Fp::from(47)], Some(&mut witness));
+            let z = crate::r1cs::z_vector(&c.shape, inst, &Witness { w: witness });
+            let (a, b, cc) = rel.abc(&c.shape, &z);
+            a.into_iter().zip(b).zip(cc).all(|((a, b), c)| a * b == c)
+        };
+        let issuer = keyed_input("authenticated issuer table");
+        let foreign = keyed_input("foreign issuer table");
+        {
+            let (c, mut inst, mut wit, table) = fixture(&issuer.0, &issuer.0, &issuer);
+            assert!(holds(&c, &inst, &wit), "honest issuer and signature");
+            {
+                let (rotated, ri, rw, _) = fixture(&foreign.0, &foreign.0, &foreign);
+                assert!(holds(&rotated, &ri, &rw), "honest rotated issuer");
+                assert_eq!(
+                    (c.shape.sx, c.shape.row_bits, c.shape.col_bits, c.io_len),
+                    (
+                        rotated.shape.sx,
+                        rotated.shape.row_bits,
+                        rotated.shape.col_bits,
+                        rotated.io_len,
+                    ),
+                    "rotation preserves the shape"
+                );
+                assert_eq!(c.pi, rotated.pi);
+                assert_eq!(c.counts, rotated.counts);
+                assert_eq!(c.regions(), rotated.regions());
+                assert!(
+                    crate::template_differences(&c, &rotated, usize::MAX).is_empty(),
+                    "rotation preserves every constraint and lookup template"
+                );
+                for (a, b) in c.arrays.iter().zip(&rotated.arrays) {
+                    if a.fixed {
+                        assert_eq!(a.values, b.values, "rotation preserves fixed material");
+                    }
+                }
+                let rx: Vec<_> = (0..c.shape.sx).map(|i| Fp::from(101 + i as u64)).collect();
+                let ry: Vec<_> = (0..c.shape.sz())
+                    .map(|i| Fp::from(211 + i as u64))
+                    .collect();
+                let ch = [Fp::from(31), Fp::from(47)];
+                assert_eq!(
+                    c.evals(&rx, &ry, &ch),
+                    rotated.evals(&rx, &ry, &ch),
+                    "rotation preserves matrix evaluations"
+                );
+            }
+            for (cell, row) in [(0, 173), (1, 173), (6, 511)] {
+                let at = c.cell_index(table, cell, row);
+                wit.w[at] += Fp::ONE;
+                assert!(!holds(&c, &inst, &wit), "table cell {cell}, row {row}");
+                wit.w[at] -= Fp::ONE;
+            }
+            inst.io[8] += Fp::ONE;
+            assert!(!holds(&c, &inst, &wit), "authenticated key substitution");
+        }
+        {
+            // Every signature/derivation equation is valid for the foreign
+            // key; only the new authenticated-source binding rejects it.
+            let (c, inst, wit, _) = fixture(&issuer.0, &foreign.0, &foreign);
+            assert!(!holds(&c, &inst, &wit), "foreign derivation and signature");
+        }
+        {
+            // The authenticated key and its derivation agree, but the
+            // signature selects a different, otherwise valid lookup table.
+            let (c, inst, wit, _) = fixture(&issuer.0, &issuer.0, &foreign);
+            assert!(!holds(&c, &inst, &wit), "foreign signature lookup table");
+        }
+    }
+
+    /// Bootstrap's key tables (m = 16) derived from a key in uniform arrays:
+    /// the walk's sums are the comb tables and sit in the witness, every row
+    /// holds, the matrix evaluation matches the entries, the circuit proves
+    /// and verifies, and a changed walk slope, chain value, addend or key
+    /// point is refused.
+    #[test]
+    fn key_tables_derive_the_comb_tables() {
+        let n = p256::n();
+        let q = p256::mul(
+            &p256::generator(),
+            &p256::scalar_below("key-tables-test", &n),
+        )
+        .unwrap();
+        let first = 1;
+        let kt = key_tables(first, 0, &q);
+        assert_eq!(
+            kt.entries,
+            crate::operation::comb_tables(&q, 16),
+            "the derived tables"
+        );
+        assert_eq!(
+            kt.counts,
+            [
+                KT_DOUBLINGS,
+                524,
+                2 * KT_DOUBLINGS + 1 + 3 * 524,
+                KT_DOUBLINGS + 1,
+                524
+            ],
+            "doublings, additions and checks"
+        );
+        let mut arrays = vec![Array {
+            name: "range table",
+            family: 0,
+            rho: CHUNK,
+            r_count: 1 << CHUNK,
+            fixed: true,
+            lookups: Vec::new(),
+            widths: vec![CHUNK as u16],
+            rows: Vec::new(),
+            values: vec![(0..1u64 << CHUNK).map(Fp::from).collect()],
+        }];
+        let mut tables = vec![(0usize, RANGE_TABLE)];
+        tables.extend(kt.tables.iter().copied());
+        arrays.extend(kt.arrays);
+        let (c, inst, wit) = UniformCircuit::build(
+            "key-tables-test",
+            arrays,
+            vec![0],
+            vec![1],
+            tables,
+            14,
+            4,
+            b"key tables",
+        );
+        for j in 0..2 {
+            for h in [0usize, 1, 128, 200, 255] {
+                let t = kt.step_of[j][h];
+                let e = &kt.entries[j][h];
+                for (slot, v) in [(1usize, &e.x), (2, &e.y)] {
+                    let l = limbs(v);
+                    for k in 0..3 {
+                        assert_eq!(
+                            wit.w[c.cell_index(first + KT_GVAL, k, (slot << 9) | (j << 8) | t)],
+                            fp_u(&l[k]),
+                            "entry ({j}, {h}) in the witness"
+                        );
+                    }
+                }
+            }
+        }
+        let shape = c.shape;
+        let mut rng = SpikeRng::new(b"key tables ch");
+        let ch: Vec<Fp> = vec![rng.scalar(), rng.scalar()];
+        let mut w = wit.w.clone();
+        let rel = c.instantiate(&shape, &ch, Some(&mut w));
+        let z = crate::r1cs::z_vector(&shape, &inst, &Witness { w: w.clone() });
+        let (az, bz, cz) = rel.abc(&shape, &z);
+        let bad: Vec<usize> = (0..1 << shape.sx)
+            .filter(|x| az[*x] * bz[*x] != cz[*x])
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "{} rows fail, first {:?}",
+            bad.len(),
+            &bad[..bad.len().min(5)]
+        );
+        let rx: Vec<Fp> = (0..shape.sx).map(|_| rng.scalar()).collect();
+        let ry: Vec<Fp> = (0..shape.sz()).map(|_| rng.scalar()).collect();
+        let (ex, ey) = (crate::grid::eq_table(&rx), crate::grid::eq_table(&ry));
+        let mut slow = [Fp::ZERO; 3];
+        for &(mat, x, y, v) in &c.entries(&ch) {
+            slow[mat] += ex[x] * ey[y] * v;
+        }
+        assert_eq!(
+            rel.matrix_evals(&shape, &rx, &ry),
+            (slow[0], slow[1], slow[2]),
+            "matrix evaluation matches the entries"
+        );
+        let gens = crate::ipa::Gens::<Vesta>::new(shape.cols());
+        let mut prng = SpikeRng::new(b"key tables prove");
+        let (proof, _) = crate::spartan::prove_circuit(&shape, &gens, &inst, &wit, &mut prng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "honest"
+        );
+        let one = Fp::ONE;
+        assert!(
+            refused(
+                &c,
+                &inst,
+                &wit,
+                &gens,
+                first + KT_GVAL,
+                0,
+                (1 << 8) | 77,
+                one
+            ),
+            "changed walk slope"
+        );
+        assert!(
+            refused(
+                &c,
+                &inst,
+                &wit,
+                &gens,
+                first + KT_DVAL,
+                1,
+                (1 << 8) | 40,
+                one
+            ),
+            "changed chain x"
+        );
+        assert!(
+            refused(&c, &inst, &wit, &gens, first + KT_GSEL, 4, 9, one),
+            "changed addend"
+        );
+        assert!(
+            refused(&c, &inst, &wit, &gens, first + KT_POINTS, 2, 20, one),
+            "changed key point"
         );
     }
 }

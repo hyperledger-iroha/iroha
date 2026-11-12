@@ -458,6 +458,17 @@ mandatory-NPoS corridors, which install the `test-network-parliament-signers`
 beacon fixture. Sortition corridors run on a signed 128-block NPoS epoch and
 compute each slot from the certified epoch length.
 
+A pulse never creates a block ([Sumeragi](../specs/sumeragi.md)): a leader
+starts pulse production only after selecting real work, and missing shares keep
+that work pending. Every corridor therefore carries a transaction into each
+pulse height, the mandatory pre-boundary heights and the sortition slots alike.
+The below-threshold corridor carries one into its pulse height as well, so its
+stall shows that one valid share does not meet the threshold of two rather than
+an idle chain. Its faulty seat attests genuine custody but signs a corrupted
+share; the native producer verifies its own share before retaining or
+broadcasting it, so that seat contributes nothing. Protocol code carries no
+fault-injection hook.
+
 The fixture key session is an ordinary signed all-edge DKG session of exactly
 four validators with threshold two. The harness owns every validator's
 consensus key, so it runs the complete ceremony (signed recipient keys, signed
@@ -468,10 +479,24 @@ only its seat: it reads the seat from the committed session's recipient keys,
 re-derives the fixture dealers of that session and derives its one share
 against the committed transcript. It never rebuilds a transcript, because
 sealing an edge draws fresh randomness. Core installs a successor key only as
-the session of a certified committee-transition preparation, so a rotation
+the session of a certified committee-transition preparation, so the rotation
 corridor passes that exact session to
-`deterministic_parliament_beacon_key_record_for_session_v1`. No rotation
-corridor exists yet.
+`deterministic_parliament_beacon_key_record_for_session_v1`.
+
+`four_validator_certified_rotation_moves_mandatory_pulse_to_successor_session`
+(`sora_parliament_committee_rotation.rs`) runs on a signed 16-block NPoS epoch.
+The first boundary freezes the committee attempt for epoch 2. Inside the
+preparing epoch the incumbent committee certifies the attempt's successor
+transcript as the pending key, with the active bootstrap session as its
+compare-and-set predecessor; a target owner binds it as the attempt's
+credentials, and every target seat admits a readiness proof from its own
+fixture custody. The incumbent boundary at height 32 activates the prepared
+generation and the successor session together. The pulse at height 31 still
+belongs to the bootstrap session; the pulse at height 47 belongs to the
+successor and verifies against its replayed transcript. The four bonded
+validators are the whole candidate pool, so the rotation re-keys the same
+members in their election order; the uncredentialed attempt for epoch 3 is
+cancelled while the rotated generation stays.
 
 ### Running the Parliament corridors
 
@@ -480,7 +505,8 @@ funds registered citizens with signed transfers of the signed-genesis NPoS fee
 asset. Its finality reader validates the independently constructed genesis bundle
 and every contiguous embedded certificate, preserving exact four-validator,
 three-vote roster authority comparisons. The corridors exercise sortition, native
-pulses, public findings, epoch authorization and mandatory beacon custody.
+pulses, public findings, epoch authorization, mandatory beacon custody and a
+certified committee rotation of the beacon key.
 
 Prebuild the same-source native `iroha3d` with `test-network-parliament-signers`
 and the ordinary `iroha` CLI; point `TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS`

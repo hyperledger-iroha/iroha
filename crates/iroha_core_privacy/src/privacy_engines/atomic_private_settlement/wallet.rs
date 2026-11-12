@@ -1708,7 +1708,8 @@ mod tests {
         )
         .expect("owner bundle");
         let mut material = encoded.to_vec();
-        let phase_capture = super::super::facade::phase_test_support::PhaseCaptureV1::new(true);
+        let phase_capture = super::super::facade::phase_test_support::PhaseCaptureV1::new(true)
+            .with_note_phase_durations_v1();
         let prepared = phase_capture
             .with_default(|| {
                 consume_atomic_private_settlement_wallet_bundle_v1(
@@ -1724,6 +1725,21 @@ mod tests {
             })
             .expect("self-verified native proof");
         let proof_phase_events = phase_capture.assert_one_successful_invocation_v1();
+        // Visible with `--nocapture`: the genuine leg's construction and self-verification times.
+        for (phase, duration) in proof_phase_events
+            .iter()
+            .filter_map(|event| event.completed_duration_v1())
+        {
+            eprintln!("settlement leg proof phase {phase}: {duration:?}");
+        }
+        let prover_phases = phase_capture.note_phase_durations_v1();
+        assert!(
+            !prover_phases.is_empty(),
+            "the genuine leg runs the managed-note prover"
+        );
+        for (phase, duration) in prover_phases {
+            eprintln!("settlement leg prover phase {phase}: {duration:?}");
+        }
         assert!(!prepared.proof.is_empty());
         assert_eq!(prepared.statement, statement);
         assert_eq!(prepared.audit_capsule, capsule);

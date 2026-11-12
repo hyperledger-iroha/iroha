@@ -123,6 +123,12 @@ pub struct Copies<F> {
     pub late_io: Vec<(usize, usize, usize, usize)>,
     /// The link phase (cells that follow the pair link's rho).
     pub link: LinkPhase<F>,
+    /// The wallet row: (array, io index of its commitment's four limbs). The
+    /// array (one wallet's constants, its key's comb tables) gets the last
+    /// row to itself, cell `k` instance `i` at column `k 2^m + i` whatever
+    /// the circuit, so the row's unblinded commitment depends on the wallet
+    /// alone; it is a fixed row whose commitment the instance names.
+    pub wallet: Option<(usize, usize)>,
 }
 
 impl<F> Default for Copies<F> {
@@ -134,6 +140,7 @@ impl<F> Default for Copies<F> {
             io_arrays: Vec::new(),
             late_io: Vec::new(),
             link: LinkPhase::default(),
+            wallet: None,
         }
     }
 }
@@ -268,6 +275,9 @@ pub struct UniformCircuit<F> {
     /// Trailing fixed rows and their values (row major).
     fixed_rows: usize,
     fixed_values: Vec<F>,
+    /// The wallet row (the last fixed row) and its commitment's io index.
+    wallet_rows: usize,
+    wallet_io: Option<usize>,
     /// Second-phase cells (LogUp helpers), per array and cell.
     phase2: Vec<Vec<bool>>,
     /// Arrays with lookups: (array, first helper cell, first lookup row).
@@ -1335,6 +1345,8 @@ impl<F: Scalar> UniformCircuit<F> {
         let challenge = std::mem::take(&mut copies.challenge);
         let mut io_arrays = std::mem::take(&mut copies.io_arrays);
         let late_io = std::mem::take(&mut copies.late_io);
+        let wallet = copies.wallet.take();
+        let wallet_rows = usize::from(wallet.is_some());
         let link = std::mem::take(&mut copies.link);
         // The link's io arrays are io arrays whose values come from rho.
         io_arrays.extend(link.io.iter().copied());
@@ -1705,7 +1717,10 @@ impl<F: Scalar> UniformCircuit<F> {
                     } else {
                         0
                     };
-                    r == region && moved[a][k].is_none() && !is_io.get(a).copied().unwrap_or(false)
+                    r == region
+                        && moved[a][k].is_none()
+                        && !is_io.get(a).copied().unwrap_or(false)
+                        && wallet.is_none_or(|(wa, _)| wa != a)
                 })
                 .map(|(a, k)| (a, k, m_of(a), arrays[a].widths[k]))
                 .collect();
@@ -1901,17 +1916,19 @@ impl<F: Scalar> UniformCircuit<F> {
             // the constants keep the first rows of the fixed region (moved
             // by a multiple of their tallest block, so still aligned) and the
             // rest get a padding constant below.
-            let frows = match target {
+            let room = match target {
                 Some(t) => {
+                    let room = t.fixed - wallet_rows;
                     assert!(
-                        frows <= t.fixed && t.fixed % tallest == 0,
-                        "{label}: {frows} fixed rows (blocks of {tallest}) fit the target's {}",
-                        t.fixed
+                        frows <= room && room % tallest == 0,
+                        "{label}: {frows} fixed rows (blocks of {tallest}) fit the target's {room} (besides its wallet rows)"
                     );
-                    t.fixed
+                    room
                 }
                 None => frows,
             };
+            // The wallet rows sit just before the constants' rows.
+            let frows = room + wallet_rows;
             if frows < s.rows() {
                 // The fewest rows that hold both phases: a row budget for the
                 // marked rows (full blocks may run on to the end), by bisection.
@@ -1984,7 +2001,7 @@ impl<F: Scalar> UniformCircuit<F> {
                     }
                     let (rows, p1, el, e2) =
                         attempt(hi, &mut blocks).expect("the bisection's budget fits");
-                    let shift = (s.rows() - frows) * s.cols();
+                    let shift = (s.rows() - room) * s.cols();
                     for &(a, k, _, _) in &fixed_sizes {
                         blocks[a][k].base += shift;
                     }
@@ -2025,6 +2042,22 @@ impl<F: Scalar> UniformCircuit<F> {
                 hi: shape.col_bits,
                 m,
             };
+        }
+        if let Some((wa, _)) = wallet {
+            let m = m_of(wa);
+            let base = (shape.rows() - fixed_rows) * shape.cols();
+            assert!(
+                (arrays[wa].cells() << m) <= shape.active_cols(),
+                "{label}: the wallet row holds its array"
+            );
+            for (k, b) in blocks[wa].iter_mut().enumerate() {
+                *b = Block {
+                    base: base + (k << m),
+                    lo: m,
+                    hi: shape.col_bits,
+                    m,
+                };
+            }
         }
         // Every block is aligned: its base has no bit where an instance bit
         // lands (the matrix evaluation factors on exactly that).
@@ -2168,7 +2201,7 @@ impl<F: Scalar> UniformCircuit<F> {
         // a 1 in its first column, read by no constraint, so that its
         // commitment is a generator, not the identity (which no verifier
         // takes as an input point).
-        for r in shape.rows() - fixed_rows + natural_fixed..shape.rows() {
+        for r in shape.rows() - fixed_rows + wallet_rows + natural_fixed..shape.rows() {
             let row = &mut w[r * cols_n..(r + 1) * cols_n];
             assert!(
                 row.iter().all(|v| bool::from(v.is_zero())),
@@ -2176,7 +2209,7 @@ impl<F: Scalar> UniformCircuit<F> {
             );
             row[0] = F::ONE;
         }
-        let fixed_values = w[(shape.rows() - fixed_rows) * cols_n..].to_vec();
+        let fixed_values = w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec();
         let _ = n_user;
         let circuit = UniformCircuit {
             label,
@@ -2191,6 +2224,8 @@ impl<F: Scalar> UniformCircuit<F> {
             bounds,
             fixed_rows,
             fixed_values,
+            wallet_rows,
+            wallet_io: wallet.map(|(_, io)| io),
             phase2,
             lookup_arrays,
             tables,
@@ -5039,6 +5074,12 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
         self.fixed_values.clone()
+    }
+    fn wallet_rows(&self) -> usize {
+        self.wallet_rows
+    }
+    fn wallet_io(&self) -> Option<usize> {
+        self.wallet_io
     }
     fn late_slots(&self) -> Vec<usize> {
         self.late_io.iter().map(|x| x.0).collect()

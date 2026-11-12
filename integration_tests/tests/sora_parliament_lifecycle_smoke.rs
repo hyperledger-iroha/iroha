@@ -1,4 +1,5 @@
-//! Four-validator modern SORA Parliament sortition, native-pulse and public-finding corridors.
+//! Four-validator modern SORA Parliament sortition, native-pulse, public-finding and
+//! certified committee-rotation corridors.
 
 use iroha::data_model::{
     parameter::system::{ConsensusHandshakeMetadata, consensus_metadata},
@@ -237,10 +238,12 @@ async fn assert_no_global_beacon_pulse_at(
     label: &str,
     network: &iroha_test_network::Network,
 ) -> Result<()> {
-    let block = exact_block(client, height, network)
+    // The native control witness owns a pulse and the certified execution commits it; a
+    // block payload never carries one.
+    let (_, verified) = finality::certified_block(network, client, height)
         .await
-        .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
-    if block.global_beacon_pulse().is_some() {
+        .wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;
+    if verified.commitment().beacon.is_some() {
         return Err(eyre!(
             "{label}: finalized block {height} unexpectedly carries a global beacon pulse"
         ));
@@ -373,7 +376,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         install_height,
     )?;
     submit_parliament_instructions(&client, [lifecycle_certificate]).await?;
-    assert_eq!(current_height(&client).await?, install_height);
+    observe_exact_height(&client, install_height, "install height").await?;
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("mandatory beacon-key activation height overflow"))?;
@@ -386,14 +389,19 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     )
     .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(&client).await?, activation_height);
+    observe_exact_height(
+        &client,
+        activation_height,
+        "mandatory beacon-key activation",
+    )
+    .await?;
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
-    advance_to_autonomous_predecessor(
+    advance_to_height_with_carriers(
         &network,
         &client,
-        pulse_height,
+        pulse_height - 1,
         "initial mandatory pre-boundary pulse",
     )
     .await?;
@@ -404,12 +412,15 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &network,
     )
     .await?;
-    network.ensure_blocks(pulse_height).await?;
-    assert_eq!(
-        current_height(&client).await?,
+    // A pulse never creates a block (`specs/sumeragi.md`): real work carries the
+    // pre-boundary block, and its leader starts pulse production only after selecting it.
+    advance_to_height_with_carriers(
+        &network,
+        &client,
         pulse_height,
-        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
-    );
+        "mandatory pre-boundary pulse height",
+    )
+    .await?;
 
     let mut pulses = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
@@ -443,18 +454,22 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let successor_epoch = 1;
     let successor_seed =
         global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch);
-    admit_parliament_height_carrier(
+    // Idle chains create no blocks: real work carries the boundary and the first block
+    // of the successor epoch.
+    advance_to_height_with_carriers(
+        &network,
         &client,
-        [Log::new(
-            Level::INFO,
-            "carry retained-authority successor progression".to_owned(),
-        )],
+        boundary_height,
+        "mandatory epoch boundary",
     )
     .await?;
-    network.ensure_blocks(boundary_height).await?;
-    assert_eq!(current_height(&client).await?, boundary_height);
-    network.ensure_blocks(boundary_height + 1).await?;
-    assert_eq!(current_height(&client).await?, boundary_height + 1);
+    advance_to_height_with_carriers(
+        &network,
+        &client,
+        boundary_height + 1,
+        "first height of the successor epoch",
+    )
+    .await?;
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
             let client = peer.client().client().clone();
@@ -489,14 +504,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .and_then(|height| height.checked_sub(1))
         .ok_or_else(|| eyre!("successor mandatory pulse height overflow"))?;
-    advance_to_autonomous_predecessor(
+    advance_to_height_with_carriers(
         &network,
         &client,
         successor_pulse_height,
         "retained-session mandatory pre-boundary pulse",
     )
     .await?;
-    network.ensure_blocks(successor_pulse_height).await?;
     let mut successor_pulses = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         successor_pulses.push(pulse_at(&peer.client(), successor_pulse_height, &network).await?);
@@ -538,16 +552,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         second_boundary_height,
         second_successor_epoch,
     );
-    admit_parliament_height_carrier(
+    advance_to_height_with_carriers(
+        &network,
         &client,
-        [Log::new(
-            Level::INFO,
-            "carry the retained-session NPoS boundary".to_owned(),
-        )],
+        second_boundary_height + 1,
+        "retained-session NPoS boundary",
     )
     .await?;
-    network.ensure_blocks(second_boundary_height).await?;
-    network.ensure_blocks(second_boundary_height + 1).await?;
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
             let client = peer.client().client().clone();
@@ -792,7 +803,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         install_height,
     )?;
     submit_parliament_instructions(&client, [lifecycle_certificate]).await?;
-    assert_eq!(current_height(&client).await?, install_height);
+    observe_exact_height(&client, install_height, "install height").await?;
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("fail-closed beacon-key activation height overflow"))?;
@@ -805,7 +816,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     )
     .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(&client).await?, activation_height);
+    observe_exact_height(
+        &client,
+        activation_height,
+        "fail-closed beacon-key activation",
+    )
+    .await?;
 
     let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
     let predecessor_height = pulse_height - 1;
@@ -814,8 +830,23 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         Some(predecessor_height),
         "the retained deterministic fixture must expose one committed predecessor after activation",
     );
-    network.ensure_blocks(predecessor_height).await?;
-    assert_eq!(current_height(&client).await?, predecessor_height);
+    advance_to_height_with_carriers(
+        &network,
+        &client,
+        predecessor_height,
+        "fail-closed pulse predecessor",
+    )
+    .await?;
+    // Real work at the pulse height starts pulse production; one valid share stays below
+    // the threshold of two, so the work stays pending rather than the chain idling.
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry the below-threshold mandatory pulse".to_owned(),
+        )],
+    )
+    .await?;
     let pulse_status_is_active = |status: &SumeragiStatus| -> bool {
         assert!(
             !status.is_halted(),
@@ -893,6 +924,11 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                     "validators did not publish the mandatory pulse-height context within {status_poll_window:?} plus the {status_poll_request_timeout:?} in-flight request bound; last status fetch error: {}",
                     last_activation_status_error.as_deref().unwrap_or("none"),
                 ));
+            }
+            if observed_height < predecessor_height {
+                // A status projection may trail the committed predecessor briefly.
+                all_pulse_heights_active = false;
+                continue;
             }
             assert_eq!(
                 observed_height, predecessor_height,
@@ -1167,7 +1203,7 @@ async fn four_validator_pending_parliament_request_never_blocks_unrelated_work_o
         ],
     )
     .await?;
-    assert_eq!(current_height(&client).await?, request_height);
+    observe_exact_height(&client, request_height, "request height").await?;
 
     let pending = read_attempt(&client, attempt_id).await?;
     assert_eq!(pending.attempt().status, GovernanceAttemptStatusV1::Active);
@@ -1494,12 +1530,13 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         include_str!("sora_parliament_enactment.rs"),
         include_str!("sora_parliament_no_result_paths.rs"),
         include_str!("sora_parliament_failure_paths.rs"),
+        include_str!("sora_parliament_committee_rotation.rs"),
     ]
     .concat();
     let rayon_threads_key = concat!("rayon_global_", "threads");
     assert_eq!(
         source.matches(rayon_threads_key).count(),
-        4,
+        5,
         "every four-validator builder must bound per-peer proving concurrency without disabling FastPQ",
     );
     let forbidden = [
@@ -1594,6 +1631,13 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!("lifecycle_certificate_", "replacing"),
         concat!("shutdown_if_", "started"),
         concat!("start_", "checked"),
+        concat!(
+            "deterministic_parliament_beacon_key_record_",
+            "for_session_v1"
+        ),
+        concat!("ValidatorCommitteeOperationV1::", "PrepareCredentials"),
+        concat!("ValidatorCommitteeOperationV1::", "AdmitSeat"),
+        concat!("ValidatorEpochDecisionV1::", "Activate"),
     ] {
         assert!(
             source.contains(required),
@@ -1607,3 +1651,6 @@ mod failure_paths;
 
 #[path = "sora_parliament_no_result_paths.rs"]
 mod no_result_paths;
+
+#[path = "sora_parliament_committee_rotation.rs"]
+mod committee_rotation;

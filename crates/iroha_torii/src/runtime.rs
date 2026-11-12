@@ -1747,6 +1747,78 @@ pub async fn handle_runtime_draft_upgrade(
         change_set,
     })
 }
+#[derive(
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeDraftMigrationRequest")]
+/// Body of POST /v1/runtime/migrations/draft: the migration of this node's release, the step to
+/// draft and from which height (`specs/live_runtime_upgrades.md` §5.4).
+pub struct RuntimeDraftMigrationRequest {
+    /// Native module of the migration.
+    pub migration: String,
+    /// The step: `start` (install the successor storage and activate the migration),
+    /// `cut_over` (make the successor authoritative and drain the old storage) or `retire`
+    /// (retire the drained old storage and deactivate the migration).
+    pub step: String,
+    /// First height executed under the successor selection.
+    pub effective_height: u64,
+    /// Digest of the qualification evidence for the successor composition, 32-byte hex.
+    pub qualification_hex: String,
+}
+/// POST /v1/runtime/migrations/draft — draft, from this node's release catalog and the committed
+/// selection, the change set of one step of a migration (`specs/live_runtime_upgrades.md` §5.4).
+/// Release signers endorse its identity, `POST /v1/runtime/upgrades/propose` drafts the proposal
+/// that schedules it, and every validator attests it. A root admits a migration only once it has
+/// activated the kernel's lifecycle State, and a cut-over or a retirement only once the
+/// migration's record allows it; the activation enforces both.
+///
+/// # Errors
+/// Returns an error when the qualification is not 32 bytes of hex, the step is unknown, the
+/// migration is not one of this release, or the step does not apply to the committed selection.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
+pub async fn handle_runtime_draft_migration(
+    state: Arc<iroha_core::state::State>,
+    NoritoJson(request): NoritoJson<RuntimeDraftMigrationRequest>,
+) -> Result<RuntimeDraftUpgradeResponse, crate::Error> {
+    use iroha_core::runtime::catalog::MigrationStep;
+    let qualification = hex_32("qualification", &request.qualification_hex)?;
+    let step = match request.step.as_str() {
+        "start" => MigrationStep::Start,
+        "cut_over" => MigrationStep::CutOver,
+        "retire" => MigrationStep::Retire,
+        other => {
+            return Err(runtime_conversion_error(format!(
+                "{other} is not a migration step: start, cut_over or retire"
+            )));
+        }
+    };
+    let view = state.view();
+    let change_set = iroha_core::runtime::migration::draft_step(
+        view.world(),
+        *view.network_id(),
+        &request.migration,
+        step,
+        request.effective_height,
+        qualification,
+    )
+    .map_err(|error| runtime_conversion_error(error.to_string()))?;
+    let id = change_set
+        .id()
+        .map_err(|error| runtime_conversion_error(format!("change-set identity: {error}")))?;
+    Ok(RuntimeDraftUpgradeResponse {
+        id_hex: hex::encode(id.0),
+        change_set,
+    })
+}
 /// POST /v1/runtime/upgrades/cancel/{id} — draft the SORA Parliament proposal that withdraws
 /// a scheduled change set.
 ///
@@ -1954,6 +2026,39 @@ mod tests {
             checked_projection_account(0x51),
             checked_projection_account(0x52)
         );
+    }
+    #[tokio::test]
+    async fn a_migration_draft_names_a_known_step_of_a_compiled_migration() {
+        let state = std::sync::Arc::new(State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let request = |step: &str| {
+            NoritoJson(RuntimeDraftMigrationRequest {
+                migration: "iroha.test.migration.v1".into(),
+                step: step.into(),
+                effective_height: 10,
+                qualification_hex: hex::encode([7; 32]),
+            })
+        };
+        let unknown_step = handle_runtime_draft_migration(state.clone(), request("cutover"))
+            .await
+            .expect_err("an unknown step");
+        assert!(
+            format!("{unknown_step:?}").contains("is not a migration step"),
+            "{unknown_step:?}"
+        );
+        // This release compiles no migration, so every step of a named one is refused.
+        for step in ["start", "cut_over", "retire"] {
+            let error = handle_runtime_draft_migration(state.clone(), request(step))
+                .await
+                .expect_err("not a migration of this release");
+            assert!(
+                format!("{error:?}").contains("iroha.test.migration.v1"),
+                "{step}: {error:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn runtime_abi_hash_matches_ivm() {

@@ -110,8 +110,8 @@ pub use self::{
         anonymous_governance_attempt_id_v1,
     },
     instruction::{
-        AnonymousParliamentTransitionV1, CreateAnonymousParliamentAttemptV1,
-        SubmitAnonymousParliamentTransitionV1,
+        AnonymousClosePhaseEarlyV1, AnonymousParliamentTransitionV1,
+        CreateAnonymousParliamentAttemptV1, SubmitAnonymousParliamentTransitionV1,
     },
     outcome::{BallotDecisionV1, BallotOutcomeV1, BallotTallyErrorV1, ParliamentDecisionRuleV1},
     output::{

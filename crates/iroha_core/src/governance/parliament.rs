@@ -1151,7 +1151,8 @@ fn root_is_zero(root: &[u8; 32]) -> bool {
     root.iter().all(|byte| *byte == 0)
 }
 
-fn candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot: &[AccountId]) -> bool {
+/// Whether `candidate_snapshot` fits the V1 citizen and snapshot-byte bounds.
+pub(crate) fn candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot: &[AccountId]) -> bool {
     if candidate_snapshot.len()
         > usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
             .expect("the V1 Parliament citizen cap fits usize")

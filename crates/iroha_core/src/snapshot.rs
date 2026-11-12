@@ -44,6 +44,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+pub(crate) mod checkpoint_store;
+pub mod checkpoints;
 mod errors;
 mod startup_recovery;
 pub use startup_recovery::StartupRecovery;
@@ -959,6 +961,8 @@ pub struct SnapshotMaker {
     read_buffer_budget: AllocationBudget,
     /// Original commit-evidence refusal retained until a snapshot is successfully published.
     commit_evidence_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
+    /// Checkpoints of the root's committed policy (`checkpoint_store`).
+    checkpoints: checkpoint_store::MakerCheckpoints,
 }
 impl SnapshotMaker {
     /// Start supervised storage maintenance after successful startup recovery.
@@ -981,12 +985,13 @@ impl SnapshotMaker {
                 },
                 move |startup_recovery, shutdown_signal| async move {
                     if let Some(mut maker) = snapshot_maker {
-                        Self::run_snapshot_loop(
-                            maker.create_every,
-                            startup_recovery,
-                            shutdown_signal,
-                            || maker.create_snapshot(),
-                        )
+                        // The loop looks for a checkpoint height at the tip every poll and
+                        // writes the periodic snapshot once its interval has passed.
+                        let poll = maker.create_every.min(checkpoint_store::CHECKPOINT_POLL);
+                        let shutting_down = shutdown_signal.clone();
+                        Self::run_snapshot_loop(poll, startup_recovery, shutdown_signal, || {
+                            maker.tick(shutting_down.is_sent());
+                        })
                         .await;
                     } else {
                         let mut startup_recovery = startup_recovery;
@@ -1122,6 +1127,7 @@ impl SnapshotMaker {
                 resource_policy: config.resources,
                 read_buffer_budget,
                 commit_evidence_refusal: None,
+                checkpoints: checkpoint_store::MakerCheckpoints::default(),
             })
         } else {
             None

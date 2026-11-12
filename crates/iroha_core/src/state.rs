@@ -12686,11 +12686,17 @@ pub struct State {
     zk: iroha_config::parameters::actual::Zk,
     /// Governance configuration (voting keys, policies).
     pub gov: iroha_config::parameters::actual::Governance,
-    /// Content lane configuration (bundle caps, chunk size).
+    /// Installed content settings: this node's gateway resources over the
+    /// protocol limits ([`Self::install_node_content`]). Readers use
+    /// [`Self::content_snapshot`], a view or a block, which lay the committed
+    /// limits of a recognizing root over it (`runtime::committed_policy`).
     pub content: iroha_config::parameters::actual::Content,
-    /// Settlement configuration (repo defaults, collateral policies).
+    /// Settlement router inputs of this release, the protocol constants.
+    /// Readers use [`Self::settlement_snapshot`], a view or a block, which apply
+    /// the committed inputs of a recognizing root (`runtime::committed_policy`).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Unified settlement engine for XOR quoting.
+    /// Settlement engine of [`Self::settlement`]; views and blocks build theirs
+    /// from the effective router inputs.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
     pub chain_id: iroha_model_base::chain::ChainId,
@@ -23581,6 +23587,10 @@ impl WorldTransaction<'_, '_> {
                 .parameters
                 .try_retain_authoring(|parameter| {
                     !is_consensus_owned_custom_parameter(parameter.id())
+                        && !crate::runtime::committed_policy::consensus_owned(
+                            self.runtime_selection.get(),
+                            parameter.id(),
+                        )
                 })
                 .map_err(ParameterIngressError::from)?;
             let prepared = self.prepare_parameters_from_executor(&executor_data_model)?;
@@ -23850,10 +23860,15 @@ impl WorldTransaction<'_, '_> {
         let old_defaults = self.executor_data_model.get().parameters();
         let new_defaults = new_model.parameters();
         let mut candidate = predecessor.clone();
+        let selection = self.runtime_selection.get();
+        let owned = |id| {
+            is_consensus_owned_custom_parameter(id)
+                || crate::runtime::committed_policy::consensus_owned(selection, id)
+        };
         // Walk the existing maps by reference: no cloned model, ID set, or
         // unadmitted intermediate CustomParameter is required.
         for id in old_defaults.keys() {
-            if is_consensus_owned_custom_parameter(id) || new_defaults.contains_key(id) {
+            if owned(id) || new_defaults.contains_key(id) {
                 continue;
             }
             let prepared = candidate.prepare_custom_removal(id, pool)?;
@@ -23862,7 +23877,7 @@ impl WorldTransaction<'_, '_> {
                 .map_err(|(_prepared, original)| original)?;
         }
         for (id, next) in new_defaults {
-            if is_consensus_owned_custom_parameter(id) {
+            if owned(id) {
                 continue;
             }
             let replace = old_defaults.get(id).is_none_or(|previous| {
@@ -31055,7 +31070,11 @@ impl State {
             lane_incarnation_activation_heights: projection.activation_heights,
             lane_manifests: projection.manifests,
             zk: crate::zk_validity_policy::effective_zk(self.zk.clone(), world.parameters()),
-            content: self.content.clone(),
+            content: crate::runtime::committed_policy::effective_content(
+                &self.content,
+                world.runtime_selection.get(),
+                world.parameters.get(),
+            ),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
             world,
@@ -32151,13 +32170,19 @@ impl State {
         (&self.gov.voting_asset_id, &self.gov.bond_escrow_account)
     }
     /// Snapshot the current content settings: this node's gateway resources
-    /// with the bundle limits the protocol fixes
-    /// ([`Self::install_node_content`]).
+    /// ([`Self::install_node_content`]) with the committed bundle limits of a
+    /// root that recognizes them, the protocol limits otherwise
+    /// (`runtime::committed_policy`).
     ///
     /// This avoids acquiring a full [`StateView`] when only content limits/settings are needed.
     #[must_use]
     pub fn content_snapshot(&self) -> iroha_config::parameters::actual::Content {
-        self.content.clone()
+        let world = self.world.view();
+        crate::runtime::committed_policy::effective_content(
+            &self.content,
+            world.runtime_selection(),
+            world.parameters(),
+        )
     }
     /// Retain notification before acquiring publication writers and fences.
     #[inline]
@@ -32366,6 +32391,17 @@ impl State {
                 self.fraud_monitoring.clone(),
                 world.parameters.get(),
             );
+            let content = crate::runtime::committed_policy::effective_content(
+                &self.content,
+                world.runtime_selection.get(),
+                world.parameters.get(),
+            );
+            let settlement = crate::runtime::committed_policy::effective_settlement(
+                &self.settlement,
+                world.runtime_selection.get(),
+                world.parameters.get(),
+            );
+            let settlement_engine = SettlementEngine::from_router_config(&settlement.router);
             Ok(StateView {
                 publication_generation: generation_after,
                 canonical_runtime,
@@ -32399,9 +32435,9 @@ impl State {
                 fraud_monitoring,
                 zk,
                 gov: self.gov.clone(),
-                content: self.content.clone(),
-                settlement: self.settlement,
-                settlement_engine: self.settlement_engine.clone(),
+                content,
+                settlement,
+                settlement_engine,
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
                 _lifetime_diagnostic: Instant::now().into(),
@@ -33259,10 +33295,11 @@ impl State {
     }
     // The admission is authenticated locally before this private helper is called.
     // Historical membership and live route authority still belong to this exact view.
-    /// Access the unified settlement engine.
-    #[inline]
-    pub fn settlement_engine(&self) -> &SettlementEngine {
-        &self.settlement_engine
+    /// The settlement engine of the current committed router inputs
+    /// ([`Self::settlement_snapshot`]).
+    #[must_use]
+    pub fn settlement_engine(&self) -> SettlementEngine {
+        SettlementEngine::from_router_config(&self.settlement_snapshot().router)
     }
     /// Select a pending settlement entry bound to the exact consensus round.
     #[cfg_attr(
@@ -38487,9 +38524,12 @@ impl State {
         [u8; 32],
         iroha_config::parameters::actual::NexusConsensusPolicyDigestError,
     > {
-        // The committed ZK and pipeline validity policies, as every view and block reads them.
+        // The committed ZK, pipeline, content and router policies, as every view and block
+        // reads them.
         let zk = self.zk_snapshot();
         let pipeline = self.pipeline_snapshot();
+        let content = self.content_snapshot();
+        let settlement = self.settlement_snapshot();
         let parameters = self.world.parameters.view();
         compute_execution_policy_digest_v1(
             &pipeline,
@@ -38501,8 +38541,8 @@ impl State {
             &self.fraud_monitoring_snapshot(),
             &zk,
             &self.gov,
-            &self.content,
-            &self.settlement,
+            &content,
+            &settlement,
         )
     }
 }

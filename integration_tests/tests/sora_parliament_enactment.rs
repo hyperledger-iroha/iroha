@@ -121,15 +121,25 @@ pub async fn fund_citizen_fees(
         parameters.xor_asset_definition_id,
         client.client().account().clone(),
     );
-    submit_parliament_instructions(
-        client,
-        citizens.iter().map(|citizen| {
-            iroha_data_model::isi::Transfer::asset_quantity(
-                source.clone(),
-                10_000_u32,
-                citizen.clone(),
-            )
-        }),
-    )
-    .await
+    // One transaction carries at most the transfers the committed FASTPQ source policy
+    // admits per entry; a larger batch is rejected as a whole.
+    let transfers_per_transaction = usize::try_from(
+        iroha_data_model::parameter::fastpq_source::FastpqSourcePolicyV1::bootstrap()
+            .intrinsic
+            .max_transcripts,
+    )?;
+    for batch in citizens.chunks(transfers_per_transaction) {
+        submit_parliament_instructions(
+            client,
+            batch.iter().map(|citizen| {
+                iroha_data_model::isi::Transfer::asset_quantity(
+                    source.clone(),
+                    10_000_u32,
+                    citizen.clone(),
+                )
+            }),
+        )
+        .await?;
+    }
+    Ok(())
 }

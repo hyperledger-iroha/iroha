@@ -1,4 +1,6 @@
 //! Executor authorization, execution and custody regression tests.
+#[path = "executor_content_publish_permission_tests.rs"]
+mod content_publish_permission;
 #[path = "executor_custody_tests.rs"]
 mod custody_upgrade;
 #[path = "executor_restricted_dataspace_read_tests.rs"]

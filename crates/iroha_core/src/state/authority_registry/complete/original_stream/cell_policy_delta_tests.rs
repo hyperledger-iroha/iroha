@@ -431,3 +431,71 @@ fn runtime_catalog_touch_keeps_manifest_preimage_and_refuses_foreign_binding() {
         }
     }
 }
+
+#[test]
+fn committed_content_and_router_cells_keep_constant_bytes_until_a_recognized_value_changes() {
+    use iroha_data_model::{
+        content_policy::ContentPolicyV1, parameter::Parameter,
+        settlement_router_policy::SettlementRouterPolicyV1,
+    };
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (state, _) = crate::state::publication::musubi_materializer_test_support::fixture();
+    let cells = |state: &State| {
+        let block = frozen_policy_block(state, false, false, false);
+        let fields = block.fields.as_ref().unwrap();
+        let mut cold = Collector::new(
+            state.ivm_execution_budget(),
+            limits(),
+            CaptureIntent::Complete,
+        )
+        .unwrap();
+        policies::append(fields, &mut cold).unwrap();
+        (
+            values(find(&cold, "state.content")),
+            values(find(&cold, "state.settlement")),
+        )
+    };
+    let set = |state: &State, parameter: Parameter| {
+        let mut world = state.world.block();
+        world.set_parameter_for_testing(parameter).unwrap();
+        world.commit();
+    };
+    let constant = cells(&state);
+    // An unrecognized identifier is opaque: storing a valid policy moves no byte.
+    let changed = ContentPolicyV1 {
+        max_files: 64,
+        ..ContentPolicyV1::protocol_default()
+    };
+    set(&state, Parameter::Custom(changed.into_custom_parameter()));
+    assert_eq!(cells(&state), constant);
+    // A root that recognizes both parameters at their initial values keeps the bytes.
+    let catalog = crate::runtime::release_catalog().unwrap();
+    {
+        let mut world = state.world.block();
+        for id in catalog.parameter_definitions() {
+            world
+                .runtime_definitions
+                .insert(id, catalog.definitions[&id].clone());
+            let selection = world.runtime_selection.get_mut();
+            selection.active.push(id);
+            selection.active.sort_unstable();
+        }
+        world.commit();
+    }
+    for initial in [
+        ContentPolicyV1::protocol_default().into_custom_parameter(),
+        SettlementRouterPolicyV1::protocol_default().into_custom_parameter(),
+    ] {
+        set(&state, Parameter::Custom(initial));
+    }
+    assert_eq!(
+        cells(&state),
+        constant,
+        "recognition at the protocol defaults changes no State-cell byte"
+    );
+    // A recognized value moves exactly its own cell.
+    set(&state, Parameter::Custom(changed.into_custom_parameter()));
+    let (content, settlement) = cells(&state);
+    assert_ne!(content, constant.0);
+    assert_eq!(settlement, constant.1);
+}

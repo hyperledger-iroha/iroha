@@ -528,7 +528,10 @@ const COPY_WIDTH: usize = PRIVATE_NOTE_COPY_WIDTH_V1;
 const DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 const VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 include!("../shared_note_profile_constraints.rs");
-define_note_profile_constraint_residues_v1!(private_note_shared_constraint_residues_v1);
+define_note_profile_constraint_residues_v1!(
+    private_note_shared_constraint_residues_v1,
+    PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1
+);
 
 fn private_note_profile_constraint_residues_inner_v1(
     current: &[F],

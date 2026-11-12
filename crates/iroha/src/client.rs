@@ -21693,6 +21693,33 @@ impl Client {
         )?;
         Self::decode_json_ok(resp, "Failed to draft runtime upgrade")
     }
+    /// POST `/v1/runtime/migrations/draft`: the node drafts, from its release catalog and the
+    /// committed selection, the change set of one `step` (`start`, `cut_over` or `retire`) of a
+    /// migration its release compiles.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn post_runtime_draft_migration_json(
+        &self,
+        migration: &str,
+        step: &str,
+        effective_height: u64,
+        qualification_hex: &str,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/migrations/draft");
+        let body = norito::json::to_vec(&norito::json!({
+            "migration": migration,
+            "step": step,
+            "effective_height": effective_height,
+            "qualification_hex": qualification_hex,
+        }))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to draft runtime migration step")
+    }
     /// POST `/v1/runtime/upgrades/cancel/:id` (change-set id hex in path); the response drafts the
     /// SORA Parliament proposal that withdraws the scheduled change set.
     ///
@@ -21723,6 +21750,51 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to attest runtime upgrade")
+    }
+    /// GET `/v1/runtime/boundaries`: the root's checkpoint policy, ratified adoption anchor and
+    /// startup floors, the history boundary they set, and the upgrade checkpoint and checkpoints
+    /// this node holds.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn get_runtime_boundaries_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/boundaries");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get runtime boundaries")
+    }
+    /// POST `/v1/runtime/boundaries/anchor/attest`: the node derives the adoption record from its
+    /// own store and returns it with its statement, signed with its validator key.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn post_runtime_attest_anchor_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/boundaries/anchor/attest");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to attest the runtime adoption anchor")
+    }
+    /// POST `/v1/runtime/boundaries/floor/attest`: the node states the startup floor at `height`
+    /// from its own history and returns it with its statement, signed with its validator key,
+    /// while it holds a checkpoint at that height.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn post_runtime_attest_floor_json(&self, height: u64) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/boundaries/floor/attest");
+        let body = norito::json::to_vec(&norito::json!({ "height": height }))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to attest the runtime startup floor")
     }
     /// GET `/v1/runtime/release`: this node's release digest and whether it executes the committed
     /// selection and the successor of each scheduled change set.

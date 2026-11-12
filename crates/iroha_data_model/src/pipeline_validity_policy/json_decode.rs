@@ -1,4 +1,7 @@
-//! Destination of escaped record keys for the single pipeline policy field kernel.
+//! Destination of escaped record keys for the scalar policy field kernels.
+//!
+//! The pipeline validity policy and the records declared with
+//! `scalar_policy_record!` decode their keys through these destinations.
 
 use super::PipelineValidityPolicyV1;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
@@ -31,7 +34,7 @@ impl PipelineValidityPolicyV1 {
         super::decode_record(parser, &Admitted { budget })
     }
 }
-pub(super) fn invalid(message: &'static str) -> json::Error {
+pub(crate) fn invalid(message: &'static str) -> json::Error {
     json::Error::WithPos {
         msg: message,
         byte: 0,
@@ -39,13 +42,13 @@ pub(super) fn invalid(message: &'static str) -> json::Error {
         col: 1,
     }
 }
-pub(super) fn key_text<'a, T: AsRef<str>>(key: &'a json::KeyRef<'_, T>) -> &'a str {
+pub(crate) fn key_text<'a, T: AsRef<str>>(key: &'a json::KeyRef<'_, T>) -> &'a str {
     match key {
         json::KeyRef::Borrowed(text) => text,
         json::KeyRef::Owned(text) => text.as_ref(),
     }
 }
-pub(super) trait Destination {
+pub(crate) trait Destination {
     type Error: From<json::Error>;
     type Text: AsRef<str>;
     fn key<'a>(
@@ -53,7 +56,7 @@ pub(super) trait Destination {
         object: &mut json::MapVisitor<'a, '_>,
     ) -> Result<Option<json::KeyRef<'a, Self::Text>>, Self::Error>;
 }
-pub(super) struct Ordinary;
+pub(crate) struct Ordinary;
 impl Destination for Ordinary {
     type Error = json::Error;
     type Text = String;
@@ -64,7 +67,7 @@ impl Destination for Ordinary {
         object.next_key()
     }
 }
-struct Text(ChargedBuffer<u8>);
+pub(crate) struct Text(ChargedBuffer<u8>);
 impl AsMut<[u8]> for Text {
     fn as_mut(&mut self) -> &mut [u8] {
         self.0.as_mut_slice()
@@ -75,8 +78,8 @@ impl AsRef<str> for Text {
         std::str::from_utf8(self.0.as_slice()).expect("the original string kernel writes UTF-8")
     }
 }
-struct Admitted<'a> {
-    budget: &'a AllocationBudget,
+pub(crate) struct Admitted<'a> {
+    pub(crate) budget: &'a AllocationBudget,
 }
 impl Destination for Admitted<'_> {
     type Error = PipelinePolicyJsonAdmissionError;

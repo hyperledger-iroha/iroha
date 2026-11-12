@@ -1134,11 +1134,57 @@ fn selected_permission_mutation_allowed(
     {
         return restricted_dataspace_read_owner(state_transaction, authority, permission);
     }
+    if permission.name() == crate::runtime::content_publish_permission::NAME
+        && crate::runtime::content_publish_permission::selected(
+            state_transaction.world.runtime_selection(),
+        )
+    {
+        return content_publish_permission_issuer(
+            state_transaction,
+            authority,
+            permission,
+            is_revoke,
+        );
+    }
     if is_revoke {
         initial_permission_revocation_allowed(state_transaction, authority, permission)
     } else {
         initial_permission_delegation_allowed(state_transaction, authority, permission)
     }
+}
+
+/// On a root that selected the governed content-publishing permission
+/// (`crate::runtime::content_publish_permission`), only the parameter authority issues or
+/// withdraws it, and only in its exact unit form; holding it never authorizes delegation. While a
+/// `Disabled` restriction names it, nothing new is issued, so its grants only shrink.
+fn content_publish_permission_issuer(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+    is_revoke: bool,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    if *permission != crate::runtime::content_publish_permission::token() {
+        return Err(invalid_initial_permission_payload(
+            permission,
+            "permission requires the unit payload",
+        )
+        .into());
+    }
+    if !is_revoke
+        && !crate::runtime::content_publish_permission::recognized(
+            state_transaction.world.runtime_selection(),
+        )
+    {
+        return Err(ValidationFail::NotPermitted(
+            "content publishing is disabled; CanPublishContentBundle cannot be granted".to_owned(),
+        )
+        .into());
+    }
+    Ok(authority_has_permission(
+        &state_transaction.world,
+        authority,
+        &executor_permission::parameter::CanSetParameters.into(),
+    )?)
 }
 
 /// Enforce the selected native successor even for an installed user executor. Other permission
@@ -1252,6 +1298,15 @@ fn validate_initial_permission_or_role_mutation(
                 permission,
                 is_revoke,
             )?;
+            // A holder may renounce its own governed content-publishing grant.
+            let renunciation = !is_genesis
+                && !allowed
+                && is_revoke
+                && destination == authority
+                && permission.name() == crate::runtime::content_publish_permission::NAME
+                && crate::runtime::content_publish_permission::selected(
+                    state_transaction.world.runtime_selection(),
+                );
             let scoped_enrollment = !is_genesis
                 && !allowed
                 && !is_revoke
@@ -1262,7 +1317,7 @@ fn validate_initial_permission_or_role_mutation(
                     destination,
                     state_transaction.block_unix_timestamp_ms(),
                 )?;
-            if is_genesis || allowed || scoped_enrollment {
+            if is_genesis || allowed || renunciation || scoped_enrollment {
                 return Ok(());
             }
             Err(ValidationFail::NotPermitted(format!(
@@ -1320,13 +1375,19 @@ fn validate_initial_permission_or_role_mutation(
                 return Ok(());
             }
             // A new native SNS owner must be able to remove its exact read capability from
-            // roles created by a previous owner, without first receiving those roles.
+            // roles created by a previous owner, without first receiving those roles. Likewise
+            // the parameter authority removes the governed content-publishing permission from
+            // any role.
             let owner_revoke = is_revoke
-                && normalized.name() == "CanReadRestrictedDataspace"
-                && crate::runtime::restricted_dataspace_read::selected_for(
-                    state_transaction.world.runtime_selection(),
-                    instruction,
-                );
+                && ((normalized.name() == "CanReadRestrictedDataspace"
+                    && crate::runtime::restricted_dataspace_read::selected_for(
+                        state_transaction.world.runtime_selection(),
+                        instruction,
+                    ))
+                    || (normalized.name() == crate::runtime::content_publish_permission::NAME
+                        && crate::runtime::content_publish_permission::selected(
+                            state_transaction.world.runtime_selection(),
+                        )));
             if !authority_has_role(&state_transaction.world, authority, role) && !owner_revoke {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot modify a role it does not hold".to_owned(),
@@ -2175,6 +2236,40 @@ fn validate_initial_native_instruction_authority(
             return Ok(());
         }
         return deny("Can't upgrade executor without CanUpgradeExecutor");
+    }
+    // A root that selected the governed content-publishing permission admits content bundles
+    // after genesis (`crate::runtime::content_publish_permission`); every other root keeps the
+    // baseline's genesis-only rule below.
+    if !is_genesis
+        && crate::runtime::content_publish_permission::selected(
+            state_transaction.world.runtime_selection(),
+        )
+    {
+        if any
+            .downcast_ref::<iroha_data_model::isi::content::RetireContentBundle>()
+            .is_some()
+        {
+            // Core lets only the bundle's creator retire it.
+            return Ok(());
+        }
+        if any
+            .downcast_ref::<iroha_data_model::isi::content::PublishContentBundle>()
+            .is_some()
+        {
+            if !crate::runtime::content_publish_permission::recognized(
+                state_transaction.world.runtime_selection(),
+            ) {
+                return deny("content publishing is disabled on this root");
+            }
+            if authority_has_permission(
+                &state_transaction.world,
+                authority,
+                &crate::runtime::content_publish_permission::token(),
+            )? {
+                return Ok(());
+            }
+            return deny("publishing a content bundle requires CanPublishContentBundle");
+        }
     }
     // The default executor does not admit these authority-free administrative
     // instructions. Genesis may seed their state, but post-genesis callers must use
@@ -3214,7 +3309,11 @@ fn normalize_role_permission_for_initial_executor(
         .permissions()
         .iter()
         .any(|known| known.as_str() == permission.name())
-        || is_builtin_initial_permission_name(permission.name());
+        || is_builtin_initial_permission_name(permission.name())
+        || (permission.name() == crate::runtime::content_publish_permission::NAME
+            && crate::runtime::content_publish_permission::selected(
+                state_transaction.world.runtime_selection(),
+            ));
     if !known_permission {
         return Err(ValidationFail::NotPermitted(format!(
             "{permission:?}: Unknown permission"

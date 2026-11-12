@@ -843,3 +843,21 @@ fn a_restored_board_is_recomputed_at_every_phase() {
         Err(BoardErrorV1::Restore { field: "closure" })
     );
 }
+
+#[test]
+fn only_a_node_local_proof_input_failure_is_local() {
+    use crate::inputs::ProofInputErrorV1;
+
+    let local = ContextErrorV1::Inputs(ProofInputErrorV1::ProfileIdentity);
+    let invalid = ContextErrorV1::Mismatch { field: "list" };
+    assert!(local.is_local());
+    assert!(!invalid.is_local());
+    assert!(SealErrorV1::Context(local.clone()).is_local());
+    assert!(!SealErrorV1::Context(invalid.clone()).is_local());
+    assert!(!SealErrorV1::MissingCredential.is_local());
+    assert!(BoardErrorV1::Context(local.clone()).is_local());
+    assert!(!BoardErrorV1::Context(invalid).is_local());
+    assert!(!BoardErrorV1::Closed.is_local());
+    assert!(RegistrationLedgerErrorV1::Context(local).is_local());
+    assert!(!RegistrationLedgerErrorV1::DuplicateCommitment.is_local());
+}

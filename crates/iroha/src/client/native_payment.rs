@@ -25,6 +25,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 mod carrier;
@@ -37,6 +38,32 @@ mod session;
 pub use observation::NativePaymentObservationError;
 use observation::{NativePaymentLedger, OnlinePaymentSource, PaymentSource};
 pub use session::NativePaymentSession;
+
+/// Wait before repeating a read the node refused for its parallel-query capacity. Torii
+/// advertises `Retry-After: 1` for this refusal.
+const QUERY_CAPACITY_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Whether `error` is the node's transient refusal of a read for its parallel-query capacity:
+/// HTTP 429 with the exact native `CapacityLimit` envelope. Any other refusal is final here.
+fn is_query_capacity_refusal(error: &NativePaymentObservationError) -> bool {
+    matches!(
+        error,
+        NativePaymentObservationError::Query(crate::query::QueryError::Http {
+            status,
+            code,
+            message,
+        }) if *status == http::StatusCode::TOO_MANY_REQUESTS
+            && code == "query_validation_failed"
+            && *message
+                == iroha_data_model::query::error::QueryExecutionFail::CapacityLimit.to_string()
+    )
+}
+
+/// The latest instant a call may still wait for capacity: `timeout` after `start`.
+fn observation_deadline(start: Instant, timeout: Duration) -> Instant {
+    start.checked_add(timeout).unwrap_or(start)
+}
+
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
@@ -387,16 +414,30 @@ impl NativePaymentOperation {
         Ok(NativePaymentSettlement { receipt, carrier })
     }
 
-    async fn existing_receipt(&self) -> Result<Option<VerifiedPaymentReceipt>, NativePaymentError> {
+    /// Recover an independently verified business receipt. A read the node refuses for its
+    /// parallel-query capacity is repeated after the advertised delay until `deadline`, the
+    /// caller's own observation bound; reads never authorize a new submission.
+    async fn existing_receipt(
+        &self,
+        deadline: Instant,
+    ) -> Result<Option<VerifiedPaymentReceipt>, NativePaymentError> {
         let journal = self.handle.journal_snapshot()?;
         let marker = journal
             .as_ref()
             .and_then(|journal| journal.native_payment_completion.as_ref());
-        let receipt = self
-            .ledger
-            .recover_business(marker)
-            .await
-            .map_err(|e| self.observation_error(e))?;
+        let receipt = loop {
+            match self.ledger.recover_business(marker).await {
+                Err(error)
+                    if is_query_capacity_refusal(&error)
+                        && Instant::now()
+                            .checked_add(QUERY_CAPACITY_RETRY_DELAY)
+                            .is_some_and(|retry| retry < deadline) =>
+                {
+                    tokio::time::sleep(QUERY_CAPACITY_RETRY_DELAY).await;
+                }
+                result => break result.map_err(|e| self.observation_error(e))?,
+            }
+        };
         if let Some(marker) = marker {
             let Some(receipt) = &receipt else {
                 return Err(
@@ -453,11 +494,12 @@ impl NativePaymentOperation {
         authorize_submission: bool,
     ) -> Result<NativePaymentSettlement, NativePaymentError> {
         let _call = self.call.lock().await;
+        let deadline = observation_deadline(Instant::now(), options.workflow.observation_timeout);
         let _observation = self
             .ledger
             .begin_call(options.max_finality_proof_reads.get() as usize)
             .map_err(|error| self.observation_error(error))?;
-        if let Some(receipt) = self.existing_receipt().await? {
+        if let Some(receipt) = self.existing_receipt(deadline).await? {
             return self.finish_verified(receipt);
         }
         let result = if authorize_submission {
@@ -488,7 +530,7 @@ impl NativePaymentOperation {
         if let Some(receipt) = self.ledger.take_receipt()? {
             return self.finish_verified(receipt);
         }
-        let recovery = self.existing_receipt().await;
+        let recovery = self.existing_receipt(deadline).await;
         if let Ok(Some(receipt)) = recovery {
             return self.finish_verified(receipt);
         }
@@ -512,11 +554,12 @@ impl NativePaymentOperation {
         options: &NativePaymentRunOptions,
     ) -> Result<NativePaymentRecovery, NativePaymentError> {
         let _call = self.call.lock().await;
+        let deadline = observation_deadline(Instant::now(), options.workflow.observation_timeout);
         let _observation = self
             .ledger
             .begin_call(options.max_finality_proof_reads.get() as usize)
             .map_err(|error| self.observation_error(error))?;
-        if let Some(receipt) = self.existing_receipt().await? {
+        if let Some(receipt) = self.existing_receipt(deadline).await? {
             let settled = self.finish_verified(receipt)?;
             return Ok(NativePaymentRecovery {
                 carrier: Some(settled.carrier),
@@ -534,7 +577,7 @@ impl NativePaymentOperation {
         let original_error = self.ledger.take_error()?;
         let recovery = match self.ledger.take_receipt()? {
             Some(receipt) => Ok(Some(receipt)),
-            None => self.existing_receipt().await,
+            None => self.existing_receipt(deadline).await,
         };
         if let Ok(Some(receipt)) = recovery {
             let settled = self.finish_verified(receipt)?;

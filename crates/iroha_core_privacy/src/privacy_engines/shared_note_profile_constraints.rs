@@ -1,6 +1,7 @@
 // Shared exact profile constraints for the IVM private-note and PQ-MASP AIRs.
+// `$capacity` sizes each row's residue vector once; it never changes the residues.
 macro_rules! define_note_profile_constraint_residues_v1 {
-    ($function_name:ident) => {
+    ($function_name:ident, $capacity:expr) => {
         fn $function_name(
             current: &[F],
             next: &[F],
@@ -19,7 +20,7 @@ macro_rules! define_note_profile_constraint_residues_v1 {
             let fixed = &fixed[NOTE_COPY_FIXED_WIDTH_V1..];
             let bridge = current_aux[NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_VM_CARRY_BRIDGE];
             let next_bridge = next_aux[NOTE_COPY_AUX_WIDTH_V1 + PROFILE_AUX_VM_CARRY_BRIDGE];
-            let mut residues = Vec::new();
+            let mut residues = Vec::with_capacity($capacity);
             // Every base cell outside its row-family layout is exactly zero. This
             // closes alternate encodings and makes all scratch reuse unambiguous.
             for (column, value) in current.iter().copied().enumerate().skip(8) {

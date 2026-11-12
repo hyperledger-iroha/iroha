@@ -287,10 +287,12 @@ pub fn prove_atomic_private_settlement_intent_v1(
 #[cfg(test)]
 pub(super) mod phase_test_support {
     use super::APS_PROOF_PHASE_TARGET_V1;
+    use crate::privacy_engines::proof_phase_diagnostics::NOTE_PROOF_PHASE_TARGET_V1;
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt,
         sync::{Arc, Mutex},
+        time::Duration,
     };
     use tracing::{
         Event, Metadata, Subscriber,
@@ -314,6 +316,19 @@ pub(super) mod phase_test_support {
         fields: BTreeMap<String, CapturedValueV1>,
     }
 
+    impl CapturedPhaseEventV1 {
+        /// Phase label and duration of a completed event, for timing diagnostics.
+        pub(crate) fn completed_duration_v1(&self) -> Option<(&str, Duration)> {
+            match (self.fields.get("phase"), self.fields.get("duration_ns")) {
+                (
+                    Some(CapturedValueV1::Text(phase)),
+                    Some(CapturedValueV1::Unsigned(duration_ns)),
+                ) => Some((phase, Duration::from_nanos(*duration_ns))),
+                _ => None,
+            }
+        }
+    }
+
     struct FieldVisitorV1(BTreeMap<String, CapturedValueV1>);
     impl FieldVisitorV1 {
         fn insert(&mut self, field: &Field, value: CapturedValueV1) {
@@ -332,9 +347,13 @@ pub(super) mod phase_test_support {
         }
     }
 
+    /// Completed managed-note prover phases, kept apart from the exact facade population.
+    type NoteDurationsV1 = Arc<Mutex<Vec<(String, Duration)>>>;
+
     struct CaptureSubscriberV1 {
         enabled: bool,
         events: Arc<Mutex<Vec<CapturedPhaseEventV1>>>,
+        note_durations: Option<NoteDurationsV1>,
     }
     impl Subscriber for CaptureSubscriberV1 {
         fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
@@ -343,9 +362,10 @@ pub(super) mod phase_test_support {
             Interest::sometimes()
         }
         fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-            self.enabled
-                && metadata.target() == APS_PROOF_PHASE_TARGET_V1
-                && *metadata.level() == tracing::Level::DEBUG
+            *metadata.level() == tracing::Level::DEBUG
+                && ((self.enabled && metadata.target() == APS_PROOF_PHASE_TARGET_V1)
+                    || (self.note_durations.is_some()
+                        && metadata.target() == NOTE_PROOF_PHASE_TARGET_V1))
         }
         fn max_level_hint(&self) -> Option<LevelFilter> {
             Some(LevelFilter::DEBUG)
@@ -366,6 +386,17 @@ pub(super) mod phase_test_support {
                 level: *event.metadata().level(),
                 fields: visitor.0,
             };
+            if recorded.target == NOTE_PROOF_PHASE_TARGET_V1 {
+                if let (Some(durations), Some((phase, duration))) =
+                    (&self.note_durations, recorded.completed_duration_v1())
+                {
+                    durations
+                        .lock()
+                        .expect("note phase capture lock")
+                        .push((phase.to_owned(), duration));
+                }
+                return;
+            }
             self.events
                 .lock()
                 .expect("phase capture lock")
@@ -378,25 +409,42 @@ pub(super) mod phase_test_support {
     pub struct PhaseCaptureV1 {
         enabled: bool,
         events: Arc<Mutex<Vec<CapturedPhaseEventV1>>>,
+        note_durations: Option<NoteDurationsV1>,
     }
     impl PhaseCaptureV1 {
         pub(crate) fn new(enabled: bool) -> Self {
             Self {
                 enabled,
                 events: Arc::new(Mutex::new(Vec::new())),
+                note_durations: None,
             }
+        }
+        /// Also time every managed-note prover phase. Those records never enter
+        /// [`Self::events_v1`], so the facade population assertions are unchanged.
+        pub(crate) fn with_note_phase_durations_v1(mut self) -> Self {
+            self.note_durations = Some(Arc::new(Mutex::new(Vec::new())));
+            self
         }
         pub(crate) fn with_default<R>(&self, run: impl FnOnce() -> R) -> R {
             tracing::subscriber::with_default(
                 CaptureSubscriberV1 {
                     enabled: self.enabled,
                     events: Arc::clone(&self.events),
+                    note_durations: self.note_durations.clone(),
                 },
                 run,
             )
         }
         pub(crate) fn events_v1(&self) -> Vec<CapturedPhaseEventV1> {
             self.events.lock().expect("phase capture lock").clone()
+        }
+        /// Completed managed-note prover phases in completion order.
+        pub(crate) fn note_phase_durations_v1(&self) -> Vec<(String, Duration)> {
+            self.note_durations
+                .as_ref()
+                .map_or_else(Vec::new, |durations| {
+                    durations.lock().expect("note phase capture lock").clone()
+                })
         }
         pub(crate) fn assert_one_successful_invocation_v1(&self) -> Vec<CapturedPhaseEventV1> {
             let events = self.events_v1();

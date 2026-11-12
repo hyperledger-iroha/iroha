@@ -4,9 +4,12 @@
 //! Keeping the existing block snapshots here removes transaction copies and makes
 //! a temporary policy substitution impossible through the execution-scope API.
 //! This is original input custody, not a policy digest or publication authority.
-//! TODO: migrate these node-configuration families into the existing committed
-//! policy owners. Immutable capture alone does not make local policies consensus
-//! parameters or complete the keyed State publication and recovery contract.
+//! The content limits and router inputs of a root that recognizes them are its
+//! committed policy (`runtime::committed_policy`), frozen from the predecessor.
+//! TODO: migrate the remaining node-configuration families (oracle, governance)
+//! into the existing committed policy owners. Immutable capture alone does not
+//! make local policies consensus parameters or complete the keyed State
+//! publication and recovery contract.
 
 use super::*;
 
@@ -60,9 +63,11 @@ pub struct StaticExecutionPolicy {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Governance execution settings from the original construction.
     pub gov: iroha_config::parameters::actual::Governance,
-    /// Content admission settings from the original construction.
+    /// Content settings: this node's gateway resources with the bundle limits
+    /// of the predecessor, committed when its root recognizes them.
     pub content: iroha_config::parameters::actual::Content,
-    /// Settlement rules from the original construction.
+    /// Settlement router inputs of the predecessor, committed when its root
+    /// recognizes them.
     pub settlement: iroha_config::parameters::actual::Settlement,
     // Keep construction in this module, including from other modules in this crate.
     _original: (),
@@ -70,13 +75,26 @@ pub struct StaticExecutionPolicy {
 
 impl StaticExecutionPolicy {
     /// Move the existing construction snapshots into their immutable owner.
-    pub(super) fn capture(state: &State) -> Self {
+    ///
+    /// `world` is the predecessor the block freezes: the content limits and
+    /// router inputs of a root that recognizes them are its committed values.
+    pub(super) fn capture(state: &State, world: &impl crate::state::WorldReadOnly) -> Self {
+        let selection = world.runtime_selection();
+        let parameters = world.parameters();
         Self {
             oracle: state.oracle.clone(),
             crypto: state.crypto(),
             gov: state.gov.clone(),
-            content: state.content.clone(),
-            settlement: state.settlement,
+            content: crate::runtime::committed_policy::effective_content(
+                &state.content,
+                selection,
+                parameters,
+            ),
+            settlement: crate::runtime::committed_policy::effective_settlement(
+                &state.settlement,
+                selection,
+                parameters,
+            ),
             _original: (),
         }
     }

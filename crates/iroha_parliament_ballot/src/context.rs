@@ -58,6 +58,17 @@ pub enum ContextErrorV1 {
     },
 }
 
+impl ContextErrorV1 {
+    /// Whether the node could not build the context, as opposed to the context being
+    /// invalid. A local failure is never a committed verdict.
+    pub const fn is_local(&self) -> bool {
+        match self {
+            Self::Inputs(error) => error.is_local(),
+            Self::Structure(_) | Self::Mismatch { .. } | Self::Derived { .. } => false,
+        }
+    }
+}
+
 /// The proof crate's representation of a checked context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProofParts {

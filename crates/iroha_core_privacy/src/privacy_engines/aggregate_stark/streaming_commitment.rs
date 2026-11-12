@@ -31,8 +31,8 @@ pub(super) fn payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
 
-/// Initial pairs alone need reconstructed original finalizers and serialized
-/// scratch. Selected replay keeps the original scalar bound above.
+/// Initial pairs alone add the fixed paired construction and finalization
+/// workspace per tile row. Selected replay keeps the original scalar bound above.
 pub(super) fn initial_payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
     let scalar = payload_bound_v1()?;
     TILE_ROWS

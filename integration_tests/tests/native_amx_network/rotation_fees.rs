@@ -5,17 +5,13 @@
 //! supply, and additionally reconstructs each bank's exact fee-account balances.
 
 use super::*;
+use iroha::collections::{Collection, ListQuery};
 use iroha_data_model::{
-    Identifiable,
     asset::{Asset, AssetValue},
     block::consensus::NexusFeeSettlementV1,
     isi::{Burn, BurnBox, Mint, MintBox, TransferBox},
     nexus::FeeDebitSource,
-    query::{
-        asset::{FindAssetDefinitionById, FindAssets},
-        builder::QueryBuilderExt,
-        parameters::Pagination,
-    },
+    query::asset::FindAssetDefinitionById,
     sumeragi_finality::authenticate_signed_genesis_v1,
     transaction::{Executable, FeeChargeKind, TransactionEntrypoint},
 };
@@ -162,8 +158,7 @@ pub(super) fn audit(
             let proof = if next == height {
                 cut.attestation.body.finality_proof.clone()
             } else {
-                root.client(&amx::genesis_key(root.index)).client()
-                    .get_sumeragi_finality_proof_async(NonZeroU64::new(next).unwrap(), root.scope).await?
+                amx::finality_proof(root.client(&amx::genesis_key(root.index)).client(), next, root.scope).await?
             };
             let block = verifier.verify(&proof)?;
             if next > 1 {
@@ -213,25 +208,42 @@ pub(super) fn audit(
         let tip = tip.ok_or_else(|| eyre!("rotation has no authenticated final cut"))?;
         let world = cut.world_snapshot.authenticate(&tip)?;
         ensure!(world.schema_hash() == iroha_core::state::State::native_world_schema_hash_v1().map_err(|e| eyre!(e))?);
-        // The authenticated complete table itself supplies the read bound. The
-        // extra row detects inconsistent query pagination; no failed query or
-        // missing response is interpreted as balance absence.
+        // The authenticated complete table itself supplies the read bound. Signed
+        // collection reads (every holder of every definition) supply only key
+        // originals and claimed balances; the certified table authenticates each
+        // row and the complete key set. No failed read or missing row is
+        // interpreted as balance absence.
         let count = cut.world_snapshot.entries.iter().filter(|entry| entry.field_id == "world.assets").count();
-        let limit = NonZeroU64::new(u64::try_from(count)?.checked_add(1).ok_or_else(|| eyre!("asset row count overflow"))?).unwrap();
         let client = root.client(&amx::genesis_key(root.index));
         let (assets, definition) = iroha_test_network::read_on_dedicated_thread(move || -> Result<_> {
-            let assets = client.client().query(FindAssets::new())
-                .with_pagination(Pagination { limit: Some(limit), offset: 0 }).execute_all()?;
+            let text = |row: &norito::json::Value, field: &str| -> Result<String> {
+                row.get(field)
+                    .and_then(norito::json::Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| eyre!("collection row omits text field `{field}`"))
+            };
+            let mut assets = Vec::new();
+            for row in client.list(Collection::AssetDefinitions, ListQuery::new().select(["id"])) {
+                let definition: AssetDefinitionId = text(&row?, "id")?.parse()?;
+                let holders = Collection::AssetHolders(definition);
+                for holder in client.list(holders, ListQuery::new().select(["id", "quantity"])) {
+                    let holder = holder?;
+                    let id: AssetId = text(&holder, "id")?.parse()?;
+                    let quantity: Quantity = text(&holder, "quantity")?.parse()?;
+                    assets.push((id, quantity));
+                    ensure!(assets.len() <= count, "asset collections list more rows than the certified complete table");
+                }
+            }
             let definition = client.client().query_single(FindAssetDefinitionById::new(amx::fee_asset()))?;
             Ok((assets, definition))
         }).await?;
-        ensure!(assets.len() == count, "asset response differs from exact certified complete table count");
-        world.verify_asset_keys_complete(&assets.iter().map(|asset| asset.id().clone()).collect::<Vec<_>>())?;
+        ensure!(assets.len() == count, "asset rows differ from exact certified complete table count");
+        world.verify_asset_keys_complete(&assets.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>())?;
         let mut fee_balances = Balances::new();
-        for asset in assets {
-            world.verify_table_value("world.assets", asset.id(), &AssetValue::new(asset.value().clone()))?;
-            if asset.id().definition() == &amx::fee_asset() {
-                ensure!(fee_balances.insert(asset.id().clone(), asset.value().clone()).is_none());
+        for (id, quantity) in assets {
+            world.verify_table_value("world.assets", &id, &AssetValue::new(quantity.clone()))?;
+            if id.definition() == &amx::fee_asset() {
+                ensure!(fee_balances.insert(id, quantity).is_none());
             }
         }
         world.verify_table_value("world.asset_definitions", &amx::fee_asset(), &definition)?;

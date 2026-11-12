@@ -13,10 +13,10 @@ use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     proof_phase_diagnostics::{ManagedNotePhaseCursorV1, ProofPhaseInvocationV1, ProofPhaseV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        PrivacyOuterDigestV1, ReplayableTraceMaskV1, TransparentStarkErrorV1,
-        TransparentTranscriptV1, goldilocks_fft_v1, goldilocks_ifft_v1,
-        goldilocks_primitive_root_v1, grind_nonce_v1, masked_trace_lde_column_with_mask_v1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksColumnInterpolatorV1, GoldilocksColumnLdeTablesV1,
+        GoldilocksFieldV1 as F, GoldilocksFp4DotV1, GoldilocksFp4V1 as E, PrivacyOuterDigestV1,
+        ReplayableTraceMaskV1, TransparentStarkErrorV1, TransparentTranscriptV1,
+        goldilocks_fp4_evaluate_coset_v1, goldilocks_primitive_root_v1, grind_nonce_v1,
         privacy_outer_digest_frame_v1, sample_trace_mask_v1, transparent_stark_zk_mask_geometry_v1,
         verify_grinding_nonce_v1,
     },
@@ -28,7 +28,6 @@ use iroha_data_model::privacy::{
 
 use rand::TryRng;
 use rayon::prelude::*;
-use std::collections::BTreeSet;
 use thiserror::Error;
 #[path = "proof_managed_note_stark_fixed_queries.rs"]
 mod fixed_queries;
@@ -516,7 +515,12 @@ impl NoteCopyScheduleV1 {
         if labels > u32::MAX as usize {
             return Err(ProofManagedNoteStarkErrorV1::Resource);
         }
-        let mut seen = BTreeSet::new();
+        // One flag per one-based label: a repeated or out-of-range target is not a permutation.
+        let mut seen = Vec::new();
+        seen.try_reserve_exact(labels)
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        seen.resize(labels, false);
+        let mut distinct = 0_usize;
         for (row, policies) in self.policies.iter().enumerate().take(trace_size) {
             for (column, policy) in policies.iter().enumerate() {
                 let identity = row
@@ -526,9 +530,11 @@ impl NoteCopyScheduleV1 {
                     .ok_or(ProofManagedNoteStarkErrorV1::Resource)?;
                 let target = usize::try_from(self.sigma[row][column])
                     .map_err(|_| ProofManagedNoteStarkErrorV1::Copy)?;
-                if target == 0 || target > labels || !seen.insert(target) {
+                if target == 0 || target > labels || core::mem::replace(&mut seen[target - 1], true)
+                {
                     return Err(ProofManagedNoteStarkErrorV1::Copy);
                 }
+                distinct += 1;
                 let target_zero = target - 1;
                 let target_row = target_zero / NOTE_COPY_WIDTH_V1;
                 let target_column = target_zero % NOTE_COPY_WIDTH_V1;
@@ -549,7 +555,7 @@ impl NoteCopyScheduleV1 {
                 }
             }
         }
-        if seen.len() != labels {
+        if distinct != labels {
             return Err(ProofManagedNoteStarkErrorV1::Copy);
         }
         Ok(())
@@ -1064,6 +1070,7 @@ fn prepare_fixed_columns_v1<A: ProofManagedNoteStarkAdapterV1>(
     canonical_columns_v1(&fixed_columns, fixed_width, trace_size)?;
     Ok(fixed_columns)
 }
+#[cfg(test)]
 fn row_at_columns_v1(
     columns: &[Vec<F>],
     row: usize,
@@ -1082,6 +1089,151 @@ fn row_at_columns_v1(
         );
     }
     Ok(values.into_inner())
+}
+/// Rows whose constraint residues one worker evaluates from one gathered block.
+const NOTE_ROW_BLOCK_V1: usize = 64;
+/// One worker's row-major current/next windows for a block of rows of column-major traces.
+///
+/// A block is gathered one column at a time, so each column is read in one short ascending run
+/// instead of one scattered load per row. The windows keep a fixed size: every slot is either
+/// overwritten by the current block or holds a value of an earlier block of the same worker, and
+/// Drop wipes all of them.
+struct NoteRowBlockV1 {
+    current_base: ZeroizingBaseFieldValuesV1,
+    next_base: ZeroizingBaseFieldValuesV1,
+    current_aux: ZeroizingBaseFieldValuesV1,
+    next_aux: ZeroizingBaseFieldValuesV1,
+    fixed: ZeroizingBaseFieldValuesV1,
+    widths: (usize, usize, usize),
+    rows: usize,
+}
+impl NoteRowBlockV1 {
+    fn new(prepared: &PreparedNoteProfileV1) -> Result<Self, ProofManagedNoteStarkErrorV1> {
+        let zeroed = |width: usize| {
+            let slots = width
+                .checked_mul(NOTE_ROW_BLOCK_V1)
+                .ok_or(ProofManagedNoteStarkErrorV1::Resource)?;
+            let mut values = ZeroizingBaseFieldValuesV1::from(Vec::new());
+            values
+                .0
+                .try_reserve_exact(slots)
+                .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+            values.0.resize(slots, F::ZERO);
+            Ok::<_, ProofManagedNoteStarkErrorV1>(values)
+        };
+        Ok(Self {
+            current_base: zeroed(prepared.base_width)?,
+            next_base: zeroed(prepared.base_width)?,
+            current_aux: zeroed(prepared.aux_width)?,
+            next_aux: zeroed(prepared.aux_width)?,
+            fixed: zeroed(prepared.fixed_width)?,
+            widths: (
+                prepared.base_width,
+                prepared.aux_width,
+                prepared.fixed_width,
+            ),
+            rows: 0,
+        })
+    }
+    /// Gather the rows `current[k]` and their successor rows `next[k]`.
+    fn gather(
+        &mut self,
+        (base, aux, fixed): NoteLdeColumnsV1<'_>,
+        current: &[usize],
+        next: &[usize],
+    ) -> Result<(), ProofManagedNoteStarkErrorV1> {
+        if current.len() != next.len() || current.len() > NOTE_ROW_BLOCK_V1 {
+            return Err(ProofManagedNoteStarkErrorV1::Internal);
+        }
+        let (base_width, aux_width, fixed_width) = self.widths;
+        self.rows = 0;
+        transpose_rows_v1(base, base_width, current, &mut self.current_base)?;
+        transpose_rows_v1(base, base_width, next, &mut self.next_base)?;
+        transpose_rows_v1(aux, aux_width, current, &mut self.current_aux)?;
+        transpose_rows_v1(aux, aux_width, next, &mut self.next_aux)?;
+        transpose_rows_v1(fixed, fixed_width, current, &mut self.fixed)?;
+        self.rows = current.len();
+        Ok(())
+    }
+    fn residues<A: ProofManagedNoteStarkAdapterV1>(
+        &self,
+        row: usize,
+        adapter: &A,
+        prepared: &PreparedNoteProfileV1,
+        copy_challenges: NoteCopyChallengesV1,
+        profile_challenges: &A::ProfileChallenges,
+    ) -> Result<ZeroizingBaseFieldValuesV1, ProofManagedNoteStarkErrorV1> {
+        if row >= self.rows {
+            return Err(ProofManagedNoteStarkErrorV1::Internal);
+        }
+        let (base_width, aux_width, fixed_width) = self.widths;
+        all_constraint_residues_v1(
+            adapter,
+            prepared,
+            (
+                row_window_v1(&self.current_base, row, base_width),
+                row_window_v1(&self.next_base, row, base_width),
+            ),
+            (
+                row_window_v1(&self.current_aux, row, aux_width),
+                row_window_v1(&self.next_aux, row, aux_width),
+            ),
+            row_window_v1(&self.fixed, row, fixed_width),
+            copy_challenges,
+            profile_challenges,
+        )
+    }
+}
+/// Copy rows `rows[k]` of `width` column-major columns to `target[k * width + column]`.
+fn transpose_rows_v1(
+    columns: &[Vec<F>],
+    width: usize,
+    rows: &[usize],
+    target: &mut [F],
+) -> Result<(), ProofManagedNoteStarkErrorV1> {
+    if columns.len() != width
+        || rows
+            .len()
+            .checked_mul(width)
+            .is_none_or(|needed| needed > target.len())
+    {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
+    }
+    for (column_index, column) in columns.iter().enumerate() {
+        for (row_offset, row) in rows.iter().enumerate() {
+            target[row_offset * width + column_index] = column
+                .get(*row)
+                .copied()
+                .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?;
+        }
+    }
+    Ok(())
+}
+/// Row `row` of a row-major window whose rows hold `width` values.
+fn row_window_v1(values: &[F], row: usize, width: usize) -> &[F] {
+    &values[row * width..(row + 1) * width]
+}
+/// The rows of positions `first..last` scaled by `stride`, and their successors on `size` rows.
+fn block_rows_v1(
+    first: usize,
+    last: usize,
+    stride: usize,
+    next_stride: usize,
+    size: usize,
+) -> (
+    [usize; NOTE_ROW_BLOCK_V1],
+    [usize; NOTE_ROW_BLOCK_V1],
+    usize,
+) {
+    let mut current = [0_usize; NOTE_ROW_BLOCK_V1];
+    let mut next = [0_usize; NOTE_ROW_BLOCK_V1];
+    let count = last.saturating_sub(first).min(NOTE_ROW_BLOCK_V1);
+    for offset in 0..count {
+        let row = (first + offset) * stride;
+        current[offset] = row;
+        next[offset] = (row + next_stride) % size;
+    }
+    (current, next, count)
 }
 struct ZeroizingBaseFieldValuesV1(Vec<F>);
 impl From<Vec<F>> for ZeroizingBaseFieldValuesV1 {
@@ -1278,6 +1430,13 @@ impl<const N: usize> Drop for ZeroizingExtensionFieldRowV1<N> {
         self.zeroize_v1();
     }
 }
+/// Exact maximum number of note column transforms resident in one parallel dispatch.
+///
+/// Each transform runs on one worker with shared public tables, so one dispatch must hold enough
+/// columns to occupy the whole pool. Besides its retained output, an in-flight transform holds one
+/// interpolation-sized scratch vector; source-ordered dispatches keep that count independent of
+/// the process-global Rayon width.
+const NOTE_COLUMN_TRANSFORM_BATCH_V1: usize = 64;
 fn collect_bounded_parallel_columns_v1<T, Transform>(
     column_count: usize,
     transform: Transform,
@@ -1293,9 +1452,9 @@ where
     // Sequential source-ordered batches make the resident transform count independent of the
     // process-global Rayon width. Indexed collection and serial reduction preserve both output
     // order and the lowest-column error.
-    for batch_start in (0..column_count).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+    for batch_start in (0..column_count).step_by(NOTE_COLUMN_TRANSFORM_BATCH_V1) {
         let batch_end = batch_start
-            .checked_add(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .checked_add(NOTE_COLUMN_TRANSFORM_BATCH_V1)
             .map_or(column_count, |end| end.min(column_count));
         let batch = (batch_start..batch_end)
             .into_par_iter()
@@ -1320,21 +1479,12 @@ fn fixed_lde_columns_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
-    let trace_root = goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
-    let lde_root = goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
-    let shift = F(GOLDILOCKS_GENERATOR_V1);
+    let tables = GoldilocksColumnLdeTablesV1::new_v1(trace_log2, lde_log2, 0)
+        .map_err(map_transparent_error_v1)?;
     collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
-        let column = &columns[column_index];
-        let mut coefficients = column.clone();
-        goldilocks_ifft_v1(&mut coefficients, trace_root).map_err(map_transparent_error_v1)?;
-        coefficients.resize(lde_size, F::ZERO);
-        let mut shift_power = F::ONE;
-        for coefficient in &mut coefficients {
-            *coefficient = coefficient.mul(shift_power);
-            shift_power = shift_power.mul(shift);
-        }
-        goldilocks_fft_v1(&mut coefficients, lde_root).map_err(map_transparent_error_v1)?;
-        Ok(coefficients)
+        tables
+            .public_lde_column_v1(&columns[column_index])
+            .map_err(map_transparent_error_v1)
     })
 }
 fn masked_lde_columns_v1<R: TryRng>(
@@ -1374,14 +1524,9 @@ fn masked_lde_columns_v1<R: TryRng>(
             TransparentStarkErrorV1::NonCanonicalField,
         ));
     }
-    goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
-    goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
-    let shift = F(GOLDILOCKS_GENERATOR_V1);
-    if shift.pow(trace_size as u128) == F::ONE || shift.pow(lde_size as u128) == F::ONE {
-        return Err(map_transparent_error_v1(
-            TransparentStarkErrorV1::InvalidDomain,
-        ));
-    }
+    // Root and coset geometry are checked here, still before any entropy is consumed.
+    let tables = GoldilocksColumnLdeTablesV1::new_v1(trace_log2, lde_log2, mask_len)
+        .map_err(map_transparent_error_v1)?;
     let mut masks = Vec::new();
     masks
         .try_reserve_exact(columns.len())
@@ -1397,14 +1542,10 @@ fn masked_lde_columns_v1<R: TryRng>(
     // sampled coefficients on success, ordinary error, and unwind. The transform itself likewise
     // guards and wipes the witness-interpolating coefficient vector.
     let lde_columns = collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
-        masked_trace_lde_column_with_mask_v1(
-            &columns[column_index],
-            trace_log2,
-            lde_log2,
-            masks[column_index].coefficients(),
-        )
-        .map(ZeroizingBaseFieldValuesV1::from)
-        .map_err(map_transparent_error_v1)
+        tables
+            .masked_lde_column_v1(&columns[column_index], masks[column_index].coefficients())
+            .map(ZeroizingBaseFieldValuesV1::from)
+            .map_err(map_transparent_error_v1)
     })?;
     let mut protected_columns = ZeroizingBaseFieldMatrixV1(Vec::new());
     protected_columns
@@ -1415,21 +1556,35 @@ fn masked_lde_columns_v1<R: TryRng>(
     }
     Ok((protected_columns.into_inner(), masks))
 }
-fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
-    coefficients
-        .iter()
-        .rev()
-        .copied()
-        .fold(E::ZERO, |value, coefficient| {
-            value.mul(point).add(E::from_base(coefficient))
-        })
+/// `point^0, ..., point^(count - 1)`.
+fn fp4_powers_v1(point: E, count: usize) -> Result<Vec<E>, ProofManagedNoteStarkErrorV1> {
+    let mut powers = Vec::new();
+    powers
+        .try_reserve_exact(count)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    let mut power = E::ONE;
+    for _ in 0..count {
+        powers.push(power);
+        power = power.mul(point);
+    }
+    Ok(powers)
 }
-fn evaluate_masked_native_columns_at_deep_v1(
+/// `sum_j coefficients[j] * point^j` from a table of at least `coefficients.len()` powers.
+fn evaluate_base_coefficients_with_powers_v1(coefficients: &[F], powers: &[E]) -> E {
+    debug_assert!(powers.len() >= coefficients.len());
+    let mut value = GoldilocksFp4DotV1::default();
+    value.add_products(powers, coefficients);
+    value.finish()
+}
+/// Coefficients of every masked native column, `trace(X) + (X^n - 1) * mask(X)`.
+///
+/// These are the polynomials whose coset evaluations the masked LDE committed. The DEEP openings
+/// and the DEEP/FRI codeword are both derived from them, so each column is interpolated once.
+fn masked_native_coefficients_v1(
     columns: &[Vec<F>],
     masks: &[ReplayableTraceMaskV1],
     trace_log2: u8,
-    point: E,
-) -> Result<(Vec<E>, Vec<E>), ProofManagedNoteStarkErrorV1> {
+) -> Result<ZeroizingBaseFieldMatrixV1, ProofManagedNoteStarkErrorV1> {
     let trace_size = checked_trace_size_v1(trace_log2)?;
     if columns.is_empty()
         || columns.len() != masks.len()
@@ -1440,48 +1595,76 @@ fn evaluate_masked_native_columns_at_deep_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
+    // Each worker owns one zeroizing coefficient vector. Results are reduced serially in column
+    // order, so malformed inputs keep their deterministic error precedence.
+    let interpolator =
+        GoldilocksColumnInterpolatorV1::new_v1(trace_log2).map_err(map_transparent_error_v1)?;
+    let coefficients = collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
+        interpolator
+            .masked_coefficients_v1(&columns[column_index], masks[column_index].coefficients())
+            .map(ZeroizingBaseFieldValuesV1::from)
+            .map_err(map_transparent_error_v1)
+    })?;
+    let mut matrix = ZeroizingBaseFieldMatrixV1(Vec::new());
+    matrix
+        .try_reserve_exact(coefficients.len())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    for column in coefficients {
+        matrix.push(column.into_inner());
+    }
+    Ok(matrix)
+}
+/// Evaluate masked column polynomials at the DEEP point and its next-row point.
+fn evaluate_masked_coefficients_at_deep_v1(
+    coefficients: &[Vec<F>],
+    trace_log2: u8,
+    point: E,
+) -> Result<(Vec<E>, Vec<E>), ProofManagedNoteStarkErrorV1> {
+    let length = coefficients
+        .first()
+        .map(Vec::len)
+        .ok_or(ProofManagedNoteStarkErrorV1::InvalidTrace)?;
+    if coefficients.iter().any(|column| column.len() != length) {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
+    }
     let native_root = goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
-    let next_point = point.mul_base(native_root);
+    // Both points are public. One shared power table per point turns every Horner chain into an
+    // exact dot product that reduces once per extension coefficient.
+    let powers = [
+        fp4_powers_v1(point, length)?,
+        fp4_powers_v1(point.mul_base(native_root), length)?,
+    ];
+    let evaluations = coefficients
+        .par_iter()
+        .map(|column| {
+            (
+                evaluate_base_coefficients_with_powers_v1(column, &powers[0]),
+                evaluate_base_coefficients_with_powers_v1(column, &powers[1]),
+            )
+        })
+        .collect::<Vec<_>>();
     let mut current = Vec::new();
     let mut next = Vec::new();
     current
-        .try_reserve_exact(columns.len())
+        .try_reserve_exact(evaluations.len())
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    next.try_reserve_exact(columns.len())
+    next.try_reserve_exact(evaluations.len())
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-    // Columns are independent and occupy fixed output indices. The temporary coefficient copy is
-    // owned by one worker and is zeroized before that worker returns on both success and failure.
-    // Results are reduced serially in column order so malformed inputs retain deterministic error
-    // precedence as well as deterministic successful output.
-    let evaluations = collect_bounded_parallel_columns_v1(columns.len(), |column_index| {
-        let column = &columns[column_index];
-        let mask = &masks[column_index];
-        let mut trace_coefficients = ZeroizingBaseFieldValuesV1::from(Vec::new());
-        trace_coefficients
-            .0
-            .try_reserve_exact(column.len())
-            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-        trace_coefficients.0.extend_from_slice(column);
-        goldilocks_ifft_v1(&mut trace_coefficients, native_root)
-            .map_err(map_transparent_error_v1)?;
-        let evaluate = |evaluation_point| {
-            let trace = evaluate_base_coefficients_at_fp4_v1(&trace_coefficients, evaluation_point);
-            let randomizer =
-                evaluate_base_coefficients_at_fp4_v1(mask.coefficients(), evaluation_point);
-            trace.add(
-                evaluation_point
-                    .pow(trace_size as u128)
-                    .sub(E::ONE)
-                    .mul(randomizer),
-            )
-        };
-        Ok((evaluate(point), evaluate(next_point)))
-    })?;
     for (current_value, next_value) in evaluations {
         current.push(current_value);
         next.push(next_value);
     }
     Ok((current, next))
+}
+#[cfg(test)]
+fn evaluate_masked_native_columns_at_deep_v1(
+    columns: &[Vec<F>],
+    masks: &[ReplayableTraceMaskV1],
+    trace_log2: u8,
+    point: E,
+) -> Result<(Vec<E>, Vec<E>), ProofManagedNoteStarkErrorV1> {
+    let coefficients = masked_native_coefficients_v1(columns, masks, trace_log2)?;
+    evaluate_masked_coefficients_at_deep_v1(&coefficients, trace_log2, point)
 }
 fn new_note_transcript_v1(
     prepared: &PreparedNoteProfileV1,
@@ -1662,33 +1845,34 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
     // Native rows are immutable and independently constrained. Indexed collection plus serial
     // reduction retains the lowest-row error while successful validation has no output ordering
     // to perturb.
+    let columns = (base_columns, aux_columns, prepared.fixed_columns.as_slice());
     let results = (0..prepared.trace_size)
         .into_par_iter()
-        .map(|row| -> Result<(), ProofManagedNoteStarkErrorV1> {
-            let next = (row + 1) % prepared.trace_size;
-            let current_base =
-                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_columns, row)?);
-            let next_base =
-                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_columns, next)?);
-            let current_aux =
-                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_columns, row)?);
-            let next_aux = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_columns, next)?);
-            let fixed =
-                ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(&prepared.fixed_columns, row)?);
-            let residues = all_constraint_residues_v1(
-                adapter,
-                prepared,
-                (&current_base, &next_base),
-                (&current_aux, &next_aux),
-                &fixed,
-                copy_challenges,
-                profile_challenges,
-            )?;
-            if residues.iter().any(|residue| *residue != F::ZERO) {
-                return Err(ProofManagedNoteStarkErrorV1::Constraint);
-            }
-            Ok(())
-        })
+        .step_by(NOTE_ROW_BLOCK_V1)
+        .map_init(
+            || NoteRowBlockV1::new(prepared),
+            |block, first| -> Result<(), ProofManagedNoteStarkErrorV1> {
+                let block = block.as_mut().map_err(|error| *error)?;
+                let last = first
+                    .saturating_add(NOTE_ROW_BLOCK_V1)
+                    .min(prepared.trace_size);
+                let (current, next, count) = block_rows_v1(first, last, 1, 1, prepared.trace_size);
+                block.gather(columns, &current[..count], &next[..count])?;
+                for row in 0..count {
+                    let residues = block.residues(
+                        row,
+                        adapter,
+                        prepared,
+                        copy_challenges,
+                        profile_challenges,
+                    )?;
+                    if residues.iter().any(|residue| *residue != F::ZERO) {
+                        return Err(ProofManagedNoteStarkErrorV1::Constraint);
+                    }
+                }
+                Ok(())
+            },
+        )
         .collect::<Vec<_>>();
     results.into_iter().collect()
 }
@@ -1726,63 +1910,70 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         .ok_or(ProofManagedNoteStarkErrorV1::Internal)?
         .next_stride(prepared.layout.common_lde_log2())
         .map_err(map_aggregate_error_v1)?;
+    // The quotient is a polynomial of degree at most `maximum_quotient_degree_v1`, so its
+    // values on the LDE points whose index is a multiple of `stride` determine every chunk.
+    let evaluation_log2 = quotient_evaluation_log2_v1(prepared)?;
+    let evaluation_size = checked_trace_size_v1(evaluation_log2)?;
+    let stride = lde_size / evaluation_size;
     let mut lanes = ZeroizingExtensionFieldMatrixV1::from(
         (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
             .map(|_| Vec::new())
             .collect::<Vec<_>>(),
     );
     for lane in lanes.iter_mut() {
-        lane.try_reserve_exact(lde_size)
+        lane.try_reserve_exact(evaluation_size)
             .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     }
     // Keep one canonical row batch at a time. The shared vanishing table has
     // one entry per blowup coordinate; every row retains the same quotient
     // divisor without a domain-point buffer or per-row exponentiation/inversion.
     // Indexed collection and serial reduction preserve lane and error order.
-    for batch_start in (0..lde_size).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
+    for batch_start in (0..evaluation_size).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
         let batch_end = batch_start
             .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
-            .map_or(lde_size, |end| end.min(lde_size));
-        let rows = (batch_start..batch_end)
+            .map_or(evaluation_size, |end| end.min(evaluation_size));
+        let blocks = (batch_start..batch_end)
             .into_par_iter()
-            .map(|index| {
-                let next = (index + next_stride) % lde_size;
-                let current_base =
-                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_lde, index)?);
-                let next_base =
-                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(base_lde, next)?);
-                let current_aux =
-                    ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_lde, index)?);
-                let next_aux = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(aux_lde, next)?);
-                let fixed = ZeroizingBaseFieldValuesV1::from(row_at_columns_v1(fixed_lde, index)?);
-                let residues = all_constraint_residues_v1(
-                    adapter,
-                    prepared,
-                    (&current_base, &next_base),
-                    (&current_aux, &next_aux),
-                    &fixed,
-                    copy_challenges,
-                    profile_challenges,
-                )?;
-                let inverse_vanishing =
-                    inverse_vanishing_period[index % inverse_vanishing_period.len()];
-                let mut row = [E::ZERO; PROOF_MANAGED_NOTE_SECURITY_LANES_V1];
-                for (lane, value) in row.iter_mut().enumerate() {
-                    let numerator = residues
-                        .iter()
-                        .zip(&alphas[lane])
-                        .fold(E::ZERO, |sum, (residue, alpha)| {
-                            sum.add(alpha.mul_base(*residue))
-                        });
-                    *value = numerator.mul_base(inverse_vanishing);
-                }
-                Ok(ZeroizingExtensionFieldRowV1(row))
-            })
+            .step_by(NOTE_ROW_BLOCK_V1)
+            .map_init(
+                || NoteRowBlockV1::new(prepared),
+                |block, first| {
+                    let block = block.as_mut().map_err(|error| *error)?;
+                    let last = first.saturating_add(NOTE_ROW_BLOCK_V1).min(batch_end);
+                    let (current, next, count) =
+                        block_rows_v1(first, last, stride, next_stride, lde_size);
+                    block.gather(lde_columns, &current[..count], &next[..count])?;
+                    let mut values = Vec::new();
+                    values
+                        .try_reserve_exact(count)
+                        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+                    for (row, index) in current[..count].iter().enumerate() {
+                        let residues = block.residues(
+                            row,
+                            adapter,
+                            prepared,
+                            copy_challenges,
+                            profile_challenges,
+                        )?;
+                        let inverse_vanishing =
+                            inverse_vanishing_period[index % inverse_vanishing_period.len()];
+                        let mut value = [E::ZERO; PROOF_MANAGED_NOTE_SECURITY_LANES_V1];
+                        for (lane, slot) in value.iter_mut().enumerate() {
+                            let mut numerator = GoldilocksFp4DotV1::default();
+                            numerator.add_products(&alphas[lane], &residues);
+                            *slot = numerator.finish().mul_base(inverse_vanishing);
+                        }
+                        values.push(ZeroizingExtensionFieldRowV1(value));
+                    }
+                    Ok(values)
+                },
+            )
             .collect::<Vec<Result<_, ProofManagedNoteStarkErrorV1>>>();
-        for row in rows {
-            let row = row?;
-            for (lane, value) in lanes.iter_mut().zip(row.iter().copied()) {
-                lane.push(value);
+        for block in blocks {
+            for row in block? {
+                for (lane, value) in lanes.iter_mut().zip(row.iter().copied()) {
+                    lane.push(value);
+                }
             }
         }
     }
@@ -1792,8 +1983,9 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     for lane in lanes.iter() {
         compositions.push(
-            aggregate::split_composition_evaluations_v1(
+            aggregate::split_composition_subgroup_evaluations_v1(
                 lane,
+                evaluation_log2,
                 prepared.protocol.parameters,
                 &prepared.layout,
             )
@@ -1801,6 +1993,26 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         );
     }
     Ok(compositions.into_inner())
+}
+/// Smallest LDE subgroup that determines the quotient: more points than its maximum degree,
+/// and at least the native trace, so every next-row index of a point is again a point.
+fn quotient_evaluation_log2_v1(
+    prepared: &PreparedNoteProfileV1,
+) -> Result<u8, ProofManagedNoteStarkErrorV1> {
+    let points = maximum_quotient_degree_v1(
+        prepared.trace_size,
+        prepared.protocol.maximum_constraint_degree,
+    )?
+    .checked_add(1)
+    .and_then(usize::checked_next_power_of_two)
+    .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)?
+    .max(prepared.trace_size);
+    let log2 = u8::try_from(points.trailing_zeros())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    if log2 > prepared.layout.common_lde_log2() {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+    }
+    Ok(log2)
 }
 fn try_for_each_ordered_deep_batch_v1<Batch>(
     rows: usize,
@@ -1823,9 +2035,16 @@ where
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
+/// Degrees combined per task when mixing column coefficients.
+const MIXED_COEFFICIENT_CHUNK_V1: usize = 1 << 8;
+/// Build one lane's DEEP-ALI/FRI base codeword from the masked column polynomials.
+///
+/// `base_coefficients` and `aux_coefficients` are the coefficients of the polynomials whose
+/// coset evaluations the trace commitments hold. Mixing them by degree before one coset FFT per
+/// DEEP point gives every row exactly the mixed sum of its committed LDE values.
 fn mixed_deep_fri_base_v1(
-    base_lde: &[Vec<F>],
-    aux_lde: &[Vec<F>],
+    base_coefficients: &[Vec<F>],
+    aux_coefficients: &[Vec<F>],
     composition: &[Vec<E>],
     deep: &aggregate::AggregateDeepProofV1,
     deep_point: E,
@@ -1857,22 +2076,27 @@ fn mixed_deep_fri_base_v1(
         .first()
         .map(Vec::len)
         .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
-    if base_lde.len() != trace_mix.base_current.len()
-        || base_lde.len() != trace_mix.base_next.len()
-        || aux_lde.len() != trace_mix.aux_current.len()
-        || aux_lde.len() != trace_mix.aux_next.len()
+    let length = base_coefficients
+        .first()
+        .map(Vec::len)
+        .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
+    if base_coefficients.len() != trace_mix.base_current.len()
+        || base_coefficients.len() != trace_mix.base_next.len()
+        || aux_coefficients.len() != trace_mix.aux_current.len()
+        || aux_coefficients.len() != trace_mix.aux_next.len()
         || composition.len() != mix.composition.len()
-        || deep_trace.base_current.len() != base_lde.len()
-        || deep_trace.base_next.len() != base_lde.len()
-        || deep_trace.aux_current.len() != aux_lde.len()
-        || deep_trace.aux_next.len() != aux_lde.len()
+        || deep_trace.base_current.len() != base_coefficients.len()
+        || deep_trace.base_next.len() != base_coefficients.len()
+        || deep_trace.aux_current.len() != aux_coefficients.len()
+        || deep_trace.aux_next.len() != aux_coefficients.len()
         || deep_composition.len() != composition.len()
         || rows != layout.common_lde_size()
+        || length > rows
         || composition.iter().any(|chunk| chunk.len() != rows)
-        || base_lde
+        || base_coefficients
             .iter()
-            .chain(aux_lde)
-            .any(|column| column.len() != rows)
+            .chain(aux_coefficients)
+            .any(|column| column.len() != length)
     {
         return Err(ProofManagedNoteStarkErrorV1::Internal);
     }
@@ -1887,6 +2111,59 @@ fn mixed_deep_fri_base_v1(
     let deep_next_point = deep_point.mul_base(native_root);
     let lde_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2()).map_err(map_transparent_error_v1)?;
+    // Mix the current and next trace polynomials by degree in one pass over the coefficients.
+    let mut current_coefficients = ZeroizingExtensionFieldValuesV1(Vec::new());
+    let mut next_coefficients = ZeroizingExtensionFieldValuesV1(Vec::new());
+    for coefficients in [&mut current_coefficients, &mut next_coefficients] {
+        coefficients
+            .0
+            .try_reserve_exact(length)
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        coefficients.0.resize(length, E::ZERO);
+    }
+    current_coefficients
+        .0
+        .par_chunks_mut(MIXED_COEFFICIENT_CHUNK_V1)
+        .zip(
+            next_coefficients
+                .0
+                .par_chunks_mut(MIXED_COEFFICIENT_CHUNK_V1),
+        )
+        .enumerate()
+        .for_each(|(chunk, (current, next))| {
+            let first = chunk * MIXED_COEFFICIENT_CHUNK_V1;
+            for (offset, (current, next)) in current.iter_mut().zip(next).enumerate() {
+                let degree = first + offset;
+                let mut current_sum = GoldilocksFp4DotV1::default();
+                let mut next_sum = GoldilocksFp4DotV1::default();
+                for (column_index, column) in base_coefficients.iter().enumerate() {
+                    let value = column[degree];
+                    current_sum.add_product(trace_mix.base_current[column_index], value);
+                    next_sum.add_product(trace_mix.base_next[column_index], value);
+                }
+                for (column_index, column) in aux_coefficients.iter().enumerate() {
+                    let value = column[degree];
+                    current_sum.add_product(trace_mix.aux_current[column_index], value);
+                    next_sum.add_product(trace_mix.aux_next[column_index], value);
+                }
+                *current = current_sum.finish();
+                *next = next_sum.finish();
+            }
+        });
+    let evaluate = |coefficients: &ZeroizingExtensionFieldValuesV1| {
+        goldilocks_fp4_evaluate_coset_v1(
+            &coefficients.0,
+            rows,
+            lde_root,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .map(ZeroizingExtensionFieldValuesV1)
+        .map_err(map_transparent_error_v1)
+    };
+    let current_trace = evaluate(&current_coefficients)?;
+    drop(current_coefficients);
+    let next_trace = evaluate(&next_coefficients)?;
+    drop(next_coefficients);
     let mut result = ZeroizingExtensionFieldValuesV1(Vec::new());
     result
         .0
@@ -1943,18 +2220,8 @@ fn mixed_deep_fri_base_v1(
                 let index = start + local_index;
                 let current_inverse = inverse_denominators[2 * local_index];
                 let next_inverse = inverse_denominators[2 * local_index + 1];
-                let mut current = E::ZERO;
-                let mut next = E::ZERO;
-                for (column_index, column) in base_lde.iter().enumerate() {
-                    let value = column[index];
-                    current = current.add(trace_mix.base_current[column_index].mul_base(value));
-                    next = next.add(trace_mix.base_next[column_index].mul_base(value));
-                }
-                for (column_index, column) in aux_lde.iter().enumerate() {
-                    let value = column[index];
-                    current = current.add(trace_mix.aux_current[column_index].mul_base(value));
-                    next = next.add(trace_mix.aux_next[column_index].mul_base(value));
-                }
+                let mut current = current_trace.0[index];
+                let next = next_trace.0[index];
                 for (chunk, coefficient) in composition.iter().zip(&mix.composition) {
                     current = current.add(chunk[index].mul(*coefficient));
                 }
@@ -2171,15 +2438,19 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
             &prepared.layout,
         )
         .map_err(map_aggregate_error_v1)?;
-        let (base_current, base_next) = evaluate_masked_native_columns_at_deep_v1(
-            base_columns,
-            &base_masks,
+        let base_coefficients =
+            masked_native_coefficients_v1(base_columns, &base_masks, prepared.trace_log2)?;
+        let aux_coefficients =
+            masked_native_coefficients_v1(&aux_columns, &aux_masks, prepared.trace_log2)?;
+        drop(base_masks);
+        drop(aux_masks);
+        let (base_current, base_next) = evaluate_masked_coefficients_at_deep_v1(
+            &base_coefficients,
             prepared.trace_log2,
             deep_point,
         )?;
-        let (aux_current, aux_next) = evaluate_masked_native_columns_at_deep_v1(
-            &aux_columns,
-            &aux_masks,
+        let (aux_current, aux_next) = evaluate_masked_coefficients_at_deep_v1(
+            &aux_coefficients,
             prepared.trace_log2,
             deep_point,
         )?;
@@ -2224,8 +2495,6 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
             &prepared.layout,
         )
         .map_err(map_aggregate_error_v1)?;
-        drop(base_masks);
-        drop(aux_masks);
         aggregate::absorb_deep_openings_v1(
             &mut transcript,
             &deep,
@@ -2245,8 +2514,8 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
         let mut fri_lanes = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
         for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
             let mut fri_base = ZeroizingExtensionFieldValuesV1::from(mixed_deep_fri_base_v1(
-                &trace_materials[0].base_lde,
-                &trace_materials[0].aux_lde,
+                &base_coefficients,
+                &aux_coefficients,
                 &compositions[lane],
                 &deep,
                 deep_point,
@@ -3161,7 +3430,124 @@ pub mod degree_audit {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::transparent_stark::goldilocks_ifft_v1;
     use super::*;
+
+    #[test]
+    fn copy_schedule_validation_requires_one_policy_respecting_permutation() {
+        const ROWS: usize = 4;
+        let label = |row: usize, column: usize| {
+            u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1).expect("small label")
+        };
+        let identity = NoteCopyScheduleV1 {
+            policies: vec![[NoteCopyCellPolicyV1::Variable; NOTE_COPY_WIDTH_V1]; ROWS],
+            sigma: (0..ROWS)
+                .map(|row| core::array::from_fn(|column| label(row, column)))
+                .collect(),
+        };
+        identity.validate(ROWS).expect("identity permutation");
+        let mut cycle = identity.clone();
+        cycle.sigma[0][0] = label(1, 2);
+        cycle.sigma[1][2] = label(0, 0);
+        cycle.validate(ROWS).expect("two-cell variable cycle");
+        let beyond = u32::try_from(ROWS * NOTE_COPY_WIDTH_V1 + 1).expect("small label");
+        for target in [0, beyond, label(0, 1)] {
+            let mut malformed = identity.clone();
+            malformed.sigma[0][0] = target;
+            assert_eq!(
+                malformed.validate(ROWS),
+                Err(ProofManagedNoteStarkErrorV1::Copy),
+                "target {target}"
+            );
+        }
+        let mut moved_constant = cycle.clone();
+        moved_constant.policies[0][0] = NoteCopyCellPolicyV1::Constant(7);
+        assert_eq!(
+            moved_constant.validate(ROWS),
+            Err(ProofManagedNoteStarkErrorV1::Copy)
+        );
+        let mut inactive_target = cycle.clone();
+        inactive_target.policies[1][2] = NoteCopyCellPolicyV1::Inactive;
+        assert_eq!(
+            inactive_target.validate(ROWS),
+            Err(ProofManagedNoteStarkErrorV1::Copy)
+        );
+        assert_eq!(
+            identity.validate(ROWS * 2),
+            Err(ProofManagedNoteStarkErrorV1::Copy)
+        );
+    }
+    #[test]
+    fn power_table_evaluation_matches_horner_for_every_prefix() {
+        use super::super::transparent_stark::GOLDILOCKS_MODULUS_V1;
+        let point = E::canonical([0x1234_5678, 0x9abc_def0, 17, GOLDILOCKS_MODULUS_V1 - 2])
+            .expect("canonical point");
+        let powers = fp4_powers_v1(point, 1_000).expect("power table");
+        assert_eq!(powers[0], E::ONE);
+        assert_eq!(powers[1], point);
+        let mut random = 0x0dd5_eed5_1234_9876_u64;
+        let coefficients = (0..1_000)
+            .map(|_| {
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                F(random % GOLDILOCKS_MODULUS_V1)
+            })
+            .collect::<Vec<_>>();
+        for length in [0, 1, 2, 975, 976, 1_000] {
+            let horner = coefficients[..length]
+                .iter()
+                .rev()
+                .fold(E::ZERO, |value, coefficient| {
+                    value.mul(point).add(E::from_base(*coefficient))
+                });
+            assert_eq!(
+                evaluate_base_coefficients_with_powers_v1(&coefficients[..length], &powers),
+                horner,
+                "{length} coefficients"
+            );
+        }
+    }
+    #[test]
+    fn row_blocks_transpose_exact_rows_and_reject_mismatched_shapes() {
+        let columns = (0..3_u64)
+            .map(|column| {
+                (0..8_u64)
+                    .map(|row| F(10 * column + row))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut target = vec![F::ZERO; 3 * 3];
+        transpose_rows_v1(&columns, 3, &[2, 7, 0], &mut target).expect("three rows");
+        assert_eq!(
+            target,
+            [2, 12, 22, 7, 17, 27, 0, 10, 20].map(F).to_vec(),
+            "row-major rows in the requested order"
+        );
+        assert_eq!(row_window_v1(&target, 1, 3), [7, 17, 27].map(F).as_slice());
+        assert_eq!(
+            transpose_rows_v1(&columns, 3, &[8], &mut target),
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        );
+        assert_eq!(
+            transpose_rows_v1(&columns, 2, &[0], &mut target),
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        );
+        assert_eq!(
+            transpose_rows_v1(&columns, 3, &[0, 1, 2, 3], &mut target),
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        );
+        let (current, next, count) = block_rows_v1(3, 6, 2, 8, 16);
+        assert_eq!(count, 3);
+        assert_eq!(&current[..count], &[6, 8, 10]);
+        assert_eq!(&next[..count], &[14, 0, 2]);
+        assert_eq!(block_rows_v1(5, 5, 2, 8, 16).2, 0);
+        assert_eq!(
+            block_rows_v1(0, 1_000, 1, 1, 1_024).2,
+            NOTE_ROW_BLOCK_V1,
+            "a block never exceeds its fixed capacity"
+        );
+    }
     use rand::{Rng, SeedableRng as _};
     use rand_chacha::ChaCha12Rng;
     use std::sync::OnceLock;
@@ -3393,8 +3779,8 @@ mod tests {
         // One more than the source-fixed resident-column bound forces two canonical dispatches.
         // TODO: add whole-proof fixed-RNG byte equality to the slow release suite; repeating the
         // protocol-mandated 20-bit SHA3-384 grind is intentionally outside this unit test.
-        assert_eq!(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, 8);
-        let columns = (0..=aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+        assert_eq!(NOTE_COLUMN_TRANSFORM_BATCH_V1, 64);
+        let columns = (0..=NOTE_COLUMN_TRANSFORM_BATCH_V1)
             .map(|column| {
                 (0..8)
                     .map(|row| {
@@ -3450,7 +3836,7 @@ mod tests {
 
     #[test]
     fn fixed_lde_in_place_matches_allocating_reference_and_secret_owners_wipe() {
-        let columns = (0..=aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+        let columns = (0..=NOTE_COLUMN_TRANSFORM_BATCH_V1)
             .map(|column| {
                 (0..8)
                     .map(|row| {
@@ -3528,7 +3914,7 @@ mod tests {
             }
         }
 
-        let column_count = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * 2 + 1;
+        let column_count = NOTE_COLUMN_TRANSFORM_BATCH_V1 * 2 + 1;
         let active = std::sync::atomic::AtomicUsize::new(0);
         let peak = std::sync::atomic::AtomicUsize::new(0);
         let ordered = rayon::ThreadPoolBuilder::new()
@@ -3547,8 +3933,7 @@ mod tests {
             });
         assert_eq!(ordered, (0..column_count).collect::<Vec<_>>());
         assert!(
-            peak.load(std::sync::atomic::Ordering::SeqCst)
-                <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+            peak.load(std::sync::atomic::Ordering::SeqCst) <= NOTE_COLUMN_TRANSFORM_BATCH_V1,
             "resident column transforms must stay inside the source-fixed bound"
         );
 
@@ -3559,7 +3944,7 @@ mod tests {
             .expect("private test thread pool")
             .install(|| {
                 collect_bounded_parallel_columns_v1(column_count, |column| {
-                    if column >= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+                    if column >= NOTE_COLUMN_TRANSFORM_BATCH_V1 {
                         later_batch_visited.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     match column {
@@ -3582,18 +3967,15 @@ mod tests {
         let created = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let error = pool.install(|| {
-            collect_bounded_parallel_columns_v1(
-                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
-                |column| {
-                    if column == 3 {
-                        return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
-                    }
-                    created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(DropProbe {
-                        dropped: std::sync::Arc::clone(&dropped),
-                    })
-                },
-            )
+            collect_bounded_parallel_columns_v1(NOTE_COLUMN_TRANSFORM_BATCH_V1, |column| {
+                if column == 3 {
+                    return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
+                }
+                created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(DropProbe {
+                    dropped: std::sync::Arc::clone(&dropped),
+                })
+            })
         });
         assert!(matches!(
             error,
@@ -3610,7 +3992,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pool.install(|| {
                 let _ = collect_bounded_parallel_columns_v1(
-                    aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                    NOTE_COLUMN_TRANSFORM_BATCH_V1,
                     |column| -> Result<DropProbe, ProofManagedNoteStarkErrorV1> {
                         assert!(column != 3, "injected transform unwind");
                         created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -3799,11 +4181,17 @@ mod tests {
         let next_stride = prepared.layout.trace_groups()[0]
             .next_stride(prepared.layout.common_lde_log2())
             .expect("composition next-row stride");
+        // Synthetic columns are not low degree, so the serial oracle evaluates the same
+        // quotient subgroup as the driver; full-domain equality is checked on a genuine trace.
+        let evaluation_log2 = quotient_evaluation_log2_v1(&prepared).expect("quotient subgroup");
+        let evaluation_size = 1_usize << evaluation_log2;
+        let stride = lde_size / evaluation_size;
         let mut serial_lanes = (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
-            .map(|_| Vec::with_capacity(lde_size))
+            .map(|_| Vec::with_capacity(evaluation_size))
             .collect::<Vec<_>>();
+        let step = lde_root.pow(stride as u128);
         let mut x = F(GOLDILOCKS_GENERATOR_V1);
-        for index in 0..lde_size {
+        for index in (0..lde_size).step_by(stride) {
             let next = (index + next_stride) % lde_size;
             let residues = all_constraint_residues_v1(
                 &adapter,
@@ -3835,13 +4223,14 @@ mod tests {
                     });
                 values.push(numerator.mul_base(inverse_vanishing));
             }
-            x = x.mul(lde_root);
+            x = x.mul(step);
         }
         let serial = serial_lanes
             .iter()
             .map(|lane| {
-                aggregate::split_composition_evaluations_v1(
+                aggregate::split_composition_subgroup_evaluations_v1(
                     lane,
+                    evaluation_log2,
                     prepared.protocol.parameters,
                     &prepared.layout,
                 )
@@ -3850,6 +4239,110 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(run(1), serial);
         assert_eq!(run(4), serial);
+    }
+
+    #[test]
+    fn quotient_subgroup_composition_equals_the_full_domain_split() {
+        let adapter = MockAdapterV1::default();
+        let prepared = prepare_note_profile_v1(&adapter).expect("mock profile");
+        let lde_log2 = prepared.layout.common_lde_log2();
+        let lde_size = prepared.layout.common_lde_size();
+        let evaluation_log2 = quotient_evaluation_log2_v1(&prepared).expect("quotient subgroup");
+        assert!(
+            evaluation_log2 < lde_log2,
+            "the genuine mock quotient is determined by a proper LDE subgroup"
+        );
+        let base = mock_base_columns_v1();
+        let mut rng = ChaCha12Rng::from_seed([0x5A; 32]);
+        let (base_lde, _base_masks) =
+            masked_lde_columns_v1(&base, prepared.trace_log2, lde_log2, &mut rng)
+                .expect("masked base LDE");
+        let copy_challenges = NoteCopyChallengesV1 {
+            lanes: std::array::from_fn(|lane| NoteCopyLaneChallengesV1 {
+                beta: F(u64::try_from(lane + 29).expect("small beta")),
+                gamma: F(u64::try_from(lane + 41).expect("small gamma")),
+            }),
+        };
+        let aux = build_note_copy_aux_columns_v1(
+            &base,
+            &prepared.fixed_columns,
+            copy_challenges,
+            prepared.trace_size,
+        )
+        .expect("copy auxiliary columns");
+        let (aux_lde, _aux_masks) =
+            masked_lde_columns_v1(&aux, prepared.trace_log2, lde_log2, &mut rng)
+                .expect("masked auxiliary LDE");
+        let fixed_lde =
+            fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)
+                .expect("fixed LDE");
+        let alphas = vec![
+            (0..prepared.constraint_count)
+                .map(|constraint| {
+                    let constraint = u64::try_from(constraint).expect("small constraint");
+                    E::canonical([
+                        constraint + 3,
+                        2 * constraint + 5,
+                        3 * constraint + 7,
+                        5 * constraint + 11,
+                    ])
+                    .expect("canonical alpha")
+                })
+                .collect::<Vec<_>>(),
+        ];
+        let subgroup = composition_lanes_v1(
+            &adapter,
+            &prepared,
+            (&base_lde, &aux_lde, &fixed_lde),
+            copy_challenges,
+            &(),
+            &alphas,
+        )
+        .expect("subgroup composition");
+        let inverse_vanishing = aggregate::trace_vanishing_inverse_period_v1(
+            prepared.trace_log2,
+            lde_log2,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("vanishing period");
+        let next_stride = prepared.layout.trace_groups()[0]
+            .next_stride(lde_log2)
+            .expect("next stride");
+        let full = (0..lde_size)
+            .map(|index| {
+                let next = (index + next_stride) % lde_size;
+                let residues = all_constraint_residues_v1(
+                    &adapter,
+                    &prepared,
+                    (
+                        &row_at_columns_v1(&base_lde, index).expect("current base"),
+                        &row_at_columns_v1(&base_lde, next).expect("next base"),
+                    ),
+                    (
+                        &row_at_columns_v1(&aux_lde, index).expect("current auxiliary"),
+                        &row_at_columns_v1(&aux_lde, next).expect("next auxiliary"),
+                    ),
+                    &row_at_columns_v1(&fixed_lde, index).expect("fixed"),
+                    copy_challenges,
+                    &(),
+                )
+                .expect("full-domain residues");
+                residues
+                    .iter()
+                    .zip(&alphas[0])
+                    .fold(E::ZERO, |sum, (residue, alpha)| {
+                        sum.add(alpha.mul_base(*residue))
+                    })
+                    .mul_base(inverse_vanishing[index % inverse_vanishing.len()])
+            })
+            .collect::<Vec<_>>();
+        let expected = aggregate::split_composition_evaluations_v1(
+            &full,
+            prepared.protocol.parameters,
+            &prepared.layout,
+        )
+        .expect("full-domain split");
+        assert_eq!(subgroup, vec![expected]);
     }
 
     fn proof_fixture_v1() -> &'static (MockAdapterV1, Vec<Vec<F>>, Vec<u8>) {
@@ -4021,19 +4514,27 @@ mod tests {
         )
         .expect("small DEEP layout");
         let rows = layout.common_lde_size();
-        let base_lde = vec![
-            (0..rows)
-                .map(|index| F(u64::try_from(index + 3).expect("small row")))
-                .collect::<Vec<_>>(),
-            (0..rows)
-                .map(|index| F(u64::try_from(index * 7 + 11).expect("small affine evaluation")))
-                .collect::<Vec<_>>(),
-        ];
-        let aux_lde = vec![
-            (0..rows)
-                .map(|index| F(u64::try_from(index * 13 + 17).expect("small affine evaluation")))
-                .collect::<Vec<_>>(),
-        ];
+        // Committed columns are coset evaluations of genuine polynomials; the codeword builder
+        // receives those polynomials' coefficients and the opened-row verifier their evaluations.
+        let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2()).expect("LDE root");
+        let polynomial = |seed: u64| {
+            (0..48_u64)
+                .map(|degree| F((seed + 1) * (degree + 3) * (degree + 5) % 1_000_003))
+                .collect::<Vec<_>>()
+        };
+        let lde = |coefficients: &Vec<F>| {
+            super::super::transparent_stark::goldilocks_evaluate_coset_v1(
+                coefficients,
+                rows,
+                lde_root,
+                F(GOLDILOCKS_GENERATOR_V1),
+            )
+            .expect("coset evaluation")
+        };
+        let base_coefficients = vec![polynomial(3), polynomial(7)];
+        let aux_coefficients = vec![polynomial(13)];
+        let base_lde = base_coefficients.iter().map(lde).collect::<Vec<_>>();
+        let aux_lde = aux_coefficients.iter().map(lde).collect::<Vec<_>>();
         let compositions = vec![
             (0..parameters.composition_degree_chunks)
                 .map(|chunk| {
@@ -4112,8 +4613,8 @@ mod tests {
                 .expect("private test thread pool")
                 .install(|| {
                     mixed_deep_fri_base_v1(
-                        &materials[0].base_lde,
-                        &materials[0].aux_lde,
+                        &base_coefficients,
+                        &aux_coefficients,
                         &compositions[0],
                         &deep,
                         deep_point,
@@ -4138,7 +4639,6 @@ mod tests {
         let stride = layout.trace_groups()[0]
             .next_stride(layout.common_lde_log2())
             .expect("next stride");
-        let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2()).expect("LDE root");
         for index in 0..rows {
             let next = (index + stride) % rows;
             let opened = aggregate::AggregateOpenedTraceGroupV1 {

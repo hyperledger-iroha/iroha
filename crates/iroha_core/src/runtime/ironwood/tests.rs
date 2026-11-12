@@ -653,10 +653,12 @@ fn only_the_taira_activation_unbinds_a_wire() {
     );
 }
 
-/// Ironwood, Ironwood after Time, and lifecycle, in the order the test computes them.
+/// Ironwood, Ironwood after Time, and lifecycle, in the order the test computes them. Each
+/// publishes only what its successor relies on, so a dormant addition the release also compiles
+/// moves none of them.
 const PINNED_CHANGE_SET_IDS: [&str; 3] = [
     "1e4c77b2821cea5891c3b5738dd9aee94ee28a4fc1a77795c50fbd08df7f972b",
-    "d161c9f481810943a4212814fab4968dc5455a6290f72877f355fa9123329fdf",
+    "d33f4c93aa85214e3d08345f6c4dfe74013b3e417f8528e1667c11a42a791889",
     "9f6b930d1c808c44f48b007de7f884db20de35aa889340ce944a39009de68573",
 ];
 

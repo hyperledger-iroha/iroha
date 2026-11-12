@@ -168,10 +168,9 @@ impl State {
     /// change which archive this validator accepts. Returns the names of the
     /// limit fields `node` held with another value, which were ignored.
     ///
-    /// TODO(F.4): a chain that needs other limits gets them from a typed
-    /// committed parameter published by a release addition and activated by a
-    /// governed change set (`specs/live_runtime_upgrades.md` §4); the frozen
-    /// baseline stores `content_policy_v1` as an opaque custom parameter.
+    /// A root that recognizes the committed `content_policy_v1`
+    /// (`runtime::committed_policy`) lays its limits over these in every block,
+    /// view and snapshot.
     pub fn install_node_content(
         &mut self,
         node: iroha_config::parameters::actual::Content,
@@ -223,18 +222,19 @@ impl State {
         ignored
     }
 
-    /// Settlement router inputs: protocol constants of this release.
-    ///
-    /// No node setting contributes and this State has no settlement installer.
-    ///
-    /// TODO(F.4): a chain that needs other inputs gets them from a typed
-    /// committed parameter published by a release addition and activated by a
-    /// governed change set (`specs/live_runtime_upgrades.md` §4); the frozen
-    /// baseline stores `settlement_router_policy_v1` as an opaque custom
-    /// parameter.
+    /// Settlement router inputs of the current committed State: the committed
+    /// `settlement_router_policy_v1` of a root that recognizes it
+    /// (`runtime::committed_policy`), the protocol constants of this release
+    /// otherwise. No node setting contributes and this State has no settlement
+    /// installer.
     #[must_use]
-    pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
-        &self.settlement
+    pub fn settlement_snapshot(&self) -> iroha_config::parameters::actual::Settlement {
+        let world = self.world.view();
+        crate::runtime::committed_policy::effective_settlement(
+            &self.settlement,
+            world.runtime_selection(),
+            world.parameters(),
+        )
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]

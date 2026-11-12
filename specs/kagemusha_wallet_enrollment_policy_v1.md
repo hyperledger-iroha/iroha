@@ -364,9 +364,11 @@ current authority/routing and retains each fresh observation at its durable boun
 approved original selection, CSPRNG nonce, challenge CAS/use, durable Apple counters, genuine
 time, original evidence/result retention and one genuine scheme-rooted Enrollment-role P256
 signer. FI access/DPoP/workload keys are separate transport signers. It must build the current
-credential with typed app digest, exact regulator/lease result and verified evidence, freeze
-the actual signer output and call `verify_enrollment` against the retained exact E1/payment
-key before delivery. Reusing deleted RetailEnrollment/Ed25519 authority is not an option.
+credential with typed app digest, exact regulator/lease result, verified evidence and the
+payment key's `key_table_commitment` computed natively from the attested key (wire §3.1),
+freeze the actual signer output and call `verify_enrollment`, which recomputes that
+commitment, against the retained exact E1/payment key before delivery. Reusing deleted
+RetailEnrollment/Ed25519 authority is not an option.
 
 Model, Python adapter, specification, digest-role inventory and shared DATA vectors form one
 proposal. Swift/Kotlin/JS/C# consumers and the current issuer/Native bridge must migrate their

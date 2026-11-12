@@ -186,8 +186,11 @@ Ironwood namespace and enforces the same committed public-balance scope checks.
 ## Mandatory decoder rollout gate
 
 The chosen compatibility mechanism is **rebuild all decoders before activation**.
-`wire_schema_hash` stays `8c6e538004b15b52a6b6ca430b5c9d6c32a8798e039a703b798d71204cf08df3`;
-its opaque instruction roots do not bind the privacy payload registry. IVM ABI V1
+`wire_schema_hash` is `072924c3239057c3d6134405483512c98cf4e63cca5f6a109b45bf7578b82e8f`;
+its opaque instruction roots do not bind the privacy payload registry. It moved from
+`8c6e5380…` when the execution commitment's World roots became `KeyedStateRoot`
+(`sumeragi.md` §16.6): LtHash roots keep their bytes, but a reader built before that change
+refuses a keyed root whose marker bit is clear. IVM ABI V1
 stays `7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7`.
 Neither hash is a sufficient Ironwood support signal.
 

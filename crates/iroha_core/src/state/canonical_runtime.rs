@@ -90,9 +90,10 @@ impl CapturedRuntimePolicy {
         zk: &iroha_config::parameters::actual::Zk,
         compliance: Option<Arc<LaneComplianceEngine>>,
         state: &State,
+        world: &impl crate::state::WorldReadOnly,
     ) -> Self {
         Self {
-            static_inputs: StaticExecutionPolicy::capture(state),
+            static_inputs: StaticExecutionPolicy::capture(state, world),
             nexus: projection.nexus.clone(),
             manifests: Arc::clone(&projection.manifests),
             compliance,

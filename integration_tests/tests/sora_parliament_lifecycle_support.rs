@@ -304,18 +304,6 @@ pub async fn advance_to_execution_predecessor(
     advance_to_height_with_carriers(network, client, authority_height, label).await
 }
 
-pub async fn advance_to_autonomous_predecessor(
-    network: &iroha_test_network::Network,
-    client: &Client,
-    target_height: u64,
-    label: &str,
-) -> Result<()> {
-    let predecessor_height = target_height.checked_sub(1).ok_or_else(|| {
-        eyre!("{label}: autonomous target height {target_height} has no predecessor")
-    })?;
-    advance_to_height_with_carriers(network, client, predecessor_height, label).await
-}
-
 pub async fn submit_transition(
     client: &Client,
     attempt_id: GovernanceAttemptId,
@@ -517,15 +505,17 @@ pub fn lifecycle_certificate_replacing(
     Ok(ApplyThresholdKeyLifecycleCertificateV1 { certificate })
 }
 
+/// The pulse of a finalized block, from its certified execution commitment. The native
+/// control witness owns a pulse; a block payload never carries one.
 pub async fn pulse_at(
     client: &Client,
     height: u64,
     network: &iroha_test_network::Network,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    exact_block(client, height, network)
-        .await?
-        .global_beacon_pulse()
-        .copied()
+    let (_, verified) = finality::certified_block(network, client, height).await?;
+    verified
+        .commitment()
+        .beacon
         .ok_or_else(|| eyre!("block {height} does not carry a finalized global beacon pulse"))
 }
 
@@ -681,10 +671,10 @@ pub async fn await_native_sortition_pulse(
     slot: u64,
     label: &str,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    advance_to_autonomous_predecessor(network, client, slot, label).await?;
-    network.ensure_blocks(slot).await?;
-    // The native pre-boundary pulse must finalize exactly the slot height.
-    observe_exact_height(client, slot, label).await?;
+    // A pulse never creates a block (`specs/sumeragi.md`): real work carries the slot
+    // block, and its leader starts pulse production only after selecting it. The
+    // native pre-boundary pulse must finalize exactly the slot height.
+    advance_to_height_with_carriers(network, client, slot, label).await?;
     let mut pulses = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         pulses.push(pulse_at(&peer.client(), slot, network).await?);
@@ -720,20 +710,12 @@ pub async fn cross_native_boundary_after_pulse(
             pulse.height
         ));
     }
-    admit_parliament_height_carrier(
-        client,
-        [Log::new(
-            Level::INFO,
-            format!("{label} boundary carrier {boundary_height}"),
-        )],
-    )
-    .await?;
-    network.ensure_blocks(boundary_height).await?;
     let successor_height = boundary_height
         .checked_add(1)
         .ok_or_else(|| eyre!("{label}: successor height overflow"))?;
-    network.ensure_blocks(successor_height).await?;
-    observe_exact_height(client, successor_height, label).await?;
+    // Idle chains create no blocks: real work carries the boundary and the first block
+    // of the successor epoch.
+    advance_to_height_with_carriers(network, client, successor_height, label).await?;
     let successor_epoch = boundary_height / epoch_length_blocks;
     let (_, verified) = finality::certified_block(network, client, successor_height).await?;
     let context = &verified.commitment().schedule.current;

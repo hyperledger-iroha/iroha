@@ -15,6 +15,10 @@
 //! progress since the containment it renews; otherwise the containment expires at block start
 //! and restores every restriction it still holds. A change set approved before the incident
 //! names the selection containment replaced, so it no longer applies and cannot undo it.
+//!
+//! A root that has activated the kernel's lifecycle State also contains a running migration by
+//! closing its admission, which suspends its stages while its cursor and write barrier stay; the
+//! migration moves on only through governed change sets.
 
 use std::collections::BTreeSet;
 
@@ -31,6 +35,7 @@ use iroha_data_model::{
             ContainmentRecordV1, ContainmentReviewV1, ContainmentStatusV1, RestrictionKindV1,
             RootScopeV1, SelectionTransitionV1,
         },
+        obligation::{MigrationRecordV1, MigrationStatusV1},
     },
 };
 use mv::storage::StorageReadOnly;
@@ -117,14 +122,24 @@ fn already_restricted(previous: Option<RestrictionV1>, imposed: RestrictionV1) -
     })
 }
 
-/// Check that containment may restrict `target` under `selection`.
-fn check_target<S>(
+/// Check that a containment of `kind` may restrict `target` under `selection`, with the
+/// published `definitions` and the kernel's migration records `migrations`.
+///
+/// A root that has activated the kernel's lifecycle State also contains a running migration:
+/// closing its admission suspends its stages while its cursor and write barrier stay (§5.4).
+/// Containment never moves a migration on, so it only closes admission, and only while the
+/// migration still copies rows. On any other root a migration target is refused as the frozen
+/// baseline refuses it.
+fn check_target<S, M>(
     selection: &RootSelectionV1,
     definitions: &S,
+    migrations: &M,
+    kind: ContainmentKindV1,
     target: &DefinitionId,
 ) -> Result<(), Error>
 where
     S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+    M: StorageReadOnly<DefinitionId, MigrationRecordV1>,
 {
     let refused = |reason: &str| {
         Error::InvariantViolation(format!("containment of {target}: {reason}").into())
@@ -145,6 +160,22 @@ where
             .filter(|binding| binding.implementation == *target)
             .map(|binding| binding.wire_id.as_str())
             .collect(),
+        Some(DefinitionDescriptorV1::Migration(_))
+            if super::migration::lifecycle_installed(selection) =>
+        {
+            if kind != ContainmentKindV1::AdmissionClosed {
+                return Err(refused(
+                    "a migration is contained only by closing its admission",
+                ));
+            }
+            if !migrations
+                .get(target)
+                .is_some_and(|record| record.status == MigrationStatusV1::Running)
+            {
+                return Err(refused("only a running migration is contained"));
+            }
+            return Ok(());
+        }
         Some(_) => return Err(refused("only interfaces and implementations are contained")),
         None => return Err(refused("the definition is not published")),
     };
@@ -278,6 +309,8 @@ pub fn contain(
             check_target(
                 &selection,
                 &state_transaction.world.runtime_definitions,
+                &state_transaction.world.runtime_migrations,
+                containment.kind,
                 target,
             )?;
             let previous = restriction_of(&selection, target);

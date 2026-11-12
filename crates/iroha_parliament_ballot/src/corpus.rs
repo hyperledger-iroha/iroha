@@ -68,6 +68,14 @@ pub enum CorpusErrorV1 {
     Codec(#[from] AnonymousBallotCodecErrorV1),
 }
 
+impl CorpusErrorV1 {
+    /// Whether the node could not compute a corpus digest, as opposed to the entry being
+    /// refused. A local failure is never a committed verdict.
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::Codec(_))
+    }
+}
+
 /// Public Aye, Nay and Abstain counts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct BallotCountsV1 {

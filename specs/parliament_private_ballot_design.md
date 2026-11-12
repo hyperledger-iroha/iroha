@@ -335,9 +335,9 @@ the opening block, `h_open + 1`, not to `s0`. Closure is due at the first
 block-start pass whose timestamp reaches `t(h_open + 1) + casting_window_ms`.
 `s0` remains the opening anchor for the lift rule.
 
-Invitation and deliberation windows remain height-based in current source.
-Converting them to the millisecond clock belongs to the SCCP-owned governance
-clock work.
+Every lifecycle window of the anonymous family is a millisecond deadline on
+this clock (section 8.1). Baseline attempts keep their height windows until
+their governed retirement (section 12.3).
 
 ```text
 scope = ScopeDigest_P(network_id, proposal_content_digest,
@@ -1245,8 +1245,8 @@ It does not present any roster size as an anonymity guarantee.
 
 ```text
 AcceptingInvitations -> Sealed(R, S >= 3) -> Deliberating -> Reflection
-    -> AwaitingOpening -> Casting [s0, s0 + casting_window_ms) -> Closed
-    -> Approved | Rejected | NoQuorum
+    -> AwaitingOpening -> Casting [s0, t(h_open + 1) + casting_window_ms)
+    -> Closed -> Approved | Rejected | NoQuorum
 AcceptingInvitations -> NoRoster (S < 3 or no roster)     [section 10]
 ```
 
@@ -1263,7 +1263,9 @@ closure outcome is final for that body:
 
 Successful decisions are immutable. Different but semantically equivalent
 proposals remain a potential grinding channel; fingerprints alone do not bound
-it. No `Active` attempt may remain after every legal retry is exhausted.
+it. No `Active` attempt may remain after every legal retry is exhausted, except
+while the one `RejectExhausted` item bound to that exhaustion awaits its pass
+(section 8.1); no registration is valid during that wait.
 
 **Block-start ordering.** Each block-start pass completes due ballot closures
 before allocating newly free casting slots. It then considers eligible openings,
@@ -1272,11 +1274,195 @@ body_role)` order in that same pass. Each transition's position in the pass is
 recorded; section 11's lift rule compares it. [sccp.md](sccp.md) section 4.7
 specifies the full pass, the positions of these items relative to other
 transitions, and the due-work predicate (`governance_due`), which reads the due
-ballot items. The ballot needs exactly these two item kinds.
+ballot items. The ballot itself needs exactly these two item kinds; section 8.1
+fixes the lifecycle items that lead to them.
 
 **Clock rules.** Windows are half-open. Local wall clocks never choose
 consensus outcomes. No external transaction must land at exactly one height.
 There is no node-local consensus toggle.
+
+### 8.1 Anonymous-family lifecycle scheduling
+
+This section fixes the governance-clock lifecycle of the anonymous family
+(section 12.3): its transactions, the block-start items that
+[sccp.md](sccp.md) section 4.7 leaves to Parliament (G1 and G2a ranks 0–2),
+their deadlines and costs, and the State a restored attempt must have. It was
+reviewed with Codex (`gpt-6-astra`, read-only) on 2026-11-11. Baseline attempts
+keep their transaction-driven transitions and height windows (section 12.3).
+
+**Transactions record facts and intents.** A transaction executes after the
+pass of its block `B` and reads `t(B)`. It never changes an attempt's status or
+stage, seals a body, opens or closes a ballot, or takes an anchor.
+
+| Transaction | Authority | Valid when | Records |
+| --- | --- | --- | --- |
+| Attempt creation (own interface) | Any signer | Below the admission cap (section 9) | The attempt at `Qualification`, with `StartQualification` due at `t(B)` |
+| `EscalateRisk { target }` | `CanManageParliament` | Before the risk lock | The higher tier |
+| `CloseQualificationEarly` | `CanManageParliament` | Qualification started and not ended; no earlier intent | `early_close_ms = t(B)` |
+| `ClosePhaseEarly { body_instance_id, phase }` | `CanManageParliament` | The body is current and in exactly `phase`, Orientation to Deliberation; no earlier intent for that phase | `early_close_ms = t(B)` of that phase |
+| `RegisterInitialSortition` | Any signer | At the first body's stage, before any generation | The initial generation: every required body but the Confirmation Jury; it locks the risk tier |
+| `RegisterSortitionRetry` | Any signer | Some body's active generation ended `NoRoster`, at a height above that generation's registration | The next generation of every such body together |
+| `RecordInvitationResponse` | The invited account | Its generation drew and `t(B) < invitation_close_ms`; one response per assignment | A decline, or acceptance of a public seat |
+| `RegisterParliamentCredential` (own interface) | The invited account | As above, for a binding seat | Acceptance with its credential (section 3.2) |
+| `RecordAttemptAbsence` | The seat's account | A current, sealed public body, before any endorsement in that body and before its decision; once Reflection starts, `t(B) < finding_close_ms` | The exclusion |
+| `EndorsePublicFinding { root }` | The seat's account, not excluded | A public body in Reflection, `t(B) < finding_close_ms`, before its decision; one endorsement per seat | The endorsement |
+
+- **Registration is inclusion-derived.** Neither registration carries a
+  payload: Core derives the generation from committed State and the containing
+  height `h`. The snapshot is every eligible citizen under the frozen bond
+  threshold, less every sealed Policy Jury member for a Confirmation Jury. Each
+  body takes its next sequence and its frozen seat target, and the generation
+  takes the first native pulse height at or above `max(h + d, g + 1)` (section
+  9). It is therefore valid at every height that meets its condition.
+- **Capacity evidence.** A generation that includes a binding jury and whose
+  snapshot holds fewer than three citizens is recorded as capacity evidence:
+  every body of it ends `NoRoster` (`InsufficientElectorate`). It records its
+  derived slot and counts as a generation for sequences, slots and redraw
+  units, but it awaits no pulse and reserves or consumes none. If it exhausts
+  a budget, `RejectExhausted` falls due at `t(B)`, and no registration is
+  valid while that item waits. A generation without a binding jury and with an
+  empty snapshot is refused. Drivers do not resubmit a registration that would
+  only record evidence while citizenship is unchanged.
+- **No due work waits on a transaction.** An attempt that waits for a
+  registration advertises no due item; a keeper, a juror or anyone else submits
+  it.
+- **Early close.** Only `CanManageParliament` may shorten Qualification or a
+  deliberation phase, and only by one phase per intent. The intent names the
+  exact phase it closes and is refused once the body has left it. There is no
+  route exception: the deadlines below keep every attempt live without any
+  manager. Reflection and casting are never shortened.
+- **Decisive facts of a public body.** With `S` sealed seats, `Q = ceil(2S/3)`.
+  The endorsement that brings one root to `Q` freezes that root and its `Q`
+  endorsing assignments as the witness. An absence or endorsement after which
+  the strongest root plus the seats neither excluded nor endorsing is below `Q`
+  makes the quorum unreachable, which an absence can do before Reflection.
+  Either fact decides the body: later absences and endorsements are refused and
+  its conclusion is due at `t(B)`. A quorum decided in time stays decided when
+  its conclusion runs after the window has closed.
+
+**Block-start items.** Every processed G1–G3 item takes the anchor `A = (h,
+position, t(B))` of its block. Within equal `due_ms` and rank, item keys
+compare lexicographically; `body` is the body role's canonical index, and the
+assigned kind values place an attempt-level item before the body items of its
+attempt.
+
+| Step | Item | Due | Key | Cost | Effect |
+| --- | --- | --- | --- | --- | --- |
+| Prelude | `EstablishCastingClock` | Every casting window opened in the parent block | `(governance_attempt_id, body)` | None | `closing_ms = t(B) + casting_window_ms`, at `h_open + 1`; mandatory, unpositioned and outside the budget (at most `K` per block) |
+| G1 | `DrawGeneration` | B carries its exact-slot pulse at `h = slot`, or that pulse was committed at `slot < h` and this generation has not consumed it | `(slot, governance_attempt_id)` | 32 | Consume the pulse for this generation; draw every body of it in pipeline order; `invitation_close_ms = A.t + invitation_window_ms` |
+| G2a rank 0 | `StartQualification` | Creation's `t(B)` | `(attempt, 0)` | 1 | `qualification_due_ms = A.t + qualification_window_ms` |
+| G2a rank 0 | `EndQualification` | `min(qualification_due_ms, early_close_ms)` | `(attempt, 1)` | 1 | The stage moves to the first required body |
+| G2a rank 0 | `AdvancePhase` | `min(phase_due_ms, early_close_ms)` of the current body | `(attempt, 2, body)` | 1 | The next phase, entered at `A` |
+| G2a rank 1 | `RejectExhausted` | The `t(B)` of the capacity evidence that exhausted a budget | `(attempt, 0)` | 1 | The attempt is rejected |
+| G2a rank 1 | `CloseInvitations` | `invitation_close_ms` | `(attempt, 1, body)` | 8 | Seal and publish, or `NoRoster` |
+| G2a rank 2 | `ConcludeFinding` | `min(finding_close_ms, decided_ms)` | `(attempt, 0, body)` | 1 | The witness becomes the body's result, or the attempt is rejected |
+| G2b rank 4 | `CloseBallot` | `closing_ms` (section 3.4) | [sccp.md](sccp.md) section 4.7.2 | 16 | The closure record decides. A narrow Policy approval registers the Confirmation generation atomically and moves the stage to the Confirmation Jury, or ends the attempt `ConfirmationJuryCapacityUnavailable` |
+| G2c rank 5 | `OpenBallot` | `opening_at_ms`, while fewer than `K` casting windows are open | [sccp.md](sccp.md) section 4.7.2 | 2 | Casting opens at `s0 = A` |
+| G3 | Enactment | `enact_not_before_ms` of a production certificate | [sccp.md](sccp.md) section 4.7.2 | 4 | Rollback-isolated execution |
+
+- **Draws and pulses.** G1 first consumes the height-progress ticket (section
+  9), then the due draws in key order. For admission, an awaiting generation
+  at `slot = h` counts as potential due work, and K4 of [sccp.md](sccp.md)
+  section 4.7.4 additionally requires the candidate block to carry its
+  authenticated exact-slot pulse. A pulse may serve the generations of several
+  attempts; each generation consumes it once. A budget deferral or a restart
+  only delays consumption; no pulse is produced late, and a slot that passed
+  without its pulse is not due.
+- **Allocation.** A draw ranks each body's candidates (section 9) and invites
+  `min(target, candidates)` primaries and `min(alternate_cap, candidates -
+  primaries)` alternates per body, using the frozen target and alternate cap; a
+  citizen is invited at most once per body. The cross-body cap is the smallest
+  one, at most the frozen `max_cross_body_assignment_cap` and the number of
+  bodies drawn, under which any such allocation exists; the generation records
+  it. At that cap the allocation is the baseline draw's load-balanced selection
+  when that succeeds; otherwise every body's invitations are matched together
+  by augmenting paths in rank order, and each body takes its best-ranked
+  matched candidates as primaries. A generation that admits no allocation
+  under that bound consumes its pulse and ends every body of it `NoRoster`
+  (`AllocationInfeasible`). If a failed body has reached
+  `max_sortition_retries`, or the proposal-wide redraw count has reached
+  `max_randomness_redraws`, the same `DrawGeneration` rejects the attempt.
+- **One live occurrence per key.** An attempt has one qualification, one
+  current phase per body, one drawn election per body and one decision per
+  public body. An item names the occurrence that made it due: `AdvancePhase`
+  the phase it ends, `CloseInvitations` its election, `ConcludeFinding` its
+  body instance and `RejectExhausted` the slot of its evidence; an item whose
+  occurrence has passed is refused. When an item ends an attempt, the
+  attempt's other occurrences lapse: they are neither processed nor charged,
+  and a terminal attempt has no due item. A deadline that cannot be expressed
+  refuses the transition that would set it.
+- **Costs.** The costs are fixed per kind. The largest Parliament item is a
+  complete generation draw, so the minimum budget of [sccp.md](sccp.md)
+  section 4.7.2 stays 43 units; the prelude is outside it. Resource
+  qualification (section 5) measures each kind against its cost.
+
+**Anchors and deadlines.** Each deadline is fixed once, from the anchor that
+starts its wait, and never moves. An early-close intent is stored beside the
+deadline and never changes it.
+
+- `StartQualification` at `A`: `qualification_due_ms = A.t +
+  qualification_window_ms`.
+- `DrawGeneration` at `A`: every drawn body's `invitation_close_ms = A.t +
+  invitation_window_ms`.
+- **Orientation** starts at the anchor of the item that makes a body both
+  current and sealed: its own `CloseInvitations` when its stage is current,
+  or `EndQualification` or the previous body's conclusion when the body is
+  already sealed. Its `phase_due_ms = A.t + orientation_window_ms`.
+- `AdvancePhase` into Evidence, Questions, Responses or Deliberation at `A`:
+  `phase_due_ms = A.t + window`. Each phase is anchored at its actual entry,
+  so closing one phase early never lengthens the next.
+- `AdvancePhase` into Reflection at `A`: a public body's `finding_close_ms =
+  A.t + public_finding_window_ms`; a binding jury's `opening_at_ms = max(A.t,
+  sealed_at.t + vote_notice_ms)` (section 3.4).
+- A certifying `CloseBallot` at `A` of a production attempt:
+  `enact_not_before_ms = A.t + enactment_delay_ms`. A zero delay lets G3 of
+  the same pass enact it. A candidate-testing certificate is a terminal
+  outcome with no enactment item (section 12.3).
+- **The Confirmation Jury** starts Orientation at its own `CloseInvitations`:
+  the closure that admitted it already made its stage current.
+- A public body's conclusion keeps its anchor; when the next body is already
+  sealed, its Orientation starts there.
+
+An item that a transition makes due in its own segment or an earlier one
+waits for the next pass ([sccp.md](sccp.md) section 4.7.2): an overdue body
+advances one phase per pass. A Reflection entry whose `opening_at_ms` has been
+reached opens its ballot in G2c of the same pass.
+
+**Election outcomes.** `CloseInvitations` seats the accepted primaries in rank
+order, then the accepted alternates in rank order, up to the frozen target. A
+binding jury needs `S >= 3` and seals its credential list with the roster
+(section 3.3); a Confirmation Jury's seats are disjoint from the sealed Policy
+Jury's. An empty roster, or a binding roster below three, ends the body
+`NoRoster`. When that body's sequence has reached `max_sortition_retries`, or
+the proposal-wide redraw count has reached `max_randomness_redraws`, the same
+item rejects the attempt; otherwise the next retry redraws every `NoRoster`
+body together. Unseated candidates are released (section 10).
+
+**Redraw budget.** The first generation of a sequence-zero attempt is the
+baseline. Every later generation, capacity evidence included, consumes one
+unit: retries, the Confirmation generation and every generation of a successor
+attempt, which starts from its predecessor's count. There is no ballot retry,
+so no ballot consumes a unit.
+
+**Restore.** A restored attempt is one these rules produce. In particular its
+generations take strictly increasing slots derived from their request heights;
+each retry holds exactly the bodies whose elections had ended without a roster
+when it was registered; a narrow Policy approval of an active attempt has its
+Confirmation generation; its deadlines and due times recompute exactly from
+their anchors, recorded intents and decisive facts, and the frozen parameters;
+each drawn body's plan is the draw of its snapshot and pulse; each sealed body
+is the roster of its accepted responses with a root over its preimage; a
+public body's record is empty before its Orientation and ends at its first
+decisive fact, recorded at or after its Orientation, before its finding window
+closed and, for an endorsement, in Reflection; no phase of a body is entered at
+or after its conclusion; each result is the recorded decision of its body, a
+ballot one opened after its jury's Reflection and notice; every anchor an item,
+closure or rejection was checked at expresses its deadlines, and every recorded
+block time lies on one chain (one time per height, never earlier at a later
+height); at most one occurrence of each
+key is live; a terminal attempt has no live occurrence; an exhausted active
+attempt is exactly one whose `RejectExhausted` awaits; and its redraw count
+stays within the frozen ceiling.
 
 ## 9. Sortition waits belong to governance
 
@@ -1373,11 +1559,10 @@ wording. The ballot requires the following of them. None is implemented.
   Each ordinary or keepalive block consumes the current progress ticket and
   decreases the potential. A successor ticket is created only while the target
   is still in the future. Requests coalesce, so at most one advancing ticket
-  exists per height. The SCCP progress invariant, which today is consume or
-  terminalize, must be amended in `sccp.md` to permit this strictly
-  decreasing, admission-bounded potential. `sccp.md` still states the
-  consume-or-terminalize invariant and describes the latency function as a
-  configured total with a single sortition-retry generation. Changing them is
+  exists per height. The SCCP progress invariant ([sccp.md](sccp.md) section
+  4.7.3) permits this strictly decreasing, admission-bounded potential beside
+  consume or terminalize. `sccp.md` still describes the latency function as a
+  configured total with a single sortition-retry generation; changing that is
   SCCP-owned work.
 - **At the target.** Only the exact authenticated native pulse permits
   drawing. A missing pulse produces no continuing keepalive loop. Parliament
@@ -1796,6 +1981,52 @@ activatable only after the fourth.
 4. Signerless execution: admission, block validity, corpus and replay
    (sections 3.6 and 3.7).
 5. Clients, certificate effects and governed retirement.
+
+**Slice 2: registration, seal and restore.**
+
+- **Proposal digest.** Creation fixes `proposal_digest` of the full canonical
+  proposal in the attempt State. Every board of the attempt is sealed with it.
+  A closure record is refused unless it names the attempt's network, proposal
+  digest, and the list digest and profile its jury's seal bound.
+- **Stored credentials.** World keeps exactly one credential per accepted
+  assignment of a binding election. Stored credentials that are not exactly
+  those, or that repeat a seat or commitment, are World's corruption: no
+  registrant is rejected for them. A failure the node cannot decide (its proof
+  profile, a pinned frame or the verifier backend) is never a verdict.
+- **Registration.** `RegisterParliamentCredential` is the only instruction of
+  a direct signed input under the network's candidate-testing selection. Core
+  derives the body from the active election, the assignment from the signing
+  authority's open invitation, and the body context from committed State. It
+  rebuilds the election's registration ledger from the stored records, checks
+  seat and commitment freshness across primaries and alternates before it
+  verifies `pi_reg`, and records the acceptance and the compact credential in
+  one step. The record keeps `(C, auth)` and the locator of the signed input
+  (height, input position, instruction position, entrypoint hash); the proof
+  stays in that input. A refusal the node cannot decide (an unavailable
+  verifier, for example) is local and never committed as a rejection.
+- **Seal.** `CloseInvitations` of a binding jury asks the election's ledger to
+  seal exactly the seated assignments: an accepted alternate who is not seated
+  contributes nothing. The seal's `(R, S, profile_id)` enters the roster root,
+  and the board starts from facts of committed State alone: the attempt's
+  purpose, proposal digest and content identifier, the body instance and
+  roster root, the seal's block time and the jury's frozen ballot policy. A
+  seat without its credential refuses the item and changes nothing. The seal
+  output with the complete canonical list belongs to the positioned pass
+  (slice 3).
+- **Planner.** On the State after the pass's draws, the planner lists an
+  attempt's due items and trial-applies them in pass order to a copy with the
+  same seal step, so a planned seal, `NoRoster`, lapse (an earlier item ended
+  the occurrence or the attempt) or refusal is what execution records for the
+  same credentials. A node that meets a local failure does not plan the item.
+- **Tables.** `world.parliament_anonymous_attempts` maps an attempt to its
+  State; `world.parliament_anonymous_registrations` maps `(election,
+  assignment)` to its credential record; `world.parliament_anonymous_boards`
+  maps a ballot scope to its board record. Restore validates each attempt,
+  rebuilds each election's ledger (uniqueness is checked again), requires
+  exactly one credential for every accepted binding assignment and exactly one
+  board for every sealed binding jury, and rebuilds every board, whose body
+  instance, roster root and registration mapping must be the ones its attempt
+  and the stored credentials give.
 
 ## 13. Required validation
 

@@ -770,10 +770,12 @@ current source, including its height-based windows.
    milliseconds. A due item is applied by the block-start pass of the first
    block `B` with `t(B) ≥ due_ms`, never by block count. Beacon pulse slots,
    recorded `*_at_height` fields and the validation-fee activation offset stay
-   height-based. Converting the invitation, deliberation and public-finding
-   windows and the enactment delay (`enact_not_before_ms = certified_at_ms +
-   delay`) is part of this work (`TODO:` WP-S3, coordinated with the Parliament
-   workstream).
+   height-based. The anonymous Parliament family runs its qualification,
+   invitation, deliberation and public-finding windows and its enactment delay
+   (`enact_not_before_ms = certified_at_ms + delay`) on this clock
+   ([ballot design](parliament_private_ballot_design.md) section 8.1);
+   baseline attempts keep their height windows until their governed retirement
+   (section 12.3 there).
 2. **Intents in transactions, transitions at block start.** Transactions record
    facts and intents only. Lifecycle transitions, including early closes, panel
    conclusions, ballot openings and closures, certification and enactment, are
@@ -787,9 +789,10 @@ current source, including its height-based windows.
 
    | Step | Items | Order |
    |---|---|---|
+   | Prelude | `EstablishCastingClock` for every casting window opened in the parent block: `closing_ms = t(B) + casting_window_ms`; mandatory, unpositioned, outside the budget | At most `K` per block |
    | G0 | Pause-panel draw | At most one per native pre-boundary pulse carrier |
-   | G1 | Parliament sortition at its exact pulse slot | Request order of the Parliament pipeline |
-   | G2a | Ranks 0–2: Parliament lifecycle transitions. Rank 3: pause-panel conclusions and reconciliation-window ends (`sccp.md` §4.10) | `(due_ms, kind_rank, item key)`; SCCP's common item key is `(network tag, kind, subkey)`, with kind 0 and primary 0/backup 1 for pause conclusions, kind 1 and revision for window ends |
+   | G1 | The height-progress ticket, then each Parliament generation whose exact-slot pulse B carries at its slot, or which has not consumed that pulse committed at an earlier height | `(slot, governance_attempt_id)`; pipeline order inside a generation |
+   | G2a | Ranks 0–2: Parliament lifecycle items (qualification and phases; invitation closes and election exhaustion; public-finding conclusions). Rank 3: pause-panel conclusions and reconciliation-window ends (`sccp.md` §4.10) | `(due_ms, kind_rank, item key)`; Parliament's keys are fixed in the ballot design section 8.1; SCCP's common item key is `(network tag, kind, subkey)`, with kind 0 and primary 0/backup 1 for pause conclusions, kind 1 and revision for window ends |
    | G2b | Rank 4: binding-ballot closures whose closing time `t(h_open + 1) + casting_window_ms`, with `h_open = s0.height`, has been reached | `(closing time, governance_attempt_id, body_role)` |
    | G2c | Rank 5: binding-ballot openings with `opening_at ≤ t(B)`, deferred ones included, while fewer than `K` casting windows are open | `(opening_at, governance_attempt_id, body_role)` |
    | G3 | Enactments: Parliament certificates, then fast pauses | `(enact_not_before_ms, governance_attempt_id)`, then `(network tag, panel role)` |
@@ -800,10 +803,11 @@ current source, including its height-based windows.
      shortens voting ([ballot design](parliament_private_ballot_design.md)
      sections 3.4 and 3.7). The closing time is fixed when block `h_open + 1`
      executes and never moves.
-   - The Parliament workstream fixes the item kinds, keys and costs of ranks
-     0–2. Ranks 6–8 are reserved and have no item kind; adding one changes this
-     section and the ballot design together. The ballot needs exactly ranks 4
-     and 5 ([ballot design](parliament_private_ballot_design.md) section 8).
+   - The [ballot design](parliament_private_ballot_design.md) section 8.1
+     fixes the kinds, keys, deadlines and costs of G1 and ranks 0–2 for the
+     anonymous family. Ranks 6–8 are reserved and have no item kind; adding one
+     changes this section and the ballot design together. The ballot itself
+     needs exactly ranks 4 and 5 (section 8 there).
    - Each step reads the state that the earlier steps of the pass left. Due
      closures therefore free their slots before openings are considered in the
      same pass, and a Reflection entry whose `opening_at` has already been
@@ -835,33 +839,45 @@ current source, including its height-based windows.
    - **Positions.** Every processed G1–G3 item gets its 0-based index among
      the items processed in that pass. Ballot openings record theirs in `s0`,
      and fast-pause enactments in `enacted_at`. S0, G0 and G4 are not
-     positioned. `governance_due_applied` holds iff at least one G1–G3 item was
+     positioned, and neither is the prelude. `governance_due_applied` holds iff
+     the prelude established a casting clock or at least one G1–G3 item was
      processed.
 4. **Due predicate.** SCCP owns `governance_due` (`sccp.md` §4.7.3):
 
    ```text
    governance_due(parent, h, t) :=
-        ∃ unconsumed Parliament pulse request with pulse_height = h
+        ∃ casting window opened at h - 1
+     ∨ ∃ Parliament generation awaiting the pulse of slot s, with s = h
+            or s < h and that pulse committed and not consumed by it
+     ∨ ∃ height-progress ticket for h
      ∨ ∃ G2a or G2b item with due_ms ≤ t
      ∨ ∃ ballot opening with opening_at ≤ t while fewer than K casting windows are open
-     ∨ ∃ certified attempt with enact_not_before_ms ≤ t
+     ∨ ∃ certified attempt with production authority and enact_not_before_ms ≤ t
      ∨ ∃ fast-pause round with certify_due
      ∨ ∃ item carried over by the block-start budget
    ```
 
-   - A pulse request is due only at its exact slot. A slot that passes without
-     its pulse leaves the request waiting for that exact pulse; the wait is not
+   - For admission, a generation awaiting the pulse of slot `h` counts as
+     potential due work, and the honest proposer includes the keepalive only
+     if its block carries that authenticated pulse. Execution draws a
+     generation at its slot in the block that carries the pulse, or later while
+     that committed pulse stays unconsumed by it. A slot that passes without its
+     pulse leaves the generation waiting for that exact pulse; the wait is not
      due work, so a missing beacon never manufactures blocks. The slot is a
      consensus-native pulse height, and no pulse is produced or carried for an
-     elapsed slot (ballot design section 9). A late request is therefore one
-     whose exact-slot pulse is already committed and not yet consumed.
-     `TODO:` (WP-S3, with the Parliament workstream): add the matching due leg;
-     under the progress invariant it may make a request due only in a pass
-     that consumes it.
+     elapsed slot (ballot design section 9). An anonymous candidate-testing
+     certificate is terminal and never due for enactment.
    - Fast-pause lapses and pause-panel draws are not due work.
-   - **Progress invariant**, binding on every present and future term: an item
-     may appear in `governance_due` only if the pass that finds it due consumes
-     or terminalizes it. An item that waits for external material is not due.
+   - **Progress invariant**, binding on every present and future term (`sccp.md`
+     §4.7.3): every reported item is executable, so the pass that finds it due
+     consumes or terminalizes it when the budget reaches it; an item that waits
+     for external material is not due. Pause-panel certification is
+     preparatory and may repeat after a G3 deferral, but every
+     governance-justified keepalive block establishes a casting clock,
+     consumes or terminalizes a non-preparatory occurrence, enacts or
+     terminalizes a fast-pause round, or consumes a height-progress ticket
+     whose successor strictly decreases the remaining height to the nearest
+     admitted slot.
 5. **Clock bounds.** Certified block time is bounded by the Sumeragi
    Prepare-vote clock guard ([`sumeragi.md`](sumeragi.md) §4.5, CT1–CT5;
    `sccp.md` §4.3). `max_clock_drift_ms` is a committed chain parameter capped

@@ -167,9 +167,23 @@ pub trait Circuit<F: Scalar>: Sync {
     fn fixed_rows(&self, _shape: &Shape) -> usize {
         0
     }
-    /// The fixed rows' values, row major (`fixed_rows * cols`).
+    /// The fixed rows' values, row major (`fixed_rows * cols`), without the
+    /// wallet rows (`wallet_rows`), whose values are the prover's.
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
         Vec::new()
+    }
+    /// The first of the fixed rows, holding one wallet's own constants (its
+    /// key's comb tables): committed with blind 0 like the others and left out
+    /// of proofs, but their commitments come from the instance (`wallet_io`)
+    /// rather than the key, so one circuit serves every wallet. Counted in
+    /// `fixed_rows`, before the key's rows.
+    fn wallet_rows(&self) -> usize {
+        0
+    }
+    /// The io index of the wallet rows' commitments: four 128-bit limbs per
+    /// row (x low, x high, y low, y high).
+    fn wallet_io(&self) -> Option<usize> {
+        None
     }
     /// Public inputs fixed after the second-phase challenges (late io): their
     /// io indices, in the order the proof carries them. The transcript

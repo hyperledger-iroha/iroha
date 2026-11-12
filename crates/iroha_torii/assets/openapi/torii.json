@@ -40529,6 +40529,46 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
+      "RuntimeDraftMigrationRequest": {
+        "additionalProperties": false,
+        "description": "The migration of this node's release (its native module), the step of it to draft and the first height executed under the successor selection. qualification_hex is the digest of the qualification evidence for the successor composition.",
+        "properties": {
+          "effective_height": {
+            "description": "First height executed under the successor selection.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "migration": {
+            "description": "Native module of the migration.",
+            "type": "string"
+          },
+          "qualification_hex": {
+            "description": "Digest of the qualification evidence, 32-byte lowercase hex.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "step": {
+            "description": "start installs the successor storage and activates the migration; cut_over makes the successor authoritative and drains the old storage; retire retires the drained old storage and deactivates the migration.",
+            "enum": [
+              "start",
+              "cut_over",
+              "retire"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "migration",
+          "step",
+          "effective_height",
+          "qualification_hex"
+        ],
+        "type": "object"
+      },
       "RuntimeDraftUpgradeRequest": {
         "additionalProperties": false,
         "description": "The addition of this node's release to activate (its native module) and the first height executed under the successor selection. qualification_hex is the digest of the qualification evidence for the successor composition.",
@@ -40646,6 +40686,23 @@
         "required": [
           "name",
           "schema"
+        ],
+        "type": "object"
+      },
+      "RuntimeFloorAttestRequest": {
+        "additionalProperties": false,
+        "description": "The height of a checkpoint this node holds, which it states as the startup floor from its own history.",
+        "properties": {
+          "height": {
+            "description": "Height of the checkpoint to state as the startup floor.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height"
         ],
         "type": "object"
       },
@@ -100802,6 +100859,164 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/boundaries": {
+      "get": {
+        "description": "The boundaries of the universal root's history: whether the root has activated the kernel's lifecycle State, its committed checkpoint policy, its ratified adoption anchor and startup floors, and the history boundary they set at the committed tip's time; and the upgrade checkpoint this node's block store records and the checkpoints this node holds.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List the runtime history boundaries.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.boundary.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/boundaries/anchor/attest": {
+      "post": {
+        "description": "Derive the adoption record from this node's own store (the upgrade checkpoint it adopted the foundation at, the certified World roots around it, the committee of its height and the founded selection) and sign this node's statement of it with its validator key. Returns the record and the signed statement; every validator's statement is relayed together in RatifyRuntimeAdoptionAnchorV1. Refused when the node records no upgrade checkpoint, its key is not a member of the current committee, or its history does not certify the record.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Sign this node's statement of the adoption anchor.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.boundary.anchor.attest"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/boundaries/floor/attest": {
+      "post": {
+        "description": "State the startup floor at the height in the body ({\"height\": <u64>}) from this node's own history (the block and committed time it stores there) and sign this node's statement of it with its validator key, only while the node holds a checkpoint at exactly that height. Returns the floor and the signed statement; every validator's statement is relayed together in RaiseRuntimeStartupFloorV1. Refused when the node stores no certified block at the height, holds no checkpoint there, or its key is not a member of the current committee.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeFloorAttestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Sign this node's statement of a startup floor.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.boundary.floor.attest"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/containments": {
       "get": {
         "description": "Every recorded emergency containment of runtime definitions, with its lease, the restrictions it imposed and its status, by authorization height then identity.",
@@ -100982,6 +101197,62 @@
           "stableRouteId": "runtime.metrics"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/runtime/migrations/draft": {
+      "post": {
+        "description": "Draft, from this node's release catalog and the committed selection, the change set of one step of a migration this release compiles. Body: {\"migration\": <native module>, \"step\": \"start\" | \"cut_over\" | \"retire\", \"effective_height\": <u64>, \"qualification_hex\": <32-byte hex>}. Start installs the successor storage and activates the migration; cut_over makes the successor authoritative and drains the old storage; retire retires the drained old storage and deactivates the migration. Returns the change set and its 32-byte hex identity, which release signers endorse and validators attest. Refused for a migration the release does not compile, an unknown step, or a step that does not apply to the committed selection.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeDraftMigrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Draft a runtime migration step.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.migration.draft"
+        },
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/release": {

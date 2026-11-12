@@ -1,4 +1,4 @@
-# Stage A2: uniform blocks — status 2026-11-11 (fixed point over Receive, Send and Bootstrap; every chain starts at a Bootstrap proof)
+# Stage A2: uniform blocks — status 2026-11-12 (fixed point over Receive, Send and Bootstrap; every chain starts at a Bootstrap proof; each wallet's key tables are its own issuer-certified wallet row)
 
 This is an experimental harness for the Receive, Send and Bootstrap circuits. The [README](README.md) lists
 what is still unfinished: the wallet state carried between steps, Bootstrap's comb tables, and the production
@@ -1740,7 +1740,10 @@ blocks could use the empty tails.
    - done: the Bootstrap kind ("The Bootstrap kind" below; owner: "Bootstrap kind"): the genesis flag is gone,
      every chain starts at a Bootstrap proof, and the predecessor slot takes Receive, Send or Bootstrap;
    - next: a Pixel run of the fixed point with all three kinds; the witness at 32 rows (about 65k fewer positions
-     in P-recv; it would also bring S-recv back toward 2^18); Bootstrap's comb tables as uniform arrays;
+     in P-recv; it would also bring S-recv back toward 2^18);
+   - done: Bootstrap's key tables derived in-circuit ("Bootstrap's key tables" below: too large for one proof at
+     Receive's layout), then issuer-certified key tables ("Issuer-certified key tables" below; owner: "Issuer
+     certifies them"): each wallet's tables are its own wallet row, one circuit for every wallet;
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -2095,14 +2098,188 @@ Bootstrap starts from the zero state with its own activation.
 
 **Not in it.**
 
-- **The wallet's comb tables** (Lever 1): `operation::bootstrap_cost` derives them from the payment key in 34,939
-  rows and 216,205 range lookups at m = 16 (about 253k constraints), one time. No uniform gadget builds them yet.
-  An estimate of the fit: each range lookup is a first-phase chunk and a second-phase helper. The first phase has
-  room (35 rows, 573k positions, against about 250k more cells). The second phase is tight: P-boot uses 9 rows
-  now, the shared layout leaves Bootstrap 64 − 35 − 5 − 3 = 21, and the tables' helpers need about 13 more, so
-  about 22. Building the gadget would settle it; the fallbacks are a lookup-leaner derivation, or the tables as a
-  one-time proof of their own that Bootstrap verifies or the credential binds.
+- **The wallet's comb tables** (Lever 1): built since, and too large to join Bootstrap in one proof at
+  Receive's layout; see "Bootstrap's key tables" below.
 - **The state from one step to the next** (`σ.predecessor = Ω.head`): the spike's own relations are synthetic, so
   the io carries no head and nothing ties a step's input state to its predecessor's output yet. With that tie,
   Bootstrap's zero state is every chain's first head.
 - The ledger's activation record, and the issuer's and the root's own keys for the credential and the certificate.
+
+## Bootstrap's key tables: built, and too large for one proof at Receive's layout (2026-11-12)
+
+Owner: "Yes, build them" (to see whether the full Bootstrap fits). Code: `nonnative::key_tables` (`KeyTables`,
+`KEY_POINTS_TABLE`, the `KT_*` arrays, `kt_value_array`, `kt_check_array`, `kt_addition`), `full::p_boot(gens,
+tables)` and `BootIdx::key_tables`, `p_boot_at` and `key_tables_fit` in `main.rs`. Test:
+`nonnative::tests::key_tables_derive_the_comb_tables`. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-keytables-fp-2.log`
+(the fixed point with the one-time measurement) and `claude-keytables-tests-2.log` (all 45 tests);
+`claude-keytables-fp-1.log` tried the tables at every hop before the measurement became one-time.
+
+**What was built.** The derivation Lever 1 needs at Bootstrap: the wallet's two comb tables (m = 16, 2 × 256
+entries) from its key Q, as uniform arrays with the comb's non-native checks.
+
+- Q on the curve, and one doubling chain `P_(s+1) = 2 P_s` of 241 doublings. Every base `B_k = 2^(16 k) Q` is
+  `P_(16 k)`, and its double `2 B_k` is the next point on the chain, so no doubling is spent twice (the census
+  counted 256).
+- A witness table of the 16 bases and their 16 doubles, tied to the chain.
+- Per table, the sum of its eight bases (seven additions; it is entry 255), then a Gray walk of 255 additions of
+  `±2 B_k`, so that every entry `sum_k (2 bit_k(h) - 1) B_(8j+k)` is one step's sum. Walking from entry 255 needs
+  no negated point. Each addend comes from the witness table by a lookup with a per-step index; its sign is a
+  per-step coefficient on its y.
+- A doubling checks the tangent (two products) and the new x and y. An addition checks both slope equations (the
+  comb's rule: equal points can only double) and the new x and y. In all: 241 doublings and 524 additions; 2,055
+  one-product, 242 two-product and 524 four-product checks.
+- Index maps stay structured (slot × step, shifts by one), as in the comb.
+
+The test derives the tables in-circuit and compares every entry with `operation::comb_tables`: every row holds,
+the matrix evaluation matches its entries, the circuit proves and verifies, and a changed walk slope, chain value,
+addend or key point is refused.
+
+**Does Bootstrap fit with them? No.** Measured once at the last hop, each P-boot at its own layout (rows of 2^14
+columns):
+
+| | P-boot without the tables | P-boot with the tables |
+|---|---:|---:|
+| Constraints | 2^18 (127,095 rows) | 2^19 (387,239 rows) |
+| Witness rows: first, link, second phase, fixed | 12 + 1 + 10 + 2 of 32 | 36 + 1 + 35 + 2 of 128 |
+| Cells | 231,597 | 686,653 (+455,056) |
+| Matrix program (products) | 5,672 | 18,310 |
+| Pixel model, kernels of 11-10 | 0.61 s | 1.35 s |
+
+Receive's layout leaves Bootstrap 2^19 constraints and at most 35 + 5 + 21 + 3 rows. The constraints would fit; the
+witness does not: 36 first-phase rows against 35, and 35 second-phase rows against 21 (each of the tables'
+roughly 210k range lookups needs a helper cell in the second phase). The tables also triple Bootstrap's matrix
+program, which every Send and Receive evaluates natively: their fold evaluates all three kinds at every point of q,
+so the P side's native q work would grow by about half again.
+
+**What this leaves (an owner decision).** Every option needs the wallet's table rows in Send and Receive: the
+experiment's circuits read one key's tables from constant columns, which a production circuit cannot do. (The owner
+chose option 1; both are done since, see "Issuer-certified key tables".)
+
+1. **The issuer certifies the tables' commitment in the credential** (recommended). At enrollment the issuer
+   derives the tables from the payment key natively, as it already checks that key, and signs their commitment;
+   Bootstrap already verifies the credential in-circuit and puts the commitment into the zero state. That is the
+   same trust as the payment-key binding itself, Bootstrap stays as built, and native q pays nothing. The
+   commitment depends on the circuit's table rows, which change only with a new wallet generation.
+2. **A two-step start.** The derivation becomes its own first link (no predecessor), and Bootstrap follows it,
+   verifying it. Everything stays proven, at the cost of a fourth kind (a third selector bit), a Bootstrap with a
+   verifier slot, and the derivation's matrix program in every fold (merging its arrays as the comb does would
+   roughly halve that).
+3. **Verifiers derive the commitment from the public payment key.** Not enough on its own: a receiver can check
+   its payer, but the recursion also relies on the tables of every earlier counterparty, whom later verifiers never
+   see.
+
+## Issuer-certified key tables: each wallet's tables as its own wallet row (2026-11-12)
+
+Owner: "Issuer certifies them". Code: the comb's split tables (`nonnative::WALLET_TABLE`, `wallet_table_values`,
+`A_SELG`, `A_WTABLE`); the wallet row (`uniform::Copies::wallet`, the builder's placement, `r1cs::Circuit::wallet_rows`
+and `wallet_io`); `spartan::fixed_for`, `wallet_commitments`, `point_from_limbs`, `limbs_of_point`, `commit_public`;
+the wallet pin in `points::PointsBuilder::verify_keyed`; `full::WalletKey`, `TABLE_IO`, `wallet_table_commitment`
+(the issuer's computation), `table_io`, `table_values`, `table_ties`; Bootstrap's certified commitment in
+`full::p_boot`; two keys in `wallet_chains`. Tests: `full::tests::wallet_row_commits_to_the_certified_tables` and the
+existing ones. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-walletrow-fp-1.log` (the fixed point) and
+`claude-walletrow-tests-2.log` (all 46 tests).
+
+**What was wrong.** The comb read the wallet key's comb tables from the circuit's constant columns, as if the key
+were part of the verification key: one key per circuit. A production circuit serves every wallet.
+
+**What changed.**
+
+- **The wallet row.** G's tables stay constant columns. The wallet key's two tables (512 points: the row `256 t +
+  i`, x's and y's limbs) are a witness table placed alone in the circuit's first fixed row, cell `k` of table row
+  `i` at column `512 k + i` in every circuit. Like the key's fixed rows it is committed with blind 0 and left out of
+  proofs, but its commitment comes from the instance: four io limbs at index 56, the wallet's table commitment,
+  which every verifier substitutes (`spartan::fixed_for`). A proof whose wallet row holds other tables does not
+  verify (the test proves B's tables under A's commitment: refused).
+- **The issuer certifies it.** At enrollment the issuer computes the commitment from the payment key
+  (`wallet_table_commitment`: the tables natively, then one MSM over the 3,584 values). Bootstrap's statement sponge
+  absorbs it (a copy of its io) before the signatures, so the credential's signature covers it.
+- **The recursion keeps it.** A P circuit ties each verified P proof's commitment limbs (its io) to four shared
+  values per pair; the S circuit pins that proof's wallet row (an input point of its points side) to the same
+  limbs; and a P circuit's predecessor has its own commitment, so one wallet keeps one table from Bootstrap on.
+- **One circuit for every wallet.** At the last hop the wallet chains run two wallets with different keys, and so
+  different tables and commitments, on the same circuits.
+
+**Results** (`ZKS_SCHEDULE=lean ZKS_HOPS=8 zk-spartan fixed-point`). All 46 experiment tests pass.
+
+- The fixed point holds as before: all six circuits' matrices are equal from hop 4 to 5 on, and every pair
+  verifies.
+- At the last hop, wallets A and B, with different keys (so different tables and commitments), run every order on
+  the same circuits: Bootstrap, then Send and Receive after a Bootstrap, a Receive and a Send. Every pair verifies
+  and every accumulator holds.
+- Refused: in every operation, a changed limb of the predecessor's table commitment (P ties it to the predecessor's
+  io and to its own; S pins the predecessor's wallet row to it); wallet A's Receive proof checked under wallet B's
+  commitment; and, in the test, a proof whose wallet row holds one wallet's tables under another's commitment.
+
+| At the fixed point (hop 8) | P-recv | S-recv | P-send | S-send | P-boot | S-boot |
+|---|---:|---:|---:|---:|---:|---:|
+| Constraint rows (all 2^19) | 479,209 (+891) | 272,656 (+468) | 263,582 (+443) | 138,228 (+234) | 127,231 (+136) | 101 |
+| Witness rows used, of 64 | 35 + 5 + 11 + 3 | 46 + 1 + 3 + 2 | 35 + 5 + 6 + 3 | 46 + 1 + 2 + 2 | 35 + 5 + 9 + 3 | 46 + 1 + 1 + 2 |
+| Cells | 605,359 (+516) | 295,754 (+56) | 342,199 (−260) | 153,411 (+28) | 230,973 (−624) | 58 |
+| Pixel model, kernels of 11-10 | 1.35 s | 0.86 s | 0.96 s | 0.59 s | 0.72 s | 0.33 s |
+
+- **Send and Receive cost the same**: Receive 2.21 s and Send 1.55 s per pair on the model, proofs 5,024 + 4,928 B
+  (the wallet row is a fixed row, so not in the proof). The P circuits still use three fixed rows: G's constant
+  table halved (512 rows instead of the merged 1,024) and the wallet row took the freed row. The four shared limbs
+  per verified P proof and their ties add a few hundred cells and rows (the changes in brackets are against "The
+  Bootstrap kind").
+- **The issuer's work** is the tables (about 780 point operations) and one MSM over 3,584 values per enrollment.
+
+**The spec.** The credential now carries the payment key's table commitment, `key_table_commitment` (R10; owner:
+"Apply and commit", 2026-11-12). The rationale and the edits are in
+[`research/SPEC-CHANGE-key-table-commitment.md`](research/SPEC-CHANGE-key-table-commitment.md).
+
+**Still open.**
+
+- The credential's and the certificate's own keys: Bootstrap's three signatures still use the comb over the
+  wallet's own tables as a stand-in (the issuer's and the root's keys need tables of their own).
+- The exact monetary state carried from one step to the next; the head-binding
+  boundary is implemented below, but its statement still uses synthetic values.
+
+## Research predecessor-head continuity (2026-11-12)
+
+The recursive relation now binds its own signed statement to the head of its
+verified predecessor. Previously the predecessor proof and own relation could
+both be valid while describing unrelated states.
+
+- Public P io index `HEAD_IO = 4`, previously filler, holds lane 0 of the own
+  statement's final sponge permutation. The other two lanes stay private.
+- The third statement permutation absorbs a private predecessor-head value and
+  the operation kind through the copy argument. Every signature is over a later
+  digest of that same chain, so generating a fresh valid signature does not
+  bypass the predecessor binding. The kind is constrained to the circuit kind.
+- Send and Receive equate that predecessor value to `HEAD_IO` in proof 0's
+  authenticated scalar-verifier io fold. Receive's payer is proof 1 and cannot
+  substitute its head for the wallet's predecessor.
+- Bootstrap pins the predecessor value to zero. Its constrained signed digest
+  becomes the first head, and its existing table-commitment absorption remains.
+- The fixed-point runner checks the binding and its mutation refusals through
+  every Send/Receive order after Bootstrap, Send and Receive. No new public io
+  slots or proof bytes are added: index 4 replaces an existing filler field.
+
+Regression tests are `signed_head_digest_and_bootstrap_predecessor_are_constrained`
+and `signed_wrong_parent_is_refused_by_recursive_head_binding`. The latter uses
+real verified incoming proofs and regenerates the own statement, signatures and
+proof for each proposed predecessor. An isolated own statement with the wrong
+head proves successfully; attaching it to the original predecessor must fail.
+It tests both Send with one input proof and Receive with two input proofs,
+including substitution of the actual incoming payer proof's head. Run this recursive test with
+`ZKS_SCHEDULE=lean cargo test --locked --offline --release -- --include-ignored`;
+the recursive matrix-fold construction requires the lean transcript schedule.
+
+This is the research boundary corresponding to `σ.predecessor = Ω.head`, not a
+production implementation of that rule. TODO: replace the synthetic statement
+with canonical `CoreHead` and statement encodings and constrain the complete
+balance, counter, authorization and map transitions. The issuer/root signatures
+and ledger activation checks also remain outside this patch. Existing timing
+figures above predate this change; they are not new phone measurements.
+
+Validation on 2026-11-12: the combined lean suite passed all 55 tests; after
+extending the signed wrong-parent regression to a real two-input Receive, that
+expanded test passed as well. The release binary's eight-hop fixed point kept
+all six matrices equal from hop 4 to 5 onward. Two wallets starting at Bootstrap
+passed every Send/Receive order with both final accumulators true, while changed
+kind bits and table commitments were refused. The head-binding assertions and
+mutation checks passed in each order. Proof sizes remain 5,024 + 4,928 bytes.
+Logs are in `output/kagemusha-100x-20261108/spike/runs/codex-20261112/` from the
+repository root. This verifies the research circuits on the development host;
+it is not a phone performance result or a production monetary-protocol release.

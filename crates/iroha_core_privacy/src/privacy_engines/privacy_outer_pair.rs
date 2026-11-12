@@ -1,16 +1,26 @@
-//! Closed paired SHA3-384 owner for initial row commitments.
+//! Paired SHA3-384 owner for initial row commitments.
 //!
-//! Original framing and finalization remain owned by the SHA3 implementation.
+//! Two rows framed after one cached public prefix share every Keccak-f\[1600\]
+//! permutation through `fastpq_prover::keccak_permute_pair_v1`: the two-state
+//! kernel where the CPU reports `FEAT_SHA3`, and the portable permutation of each
+//! lane on every other CPU and build. Framing, SHA3 padding and the 48-byte
+//! squeeze are byte-identical to the scalar owner on every backend.
 
 use super::{
-    PrivacyOuterDigestV1, PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamErrorV1,
-    PrivacyOuterLastFieldStreamV1, Sha3_384, WipingSha3V1,
+    PRIVACY_OUTER_DIGEST_BYTES_V1, PrivacyOuterDigestV1, PrivacyOuterDomainPrefixV1,
+    PrivacyOuterLastFieldStreamErrorV1, PrivacyOuterLastFieldStreamV1, Sha3_384,
 };
 use sha3::digest::common::hazmat::{SerializableState, SerializedState};
 use zeroize::Zeroize;
 
+/// SHA3-384 sponge rate.
 const RATE_BYTES: usize = 104;
+/// Serialized SHA3 state: 25 little-endian lanes, then the absorbed rate position.
 const SERIALIZED_BYTES: usize = 201;
+/// SHA3 domain suffix with the first padding bit, XORed at the final position.
+const SHA3_PAD_FIRST_V1: u64 = 0x06;
+/// Closing padding bit, XORed into the last rate byte.
+const SHA3_PAD_LAST_V1: u64 = 0x80;
 pub(crate) type PairErrorV1 = (usize, PrivacyOuterLastFieldStreamErrorV1);
 
 /// Clearing public serialized-state format, without a hybrid-array feature assumption.
@@ -23,6 +33,16 @@ impl Drop for SerializedSpongeV1 {
     }
 }
 
+/// Cached public frame prefix in Keccak lanes, read once per commitment.
+///
+/// Every pair of the commitment starts from these lanes, so no pair clones,
+/// serializes or reconstructs a scalar SHA3 owner.
+pub(crate) struct PrivacyOuterPairPrefixV1 {
+    lanes: [u64; 25],
+    position: usize,
+    prefix_bytes: usize,
+}
+
 /// Two identically framed row streams with no caller-supplied sponge state.
 pub(crate) struct PrivacyOuterLastFieldPairV1 {
     state: [[u64; 25]; 2],
@@ -31,7 +51,35 @@ pub(crate) struct PrivacyOuterLastFieldPairV1 {
 }
 
 impl PrivacyOuterDomainPrefixV1 {
-    /// Construct two original frames with their original public row coordinates.
+    /// Read the cached public prefix into Keccak lanes for every pair of one commitment.
+    pub(crate) fn pair_prefix_v1(
+        &self,
+    ) -> Result<PrivacyOuterPairPrefixV1, PrivacyOuterLastFieldStreamErrorV1> {
+        let invalid = PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded;
+        // Install clearing custody before the first lane is copied.
+        let mut prefix = PrivacyOuterPairPrefixV1 {
+            lanes: [0; 25],
+            position: 0,
+            prefix_bytes: self.prefix_bytes,
+        };
+        let encoded = SerializedSpongeV1(self.state.inner.serialize());
+        let Some((&position, lanes)) = encoded.0.split_last() else {
+            return Err(invalid);
+        };
+        let position = usize::from(position);
+        if encoded.0.len() != SERIALIZED_BYTES || position >= RATE_BYTES {
+            return Err(invalid);
+        }
+        for (word, bytes) in prefix.lanes.iter_mut().zip(lanes.as_chunks::<8>().0) {
+            *word = u64::from_le_bytes(*bytes);
+        }
+        prefix.position = position;
+        Ok(prefix)
+    }
+
+    /// Frame two rows with their original public row coordinates.
+    ///
+    /// Owners that build many pairs read [`Self::pair_prefix_v1`] once instead.
     pub(crate) fn last_field_pair_at_with_counter_v1(
         &self,
         indices: [u64; 2],
@@ -39,61 +87,83 @@ impl PrivacyOuterDomainPrefixV1 {
         prefix_fields: &[&[u8]],
         final_field_len: usize,
     ) -> Result<PrivacyOuterLastFieldPairV1, PairErrorV1> {
-        let streams = [
-            self.last_field_stream_at_with_counter(
-                indices[0],
-                counter,
-                prefix_fields,
-                final_field_len,
-            )
-            .map_err(|error| (0, error))?,
-            self.last_field_stream_at_with_counter(
-                indices[1],
-                counter,
-                prefix_fields,
-                final_field_len,
-            )
-            .map_err(|error| (1, error))?,
-        ];
-        PrivacyOuterLastFieldPairV1::from_original_streams_v1(&streams)
+        self.pair_prefix_v1()
+            .map_err(|error| (0, error))?
+            .last_field_pair_at_with_counter_v1(indices, counter, prefix_fields, final_field_len)
     }
 }
 
-impl PrivacyOuterLastFieldPairV1 {
-    fn from_original_streams_v1(
-        streams: &[PrivacyOuterLastFieldStreamV1; 2],
-    ) -> Result<Self, PairErrorV1> {
-        // Install clearing custody before the first private word is copied.
-        let mut owner = Self {
+impl PrivacyOuterPairPrefixV1 {
+    /// Frame two rows exactly as two scalar final-field streams; only the indices differ.
+    pub(crate) fn last_field_pair_at_with_counter_v1(
+        &self,
+        indices: [u64; 2],
+        counter: u64,
+        prefix_fields: &[&[u8]],
+        final_field_len: usize,
+    ) -> Result<PrivacyOuterLastFieldPairV1, PairErrorV1> {
+        // The scalar owner's checked framing arithmetic, before any lane is written.
+        let invalid = (0, PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded);
+        let count = prefix_fields.len().checked_add(1).ok_or(invalid)?;
+        let count = u32::try_from(count).map_err(|_| invalid)?;
+        let final_length = u64::try_from(final_field_len).map_err(|_| invalid)?;
+        let mut bytes = self.prefix_bytes.checked_add(4).ok_or(invalid)?;
+        for field in prefix_fields {
+            u64::try_from(field.len()).map_err(|_| invalid)?;
+            bytes = bytes
+                .checked_add(8)
+                .and_then(|n| n.checked_add(field.len()))
+                .ok_or(invalid)?;
+        }
+        bytes
+            .checked_add(8)
+            .and_then(|n| n.checked_add(final_field_len))
+            .ok_or(invalid)?;
+        // Install clearing custody before the prefix lanes are copied.
+        let mut owner = PrivacyOuterLastFieldPairV1 {
             state: [[0; 25]; 2],
             position: 0,
             remaining: [0; 2],
         };
-        for (lane, stream) in streams.iter().enumerate() {
-            let encoded = SerializedSpongeV1(stream.state.inner.serialize());
-            if encoded.0.len() != SERIALIZED_BYTES {
-                return Err((
-                    lane,
-                    PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded,
-                ));
+        for state in &mut owner.state {
+            state.copy_from_slice(&self.lanes);
+        }
+        owner.position = self.position;
+        owner.absorb_v1([&indices[0].to_be_bytes(), &indices[1].to_be_bytes()]);
+        owner.absorb_both_v1(&counter.to_be_bytes());
+        owner.absorb_both_v1(&count.to_be_bytes());
+        for field in prefix_fields {
+            owner.absorb_both_v1(&(field.len() as u64).to_be_bytes());
+            owner.absorb_both_v1(field);
+        }
+        owner.absorb_both_v1(&final_length.to_be_bytes());
+        owner.remaining = [final_field_len; 2];
+        Ok(owner)
+    }
+}
+
+impl PrivacyOuterLastFieldPairV1 {
+    /// Absorb equal-length lane inputs, permuting both lanes together at each full rate.
+    fn absorb_v1(&mut self, input: [&[u8]; 2]) {
+        debug_assert_eq!(input[0].len(), input[1].len());
+        let mut consumed = 0;
+        while consumed < input[0].len() {
+            let count = (RATE_BYTES - self.position).min(input[0].len() - consumed);
+            for (state, bytes) in self.state.iter_mut().zip(input) {
+                absorb_bytes_v1(state, self.position, &bytes[consumed..consumed + count]);
             }
-            let position = usize::from(encoded.0[200]);
-            if position >= RATE_BYTES || (lane != 0 && position != owner.position) {
-                return Err((
-                    lane,
-                    PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded,
-                ));
-            }
-            owner.position = position;
-            owner.remaining[lane] = stream.remaining;
-            for (word, bytes) in owner.state[lane]
-                .iter_mut()
-                .zip(encoded.0[..200].as_chunks::<8>().0)
-            {
-                *word = u64::from_le_bytes(*bytes);
+            self.position += count;
+            consumed += count;
+            if self.position == RATE_BYTES {
+                fastpq_prover::keccak_permute_pair_v1(&mut self.state);
+                self.position = 0;
             }
         }
-        Ok(owner)
+    }
+
+    /// Absorb one public framing field into both lanes.
+    fn absorb_both_v1(&mut self, bytes: &[u8]) {
+        self.absorb_v1([bytes, bytes]);
     }
 
     /// Check both row refusals before mutating either original row state.
@@ -118,53 +188,18 @@ impl PrivacyOuterLastFieldPairV1 {
         if input[0].len() != input[1].len() {
             return Err((1, PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded));
         }
-        let mut consumed = 0;
-        while consumed < input[0].len() {
-            let count = (RATE_BYTES - self.position).min(input[0].len() - consumed);
-            for lane in 0..2 {
-                absorb_bytes_v1(
-                    &mut self.state[lane],
-                    self.position,
-                    &input[lane][consumed..consumed + count],
-                );
-            }
-            self.position += count;
-            consumed += count;
-            if self.position == RATE_BYTES {
-                fastpq_prover::keccak_permute_pair_v1(&mut self.state);
-                self.position = 0;
-            }
-        }
+        self.absorb_v1(input);
         for lane in 0..2 {
             self.remaining[lane] -= input[lane].len();
         }
         Ok(())
     }
 
-    fn original_finalizer_v1(&self, lane: usize) -> Result<WipingSha3V1, PairErrorV1> {
-        let mut encoded = SerializedSpongeV1(SerializedState::<Sha3_384>::default());
-        if encoded.0.len() != SERIALIZED_BYTES || self.position >= RATE_BYTES {
-            return Err((
-                lane,
-                PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded,
-            ));
-        }
-        for (bytes, word) in encoded.0[..200].chunks_exact_mut(8).zip(&self.state[lane]) {
-            bytes.copy_from_slice(&word.to_le_bytes());
-        }
-        // The checked original rate is104, so this conversion is exact.
-        encoded.0[200] = self.position as u8;
-        Sha3_384::deserialize(&encoded.0)
-            .map(|inner| WipingSha3V1 { inner })
-            .map_err(|_| {
-                (
-                    lane,
-                    PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded,
-                )
-            })
-    }
-
-    /// Write to the caller's clearing digest tile only after both lane checks.
+    /// Pad, permute and squeeze both lanes into the caller's tile after both lane checks.
+    ///
+    /// SHA3 padding closes the final block, one paired permutation follows, and each
+    /// 48-byte digest is the first six little-endian lanes; the state is then wiped
+    /// and the owner permanently sealed.
     pub(crate) fn finalize_into_v1(
         &mut self,
         output: &mut [PrivacyOuterDigestV1; 2],
@@ -179,20 +214,35 @@ impl PrivacyOuterLastFieldPairV1 {
                 ));
             }
         }
-        // Both original SHA3 owners are established before either output write.
-        // Finalize a clone and wipe each original slot in place, exactly as the
-        // scalar owner does; never leave a consumed array slot vacated.
-        let mut finalizers = [
-            self.original_finalizer_v1(0)?,
-            self.original_finalizer_v1(1)?,
-        ];
-        for (state, target) in finalizers.iter_mut().zip(output) {
-            *target = state.finish_in_place_v1();
+        if self.position >= RATE_BYTES {
+            return Err((0, PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded));
+        }
+        let position = self.position;
+        for state in &mut self.state {
+            state[position / 8] ^= SHA3_PAD_FIRST_V1 << (8 * (position % 8));
+            state[(RATE_BYTES - 1) / 8] ^= SHA3_PAD_LAST_V1 << (8 * ((RATE_BYTES - 1) % 8));
+        }
+        fastpq_prover::keccak_permute_pair_v1(&mut self.state);
+        for (state, target) in self.state.iter().zip(output.iter_mut()) {
+            let mut digest = [0_u8; PRIVACY_OUTER_DIGEST_BYTES_V1];
+            for (bytes, word) in digest.as_chunks_mut::<8>().0.iter_mut().zip(state) {
+                *bytes = word.to_le_bytes();
+            }
+            *target = PrivacyOuterDigestV1::from_bytes(digest);
         }
         self.state.zeroize();
         self.position.zeroize();
         self.remaining = [usize::MAX; 2];
         Ok(())
+    }
+}
+
+impl Drop for PrivacyOuterPairPrefixV1 {
+    fn drop(&mut self) {
+        self.lanes.zeroize();
+        self.position.zeroize();
+        #[cfg(test)]
+        tests::observe_clear_v1(self.lanes.iter().all(|&word| word == 0) && self.position == 0);
     }
 }
 
@@ -228,13 +278,23 @@ fn absorb_bytes_v1(state: &mut [u64; 25], mut position: usize, mut bytes: &[u8])
     }
 }
 
-/// Conservative constructor/finalizer overlap, including exact encoded scratch.
+/// Fixed per-pair construction and finalization workspace charged by row-state owners.
+///
+/// Construction from a domain prefix holds one pair prefix and its serialized scratch
+/// next to the pair, and finalization works in place; the charge below covers that
+/// peak with margin.
 pub(crate) const fn paired_stream_workspace_bytes_v1() -> usize {
     2 * size_of::<PrivacyOuterLastFieldStreamV1>()
         + size_of::<PrivacyOuterLastFieldPairV1>()
         + 2 * size_of::<SerializedSpongeV1>()
         + 256
 }
+const _: () = assert!(
+    size_of::<PrivacyOuterPairPrefixV1>()
+        + size_of::<SerializedSpongeV1>()
+        + size_of::<PrivacyOuterLastFieldPairV1>()
+        <= paired_stream_workspace_bytes_v1()
+);
 #[cfg(test)]
 impl PrivacyOuterLastFieldPairV1 {
     pub(crate) fn corrupt_remaining_v1(&mut self, lane: usize, bytes: usize) {
@@ -246,6 +306,7 @@ impl PrivacyOuterLastFieldPairV1 {
 mod tests {
     use super::super::{PrivacyOuterDomainV1, PrivacyOuterProofFamilyV1, PrivacyOuterProofScopeV1};
     use super::*;
+    use sha3::Digest as _;
     use zeroize::Zeroizing;
 
     thread_local! { static CLEARS: std::cell::RefCell<Option<Vec<bool>>> = const { std::cell::RefCell::new(None) }; }
@@ -272,6 +333,91 @@ mod tests {
             counter: 0,
         })
         .unwrap()
+    }
+    /// The complete frame of `prefix_v1`, encoded independently of every production writer.
+    fn frame_bytes_v1(instance: bool, index: u64, counter: u64, fields: &[&[u8]]) -> Vec<u8> {
+        let mut profile = b"pair-test-profile".to_vec();
+        if instance {
+            profile.extend_from_slice(b"\0X5I1");
+            profile.push(PrivacyOuterProofFamilyV1::Main as u8);
+            profile.extend_from_slice(&[29; 32]);
+        }
+        let mut frame = b"iroha:privacy:stark:sha3-384:frame:v1\0".to_vec();
+        frame.extend_from_slice(&[17; 32]);
+        for label in [
+            b"pair-test-protocol".as_slice(),
+            &profile,
+            b"pair-test-role",
+            b"vector-row-leaf",
+        ] {
+            frame.extend_from_slice(&u16::try_from(label.len()).unwrap().to_be_bytes());
+            frame.extend_from_slice(label);
+        }
+        for coordinate in [0, index, counter] {
+            frame.extend_from_slice(&coordinate.to_be_bytes());
+        }
+        frame.extend_from_slice(&u32::try_from(fields.len()).unwrap().to_be_bytes());
+        for field in fields {
+            frame.extend_from_slice(&u64::try_from(field.len()).unwrap().to_be_bytes());
+            frame.extend_from_slice(field);
+        }
+        frame
+    }
+
+    #[test]
+    fn paired_sponge_matches_sha3_384_frames_around_block_boundaries() {
+        for instance in [false, true] {
+            let prefix = prefix_v1(instance);
+            let pair_prefix = prefix.pair_prefix_v1().unwrap();
+            // The public prefix field moves the final field's first byte through every
+            // rate offset; the final lengths straddle word and block boundaries.
+            for extra in 0..RATE_BYTES {
+                let field = vec![0xa5_u8; extra];
+                for bytes in [
+                    0, 1, 7, 8, 9, 55, 56, 57, 103, 104, 105, 207, 208, 209, 311, 312, 313, 1000,
+                ] {
+                    let indices = [2 * extra as u64, 2 * extra as u64 + 1];
+                    let payloads = [0_usize, 1].map(|lane| {
+                        (0..bytes)
+                            .map(|index| (index * 13 + lane * 101 + extra) as u8)
+                            .collect::<Vec<_>>()
+                    });
+                    let expected = [0, 1].map(|lane| {
+                        PrivacyOuterDigestV1::from_bytes(
+                            Sha3_384::digest(frame_bytes_v1(
+                                instance,
+                                indices[lane],
+                                65_535,
+                                &[&field, &payloads[lane]],
+                            ))
+                            .into(),
+                        )
+                    });
+                    for owner in [
+                        pair_prefix.last_field_pair_at_with_counter_v1(
+                            indices,
+                            65_535,
+                            &[&field],
+                            bytes,
+                        ),
+                        prefix.last_field_pair_at_with_counter_v1(
+                            indices,
+                            65_535,
+                            &[&field],
+                            bytes,
+                        ),
+                    ] {
+                        let mut owner = owner.unwrap();
+                        owner
+                            .update_v1([payloads[0].as_slice(), payloads[1].as_slice()])
+                            .unwrap();
+                        let mut output = [PrivacyOuterDigestV1::default(); 2];
+                        owner.finalize_into_v1(&mut output).unwrap();
+                        assert_eq!(output, expected, "extra={extra} bytes={bytes}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -390,16 +536,32 @@ mod tests {
             assert!(!values.is_empty());
             assert!(values.into_iter().all(|clean| clean));
         }
+        // Framing refusals match the scalar owner and precede any lane write.
         let prefix = prefix_v1(false);
-        let mut scalar = [0, 1].map(|row| {
-            prefix
-                .last_field_stream_at_with_counter(row, 0, &[], 8)
-                .unwrap()
-        });
-        scalar[1].update(&[7]).unwrap();
-        assert!(matches!(
-            PrivacyOuterLastFieldPairV1::from_original_streams_v1(&scalar),
-            Err((1, PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded))
-        ));
+        let pair_prefix = prefix.pair_prefix_v1().unwrap();
+        for final_field_len in [usize::MAX, usize::MAX - 8] {
+            assert!(matches!(
+                prefix.last_field_stream_at_with_counter(0, 0, &[b"field"], final_field_len),
+                Err(PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded)
+            ));
+            assert!(matches!(
+                pair_prefix.last_field_pair_at_with_counter_v1(
+                    [0, 1],
+                    0,
+                    &[b"field"],
+                    final_field_len
+                ),
+                Err((0, PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded))
+            ));
+        }
+        // The cached prefix lanes are exactly the scalar prefix's absorbed state.
+        let encoded = SerializedSpongeV1(prefix.state.inner.serialize());
+        assert_eq!(
+            usize::from(encoded.0[SERIALIZED_BYTES - 1]),
+            pair_prefix.position
+        );
+        for (word, bytes) in pair_prefix.lanes.iter().zip(encoded.0.as_chunks::<8>().0) {
+            assert_eq!(*word, u64::from_le_bytes(*bytes));
+        }
     }
 }

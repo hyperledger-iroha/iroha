@@ -9,17 +9,21 @@
 //!   selects neither the purpose of the attempt nor its policy: Core records the purpose
 //!   from the network's original genesis policy or the release qualification, and freezes
 //!   the policy from committed parameters.
-//! - [`SubmitAnonymousParliamentTransitionV1`] carries the account-signed transitions that
-//!   remain: qualification, sortition, invitations, public-body deliberation and findings.
+//! - [`SubmitAnonymousParliamentTransitionV1`] carries the account-signed facts and intents
+//!   of design §8.1: risk escalation, early-close intents, the two inclusion-derived
+//!   sortition registrations, invitation responses, absences and endorsements.
 //! - [`super::RegisterParliamentCredentialV1`] accepts a binding seat with its credential
 //!   (design §3.2).
 //!
-//! There is no ballot transition. A binding body has exactly one ballot; it opens and
-//! closes in the positioned block-start pass, and ballots are signerless inputs (design
-//! §3.4 to §3.7). The timed-OVN transitions of the baseline have no counterpart here.
+//! A transaction never applies a lifecycle transition. Qualification, draws, invitation
+//! closes, phase changes, finding conclusions, ballot openings and closures,
+//! certification and enactment run in the positioned block-start pass (design §8.1,
+//! `specs/sccp.md` §4.7), so the baseline's transitions for them have no counterpart here.
+//! There is no ballot transition: a binding body has exactly one ballot, and ballots are
+//! signerless inputs (design §3.4 to §3.7).
 //!
-//! The shared payloads are the baseline's own types. They are frozen with the baseline
-//! and therefore cannot change under this family either.
+//! The payloads shared with the baseline are the baseline's own types. They are frozen
+//! with the baseline and therefore cannot change under this family either.
 //!
 //! **Nothing here is registered.** Until a governed change set activates the family, its
 //! wire identifiers resolve as inactive and these payloads travel only inside the ordinary
@@ -31,16 +35,15 @@ use norito::codec::{Decode, Encode};
 use super::{AnonymousGovernanceAttemptV1, BodyDecisionModeV1, anonymous_governance_attempt_id_v1};
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
-    governance::types::{GovernanceAttemptId, ProposalContentId, ProposalKind, RiskTierV1},
+    governance::types::{
+        BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptId, ProposalContentId, ProposalKind,
+        RiskTierV1,
+    },
     governance_fingerprint::{ANONYMOUS_PARLIAMENT_TRANSITION_DIGEST_V1, fingerprint},
     isi::governance::{
-        ParliamentAdvanceBodyPhaseV1, ParliamentBeginInvitationAcceptanceV1,
-        ParliamentConsumeSortitionPulseBatchV1, ParliamentEndorsePublicFindingV1,
-        ParliamentEscalateRiskV1, ParliamentFailBodyElectionNoRosterV1,
-        ParliamentFailPublicFindingNoResultV1, ParliamentInvitationDecisionV1,
+        ParliamentEndorsePublicFindingV1, ParliamentEscalateRiskV1, ParliamentInvitationDecisionV1,
         ParliamentLifecycleTransitionV1, ParliamentRecordAttemptAbsenceV1,
-        ParliamentRecordInvitationResponseV1, ParliamentRegisterSortitionRequestV1,
-        ParliamentSealBodyRosterV1,
+        ParliamentRecordInvitationResponseV1,
     },
 };
 
@@ -100,11 +103,60 @@ impl CreateAnonymousParliamentAttemptV1 {
     }
 }
 
-/// One account-signed transition of an anonymous Parliament attempt.
+/// The intent to end one deliberation phase of a sealed body before its deadline.
+///
+/// It names the exact phase it closes, so it can never close a later phase than the one
+/// its signer saw: once the body has left `phase`, Core refuses it. Reflection is never
+/// shortened (design §8.1).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "iroha_data_model::governance::anonymous_ballot::AnonymousClosePhaseEarlyV1"
+)]
+pub struct AnonymousClosePhaseEarlyV1 {
+    /// Sealed body whose current phase the intent closes.
+    pub body_instance_id: BodyInstanceId,
+    /// The phase the body is in: Orientation, Evidence, Questions, Responses or
+    /// Deliberation.
+    pub phase: DeliberationPhaseV1,
+}
+
+impl AnonymousClosePhaseEarlyV1 {
+    /// Whether an early-close intent may name `phase`: a deliberation phase before
+    /// Reflection.
+    #[must_use]
+    pub const fn closes_early(phase: DeliberationPhaseV1) -> bool {
+        matches!(
+            phase,
+            DeliberationPhaseV1::Orientation
+                | DeliberationPhaseV1::Evidence
+                | DeliberationPhaseV1::Questions
+                | DeliberationPhaseV1::Responses
+                | DeliberationPhaseV1::Deliberation
+        )
+    }
+}
+
+/// One account-signed fact or intent of an anonymous Parliament attempt (design §8.1).
 ///
 /// The executing height and time are absent: Core supplies those of the containing block.
 #[derive(
     Clone,
+    Copy,
     Debug,
     PartialEq,
     Eq,
@@ -122,82 +174,62 @@ impl CreateAnonymousParliamentAttemptV1 {
     name = "iroha_data_model::governance::anonymous_ballot::AnonymousParliamentTransitionV1"
 )]
 pub enum AnonymousParliamentTransitionV1 {
-    /// Escalate the risk tier before the Policy Jury sortition freezes it.
+    /// Escalate the risk tier before the initial sortition registration locks it.
     #[codec(index = 0)]
     EscalateRisk(ParliamentEscalateRiskV1),
-    /// Finish qualification and enter the first required body.
+    /// End qualification before its deadline; the pass applies it.
     #[codec(index = 1)]
-    CompleteQualification,
-    /// Register the first complete sortition generation from consensus-derived inputs.
+    CloseQualificationEarly,
+    /// Register the initial generation, derived from committed State and the containing
+    /// height.
     #[codec(index = 2)]
     RegisterInitialSortition,
-    /// Register one atomic immutable request batch for a future beacon pulse.
+    /// Register the next generation of every body whose election ended without a roster,
+    /// derived from committed State and the containing height.
     #[codec(index = 3)]
-    RegisterSortitionRequest(ParliamentRegisterSortitionRequestV1),
-    /// Consume a finalized threshold-beacon pulse for a complete request batch.
-    #[codec(index = 4)]
-    ConsumeSortitionPulseBatch(ParliamentConsumeSortitionPulseBatchV1),
-    /// Derive the deterministic draw plan and begin invitation acceptance.
-    #[codec(index = 5)]
-    BeginInvitationAcceptance(ParliamentBeginInvitationAcceptanceV1),
+    RegisterSortitionRetry,
     /// Record the authority's response to its invitation: a decline of any seat, or the
     /// acceptance of a public-body seat. A binding seat is accepted by
     /// [`super::RegisterParliamentCredentialV1`], never here.
-    #[codec(index = 6)]
+    #[codec(index = 4)]
     RecordInvitationResponse(ParliamentRecordInvitationResponseV1),
-    /// Terminally record an election whose invitation window closed without a viable
-    /// roster.
-    #[codec(index = 7)]
-    FailBodyElectionNoRoster(ParliamentFailBodyElectionNoRosterV1),
-    /// Seal a canonical roster into a body instance; a binding body also seals its
-    /// credential list (design §3.3).
-    #[codec(index = 8)]
-    SealBodyRoster(ParliamentSealBodyRosterV1),
-    /// Advance one sealed body by exactly one deliberation phase.
-    #[codec(index = 9)]
-    AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1),
+    /// End the named deliberation phase of a sealed body before its deadline; the pass
+    /// applies it.
+    #[codec(index = 5)]
+    ClosePhaseEarly(AnonymousClosePhaseEarlyV1),
     /// Record a public-body member's own absence. Core refuses it for a binding body,
     /// where non-participation appears only in turnout (design §7).
-    #[codec(index = 10)]
+    #[codec(index = 6)]
     RecordAttemptAbsence(ParliamentRecordAttemptAbsenceV1),
     /// Record one seated member's endorsement of a public nonbinding finding.
-    #[codec(index = 11)]
+    #[codec(index = 7)]
     EndorsePublicFinding(ParliamentEndorsePublicFindingV1),
-    /// Terminally record expiry of a public-finding endorsement window.
-    #[codec(index = 12)]
-    FailPublicFindingNoResult(ParliamentFailPublicFindingNoResultV1),
 }
 
 impl AnonymousParliamentTransitionV1 {
-    /// The same transition in the baseline's closed form: every payload here is one of the
-    /// baseline's, so its state-independent rules are the baseline's rules.
-    fn shared_form(&self) -> ParliamentLifecycleTransitionV1 {
+    /// The same transition in the baseline's closed form, for the transitions whose payload
+    /// is one of the baseline's: their state-independent rules are the baseline's rules.
+    /// The family's own intents have no baseline form.
+    fn shared_form(&self) -> Option<ParliamentLifecycleTransitionV1> {
         use ParliamentLifecycleTransitionV1 as Shared;
         match self {
-            Self::EscalateRisk(payload) => Shared::EscalateRisk(*payload),
-            Self::CompleteQualification => Shared::CompleteQualification,
-            Self::RegisterInitialSortition => Shared::RegisterInitialSortition,
-            Self::RegisterSortitionRequest(payload) => {
-                Shared::RegisterSortitionRequest(payload.clone())
+            Self::EscalateRisk(payload) => Some(Shared::EscalateRisk(*payload)),
+            Self::RegisterInitialSortition => Some(Shared::RegisterInitialSortition),
+            Self::RecordInvitationResponse(payload) => {
+                Some(Shared::RecordInvitationResponse(*payload))
             }
-            Self::ConsumeSortitionPulseBatch(payload) => {
-                Shared::ConsumeSortitionPulseBatch(payload.clone())
-            }
-            Self::BeginInvitationAcceptance(payload) => Shared::BeginInvitationAcceptance(*payload),
-            Self::RecordInvitationResponse(payload) => Shared::RecordInvitationResponse(*payload),
-            Self::FailBodyElectionNoRoster(payload) => Shared::FailBodyElectionNoRoster(*payload),
-            Self::SealBodyRoster(payload) => Shared::SealBodyRoster(*payload),
-            Self::AdvanceBodyPhase(payload) => Shared::AdvanceBodyPhase(*payload),
-            Self::RecordAttemptAbsence(payload) => Shared::RecordAttemptAbsence(*payload),
-            Self::EndorsePublicFinding(payload) => Shared::EndorsePublicFinding(*payload),
-            Self::FailPublicFindingNoResult(payload) => Shared::FailPublicFindingNoResult(*payload),
+            Self::RecordAttemptAbsence(payload) => Some(Shared::RecordAttemptAbsence(*payload)),
+            Self::EndorsePublicFinding(payload) => Some(Shared::EndorsePublicFinding(*payload)),
+            Self::CloseQualificationEarly
+            | Self::RegisterSortitionRetry
+            | Self::ClosePhaseEarly(_) => None,
         }
     }
 
-    /// Reject a malformed, unbounded or cross-attempt transition before stateful execution.
+    /// Reject a malformed or cross-attempt transition before stateful execution.
     ///
-    /// Authority, phase, height, time, candidate corpus and proof checks need committed
-    /// state and stay with Core.
+    /// Authority, phase, time, candidate corpus and proof checks need committed state and
+    /// stay with Core.
     ///
     /// # Errors
     /// A stable message for the first violated state-independent rule.
@@ -211,8 +243,21 @@ impl AnonymousParliamentTransitionV1 {
         {
             return Err("a binding seat is accepted by registering its credential");
         }
-        self.shared_form()
-            .validate_static_for_attempt(governance_attempt_id)
+        if let Some(shared) = self.shared_form() {
+            return shared.validate_static_for_attempt(governance_attempt_id);
+        }
+        if governance_attempt_id.as_bytes() == &[0; 32] {
+            return Err("governance attempt id must be non-zero");
+        }
+        if let Self::ClosePhaseEarly(intent) = self {
+            if intent.body_instance_id.as_bytes() == &[0; 32] {
+                return Err("body instance id must be non-zero");
+            }
+            if !AnonymousClosePhaseEarlyV1::closes_early(intent.phase) {
+                return Err("only a deliberation phase before Reflection closes early");
+            }
+        }
+        Ok(())
     }
 
     /// A domain-separated digest of the exact transition. The domain is the family's own:
@@ -227,12 +272,12 @@ impl AnonymousParliamentTransitionV1 {
 ///
 /// A member's own invitation response, absence declaration and public-finding endorsement
 /// are bound to the signed authority. A transition carries a fact or an intent, never an
-/// outcome: Core derives or rechecks every height, time, snapshot, roster and budget it
-/// names. Which of the remaining transitions are permissionless liveness triggers and
-/// which need the `CanManageParliament` permission is Core's rule; the `NoRoster` retry
-/// generation stays permissionless (design §10).
+/// outcome: Core derives every height, time, snapshot, roster and budget it implies. Risk
+/// escalation and the early-close intents need the `CanManageParliament` permission; the
+/// two sortition registrations are permissionless (design §8.1 and §10).
 #[derive(
     Clone,
+    Copy,
     Debug,
     PartialEq,
     Eq,
@@ -277,16 +322,14 @@ mod tests {
         governance::{
             anonymous_ballot::test_fixtures::proposal,
             types::{
-                AssignmentId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
-                BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptStatusV1, GovernanceStageV1,
-                ParliamentBody, SortitionRequestId, SortitionRequestV1,
+                AssignmentId, BodyElectionAttemptId, GovernanceAttemptStatusV1, GovernanceStageV1,
+                ParliamentBody,
             },
         },
         isi::{
             InstructionBox, OpaqueInstructionV1,
             governance::{
-                CreateParliamentGovernanceAttemptV1, ParliamentSortitionRequestRegistrationV1,
-                SubmitParliamentLifecycleTransitionV1,
+                CreateParliamentGovernanceAttemptV1, SubmitParliamentLifecycleTransitionV1,
             },
         },
     };
@@ -294,21 +337,6 @@ mod tests {
     const ATTEMPT: GovernanceAttemptId = GovernanceAttemptId::new([0x33; 32]);
     const ELECTION: BodyElectionAttemptId = BodyElectionAttemptId::new([0x44; 32]);
     const BODY: BodyInstanceId = BodyInstanceId::new([0x55; 32]);
-
-    fn request() -> SortitionRequestV1 {
-        SortitionRequestV1 {
-            id: SortitionRequestId::new([0x66; 32]),
-            governance_attempt_id: ATTEMPT,
-            body_election_attempt_id: ELECTION,
-            body: ParliamentBody::PolicyJury,
-            candidate_root: [0x77; 32],
-            candidate_count: 200,
-            target_seats: 150,
-            request_height: 10,
-            pulse_height: 20,
-            beacon_session_id: BeaconSessionId::new([0x88; 32]),
-        }
-    }
 
     fn response(
         body: ParliamentBody,
@@ -323,43 +351,30 @@ mod tests {
         )
     }
 
+    fn close_phase(
+        body_instance_id: BodyInstanceId,
+        phase: DeliberationPhaseV1,
+    ) -> AnonymousParliamentTransitionV1 {
+        AnonymousParliamentTransitionV1::ClosePhaseEarly(AnonymousClosePhaseEarlyV1 {
+            body_instance_id,
+            phase,
+        })
+    }
+
     fn every_transition() -> Vec<AnonymousParliamentTransitionV1> {
         use AnonymousParliamentTransitionV1 as Transition;
         vec![
             Transition::EscalateRisk(ParliamentEscalateRiskV1 {
                 target: RiskTierV1::Constitutional,
             }),
-            Transition::CompleteQualification,
+            Transition::CloseQualificationEarly,
             Transition::RegisterInitialSortition,
-            Transition::RegisterSortitionRequest(ParliamentRegisterSortitionRequestV1 {
-                requests: vec![ParliamentSortitionRequestRegistrationV1 {
-                    sequence: 0,
-                    request: request(),
-                }],
-            }),
-            Transition::ConsumeSortitionPulseBatch(ParliamentConsumeSortitionPulseBatchV1 {
-                request_ids: vec![request().id],
-                beacon_session_id: BeaconSessionId::new([0x88; 32]),
-                pulse_height: 20,
-                pulse_id: BeaconPulseId::new([0x99; 32]),
-            }),
-            Transition::BeginInvitationAcceptance(ParliamentBeginInvitationAcceptanceV1 {
-                election_attempt_id: ELECTION,
-            }),
+            Transition::RegisterSortitionRetry,
             response(
                 ParliamentBody::RulesCommittee,
                 ParliamentInvitationDecisionV1::Accept,
             ),
-            Transition::FailBodyElectionNoRoster(ParliamentFailBodyElectionNoRosterV1 {
-                election_attempt_id: ELECTION,
-            }),
-            Transition::SealBodyRoster(ParliamentSealBodyRosterV1 {
-                election_attempt_id: ELECTION,
-            }),
-            Transition::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
-                body_instance_id: BODY,
-                target: DeliberationPhaseV1::Evidence,
-            }),
+            close_phase(BODY, DeliberationPhaseV1::Evidence),
             Transition::RecordAttemptAbsence(ParliamentRecordAttemptAbsenceV1 {
                 body_instance_id: BODY,
                 assignment_id: AssignmentId::new([0xaa; 32]),
@@ -367,9 +382,6 @@ mod tests {
             Transition::EndorsePublicFinding(ParliamentEndorsePublicFindingV1 {
                 body_instance_id: BODY,
                 result_root: [0xbb; 32],
-            }),
-            Transition::FailPublicFindingNoResult(ParliamentFailPublicFindingNoResultV1 {
-                body_instance_id: BODY,
             }),
         ]
     }
@@ -440,8 +452,13 @@ mod tests {
     #[test]
     fn every_transition_roundtrips_and_stays_opaque() {
         let transitions = every_transition();
-        assert_eq!(transitions.len(), 13, "one fixture per variant");
-        for transition in transitions {
+        assert_eq!(transitions.len(), 8, "one fixture per variant");
+        for (index, transition) in transitions.into_iter().enumerate() {
+            // The discriminant is the variant index.
+            assert_eq!(
+                transition.encode()[..4],
+                u32::try_from(index).expect("small").to_le_bytes()
+            );
             let instruction = SubmitAnonymousParliamentTransitionV1 {
                 governance_attempt_id: ATTEMPT,
                 transition,
@@ -497,34 +514,68 @@ mod tests {
     }
 
     #[test]
+    fn an_early_close_names_one_deliberation_phase_before_reflection() {
+        for phase in [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+        ] {
+            assert!(AnonymousClosePhaseEarlyV1::closes_early(phase));
+            assert_eq!(
+                close_phase(BODY, phase).validate_static_for_attempt(ATTEMPT),
+                Ok(()),
+                "{phase:?}"
+            );
+        }
+        // Reflection and the baseline's ballot phase are never shortened.
+        for phase in [DeliberationPhaseV1::Reflection, DeliberationPhaseV1::Vote] {
+            assert!(!AnonymousClosePhaseEarlyV1::closes_early(phase));
+            assert_eq!(
+                close_phase(BODY, phase).validate_static_for_attempt(ATTEMPT),
+                Err("only a deliberation phase before Reflection closes early"),
+                "{phase:?}"
+            );
+        }
+        assert_eq!(
+            close_phase(BodyInstanceId::new([0; 32]), DeliberationPhaseV1::Evidence)
+                .validate_static_for_attempt(ATTEMPT),
+            Err("body instance id must be non-zero")
+        );
+    }
+
+    #[test]
     fn the_shared_payload_rules_are_the_baseline_rules() {
         use AnonymousParliamentTransitionV1 as Transition;
 
-        // An inert enclosing attempt.
-        assert!(
-            Transition::CompleteQualification
-                .validate_static_for_attempt(GovernanceAttemptId::new([0; 32]))
-                .is_err()
-        );
-        // An inert election, body instance or assignment.
+        // An inert enclosing attempt, for every transition.
+        for transition in every_transition() {
+            assert!(
+                transition
+                    .validate_static_for_attempt(GovernanceAttemptId::new([0; 32]))
+                    .is_err(),
+                "{transition:?}"
+            );
+        }
+        // An inert body instance or assignment of a shared payload.
         for transition in [
-            Transition::BeginInvitationAcceptance(ParliamentBeginInvitationAcceptanceV1 {
-                election_attempt_id: BodyElectionAttemptId::new([0; 32]),
-            }),
-            Transition::SealBodyRoster(ParliamentSealBodyRosterV1 {
-                election_attempt_id: BodyElectionAttemptId::new([0; 32]),
-            }),
-            Transition::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
-                body_instance_id: BodyInstanceId::new([0; 32]),
-                target: DeliberationPhaseV1::Evidence,
-            }),
             Transition::RecordAttemptAbsence(ParliamentRecordAttemptAbsenceV1 {
                 body_instance_id: BODY,
                 assignment_id: AssignmentId::new([0; 32]),
             }),
+            Transition::EndorsePublicFinding(ParliamentEndorsePublicFindingV1 {
+                body_instance_id: BodyInstanceId::new([0; 32]),
+                result_root: [0xbb; 32],
+            }),
+            Transition::EndorsePublicFinding(ParliamentEndorsePublicFindingV1 {
+                body_instance_id: BODY,
+                result_root: [0; 32],
+            }),
         ] {
             let shared = transition
                 .shared_form()
+                .expect("a shared payload")
                 .validate_static_for_attempt(ATTEMPT);
             assert!(shared.is_err(), "{transition:?}");
             assert_eq!(
@@ -533,22 +584,21 @@ mod tests {
                 "{transition:?}"
             );
         }
-        // A sortition request of another attempt.
-        let foreign = Transition::RegisterSortitionRequest(ParliamentRegisterSortitionRequestV1 {
-            requests: vec![ParliamentSortitionRequestRegistrationV1 {
-                sequence: 0,
-                request: request(),
-            }],
-        });
-        assert_eq!(
-            foreign.validate_static_for_attempt(GovernanceAttemptId::new([0x34; 32])),
-            Err("sortition request governance attempt id does not match the enclosing attempt")
-        );
+        // The family's own intents have no baseline form; every other transition has one.
+        for transition in every_transition() {
+            let own = matches!(
+                transition,
+                Transition::CloseQualificationEarly
+                    | Transition::RegisterSortitionRetry
+                    | Transition::ClosePhaseEarly(_)
+            );
+            assert_eq!(transition.shared_form().is_none(), own, "{transition:?}");
+        }
         // The submit instruction applies the same rules under its own attempt.
         assert_eq!(
             SubmitAnonymousParliamentTransitionV1 {
                 governance_attempt_id: ATTEMPT,
-                transition: Transition::CompleteQualification,
+                transition: Transition::RegisterSortitionRetry,
             }
             .validate_static(),
             Ok(())
@@ -556,7 +606,7 @@ mod tests {
         assert!(
             SubmitAnonymousParliamentTransitionV1 {
                 governance_attempt_id: GovernanceAttemptId::new([0; 32]),
-                transition: Transition::CompleteQualification,
+                transition: Transition::CloseQualificationEarly,
             }
             .validate_static()
             .is_err()
@@ -564,9 +614,18 @@ mod tests {
     }
 
     #[test]
-    fn the_family_has_no_ballot_transition_and_its_own_digest_domain() {
-        // The baseline's timed-OVN transitions and its unknown tags do not decode.
+    fn transitions_apply_nothing_and_the_family_has_its_own_digest_domain() {
+        // The baseline's pass-applied transitions, its timed-OVN transitions and unknown
+        // tags do not decode: no transaction applies a lifecycle transition.
         for tag in [
+            "CompleteQualification",
+            "RegisterSortitionRequest",
+            "ConsumeSortitionPulseBatch",
+            "BeginInvitationAcceptance",
+            "FailBodyElectionNoRoster",
+            "SealBodyRoster",
+            "AdvanceBodyPhase",
+            "FailPublicFindingNoResult",
             "RegisterBallotAttempt",
             "RegisterBallotParticipant",
             "FreezeTimedOvnCorpus",
@@ -581,7 +640,7 @@ mod tests {
         }
         assert!(
             norito::json::from_str::<AnonymousParliamentTransitionV1>(
-                r#"{"transition":"CompleteQualification","extra":1}"#
+                r#"{"transition":"CloseQualificationEarly","extra":1}"#
             )
             .is_err()
         );
@@ -594,11 +653,9 @@ mod tests {
             .collect();
         assert_eq!(digests.len(), transitions.len());
         for transition in &transitions {
-            assert_ne!(
-                transition.digest_v1(),
-                transition.shared_form().digest_v1(),
-                "{transition:?}"
-            );
+            if let Some(shared) = transition.shared_form() {
+                assert_ne!(transition.digest_v1(), shared.digest_v1(), "{transition:?}");
+            }
         }
     }
 }

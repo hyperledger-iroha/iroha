@@ -494,6 +494,34 @@ mod addition_tests {
             expected.insert(selected.services_profile);
             expected.extend(selected.active);
         }
+        // Restricted-read delegation and the kernel's lifecycle State compile one composition
+        // per predecessor family they support; each is published, never selected.
+        for composition in catalog
+            .restricted_read_compositions
+            .values()
+            .chain(catalog.runtime_lifecycle_compositions.values())
+        {
+            expected.extend(composition.definitions());
+        }
+        // The typed committed parameters are published, never part of a founded selection.
+        expected.extend(catalog.parameter_definitions());
+        // The keyed State profile publishes storage for the State-level owners it adopts, its
+        // adoption kernel, its commitment profile and the State-row permission; a governed
+        // change set selects them.
+        expected.extend(catalog.keyed_storage.iter().copied());
+        for descriptor in [
+            iroha_data_model::runtime::keyed_state::adoption_kernel(&catalog.keyed_storage),
+            crate::runtime::keyed_state::descriptor(),
+            crate::runtime::state_row_permission::descriptor(),
+        ] {
+            expected.insert(descriptor.id().expect("keyed State identity"));
+        }
+        // The content-publishing permission is published alone; a governed change set selects it.
+        expected.insert(
+            crate::runtime::content_publish_permission::descriptor()
+                .id()
+                .expect("content-publishing permission identity"),
+        );
         // The authority service adds only its exact compiled profile and native owners
         // composed with that profile; its declared interfaces/storage are counted above.
         for (id, descriptor) in &catalog.definitions {

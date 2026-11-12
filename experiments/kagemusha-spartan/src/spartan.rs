@@ -1030,7 +1030,7 @@ pub fn prove_circuit<C: PastaCurve>(
     rng: &mut SpikeRng,
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, Timings) {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     let _ = crate::prof::take();
     let (proof, timings, _) = prove_inner(
         shape,
@@ -1056,13 +1056,15 @@ pub fn prove_circuit<C: PastaCurve>(
 }
 
 /// The verification key's part for constant columns: one unblinded
-/// commitment per trailing fixed row (computed once per circuit).
+/// commitment per trailing fixed row that holds the key's constants
+/// (computed once per circuit; the wallet rows, first of the fixed rows, are
+/// the instance's: `fixed_for`).
 pub fn fixed_commitments<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     circuit: &dyn Circuit<F<C>>,
 ) -> Vec<Aff<C>> {
-    let nf = circuit.fixed_rows(shape);
+    let nf = circuit.fixed_rows(shape) - circuit.wallet_rows();
     if nf == 0 {
         return Vec::new();
     }
@@ -1089,7 +1091,7 @@ pub fn verify_circuit<C: PastaCurve>(
     bytes: &[u8],
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<(), String> {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
     verify_inner(
         shape,
         gens,
@@ -1104,7 +1106,127 @@ pub fn verify_circuit<C: PastaCurve>(
     .map(|_| ())
 }
 
-/// Verification with a precomputed key part for the fixed rows.
+/// Every fixed row's commitment for one instance, in row order: the wallet
+/// rows' from the instance's io (`Circuit::wallet_io`), then the key's
+/// (`fixed_commitments`). This is the trusted prover/builder convenience;
+/// verification uses fallible decoding of externally supplied instance io.
+pub fn fixed_for<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    circuit: &dyn Circuit<F<C>>,
+    io: &[F<C>],
+) -> Vec<Aff<C>> {
+    let mut fixed = wallet_commitments::<C>(circuit, io)
+        .expect("a trusted instance names valid wallet row commitments");
+    fixed.extend(fixed_commitments(shape, gens, circuit));
+    fixed
+}
+
+/// Fixed-row assembly at the verifier boundary. Check the wallet inputs
+/// before computing the circuit's ordinary verification-key commitments.
+fn fixed_for_verifier<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    circuit: &dyn Circuit<F<C>>,
+    io: &[F<C>],
+) -> Result<Vec<Aff<C>>, String> {
+    let nf = circuit.fixed_rows(shape);
+    if nf > shape.rows() || circuit.wallet_rows() > nf {
+        return Err("invalid fixed-row layout".into());
+    }
+    let mut fixed = wallet_commitments::<C>(circuit, io)?;
+    fixed.extend(fixed_commitments(shape, gens, circuit));
+    Ok(fixed)
+}
+
+/// The wallet rows' commitments an instance names (four io limbs per row).
+/// Malformed, truncated or noncanonical inputs are rejected without indexing
+/// beyond the supplied io or accepting a non-point commitment.
+pub fn wallet_commitments<C: PastaCurve>(
+    circuit: &dyn Circuit<F<C>>,
+    io: &[F<C>],
+) -> Result<Vec<Aff<C>>, String> {
+    let n = circuit.wallet_rows();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let at = circuit.wallet_io().ok_or("missing wallet commitment io")?;
+    let end = n
+        .checked_mul(4)
+        .and_then(|length| at.checked_add(length))
+        .ok_or("wallet commitment io span overflow")?;
+    let limbs = io.get(at..end).ok_or("truncated wallet commitment io")?;
+    limbs
+        .chunks_exact(4)
+        .map(|limbs| {
+            point_from_limbs::<C>(limbs).ok_or_else(|| "invalid wallet commitment point".into())
+        })
+        .collect()
+}
+
+/// A point from its coordinates' 128-bit limbs (x low, x high, y low, y
+/// high), each a scalar below 2^128; `None` unless there are exactly four
+/// limbs and they encode a canonical finite curve point.
+pub fn point_from_limbs<C: PastaCurve>(limbs: &[F<C>]) -> Option<Aff<C>> {
+    if limbs.len() != 4 {
+        return None;
+    }
+    let base = |lo: &F<C>, hi: &F<C>| -> Option<C::Base> {
+        let mut bytes = [0u8; 32];
+        for (half, v) in [lo, hi].into_iter().enumerate() {
+            let r = v.to_repr();
+            let r = r.as_ref();
+            if r[16..].iter().any(|b| *b != 0) {
+                return None;
+            }
+            bytes[16 * half..16 * half + 16].copy_from_slice(&r[..16]);
+        }
+        let mut repr = <C::Base as ff::PrimeField>::Repr::default();
+        repr.as_mut().copy_from_slice(&bytes);
+        Option::from(<C::Base as ff::PrimeField>::from_repr(repr))
+    };
+    let x = base(&limbs[0], &limbs[1])?;
+    let y = base(&limbs[2], &limbs[3])?;
+    let point: Aff<C> = Option::from(<Aff<C> as iroha_pasta::PastaAffine>::from_xy(x, y))?;
+    bool::from(iroha_pasta::PastaAffine::coordinates(&point).is_some()).then_some(point)
+}
+
+/// A point's coordinates as four 128-bit limbs (x low, x high, y low, y
+/// high) in the scalar field.
+pub fn limbs_of_point<C: PastaCurve>(p: &Aff<C>) -> [F<C>; 4] {
+    let (x, y): (C::Base, C::Base) =
+        Option::from(iroha_pasta::PastaAffine::coordinates(p)).expect("a finite point");
+    let mut out = [F::<C>::ZERO; 4];
+    for (k, c) in [x, y].into_iter().enumerate() {
+        let r = ff::PrimeField::to_repr(&c);
+        let r = r.as_ref();
+        let lo = u128::from_le_bytes(r[..16].try_into().unwrap());
+        let hi = u128::from_le_bytes(r[16..32].try_into().unwrap());
+        out[2 * k] = F::<C>::from_u128(lo);
+        out[2 * k + 1] = F::<C>::from_u128(hi);
+    }
+    out
+}
+
+/// The unblinded commitment of `values` on the first generators (a row's
+/// leading columns; the rest zero).
+pub fn commit_public<C: PastaCurve>(gens: &Gens<C>, values: &[F<C>]) -> Aff<C> {
+    iroha_pasta::msm::msm_public::<C>(values, &gens.g[..values.len()], MemoryBudget::DEFAULT)
+        .expect("msm")
+        .to_affine()
+}
+
+/// One row's unblinded commitment, as the key's and the wallet rows' are.
+pub fn row_commitment<C: PastaCurve>(shape: &Shape, gens: &Gens<C>, row: &[F<C>]) -> Aff<C> {
+    let active = shape.active_cols();
+    iroha_pasta::msm::msm_public::<C>(&row[..active], &gens.g[..active], MemoryBudget::DEFAULT)
+        .expect("msm")
+        .to_affine()
+}
+
+/// Verification with precomputed fixed-row commitments, including the
+/// wallet prefix. The wallet prefix must agree with this instance's io;
+/// cached commitments from another wallet are rejected.
 pub fn verify_circuit_with<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
@@ -1581,7 +1703,7 @@ pub fn prove_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, [u8; 32], [u8; 32]) {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     let (proof, _, out) = prove_inner(
         shape,
         gens,
@@ -1608,7 +1730,7 @@ pub fn verify_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<[u8; 32], String> {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
     verify_inner(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
         .map(|o| o.expect("linked").0)
 }
@@ -1667,6 +1789,14 @@ fn verify_inner<C: PastaCurve>(
     fixed: &[Aff<C>],
 ) -> Result<Option<([u8; 32], [u8; 32])>, String> {
     shape.check();
+    let nf = circuit.fixed_rows(shape);
+    if nf > shape.rows() || fixed.len() != nf || circuit.wallet_rows() > nf {
+        return Err("invalid fixed-row commitments".into());
+    }
+    let wallet = wallet_commitments::<C>(circuit, &inst.io)?;
+    if fixed.get(..wallet.len()) != Some(wallet.as_slice()) {
+        return Err("cached wallet commitments do not match instance io".into());
+    }
     let slots = circuit.late_slots();
     let mut proof =
         Proof::<C>::from_bytes_rows(shape, shape.rows() - fixed.len(), slots.len(), bytes)
@@ -1806,6 +1936,173 @@ fn adaptive_shift<S: Scalar>(shape: &Shape, w: &[S], tau: &[S]) -> (usize, S) {
         }
     }
     panic!("no adaptive shift found");
+}
+
+#[cfg(test)]
+mod wallet_input_tests {
+    use super::*;
+    use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    /// A small real proof relation whose final witness row is supplied by
+    /// the instance as a wallet commitment. No lookup/certificate fixture
+    /// is needed to exercise the verifier's public-input boundary.
+    struct WalletToy;
+
+    impl<S: Scalar> Circuit<S> for WalletToy {
+        fn phase1_rows(&self, shape: &Shape) -> usize {
+            shape.rows() - 1
+        }
+
+        fn fixed_rows(&self, _shape: &Shape) -> usize {
+            1
+        }
+
+        fn wallet_rows(&self) -> usize {
+            1
+        }
+
+        fn wallet_io(&self) -> Option<usize> {
+            Some(r1cs::NUM_PUBLIC)
+        }
+
+        fn instantiate<'a>(
+            &'a self,
+            _shape: &Shape,
+            _ch: &[S],
+            _w: Option<&mut [S]>,
+        ) -> Box<dyn Rel<S> + 'a> {
+            Box::new(r1cs::Toy)
+        }
+    }
+
+    fn malformed_limbs<C: PastaCurve>(point: &Aff<C>) -> Vec<(&'static str, Vec<F<C>>)> {
+        let good = limbs_of_point::<C>(point);
+        let mut noncanonical = good;
+        let mut modulus = (-C::Base::ONE).to_repr();
+        for byte in modulus.as_mut() {
+            let (sum, carry) = byte.overflowing_add(1);
+            *byte = sum;
+            if !carry {
+                break;
+            }
+        }
+        let bytes = modulus.as_ref();
+        noncanonical[0] = F::<C>::from_u128(u128::from_le_bytes(bytes[..16].try_into().unwrap()));
+        noncanonical[1] = F::<C>::from_u128(u128::from_le_bytes(bytes[16..].try_into().unwrap()));
+        let mut wide = good;
+        wide[0] = F::<C>::from_u128(u128::MAX) + F::<C>::ONE;
+        vec![
+            ("noncanonical coordinate", noncanonical.to_vec()),
+            ("wide limb", wide.to_vec()),
+            ("identity", vec![F::<C>::ZERO; 4]),
+            (
+                "off-curve coordinate",
+                vec![F::<C>::ZERO, F::<C>::ZERO, F::<C>::ONE, F::<C>::ZERO],
+            ),
+        ]
+    }
+
+    fn check_point_inputs<C: PastaCurve>() {
+        let point = Gens::<C>::new(2).g[0];
+        let limbs = limbs_of_point::<C>(&point);
+        assert_eq!(point_from_limbs::<C>(&limbs), Some(point));
+        for length in 0..4 {
+            assert!(point_from_limbs::<C>(&limbs[..length]).is_none());
+        }
+        let mut extra = limbs.to_vec();
+        extra.push(F::<C>::ZERO);
+        assert!(point_from_limbs::<C>(&extra).is_none(), "excess limb");
+        for (label, malformed) in malformed_limbs::<C>(&point) {
+            assert!(point_from_limbs::<C>(&malformed).is_none(), "{label}");
+        }
+    }
+
+    #[test]
+    fn wallet_point_decoder_rejects_malformed_limbs() {
+        check_point_inputs::<Pallas>();
+        check_point_inputs::<Vesta>();
+    }
+
+    #[test]
+    fn wallet_verifiers_reject_malformed_io_and_stale_caches() {
+        let shape = Shape {
+            label: "wallet-input-boundary",
+            sx: 10,
+            row_bits: 2,
+            col_bits: 8,
+            k: 2,
+        };
+        let gens = Gens::<Vesta>::new(shape.cols());
+        let mut rng = SpikeRng::new(b"wallet input boundary");
+        let (mut inst, wit) = r1cs::sample(&shape, &mut rng);
+        let last = (shape.rows() - 1) * shape.cols();
+        let commitment = row_commitment(&shape, &gens, &wit.w[last..]);
+        inst.io.extend(limbs_of_point::<Vesta>(&commitment));
+        let fixed = fixed_for(&shape, &gens, &WalletToy, &inst.io);
+        let (proof, _) = prove_circuit(&shape, &gens, &inst, &wit, &mut rng, &WalletToy);
+        let bytes = proof.to_bytes();
+        assert!(verify_circuit(&shape, &gens, &inst, &bytes, &WalletToy).is_ok());
+        assert!(verify_circuit_with(&shape, &gens, &inst, &bytes, &WalletToy, &fixed).is_ok());
+        let link = Link::First {
+            rho: [1; 32],
+            r: [2; 32],
+        };
+        let (linked, expected_d, _) =
+            prove_linked_circuit(&shape, &gens, &inst, &wit, &mut rng, &link, &WalletToy);
+        let linked_bytes = linked.to_bytes();
+        assert_eq!(
+            verify_linked_circuit(&shape, &gens, &inst, &linked_bytes, &link, &WalletToy),
+            Ok(expected_d)
+        );
+
+        let rejected = |bad: &Instance<F<Vesta>>, label: &str| {
+            assert!(
+                verify_circuit(&shape, &gens, bad, &bytes, &WalletToy).is_err(),
+                "uncached verifier: {label}"
+            );
+            assert!(
+                verify_circuit_with(&shape, &gens, bad, &bytes, &WalletToy, &fixed).is_err(),
+                "cached verifier: {label}"
+            );
+            assert!(
+                verify_linked_circuit(&shape, &gens, bad, &linked_bytes, &link, &WalletToy)
+                    .is_err(),
+                "linked verifier: {label}"
+            );
+        };
+        for length in 0..inst.io.len() {
+            rejected(
+                &Instance {
+                    io: inst.io[..length].to_vec(),
+                },
+                "truncated io",
+            );
+        }
+        for (label, malformed) in malformed_limbs::<Vesta>(&commitment) {
+            let mut bad = inst.clone();
+            bad.io[r1cs::NUM_PUBLIC..].copy_from_slice(&malformed);
+            rejected(&bad, label);
+        }
+
+        let other = gens.g[0];
+        assert_ne!(other, commitment);
+        let stale = [other];
+        assert_eq!(
+            verify_circuit_with(&shape, &gens, &inst, &bytes, &WalletToy, &stale),
+            Err("cached wallet commitments do not match instance io".into())
+        );
+        let mut other_inst = inst.clone();
+        other_inst.io[r1cs::NUM_PUBLIC..].copy_from_slice(&limbs_of_point::<Vesta>(&other));
+        assert_eq!(
+            verify_circuit_with(&shape, &gens, &other_inst, &bytes, &WalletToy, &fixed),
+            Err("cached wallet commitments do not match instance io".into())
+        );
+        for bad_cache in [Vec::new(), vec![commitment; shape.rows() + 1]] {
+            assert!(
+                verify_circuit_with(&shape, &gens, &inst, &bytes, &WalletToy, &bad_cache).is_err()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

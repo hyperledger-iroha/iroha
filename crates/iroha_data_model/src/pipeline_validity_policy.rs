@@ -25,7 +25,7 @@ use crate::{
     parameter::custom::{CustomParameter, CustomParameterId},
 };
 
-mod json_decode;
+pub(crate) mod json_decode;
 pub use json_decode::PipelinePolicyJsonAdmissionError;
 
 /// Largest value of a policy field that counts in-memory items.

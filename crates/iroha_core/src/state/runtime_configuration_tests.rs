@@ -282,7 +282,7 @@ fn settlement_router_inputs_are_protocol_constants_without_an_installer() {
         assert!(
             state
                 .settlement_engine
-                .matches_router_config(&state.settlement().router)
+                .matches_router_config(&state.settlement_snapshot().router)
         );
         let mut changed = fixed;
         changed.router.epsilon_bps += 1;

@@ -1131,7 +1131,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Governance and Parliament identifiers, proposal and transition wire names, and fingerprints of the components of one governance record: the roster, candidate, assignment, ballot and expected-head 'roots' are flat fingerprints stored in that record, and the registration-corpus commitment digests the records held in the same lifecycle value",
+        reason: "Governance and Parliament identifiers (including the anonymous-ballot definition family), proposal and transition wire names, and fingerprints of the components of one governance record: the roster, candidate, assignment, ballot and expected-head 'roots' are flat fingerprints stored in that record, and the registration-corpus commitment digests the records held in the same lifecycle value",
         literals: &[
             r"iroha.governance.attempt.id.v1",
             r"iroha.governance.certificate.id.v1",
@@ -1563,7 +1563,9 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.ironwood.identity-cutover.v1",
             r"iroha.ironwood.v1",
             r"iroha.kernel.v1",
+            r"iroha.parameter.content_and_router_policy.v1",
             r"iroha.parameters.v1",
+            r"iroha.permission.content_publish.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.runtime.lifecycle.v1",
             r"iroha.sorafs.authority_governance.v1",

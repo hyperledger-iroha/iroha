@@ -18,6 +18,7 @@ FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs
 ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
 SUPPORT = ROOT / "integration_tests/tests/sora_parliament_lifecycle_support.rs"
 NATIVE_FINALITY = ROOT / "integration_tests/tests/sora_parliament_finality.rs"
+COMMITTEE_ROTATION = ROOT / "integration_tests/tests/sora_parliament_committee_rotation.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
 TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
@@ -40,12 +41,16 @@ GOVERNANCE_ISOLATION_TEST_NAME = (
 NO_RESULT_TEST_NAME = (
     "four_validator_public_finding_no_result_retries_take_later_native_slots"
 )
+COMMITTEE_ROTATION_TEST_NAME = (
+    "four_validator_certified_rotation_moves_mandatory_pulse_to_successor_session"
+)
 SORTITION_ONLY_CORRIDOR_TEST_NAMES = (
     MANDATORY_NPOS_TEST_NAME,
     FAIL_CLOSED_NPOS_TEST_NAME,
     GOVERNANCE_ISOLATION_TEST_NAME,
     NO_RESULT_TEST_NAME,
     "four_validator_hidden_capacity_retains_then_releases_citizenship_bond",
+    COMMITTEE_ROTATION_TEST_NAME,
 )
 NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         &restart_peer.client(),
@@ -102,8 +107,10 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "finality proof returned height",
     "if block.header() != proof.block_header",
     "finality proof header differs from its finalized block",
-    "let block = exact_block(client, height, network)",
-    "if block.global_beacon_pulse().is_some() {",
+    """let (_, verified) = finality::certified_block(network, client, height)
+        .await
+        .wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;""",
+    "if verified.commitment().beacon.is_some() {",
     EXACT_NON_BOUNDARY_PULSE_ABSENCE,
 )
 CAPACITY_DOMAIN_REGISTRATION = (
@@ -157,6 +164,7 @@ def read_corridor_source() -> str:
             ENACTMENT.read_text(encoding="utf-8"),
             SUPPORT.read_text(encoding="utf-8"),
             NATIVE_FINALITY.read_text(encoding="utf-8"),
+            COMMITTEE_ROTATION.read_text(encoding="utf-8"),
         )
     )
 
@@ -201,6 +209,130 @@ NO_RESULT_TEST = re.compile(
     r".*?^\}\n"
     r"(?=\n#\[test\]\nfn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface\(\))"
 )
+COMMITTEE_ROTATION_TEST = re.compile(
+    rf"(?ms)^{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
+    rf"fn {COMMITTEE_ROTATION_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
+    r".*?^\}\n"
+    rf"\nasync fn {COMMITTEE_ROTATION_TEST_NAME}_impl\(\)\s*"
+    r"-> Result<\(\)>\s*\{\n"
+    r".*?^\}\n"
+)
+COMMITTEE_ROTATION_CONSTANTS = (
+    "const ROTATION_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 16;",
+    "const ROTATION_TARGET_EPOCH: u64 = 2;",
+)
+# Core installs a successor beacon key only as the session of a certified committee-transition
+# preparation. Each marker occurs exactly once in the corridor body, compared without
+# formatting whitespace, so removing any one of them is detectable.
+COMMITTEE_ROTATION_MARKERS = (
+    # Four NPoS validators, the positive fault profile and one signed sixteen-block epoch.
+    "let builder = with_signed_npos_epoch(\n        NetworkBuilder::new()",
+    ".with_peers(VALIDATOR_COUNT)",
+    ".with_npos_consensus()",
+    ".with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)",
+    "}),\n        ROTATION_NPOS_EPOCH_LENGTH_BLOCKS,\n    );",
+    "certified_npos_epoch_length(&network, &client).await?,\n"
+    "        ROTATION_NPOS_EPOCH_LENGTH_BLOCKS,",
+    # The genesis committee installs the bootstrap session, which signs the first pulse.
+    "let incumbent_record = deterministic_parliament_beacon_key_record_v1(",
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        first_pulse_height,",
+    "assert_eq!(first_pulse.session_id, incumbent_record.session.session_id);",
+    # The selecting boundary's certified result freezes the attempt of the epoch after next.
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        selecting_boundary,",
+    "finality::certified_block(&network, &client, selecting_boundary).await?;",
+    ".and_then(|boundary| boundary.preparation.clone())",
+    ".validate_against_preparing_authorization(&preparing_authorization)",
+    "assert_eq!(preparation.target_epoch, ROTATION_TARGET_EPOCH);",
+    "assert_eq!(preparation.authority_generation, 1);",
+    "assert_eq!(frozen_transition.preparation, preparation);",
+    # The successor transcript is the attempt's exact session over the ordered target roster.
+    "session_id: preparation\n            .beacon_session_id()",
+    "attempt_id: transition_id,",
+    "authority_generation: preparation.authority_generation,",
+    "roster_hash: global_threshold_beacon_roster_hash_v1(&target_roster),",
+    "successor_dkg.start_height > preparation.selection_height",
+    "successor_dkg.acceptances_end_height < preparation.first_height - 1",
+    "deterministic_parliament_beacon_key_record_for_session_v1(\n        successor_dkg,\n"
+    "        &ordered_validator_signing_keys(&network, &target_roster)?,",
+    "assert_eq!(successor_record.session.adaptive_dkg.session, successor_dkg);",
+    "successor_record.session.group_public_key, incumbent_record.session.group_public_key,",
+    # The incumbent quorum certifies it as pending, replacing nothing yet.
+    "authorizing_roster, incumbent_roster,",
+    "lifecycle_certificate_replacing(",
+    "Some(incumbent_record.session.session_id),\n                successor_record.session.session_id,",
+    "certified.pending_beacon_session.as_ref(),\n        Some(&successor_record.session),",
+    "horizon.active_session_id,\n            Some(incumbent_record.session.session_id),",
+    # A target owner binds the credentials and every target seat proves its share custody.
+    "ValidatorCommitteeOperationV1::PrepareCredentials(",
+    "assert_eq!(credentialed.credentials, Some(credentials));",
+    "for (index, seat) in target_roster.iter().enumerate() {",
+    ".readiness_context(validator_index)",
+    "TestNetworkParliamentBeaconPartialSignerV1::try_new(",
+    "prove_global_threshold_beacon_seat_readiness_v1(\n            &seat_custody,\n"
+    "            &successor_session,",
+    "ValidatorCommitteeOperationV1::AdmitSeat(",
+    "(0..u32::try_from(VALIDATOR_COUNT)?).collect::<Vec<_>>(),",
+    "prepared_height < cutoff_pulse_height,",
+    # The incumbent session signs the pulse that selects the activating boundary.
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        cutoff_pulse_height,",
+    "assert_eq!(cutoff_pulse.session_id, incumbent_record.session.session_id);",
+    "&cutoff_pulse,\n        &incumbent_session,",
+    # The incumbent boundary certificate activates the prepared generation and session.
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        activating_boundary,",
+    "assert_eq!(activated.decision, ValidatorEpochDecisionV1::Activate);",
+    "assert_eq!(activated.authority_id, target_authority_id);",
+    "assert_eq!(activated.transition_id, transition_id);",
+    "activated.beacon,\n        BeaconEpochBindingV1::Installed(successor_binding)",
+    "assert_eq!(boundary.next.committee, preparation.committee);",
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        rotated_height,",
+    "horizon.active_session_id,\n            Some(successor_record.session.session_id),",
+    "assert_eq!(context.authorization, activated);",
+    "assert_eq!(terminal.outcome, Some(activated));",
+    # The mandatory pulse keeps finalizing on the successor session after the rotation.
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        successor_pulse_height,",
+    "successor_pulse.session_id,\n        successor_record.session.session_id",
+    "&successor_pulse,\n        &successor_session,",
+    "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+    "        retained_boundary + 1,",
+    "assert_eq!(context.leader_seed, retained_seed);",
+    "authorization.decision,\n            ValidatorEpochDecisionV1::RetainAndCancel",
+    # The whole prefix authenticates against signed genesis.
+    "finality::visit_certified_prefix(",
+    "expected_pulses.get(&height).copied(),",
+    "assert_eq!(committee, rotated_roster);",
+    "assert_eq!(authorization.authority_generation, 1);",
+)
+COMMITTEE_ROTATION_COUNTS = (
+    ("agreed_mandatory_pulse(", 3),
+    ("verify_pulse_on_session(", 3),
+    ("global_threshold_beacon_npos_successor_seed_v1(", 2),
+    ("!status.is_halted()", 2),
+)
+COMMITTEE_ROTATION_HELPER_MARKERS = {
+    "agreed_mandatory_pulse": (
+        "await_every_validator(network, height, label).await?;",
+        "pulses.push(pulse_at(&peer.client(), height, network).await?);",
+        "pulses.windows(2).all(|pair| pair[0] == pair[1])",
+        "|| pulse.round != 0",
+    ),
+    "verify_pulse_on_session": (
+        "finality::certified_pulse_context(network, client, pulse.height, pulse).await?;",
+        "verify_finalized_global_threshold_beacon_pulse_v1(",
+    ),
+    "target_owner_client": (
+        "&owner.account_id(),",
+        "owner.streaming_key_pair().private_key().clone(),",
+    ),
+    "validated_beacon_session": (
+        "validate_global_threshold_beacon_session_v1(session, &binding, budget)",
+    ),
+}
 # A sortition slot is the first consensus-native pulse height at or after the frozen delay
 # and above every earlier generation slot. The wait for it is governance-local.
 SORTITION_SLOT_HELPER_MARKERS = {
@@ -239,18 +371,14 @@ SORTITION_SLOT_HELPER_MARKERS = {
         "aligned_native_pulse_height(earliest, epoch_length_blocks)?;",
     ),
     "await_native_sortition_pulse": (
-        "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
-        "network.ensure_blocks(slot).await?;",
-        "observe_exact_height(client, slot, label).await?;",
+        "advance_to_height_with_carriers(network, client, slot, label).await?;",
         "pulses.push(pulse_at(&peer.client(), slot, network).await?);",
         "if !pulses.windows(2).all(|pair| pair[0] == pair[1]) {",
         "if pulse.height != slot || pulse.network_id != network.network_id() {",
     ),
     "cross_native_boundary_after_pulse": (
         "if boundary_height % epoch_length_blocks != 0 {",
-        "network.ensure_blocks(boundary_height).await?;",
-        "network.ensure_blocks(successor_height).await?;",
-        "observe_exact_height(client, successor_height, label).await?;",
+        "advance_to_height_with_carriers(network, client, successor_height, label).await?;",
         "context.authorization.epoch != successor_epoch",
         "context.authorization.last_height != boundary_height + epoch_length_blocks",
         "!= global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch,)",
@@ -306,16 +434,37 @@ GOVERNANCE_ISOLATION_CONSTANTS = (
     "const ISOLATION_CARRIERS_AFTER_RESTART: u64 = 3;",
     "pub const CORRIDOR_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 128;",
 )
-AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
-    assert_eq!(
-        current_height(&client).await?,
+# A pulse never creates a block (specs/sumeragi.md): real work carries the pre-boundary
+# block, and its leader starts pulse production only after selecting it.
+PULSE_PROGRESSION = '''advance_to_height_with_carriers(
+        &network,
+        &client,
         pulse_height,
-        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
-    );'''
-BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
-    assert_eq!(current_height(&client).await?, boundary_height);'''
-SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
-    assert_eq!(current_height(&client).await?, boundary_height + 1);'''
+        "mandatory pre-boundary pulse height",
+    )
+    .await?;'''
+FAIL_CLOSED_PULSE_CARRIER = '''admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry the below-threshold mandatory pulse".to_owned(),
+        )],
+    )
+    .await?;'''
+BOUNDARY_PROGRESSION = '''advance_to_height_with_carriers(
+        &network,
+        &client,
+        boundary_height,
+        "mandatory epoch boundary",
+    )
+    .await?;'''
+SUCCESSOR_PROGRESSION = '''advance_to_height_with_carriers(
+        &network,
+        &client,
+        boundary_height + 1,
+        "first height of the successor epoch",
+    )
+    .await?;'''
 SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(context.leader_seed, successor_seed);"
 )
@@ -913,6 +1062,7 @@ def validate_required_bounded_soranet_pow(source: str) -> None:
         ("shared Parliament builder", corridor_helper(source, "builder_with_signer_modes")),
         ("mandatory NPoS", mandatory_npos_test(source)[1]),
         ("fail-closed NPoS", fail_closed_npos_test(source)[1]),
+        ("committee rotation", committee_rotation_test(source)[1]),
     )
     compacted_source = compact(source)
     compacted_tests = "".join(compact(test) for _, test in tests)
@@ -957,6 +1107,7 @@ def validate_consensus_sized_test_stacks(source: str) -> None:
     tests = (
         (MANDATORY_NPOS_TEST_NAME, mandatory_npos_test(source)[1]),
         (FAIL_CLOSED_NPOS_TEST_NAME, fail_closed_npos_test(source)[1]),
+        (COMMITTEE_ROTATION_TEST_NAME, committee_rotation_test(source)[1]),
     )
     for name, test in tests:
         compacted = compact(test)
@@ -999,7 +1150,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "assert_eq!(beacon_record.session.threshold, 2);",
         "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
         "pulse_height = boundary_height - 1",
-        AUTONOMOUS_PULSE_PROGRESSION,
+        PULSE_PROGRESSION,
         "verify_finalized_global_threshold_beacon_pulse_v1(",
         "let successor_epoch = 1;",
         "global_threshold_beacon_npos_successor_seed_v1(",
@@ -1097,6 +1248,83 @@ def validate_beacon_rotation_fixture(source: str) -> None:
         require(
             retired not in source,
             f"beacon test fixture regained retired `{retired}`",
+        )
+
+
+def committee_rotation_test(source: str) -> tuple[re.Match[str], str]:
+    """Return the one exact executable committee-rotation test item."""
+
+    matches = list(COMMITTEE_ROTATION_TEST.finditer(source))
+    require(len(matches) == 1, "committee-rotation corridor is not one exact test item")
+    match = matches[0]
+    previous_item_end = source.rfind("\n}\n", 0, match.start())
+    require(previous_item_end >= 0, "committee-rotation test has no preceding item boundary")
+    leading = source[previous_item_end + len("\n}\n") : match.start()]
+    require(
+        "#[" not in leading,
+        "committee-rotation corridor gained an extra attribute",
+    )
+    return match, match.group(0)
+
+
+def mutate_committee_rotation_test(source: str, old: str, new: str = "") -> str:
+    """Apply one exact mutation only inside the committee-rotation test item."""
+
+    match, test = committee_rotation_test(source)
+    require(old in test, f"committee-rotation mutation target is absent: `{old}`")
+    mutated = test.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
+
+
+def validate_committee_rotation_corridor(source: str) -> None:
+    """Require a certified committee rotation that moves the mandatory pulse to its successor."""
+
+    _, test = committee_rotation_test(source)
+    for constant in COMMITTEE_ROTATION_CONSTANTS:
+        require(
+            source.count(constant) == 1,
+            f"committee-rotation constant `{constant}` is not exact",
+        )
+    compacted = compact(test)
+    for marker in COMMITTEE_ROTATION_MARKERS:
+        require(
+            compacted.count(compact(marker)) == 1,
+            f"committee-rotation corridor lost exact `{marker}`",
+        )
+    for marker, count in COMMITTEE_ROTATION_COUNTS:
+        require(
+            compacted.count(compact(marker)) == count,
+            f"committee-rotation corridor needs exactly {count} `{marker}`",
+        )
+    # Certificate, credentials and readiness precede the activating boundary, whose
+    # activation precedes the successor-session pulse.
+    ordered = (
+        "lifecycle_certificate_replacing(",
+        "ValidatorCommitteeOperationV1::PrepareCredentials(",
+        "ValidatorCommitteeOperationV1::AdmitSeat(",
+        "assert_eq!(activated.decision,ValidatorEpochDecisionV1::Activate);",
+        "&successor_pulse,&successor_session,",
+    )
+    positions = [compacted.find(compact(marker)) for marker in ordered]
+    require(
+        all(position >= 0 for position in positions) and positions == sorted(positions),
+        "committee rotation must certify, credential and ready the attempt before activation",
+    )
+    for name, markers in COMMITTEE_ROTATION_HELPER_MARKERS.items():
+        helper = compact(corridor_helper(source, name))
+        for marker in markers:
+            require(
+                compact(marker) in helper,
+                f"committee-rotation helper `{name}` lost `{marker}`",
+            )
+    for retired in (
+        ".with_permissioned_consensus()",
+        "deterministic_parliament_beacon_successor_key_record_v1",
+        "network.ensure_blocks(successor_pulse_height)",
+    ):
+        require(
+            retired not in test,
+            f"committee-rotation corridor regained `{retired}`",
         )
 
 
@@ -1206,6 +1434,15 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         < compacted.index(FAIL_CLOSED_TIMEOUT)
         < compacted.index(FAIL_CLOSED_POST_OBSERVATION_DEADLINE),
         "fail-closed NPoS beacon gates must order activation, observation, then post-observation verification",
+    )
+    # Without real work at the pulse height no pulse production starts, so the stall
+    # would prove only an idle chain, not the below-threshold beacon.
+    require(
+        test.count(FAIL_CLOSED_PULSE_CARRIER) == 1
+        and compact(FAIL_CLOSED_PULSE_CARRIER) in compacted
+        and compacted.index(compact(FAIL_CLOSED_PULSE_CARRIER))
+        < compacted.index(FAIL_CLOSED_ACTIVATION_DEADLINE),
+        "fail-closed NPoS beacon test must carry real work at the pulse height before its activation gate",
     )
     require(
         test.count("let observed_height = match current_height(peer_client).await {") == 2
@@ -1405,6 +1642,11 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             in corridor,
             "Parliament lifecycle target lost its failure-path module",
         )
+        require(
+            '#[path = "sora_parliament_committee_rotation.rs"]\nmod committee_rotation;'
+            in corridor,
+            "Parliament lifecycle target lost its committee-rotation module",
+        )
         helper_calls = corridor.count("assert_transition_rejected_without_state_change(")
         require(
             helper_calls == 3,
@@ -1430,6 +1672,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_beacon_rotation_fixture(
             BEACON_TEST_SIGNER.read_text(encoding="utf-8")
         )
+        validate_committee_rotation_corridor(corridor)
         validate_fail_closed_npos_boundary(corridor)
         validate_native_beacon_admission_and_fixture_isolation(
             TEST_NETWORK.read_text(encoding="utf-8"),
@@ -1496,8 +1739,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sortition pulse transaction race": corridor
             + '\n    tick(&client, "finalize the demanded sortition pulse")?;\n',
             "restored Parliament-demanded pulse wait": corridor.replace(
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;\n"
+                "advance_to_height_with_carriers(network, client, slot, label).await?;",
+                "advance_to_height_with_carriers(network, client, slot, label).await?;\n"
                 "    network.ensure_blocks(sortition_pulse_height).await?;",
                 1,
             ),
@@ -1751,6 +1994,107 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             with self.subTest(retired=retired), self.assertRaises(ContractError):
                 validate_beacon_rotation_fixture(f"{source}\n{retired}\n")
 
+    def test_committee_rotation_corridor_rejects_adversarial_mutations(self) -> None:
+        corridor = read_corridor_source()
+        validate_committee_rotation_corridor(corridor)
+        owner = f"{COMMITTEE_ROTATION_TEST_NAME}_impl"
+        mutations = {
+            "renamed test": mutate_committee_rotation_test(
+                corridor,
+                f"fn {COMMITTEE_ROTATION_TEST_NAME}()",
+                f"fn {COMMITTEE_ROTATION_TEST_NAME}_disabled()",
+            ),
+            "ignored test": mutate_committee_rotation_test(
+                corridor,
+                PARLIAMENT_NETWORK_TEST_ATTRIBUTE,
+                f"#[ignore]\n{PARLIAMENT_NETWORK_TEST_ATTRIBUTE}",
+            ),
+            "permissioned consensus": mutate_committee_rotation_test(
+                corridor, ".with_npos_consensus()", ".with_permissioned_consensus()"
+            ),
+            "shorter epoch": corridor.replace(
+                "const ROTATION_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 16;",
+                "const ROTATION_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;",
+                1,
+            ),
+            "fixed successor attempt": mutate_marker(
+                corridor, "attempt_id: transition_id,", "attempt_id: [0xA8; 32],", owner=owner
+            ),
+            "successor installed without the incumbent predecessor": mutate_marker(
+                corridor,
+                "Some(incumbent_record.session.session_id),\n"
+                "                successor_record.session.session_id,",
+                "None, successor_record.session.session_id,",
+                owner=owner,
+            ),
+            "credentials omitted": mutate_marker(
+                corridor, "ValidatorCommitteeOperationV1::PrepareCredentials(", owner=owner
+            ),
+            "readiness omitted": mutate_marker(
+                corridor, "ValidatorCommitteeOperationV1::AdmitSeat(", owner=owner
+            ),
+            "activation not asserted": mutate_marker(
+                corridor,
+                "assert_eq!(activated.decision, ValidatorEpochDecisionV1::Activate);",
+                "let _ = activated.decision;",
+                owner=owner,
+            ),
+            "successor pulse verified on the incumbent session": mutate_marker(
+                corridor,
+                "&successor_pulse,\n        &successor_session,",
+                "&successor_pulse,\n        &incumbent_session,",
+                owner=owner,
+            ),
+            "successor pulse awaited without real work": mutate_marker(
+                corridor,
+                "advance_to_height_with_carriers(\n        &network,\n        &client,\n"
+                "        successor_pulse_height,",
+                "network.ensure_blocks(successor_pulse_height).await?; drop((&network, &client,",
+                owner=owner,
+            ),
+            "prefix authentication omitted": mutate_marker(
+                corridor, "finality::visit_certified_prefix(", owner=owner
+            ),
+            "fail-stop status omitted": mutate_marker(
+                corridor, "!status.is_halted()", "true", owner=owner
+            ),
+            "pulse read from an uncertified source": mutate_marker(
+                corridor,
+                "pulses.push(pulse_at(&peer.client(), height, network).await?);",
+                "pulses.push(payload_pulse(&peer.client(), height).await?);",
+                owner="agreed_mandatory_pulse",
+            ),
+            "per-validator reads race the commit": mutate_marker(
+                corridor,
+                "await_every_validator(network, height, label).await?;",
+                owner="agreed_mandatory_pulse",
+            ),
+            "successor transcript built on another roster": mutate_marker(
+                corridor,
+                "&ordered_validator_signing_keys(&network, &target_roster)?,",
+                "&ordered_validator_signing_keys(&network, &incumbent_roster)?,",
+                owner=owner,
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(mutated, corridor, f"{label}: mutation did not apply")
+                with self.assertRaises(ContractError):
+                    validate_committee_rotation_corridor(mutated)
+        for marker in COMMITTEE_ROTATION_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_committee_rotation_corridor(
+                    mutate_marker(corridor, marker, owner=owner)
+                )
+        with self.assertRaises(ContractError):
+            validate_sortition_corridors_execute(
+                corridor.replace(
+                    f"#[test]\nfn {COMMITTEE_ROTATION_TEST_NAME}()",
+                    f"#[test]\n#[ignore]\nfn {COMMITTEE_ROTATION_TEST_NAME}()",
+                    1,
+                )
+            )
+
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()
         mutations = {
@@ -1776,13 +2120,13 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "missing epoch constant": corridor.replace(
                 "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;", "", 1
             ),
-            "non-autonomous pulse": mutate_mandatory_npos_test(
+            "pulse awaited without real work": mutate_mandatory_npos_test(
                 corridor,
+                PULSE_PROGRESSION,
                 "network.ensure_blocks(pulse_height).await?;",
-                'tick(&client, "commit mandatory pre-boundary pulse")?;',
             ),
-            "missing autonomous-height equality": mutate_mandatory_npos_test(
-                corridor, AUTONOMOUS_PULSE_PROGRESSION
+            "missing pulse-height progression": mutate_mandatory_npos_test(
+                corridor, PULSE_PROGRESSION
             ),
             "missing boundary progression": mutate_mandatory_npos_test(
                 corridor, BOUNDARY_PROGRESSION
@@ -1936,6 +2280,9 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 corridor,
                 "assert_eq!(beacon_record.session.threshold, 2);",
                 "assert_eq!(beacon_record.session.threshold, 1);",
+            ),
+            "idle pulse height": mutate_fail_closed_npos_test(
+                corridor, FAIL_CLOSED_PULSE_CARRIER
             ),
             "unbounded block wait": mutate_fail_closed_npos_test(
                 corridor,

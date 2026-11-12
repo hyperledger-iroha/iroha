@@ -63,7 +63,7 @@ use crate::{
         ClosureAnchorsV1, ClosureBuildErrorV1, CorpusAccumulatorV1, CorpusErrorV1,
         build_closure_record_v1, closing_ms_v1,
     },
-    inputs::{ProofInputErrorV1, body_digest_v1, list_digest_v1, registration_mapping_v1},
+    inputs::{body_digest_v1, list_digest_v1, registration_mapping_v1},
     registration::{RegistrationErrorV1, verify_registration_v1},
 };
 
@@ -101,12 +101,8 @@ impl RegistrationLedgerErrorV1 {
     pub const fn is_local(&self) -> bool {
         match self {
             Self::Registration(error) => error.is_local(),
-            Self::Context(ContextErrorV1::Inputs(
-                ProofInputErrorV1::Profile(_)
-                | ProofInputErrorV1::ProfileIdentity
-                | ProofInputErrorV1::Codec(_),
-            )) => true,
-            Self::Context(_) | Self::SeatRegistered | Self::DuplicateCommitment => false,
+            Self::Context(error) => error.is_local(),
+            Self::SeatRegistered | Self::DuplicateCommitment => false,
         }
     }
 }
@@ -127,6 +123,17 @@ pub enum SealErrorV1 {
     /// The list, its digest, the mapping or the roster root could not be built.
     #[error(transparent)]
     Context(#[from] ContextErrorV1),
+}
+
+impl SealErrorV1 {
+    /// Whether the node could not build the seal, as opposed to the roster being one that
+    /// cannot be sealed. A local failure is never a committed verdict.
+    pub const fn is_local(&self) -> bool {
+        match self {
+            Self::Context(error) => error.is_local(),
+            Self::NoRoster | Self::DuplicateAssignment | Self::MissingCredential => false,
+        }
+    }
 }
 
 /// The seal of one binding body: the list, the mapping and the roster binding.
@@ -486,6 +493,34 @@ pub enum BoardErrorV1 {
         /// The stored field that differs from its recomputation.
         field: &'static str,
     },
+}
+
+impl BoardErrorV1 {
+    /// Whether the node could not build or check the board (its context or a corpus
+    /// digest), as opposed to the transition being refused. A local failure is never a
+    /// committed verdict.
+    pub const fn is_local(&self) -> bool {
+        match self {
+            Self::Context(error) => error.is_local(),
+            Self::Corpus(error) => error.is_local(),
+            Self::Purpose(_)
+            | Self::Record(_)
+            | Self::Closure(_)
+            | Self::OpeningTime
+            | Self::OpeningScheduled
+            | Self::OpeningNotScheduled
+            | Self::AlreadyOpen
+            | Self::OpeningNotDue { .. }
+            | Self::NotOpen
+            | Self::ClockEstablished
+            | Self::ClockHeight { .. }
+            | Self::ClockNotEstablished
+            | Self::ClosureNotDue { .. }
+            | Self::Closed
+            | Self::Anchor { .. }
+            | Self::Restore { .. } => false,
+        }
+    }
 }
 
 /// The facts of committed State that a seal binds a board to. The node derives every one
