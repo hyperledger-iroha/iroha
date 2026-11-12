@@ -265,9 +265,18 @@ use main_aggregate::{
     ProjectionOpenedRowEvaluatorV1, add_main_composition_coefficient_chunks_v1,
     main_opened_composition_value_v1, validate_main_fri_mixes_v1,
 };
+pub(crate) use main_aggregate::{
+    ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1, ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1,
+    ZkX509VerifierFixedBindingDigestsV1, zk_x509_verifier_fixed_binding_digests_v1,
+};
 #[cfg(test)]
 pub use main_aggregate::{ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1};
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
+#[cfg(test)]
+pub(crate) use main_aggregate::{
+    zk_x509_verifier_fixed_binding_cell_controls_v1,
+    zk_x509_verifier_fixed_binding_digest_with_changed_cell_v1,
+};
 use rand::TryRng;
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -2149,14 +2158,14 @@ pub(super) fn main_diagnostic_transform_columns_v1() -> Result<usize, ZkX509Star
 }
 /// Complete verifier-owned first-release MAIN profile.
 ///
-/// The registration census and sole 29-field compiled-profile digest are
+/// The registration census and sole 36-field compiled-profile digest are
 /// constructed together. Fixed rows are evaluated from the manifest-bound
 /// algebraic schedules and never selected by a caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509MainVerifierProfileV1 {
     /// Exact 49-registration topology.
     pub(crate) registration: ZkX509MainRegistrationShapeV1,
-    /// Digest of the complete 29-field algebraic release manifest.
+    /// Digest of the complete 36-field algebraic release manifest.
     pub(crate) compiled_profile_digest: [u8; 32],
 }
 /// Construct the sole MAIN verifier profile from independently pinned release material.

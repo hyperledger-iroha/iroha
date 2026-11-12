@@ -1382,8 +1382,10 @@ adapter from the document's strict-DER `signatureValue`, to their P-256
 binding sinks; the compiled profile is now `82e3b93f`, with `a7d5eaa2`,
 `dd803a10` and `cbf1bd12` as rejection fixtures, and its maximum proof is
 9,436,144 bytes; its diagnostic proofs verify likewise in 336 s and 330 s.
-Unconstrained sibling ordinals, the fixed-schedule evaluators and
-forged-proof controls remain open.
+The compiled profile then binds every verifier-derived fixed table by digest
+(profile `694620f9`, with `82e3b93f` as a rejection fixture); no constraint or
+proof byte changes. Unconstrained sibling ordinals and forged-proof controls
+remain open.
 
 The public presentation window has one definition, recorded in the
 [interval contract](zk_x509_presentation_interval.md): it starts at or after the

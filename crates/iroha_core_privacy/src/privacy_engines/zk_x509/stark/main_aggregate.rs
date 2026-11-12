@@ -24,6 +24,8 @@ mod main_composition_mix;
 #[cfg(test)]
 #[path = "main_composition_ownership_tests.rs"]
 mod main_composition_ownership_tests;
+#[path = "main_fixed_binding.rs"]
+mod main_fixed_binding;
 #[path = "main_fixed_coset.rs"]
 mod main_fixed_coset;
 #[cfg(test)]
@@ -42,6 +44,15 @@ mod main_log16_fixed;
 mod main_native_boundary_tests;
 #[path = "main_native_transform.rs"]
 mod main_native_transform;
+pub(crate) use main_fixed_binding::{
+    ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1, ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1,
+    ZkX509VerifierFixedBindingDigestsV1, zk_x509_verifier_fixed_binding_digests_v1,
+};
+#[cfg(test)]
+pub(crate) use main_fixed_binding::{
+    zk_x509_verifier_fixed_binding_cell_controls_v1,
+    zk_x509_verifier_fixed_binding_digest_with_changed_cell_v1,
+};
 #[path = "main_oods.rs"]
 mod main_oods;
 #[path = "main_residue_fold.rs"]

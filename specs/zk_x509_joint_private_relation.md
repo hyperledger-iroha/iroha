@@ -365,10 +365,9 @@ second equation holds exactly when the active prefix is the complete `2n - 1`
 slots for `n` entries, or empty for none. Active comparison rows are copy
 consumers, so their serial sources and node lookups are forced with them. No
 column or residue is added: the two checks share one residue through disjoint
-fixed gates, and the weight reuses the entry-count fixed column. The compiled
-profile binds the SHA and P-256 fixed schedules by digest but the RFC schedule
-only through the RFC field of the profile descriptor, which records the census;
-binding the RFC schedule by digest is TODO(X.3).
+fixed gates, and the weight reuses the entry-count fixed column. The RFC
+field of the profile descriptor records the census; the compiled profile now
+also binds the RFC schedule by digest (gap 10, below).
 
 The controls for both changes evaluate plans and residues directly. The
 changed profile was captured from the actual compilers and its pin adopted as
@@ -452,9 +451,9 @@ The anchored patterns that pin the BIT STRING unused-bits octet to zero and
 the whole key usage TLV now also force the octet the DER AIR carries without
 reading it, for every BIT STRING the closed grammar admits.
 
-No compiled-profile field binds the RFC 5280 schedule by digest, so the
-change reaches the profile through the `rfc5280-temporal-air` text of field
-9, which records the count and the anchoring rule; the segmented STARK and
+No compiled-profile field bound the RFC 5280 schedule by digest until gap
+10 (below), so the change reached the profile through the
+`rfc5280-temporal-air` text of field 9, which records the count and the anchoring rule; the segmented STARK and
 RFC descriptors record them too, and a test ties all three to the actual
 constant. The pin, captured from the actual compilers, is `a7d5eaa2`; its
 predecessor `dd803a10`, identical except for field 9, is a rejection
@@ -535,6 +534,28 @@ over the 300 s target, at peak RSS of 10,073,014,272 and 9,993,240,576 bytes.
 Still required: a forged-proof control, and the remaining checks listed for
 the earlier revisions. `JointSecurityReductionIncomplete` remains the
 production result.
+
+## Verifier-derived fixed tables bound by digest
+
+Gap 10 of the [coverage ledger](zk_x509_relation_coverage.md) is closed by
+binding every verifier-derived fixed table into the compiled profile. Seven
+fields follow the P-256 digest: a descriptor (field 29) and six SHA3-384
+digests (fields 30 to 35) of the DER table, the RFC 5280 public affine
+schedule that MAIN evaluates, the IO table, the Projection table, every P-256
+table below log 19 and the CA table. The RFC 5280, IO and Projection tables
+carry statement values, so each is digested at five reference statements
+fixed in source, one per disclosure count. The digests are computed once per
+process before the pin comparison. The same pass requires the DER closed
+forms and the shifted affine sums to equal direct interpolation at a fixed
+extension point and at its next-row translate. No constraint, column,
+opening, transcript operation or proof byte changes. The pin, captured from
+the actual compilers, is `694620f9`. Its predecessor `82e3b93f`, exactly its
+first 29 fields, is a rejection fixture; the earlier fixtures keep their
+29-field frame. The canonical form of every digest is the descriptor in
+field 29 (`stark/main_fixed_binding.rs`). A census test matches each fixed
+source the verifier evaluates to its field, and one changed cell in each
+table moves the pin. Computing the digests takes about 8 s of CPU once per
+process, mostly the five RFC 5280 compiles, and a transient 390 MB.
 
 ## Round-by-round state function and Fiat–Shamir lift
 

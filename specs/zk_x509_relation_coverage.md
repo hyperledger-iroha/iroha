@@ -24,7 +24,10 @@ that revision the 1,506 non-ignored `zk_x509` library tests pass in release.
 The closures of gaps 3 and 7 are backed by forged traces, of the complete RFC
 5280 trace and of the SHA capacity AIR, and the closure of gap 4 by every
 zero-flag choice for non-canonical signature encodings and by a malleated sink
-on the actual traces; nothing has a forged-proof control yet.
+on the actual traces; nothing has a forged-proof control yet. A third read on
+2026-11-12 at `ad96c39560` covered the verifier-derived fixed columns; it is
+recorded under [Verifier-derived fixed columns](#verifier-derived-fixed-columns)
+and found gap 10, since closed in source.
 
 ## What the verifier adds across segments
 
@@ -91,7 +94,9 @@ traces of the SHA capacity AIR. None has a forged-proof control yet.
 
 Closed on 2026-11-11 with the owner's approval. Gap 7 is committed as
 `c3191d4c32`, and gap 3, with gap 9, as `f6c5c4cf1b`. Gap 4 was closed on
-2026-11-12, also with the owner's approval.
+2026-11-12, also with the owner's approval, and committed as `ad96c39560`.
+Gap 10 was closed in source on 2026-11-12 with the owner's approval and is
+not yet committed.
 
 - **Gap 7. SHA-256 padding was not forced minimal.** The SHA capacity AIR
   (`evaluate_sha_word_capacity_residues_with_context_v1` in
@@ -159,6 +164,43 @@ Closed on 2026-11-11 with the owner's approval. Gap 7 is committed as
   `an_absent_third_certificate_group_is_zero_and_a_present_one_is_active`,
   `fixed_layout_reads_the_encoding_and_the_two_scalar_windows`, the key-plan
   tests and `compiled_profile_rejects_unjoined_signature_scalars`.
+- **Gap 10. Most verifier-derived fixed tables were not bound by digest.**
+  Only the SHA and P-256 log-19 atom schedules entered the compiled profile
+  by digest. The RFC 5280 and IO tables reached it only through descriptor
+  text and the CA table through the hash of its descriptor. The DER closed
+  forms, the Projection table, the P-256 log-5, log-8 and log-16 tables and
+  the affine compiler and evaluator reached it not at all. No prover could
+  exploit this within one build, but across builds the pin did not name one
+  relation. Seven compiled-profile fields, 29 to 35, now carry a descriptor
+  and six SHA3-384 digests, computed once per process before the pin
+  comparison (`stark/main_fixed_binding.rs`):
+  - the DER, CA and P-256 log-5, log-8 and log-16 tables, which are constant;
+  - the RFC 5280 public affine schedule that MAIN evaluates, the IO table and
+    the Projection table, each at five reference statements fixed in source,
+    one per disclosure count.
+
+  In the same pass, the DER closed forms and the shifted affine sums must
+  equal direct interpolation at a fixed extension point and at its next-row
+  translate, or profile construction fails. No constraint, column, opening
+  or proof byte changed. The compiled-profile pin is `694620f9`; `82e3b93f`,
+  exactly the first 29 fields, is a rejection fixture. Controls:
+  - `every_verifier_fixed_source_is_bound_by_a_compiled_profile_field`, a
+    census that matches every evaluator kind `prepare_main_deep_fixed_v1`
+    uses, exhaustively, to the field that binds it, so a new fixed source
+    does not compile until it is bound;
+  - `one_changed_cell_in_any_bound_table_moves_the_compiled_profile_pin` and
+    `one_changed_cell_moves_every_bound_table_digest`: one changed cell in
+    each of the six tables moves its digest and the pin, and a changed DER
+    cell makes the closed-form tie refuse the profile;
+  - `der_tie_accepts_the_native_table_and_rejects_one_changed_cell`,
+    `affine_tie_accepts_a_reference_schedule_and_rejects_a_wrong_translate`
+    and `affine_cell_increment_changes_exactly_one_cell`;
+  - `table_digest_matches_an_independent_framing_and_observes_every_row_once`,
+    `table_digest_moves_with_any_cell_row_order_label_or_width`,
+    `reference_statements_are_valid_and_cover_every_shape` and
+    `binding_digests_are_deterministic_distinct_and_cached`;
+  - `compiled_profile_rejects_unbound_verifier_fixed_tables`, and the
+    historical fixtures, which keep their 29-field frames.
 
 ## Open gaps
 
@@ -193,13 +235,15 @@ Found by the second read:
    compared with the leaf, so revocation cannot be bypassed.
 
 By severity: gap 7, open to any holder of an in-profile credential, and gaps
-3 and 4 are closed in source above, gap 9 with gap 3. Of the open gaps, 8
+3, 4 and 10 are closed in source above, gap 9 with gap 3. Of the open gaps, 8
 needs a nonconforming document signed by a governed CA; gap 5 is a mismatch
-without a forgery. Gap 6 is the separate quiet-chain item of task X.6.
+without a forgery. Gap 6 is the separate quiet-chain item of task X.6. Gap 10
+affected release integrity, the pin's claim to name one relation, and allowed
+no forgery against any one build.
 
 ## Fix proposals awaiting approval
 
-The proposals for gaps 3, 4 and 7 are applied; the others are not. Each changes the relation and
+The proposals for gaps 3, 4, 7 and 10 are applied; the others are not. Each changes the relation and
 the profile identity, so the affected segment and profile descriptors, the
 compiled-profile pin and the fixtures are regenerated from the compilers and
 the maximum proof rerun. Proof sizes below are source-derived from the framing
@@ -221,10 +265,10 @@ Applied as proposed on 2026-11-11 with the owner's approval and committed as
   `fixed-equal-decimal-and-name-uniqueness` section gains one). No base or
   auxiliary column, no opening, no X5M1 field: X5M1 stays 1,034 framing bytes
   and the maximum proof 9,436,016 bytes.
-- **Profile.** No compiled-profile field binds the RFC 5280 schedule by digest
-  (`TODO(X.3)` in `compiled_profile_fields_v1`), so the change reaches the pin
-  through the `rfc5280-temporal-air` text of field 9, which now records the
-  count and the rule; the segmented STARK and RFC descriptors record them
+- **Profile.** No compiled-profile field bound the RFC 5280 schedule by
+  digest until gap 10, so the change reached the pin through the
+  `rfc5280-temporal-air` text of field 9, which records the count and the
+  rule; the segmented STARK and RFC descriptors record them
   too, and a test ties all three to the actual constant.
 - **Ledger.** Unchanged. No new map, so the point exclusion stays
   E = 3,353,141,249. D, B_MAIN = 19,398,656 and B_CA = 40,960 are unchanged
@@ -392,6 +436,40 @@ Applied as proposed on 2026-11-11 with the owner's approval and committed as
   wrong-genesis, 32 nonce-byte and tamper mutations; proving took 492 s and
   441 s on a loaded host, still over the 300 s target.
 
+### Gap 10: bind every verifier-derived table (applied)
+
+Applied on 2026-11-12 with the owner's approval, not yet committed; its pin
+is `694620f9`. The approved sketch digested the constant tables directly and
+the statement-dependent ones at a reference statement for each disclosure
+count. Choices made within it:
+
+- The constant tables, and the IO and Projection tables at their reference
+  statements, are digested cell by cell: big-endian cells in row order,
+  hashed in blocks of 4,096 rows, then the block digests under the table's
+  label, log size and width.
+- The RFC 5280 digest covers the affine segments that MAIN compiles and
+  evaluates, not the 3.1 GB of raw cells at five statements. The segments
+  determine the table, and a different but equal decomposition moves the
+  pin, as for the atom schedules.
+- The five reference statements share one window, key usage, EKU list, CRL
+  number and disclosure set per disclosure count. Together they cover one to
+  three EKUs, CRL numbers of one to nine content bytes, every disclosure
+  index and a window across the 2050 time-encoding boundary.
+- Digests alone bind data, not the code that evaluates it. Two checks in the
+  same pass therefore cover the two schedule-specific evaluators, the DER
+  closed forms and the shifted affine sums: each must equal direct
+  barycentric interpolation at a fixed extension point and, with independent
+  weights, at its next-row translate. The generic evaluators (barycentric
+  interpolation, the CA inverse FFT and the X5K1 atoms) remain bound only by
+  their code and, for X5K1, field 20, as before.
+- Cost, measured once on a loaded host: the six digests take about 8 s of
+  CPU once per process, of which the five RFC 5280 compiles take about 7 s;
+  each verification already runs one such compile. The computation peaks at
+  about 390 MB above the process baseline, 64 MB of it the tie weights, and
+  frees it all. A cheaper option, not taken, would compile only the 148 RFC
+  5280 columns: the 184 SHA public columns in the same schedule are already
+  bound by fields 22 to 26. Its saving is unmeasured.
+
 ### Gaps 8 and 9: sketches
 
 Not worked out to the same precision.
@@ -439,6 +517,76 @@ Not worked out to the same precision.
 | Temporal relations | fixed relation slots with verifier-fixed operands, nextUpdate the only strict one; slack below 2^38 through `RangeByte` and copy domain 99; required slots active, slot 2 with the certificate selector; CRL entry times through domains 100 and 101 with the entry census setting the multiplicity |
 | Lookup arguments | the gated zero-safe inverse forces its gate Boolean and pins `(zero, inverse)`; log-derivative sums start and end at zero, with an exact singular count; four independent base-field lanes; homogeneous factors are non-proportional within a domain through the constant domain tag, with an affine offset where domains share an accumulator (96 and 97, 100 and 101); table rows verifier-fixed (grammar rules in fixed cells, profile entries pinned by residues, DER byte and node rows at fixed document, address and node identifiers); multiplicities are free, so a lookup proves membership only, and "exactly once" comes from a pinned multiplicity, as for the topology table |
 
+## Verifier-derived fixed columns
+
+Read on 2026-11-12 at `ad96c39560`, with test-only controls added in the
+worktree and not committed.
+
+In production, MAIN evaluates fixed columns only at the DEEP point z and,
+for the AIRs that read a next row, at ω·z (`prepare_main_deep_fixed_v1` in
+`stark/main_oods.rs`). No fixed column enters a query row: every query-row
+fixed evaluator (`evaluate_query_indices_v1`, `opened_all_v1` and the
+sampled-opening helpers) is `#[cfg(test)]`, and `AggregateDeepProofV1`
+carries only trace openings and composition values. The CA subproof
+follows the same design. The prover interpolates native tables; the
+verifier does the following.
+
+| Columns | Verifier at z | Native table the prover interpolates | Verdict |
+|---|---|---|---|
+| DER, log 19, 14 columns | closed forms from Lagrange weights and their prefix sums, at shifts 0 and 1 | `ZkX509DerStarkFixedScheduleV1::fixed_row` | same polynomial; next row cyclic; `FIX_FINAL_DOCUMENT` is zero on both sides and read by no AIR |
+| RFC 5280, 148 columns, and SHA public, 4 × 46 | affine schedule compiled losslessly at verifier entry from the native rows | RFC `fixed_row` through `build_fixed_column`; SHA `fixed_row_v1` | same polynomial for all five disclosure shapes |
+| SHA, 4 × 137 | atom schedule compiled from the word-circuit topology, at z and ω·z; columns 91 to 136 cross-checked against the affine schedule at runtime | `fill_fixed_matrix_v1`, equal to `fixed_row_v1` on every cell | same polynomial for all five shapes; the SHA AIR reads no next-row fixed value |
+| P-256 log 19, fifteen registrations over six role schedules, 404 columns | atom schedule sliced by adapter, local instance and role | `P256MainVerifierFixedSourceV1`, the same object the prover's bound source holds; the arithmetic registration through a linear basis transform | same polynomial for each of the fifteen; aliasing exact |
+| P-256 log 5, 8 and 16, Projection, IO | direct barycentric interpolation of native rows | the same row functions: `P256MainVerifierFixedSourceV1::fixed_row_v1`, `compile_zk_x509_projection_stark_fixed_rows_v1`, `compile_main_io_fixed_schedule_v1` | same polynomial by construction, compiled from the public statement |
+| CA, log 12, 80 columns | inverse FFT and Horner of the native columns | the constant `compile_ca_accumulator_fixed_columns_v1()` | same polynomial by construction |
+
+- **Same polynomial.** Holds for every column of every registration.
+  - Two new controls interpolate every native log-19 column at two fixed
+    Fp4 points with weights built in the test, and require the verifier's
+    values to be identical.
+    `compiled_log19_public_sha_and_der_schedules_equal_native_interpolants`
+    covers the RFC 5280, SHA public, SHA and DER columns at both points and
+    their ω·z translates, for all five shapes.
+    `compiled_p256_log19_role_schedules_equal_every_registrations_native_interpolant`
+    covers all 404 columns of the fifteen P-256 registrations at both
+    points. Two distinct polynomials of degree below 2^19 agree at a point
+    chosen independently of them with probability below 2^-236, so the
+    controls cover every row, boundary rows included.
+  - Existing tests:
+    - `full_domain_native_equivalence_is_exact` compares all SHA atoms with
+      the native rows (default suite).
+    - `public_fixed_matrix_preserves_every_canonical_cell_for_all_supported_shapes`
+      compares the prover's SHA matrix with the rows (ignored; run).
+    - `maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts`
+      compares all 49 registrations' actual prover coefficients, after the
+      prover's own transforms, with the verifier at an Fp4 point (ignored;
+      run).
+- **Evaluator math.** Holds.
+  - Barycentric weights carry a sum-to-one check.
+  - Atoms are evaluated as the X5K1 descriptor states: affine ranges by
+    cyclic prefix sums, repeated strides by gcd cycles, a reduced-stride
+    modular inverse and cyclic weight and ordinal prefixes.
+  - A point with z^N = 1 is rejected, and DEEP admissibility excludes every
+    trace subgroup for both z and ω·z.
+- **Next rows and translates.** Holds. DER, which reads next `PARSER` and
+  `COMPARATOR`, and SHA receive next-row values at ω19·z, cyclic in the last
+  row. RFC 5280, P-256, Projection, IO and CA take current fixed values only,
+  by their evaluator signatures, so no AIR reads a next-row value the
+  verifier does not supply.
+- **No host branches, no prover-supplied fixed values.** Holds.
+  - `prepare_main_deep_fixed_v1` takes no proof input and branches only on
+    the public layout (adapter and trace log) and on canonicality.
+  - `FIX_DIGEST` and every other selector enter the Fp4 residues only as
+    multipliers.
+  - Outside tests, the only branches on a fixed value are in witness
+    construction (`build_aux_row_v1`, `build_sha_word_capacity_base_with_fixed_v1`)
+    and in native table construction from the public manifest
+    (`emit_sha_batch_fixed_row_from_word_v1`). None reads an opened or
+    prover-supplied value.
+- **Binding.** Gap 10, now closed in source: only the SHA and P-256 log-19
+  schedules were bound by digest, everything else by descriptor text or not
+  at all. Fields 29 to 35 now bind every other table.
+
 ## Observations
 
 Not gaps under the standard, but load-bearing and easy to break:
@@ -464,17 +612,34 @@ Not gaps under the standard, but load-bearing and easy to break:
   identity cells, `FIX_DOCUMENT_FIXED` and the local first and last cells.
   That is safe only because every other reader of those cells multiplies them
   by its own family selector, or by the temporal or relation selector.
+- `FIX_FINAL_DOCUMENT` is a dead DER fixed column: zero in the native table
+  and the closed form, read by no AIR. The test-only
+  `der_fixed_row_at_point_for_shape_v1` still encodes a retired parameterized
+  DER schedule, with a nonzero final document and variable active rows, and
+  its tests compare it with a test-local table, so they say nothing about the
+  production closed form. Both are candidates for deletion.
+- The CRL number in RFC 5280 fixed cells comes from the authoritative CRL
+  record that the statement names by `crl_record_digest`, never from the
+  proof. It is not itself a statement field, so it is bound only through
+  that record and the CRL digest joins; a verifier must read it from exactly
+  that revision.
+- No workflow or script runs the ignored full-domain fixed controls:
+  `every_native_cell_matches_without_materializing_a_width_404_matrix`,
+  `maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts`,
+  `public_fixed_matrix_preserves_every_canonical_cell_for_all_supported_shapes`
+  and the two new interpolation controls. The last four each finished in
+  under 35 s in release here. The default suite checks SHA on the full
+  domain, but compares P-256 with its native source only at sampled rows.
+  Those samples omit the sorted active edge at rows 362,751 and 362,752,
+  where a separate test checks only the schedule's own flags.
 
 ## Not yet read
 
-The verifier's algebraic evaluation of the log-19 fixed schedules at the DEEP
-point (`fixed_algebraic.rs`, `fixed_algebraic_sha.rs`,
-`fixed_algebraic_p256.rs`), on which every "verifier-fixed" mechanism above
-relies, was matched only in meaning and by sample rows, and the SHA operation,
-Boolean, read and sorted-memory axis compression not at all. Also unread: the
+The SHA operation, Boolean, read and sorted-memory axis compression; the
 order in which the SHA memory, call and base-folding challenges are drawn
-relative to the base commitments, and the DEEP binding of the extra key and
-digest openings.
+relative to the base commitments; and the DEEP binding of the extra key and
+digest openings. The verifier-derived fixed columns are now read; see
+[Verifier-derived fixed columns](#verifier-derived-fixed-columns).
 
 ## Closing a gap
 
@@ -485,7 +650,7 @@ validation. A relation change alters the profile identity, so descriptors,
 pins and fixtures are regenerated from the actual compiler and the maximum
 proof is rerun.
 
-TODO(X.3): as the owner approves them, close gaps 8 and 4; add forged-proof
-controls for gaps 1, 2, 3 and 7 and for each new closure; read the
-fixed-schedule evaluators; then repeat this read against the changed
-relation.
+TODO(X.3): as the owner approves it, close gap 8; add forged-proof controls
+for gaps 1, 2, 3, 4 and 7 and for each new closure; read the parts listed
+under [Not yet read](#not-yet-read); then repeat this read against the
+changed relation.

@@ -9,7 +9,7 @@ use super::*;
 
 /// Exact native-subgroup Lagrange weights at an extension-field point.
 /// The largest allocation is one public native column, never a fixed matrix.
-fn lagrange_weights_v1(trace_log2: u8, point: E) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+pub(super) fn lagrange_weights_v1(trace_log2: u8, point: E) -> Result<Vec<E>, ZkX509StarkErrorV1> {
     if trace_log2 == 0 || trace_log2 > ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 || !point.is_canonical() {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
@@ -589,6 +589,10 @@ pub(super) fn verify_main_deep_constraints_with_ca_v1(
 #[cfg(test)]
 #[path = "main_oods_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "main_oods_fixed_interpolation_tests.rs"]
+mod fixed_interpolation_tests;
 
 /// Check the complete standalone DER AIR, including all eight public endpoints.
 /// The reduced wire authenticates both z and omega*z through the unchanged DEEP

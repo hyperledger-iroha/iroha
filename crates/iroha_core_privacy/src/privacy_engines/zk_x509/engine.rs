@@ -61,8 +61,10 @@ use super::{
     },
     sha256_word_air::ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
     stark::{
-        MainJointVerifierOraclesV1, main_joint_auxiliary_from_proofs_v1,
-        zk_x509_main_pre_aux_from_proof_v1,
+        MainJointVerifierOraclesV1, ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1,
+        ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1, ZkX509VerifierFixedBindingDigestsV1,
+        main_joint_auxiliary_from_proofs_v1, zk_x509_main_pre_aux_from_proof_v1,
+        zk_x509_verifier_fixed_binding_digests_v1,
     },
     verifier_profile::{
         ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1, ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
@@ -80,11 +82,12 @@ use rand::TryCryptoRng;
 use thiserror::Error;
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-norito-zk-x509-witness-v1-flags0+strict-reference-relation";
-const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
+const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 36;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
-// Independently encoded and SHA-256 checked from the exact ordered 29-field
-// manifest, including the compact-CA descriptor and all six SHA3-384 algebraic
-// schedule digests in their opaque byte order. The manifest itself uses SHA-256.
+// Independently encoded and SHA-256 checked from the exact ordered 36-field
+// manifest, including the compact-CA descriptor, all six SHA3-384 algebraic
+// schedule digests and the six verifier-fixed table digests in their opaque
+// byte order. The manifest itself uses SHA-256.
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 // Native derivation and independent framing bind the joint MAIN/CA private links,
@@ -99,10 +102,12 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // appended before the length. So is the `FixedByte` address anchor, which
 // dd803a10 lacked; it reaches this pin only through field 9. So is the
 // strict-DER signature-scalar parse joined to each P-256 binding sink, which
-// a7d5eaa2 lacked; it also reaches this pin only through field 9.
+// a7d5eaa2 lacked; it also reaches this pin only through field 9. So are the
+// digests of every other verifier-derived fixed table in fields 29 to 35,
+// which 82e3b93f lacked; 82e3b93f is exactly this manifest's first 29 fields.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x82, 0xe3, 0xb9, 0x3f, 0xbc, 0xeb, 0x65, 0x55, 0x33, 0x23, 0x34, 0xea, 0x3e, 0x1a, 0x1d, 0x58,
-    0x53, 0x52, 0x86, 0x9e, 0xd8, 0x26, 0xbf, 0x60, 0x8e, 0x6a, 0x99, 0x01, 0x31, 0xc8, 0x88, 0x63,
+    0x69, 0x46, 0x20, 0xf9, 0xaf, 0x23, 0xd3, 0x40, 0xe0, 0x17, 0xf2, 0x01, 0xac, 0x25, 0xae, 0xbe,
+    0x7b, 0xc1, 0x5d, 0x36, 0xee, 0xf9, 0x0d, 0xdb, 0x16, 0x22, 0x0e, 0x2a, 0x3a, 0x1f, 0xb0, 0x18,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,10 +213,10 @@ pub enum ZkX509EngineErrorV1 {
     /// The canonical P-256 algebraic compiler or schedule rejected its profile.
     #[error(transparent)]
     P256FixedAlgebraic(#[from] ZkX509P256FixedAlgebraicErrorV1),
-    /// The complete 29-field release manifest has not been pinned.
+    /// The complete 36-field release manifest has not been pinned.
     #[error("zk-X509 compiled profile is not release-pinned")]
     CompiledProfileUnpinned,
-    /// Recomputed 29-field manifest digest differs from the consensus pin.
+    /// Recomputed 36-field manifest digest differs from the consensus pin.
     #[error("zk-X509 compiled profile digest mismatch")]
     CompiledProfileMismatch,
 }
@@ -567,11 +572,12 @@ fn prove_zk_x509_credential_proof_observed_v1_with_rng<R: TryCryptoRng>(
 fn compiled_profile_fields_v1<'a>(
     sha_schedule_digests: &'a [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
     p256_schedule_digest: &'a [u8; 48],
+    fixed_binding_digests: &'a ZkX509VerifierFixedBindingDigestsV1,
 ) -> [&'a [u8]; COMPILED_PROFILE_FIELD_COUNT_V1] {
-    // TODO(X.3): bind the RFC 5280 fixed schedule by digest, as the SHA and
-    // P-256 schedules are. Until then an RFC constraint change reaches this
-    // profile only through the RFC field of the STARK profile descriptor,
-    // which must be edited with it.
+    // Fields 20 to 28 bind the SHA and P-256 log-19 atom schedules; fields 29
+    // to 35 bind every other verifier-derived fixed table, the RFC 5280 one at
+    // five reference statements, and tie the DER closed forms and the affine
+    // evaluator to those tables.
     [
         ZK_X509_SUITE_V1,
         ZK_X509_SOURCE_PROFILE_V1,
@@ -602,10 +608,23 @@ fn compiled_profile_fields_v1<'a>(
         &sha_schedule_digests[4],
         ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
         p256_schedule_digest,
+        ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1,
+        &fixed_binding_digests[0],
+        &fixed_binding_digests[1],
+        &fixed_binding_digests[2],
+        &fixed_binding_digests[3],
+        &fixed_binding_digests[4],
+        &fixed_binding_digests[5],
     ]
 }
-fn compiled_profile_schedule_digests_v1()
--> Result<([[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1], [u8; 48]), ZkX509EngineErrorV1> {
+const _: () = assert!(ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1 == 6);
+/// The SHA, P-256 log-19 and verifier-fixed table digests, in field order.
+type CompiledProfileDigestsV1 = (
+    [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
+    [u8; 48],
+    ZkX509VerifierFixedBindingDigestsV1,
+);
+fn compiled_profile_schedule_digests_v1() -> Result<CompiledProfileDigestsV1, ZkX509EngineErrorV1> {
     let mut sha = [[0_u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
     for (disclosed_attributes, digest) in sha.iter_mut().enumerate() {
         *digest = zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
@@ -617,22 +636,24 @@ fn compiled_profile_schedule_digests_v1()
     let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?
         .descriptor_digest_v1()
         .to_bytes();
-    Ok((sha, p256))
+    let binding = *zk_x509_verifier_fixed_binding_digests_v1()?;
+    Ok((sha, p256, binding))
 }
-/// Recompute the sole exact 29-field compiled-profile digest.
+/// Recompute the sole exact 36-field compiled-profile digest.
 pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32], ZkX509EngineErrorV1>
 {
-    let (sha, p256) = compiled_profile_schedule_digests_v1()?;
+    let (sha, p256, binding) = compiled_profile_schedule_digests_v1()?;
     hash_frame_v1(
         COMPILED_PROFILE_DIGEST_DOMAIN_V1,
-        &compiled_profile_fields_v1(&sha, &p256),
+        &compiled_profile_fields_v1(&sha, &p256, &binding),
     )
     .map_err(|_| ZkX509EngineErrorV1::CompiledProfileMismatch)
 }
 /// Construct the sole complete algebraic-schedule-bearing release profile.
 ///
-/// All six success-only verifier schedule caches must compile before the
-/// manifest digest is compared with its independent release pin.
+/// All six success-only verifier schedule caches and the verifier-fixed table
+/// digests must compile before the manifest digest is compared with its
+/// independent release pin.
 #[doc(hidden)]
 pub fn construct_zk_x509_compiled_profile_v1()
 -> Result<ZkX509CompiledProfileV1, ZkX509EngineErrorV1> {
@@ -669,12 +690,25 @@ mod tests {
     fn independent_compiled_profile_digest_v1(fields: &[&[u8]]) -> [u8; 32] {
         Sha256::digest(independently_encode_compiled_profile_frame_v1(fields)).into()
     }
+    /// Every profile up to and including 82e3b93f had exactly the first 29
+    /// fields; the verifier-fixed table digests came after it.
+    const PRE_BINDING_FIELD_COUNT_V1: usize = 29;
+    /// The current manifest's first 29 fields, the frame of every historical
+    /// rejection fixture.
+    fn pre_binding_fields_v1(fields: &[&[u8]]) -> Vec<Vec<u8>> {
+        fields[..PRE_BINDING_FIELD_COUNT_V1]
+            .iter()
+            .map(|field| field.to_vec())
+            .collect()
+    }
     #[test]
-    fn compiled_profile_manifest_has_the_exact_29_field_order() {
+    fn compiled_profile_manifest_has_the_exact_36_field_order() {
         let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
             core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 48]);
         let p256_digest = [0x41; 48];
-        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let binding_digests: ZkX509VerifierFixedBindingDigestsV1 =
+            core::array::from_fn(|table| [u8::try_from(0x91 + table).expect("six tables"); 48]);
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest, &binding_digests);
         let original_fields: [&[u8]; 20] = [
             ZK_X509_SUITE_V1,
             ZK_X509_SOURCE_PROFILE_V1,
@@ -697,7 +731,7 @@ mod tests {
             ZK_X509_IO_AIR_DESCRIPTOR_V1,
             REFERENCE_PREPARATION_SCHEMA_V1,
         ];
-        assert_eq!(fields.len(), 29);
+        assert_eq!(fields.len(), 36);
         assert_eq!(&fields[..20], &original_fields);
         assert_eq!(fields[20], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
         assert_eq!(
@@ -709,6 +743,10 @@ mod tests {
         }
         assert_eq!(fields[27], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
         assert_eq!(fields[28], p256_digest);
+        assert_eq!(fields[29], ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1);
+        for (table, digest) in binding_digests.iter().enumerate() {
+            assert_eq!(fields[30 + table], digest);
+        }
         assert!(
             fields[12]
                 .windows(b"post-base-challenges=exact272-goldilocks-fields".len())
@@ -730,7 +768,9 @@ mod tests {
         let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
             core::array::from_fn(|shape| [u8::try_from(0x71 + shape).expect("five shapes"); 48]);
         let p256_digest = [0x81; 48];
-        let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let binding_digests = [[0xa1; 48]; ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1];
+        let canonical_fields =
+            compiled_profile_fields_v1(&sha_digests, &p256_digest, &binding_digests);
         assert_eq!(
             canonical_fields[14],
             ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1.as_slice()
@@ -753,7 +793,10 @@ mod tests {
         let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
             core::array::from_fn(|shape| [u8::try_from(0x51 + shape).expect("five shapes"); 48]);
         let p256_digest = [0x61; 48];
-        let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let binding_digests: ZkX509VerifierFixedBindingDigestsV1 =
+            core::array::from_fn(|table| [u8::try_from(0xb1 + table).expect("six tables"); 48]);
+        let canonical_fields =
+            compiled_profile_fields_v1(&sha_digests, &p256_digest, &binding_digests);
         let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
         let owned = canonical_fields
             .iter()
@@ -769,21 +812,26 @@ mod tests {
                 "manifest field {field} must be bound"
             );
         }
-        let mut reordered = owned;
-        reordered.swap(22, 23);
-        let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        assert_ne!(
-            independent_compiled_profile_digest_v1(&reordered_fields),
-            canonical,
-            "SHA disclosure-shape digest order must be bound"
-        );
+        for (first, second, what) in [
+            (22, 23, "SHA disclosure-shape digest order must be bound"),
+            (30, 31, "verifier-fixed table digest order must be bound"),
+        ] {
+            let mut reordered = owned.clone();
+            reordered.swap(first, second);
+            let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            assert_ne!(
+                independent_compiled_profile_digest_v1(&reordered_fields),
+                canonical,
+                "{what}"
+            );
+        }
     }
     #[test]
     #[ignore = "explicit native profile capture after a reviewed relation/compiler change; does not accept or update a profile pin"]
     fn capture_compiled_profile_inputs_from_actual_schedules() {
-        let (sha, p256) =
+        let (sha, p256, binding) =
             compiled_profile_schedule_digests_v1().expect("all actual schedule compilers");
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let digest = independent_compiled_profile_digest_v1(&fields);
         assert_eq!(
             digest,
@@ -799,6 +847,22 @@ mod tests {
             "zk-x509-independent-compiled-profile-sha256={}",
             hex::encode(digest)
         );
+        for (name, table) in [
+            "der",
+            "rfc5280-public-affine",
+            "io",
+            "projection",
+            "p256-log5-8-16",
+            "ca",
+        ]
+        .into_iter()
+        .zip(binding)
+        {
+            eprintln!(
+                "zk-x509-verifier-fixed-binding-{name}={}",
+                hex::encode(table)
+            );
+        }
         for disclosed_attributes in 0..5 {
             let schedule = zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
                 disclosed_attributes,
@@ -831,7 +895,7 @@ mod tests {
     // profile whose `FixedByte` rows had no address anchor. Rejection fixture
     // only; no production reader accepts it.
     fn restore_pre_fixed_byte_anchor_profile_fields_v1(fields: &mut [Vec<u8>]) {
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+32-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1034-includes1024-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=13-blocks-rfc-to-io-real-p256-and-projection-inputs301+264-per-disclosure-root-powers2,8,16-max-quotient-degree553027|main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+22-key-and-digest-join-descriptors+key-and-digest-alphas+24-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-canonical-frame-prefix-and-static-field-headers-with-carried-private-crl-length|sha-fixed-algebraic-width=548-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token+projection-hash-bus-reuses-exact-sha-call-family|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN32-key-and-digest:5-power8+6-power2+1-power16+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN32-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-entry-census-equals-entry-count-on-serial-sources-and-twice-it-after-127-weighted-serial-comparison-slots-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3353141249|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9436016|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
     }
     #[test]
@@ -840,8 +904,8 @@ mod tests {
             ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1 as RFC_LOCAL,
             ZK_X509_RFC5280_STARK_DESCRIPTOR_V1,
         };
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
         // Every descriptor that states the RFC 5280 residue count must state
         // the actual one, so a residue change cannot leave field 9 stale.
@@ -859,10 +923,7 @@ mod tests {
                 .unwrap()
                 .contains(&format!("-constraints{RFC_LOCAL}-"))
         );
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_fixed_byte_anchor_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -881,7 +942,7 @@ mod tests {
     // not join the document's signature scalars to the P-256 binding sinks.
     // Rejection fixture only; no production reader accepts it.
     fn restore_pre_signature_scalar_profile_fields_v1(fields: &mut [Vec<u8>]) {
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+32-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1034-includes1024-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=13-blocks-rfc-to-io-real-p256-and-projection-inputs301+264-per-disclosure-root-powers2,8,16-max-quotient-degree553027|main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+22-key-and-digest-join-descriptors+key-and-digest-alphas+24-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-canonical-frame-prefix-and-static-field-headers-with-carried-private-crl-length|sha-fixed-algebraic-width=548-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token+projection-hash-bus-reuses-exact-sha-call-family|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN32-key-and-digest:5-power8+6-power2+1-power16+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN32-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2146-degree4-fixed-byte-address-equals-start-plus-offset-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-entry-census-equals-entry-count-on-serial-sources-and-twice-it-after-127-weighted-serial-comparison-slots-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3353141249|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9436016|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
     }
     #[test]
@@ -890,8 +951,8 @@ mod tests {
             ZK_X509_MAIN_FRAME_BYTES_V1, ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
         };
         use super::super::rfc5280_stark::ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1 as RFC_LOCAL;
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
         // Field 9 must state the actual opening count, frame, proof bound and
         // RFC residue count, so the signature-scalar joins cannot leave it stale.
@@ -915,10 +976,7 @@ mod tests {
         ] {
             assert!(profile.contains(&token), "{token}");
         }
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_signature_scalar_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -933,19 +991,77 @@ mod tests {
         supplied.compiled_profile_digest = old;
         assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
     }
+    #[test]
+    fn compiled_profile_rejects_unbound_verifier_fixed_tables() {
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
+        let current = independent_compiled_profile_digest_v1(&fields);
+        assert_eq!(fields[29], ZK_X509_VERIFIER_FIXED_BINDING_DESCRIPTOR_V1);
+        assert!(fields[30..].iter().all(|digest| digest.len() == 48));
+        // 82e3b93f is exactly the current first 29 fields: nothing else changed.
+        let predecessor = pre_binding_fields_v1(&fields);
+        let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old = independent_compiled_profile_digest_v1(&borrowed);
+        assert_eq!(
+            hex::encode(old),
+            "82e3b93fbceb6555332334ea3e1a1d585352869ed826bf608e6a990131c88863"
+        );
+        assert_ne!(old, current);
+        assert_eq!(Some(current), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        let mut supplied =
+            super::super::stark::construct_zk_x509_main_verifier_profile_v1().unwrap();
+        supplied.compiled_profile_digest = old;
+        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
+    }
+    #[test]
+    fn one_changed_cell_in_any_bound_table_moves_the_compiled_profile_pin() {
+        use super::super::stark::{
+            ZkX509StarkErrorV1, zk_x509_verifier_fixed_binding_cell_controls_v1,
+            zk_x509_verifier_fixed_binding_digest_with_changed_cell_v1,
+        };
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let current = independent_compiled_profile_digest_v1(&compiled_profile_fields_v1(
+            &sha, &p256, &binding,
+        ));
+        assert_eq!(Some(current), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        let controls = zk_x509_verifier_fixed_binding_cell_controls_v1().unwrap();
+        assert_eq!(
+            controls.len(),
+            ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1
+        );
+        for (table, label, row, column) in controls {
+            match zk_x509_verifier_fixed_binding_digest_with_changed_cell_v1(
+                table, &label, row, column,
+            ) {
+                // The DER closed forms reject a changed DER table, so no
+                // profile can be formed at all.
+                Err(error) => {
+                    assert_eq!((table, error), (0, ZkX509StarkErrorV1::ProfileMismatch));
+                }
+                Ok(digest) => {
+                    let mut changed = binding;
+                    changed[table] = digest;
+                    let moved = independent_compiled_profile_digest_v1(
+                        &compiled_profile_fields_v1(&sha, &p256, &changed),
+                    );
+                    assert_ne!(moved, current, "table {table}");
+                }
+            }
+        }
+    }
     // Exact field 17 of the authenticated cbf1bd12 native capture, the last
     // profile whose SHA capacity relation accepted non-minimal padding, plus
     // its unanchored field 9. Rejection fixture only; no production reader
     // accepts it.
     fn restore_pre_minimal_padding_profile_fields_v1(fields: &mut [Vec<u8>]) {
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         restore_pre_fixed_byte_anchor_profile_fields_v1(fields);
         fields[17] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux82=word-capacity54+input-products4+digest-products4+rfc-consumer-products16+projection-products4:fixed137=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6+canonical-frame-byte-mask-constant-and-private-length-high-low16+active-projection-event-selectors3:constraints593=local-private-running-products:MAIN108-cross-proof-original-polynomial-quotients:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux328-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-private-source-digest-and-rfc-products:no-public-segment-products:main-16-quartic-native-endpoint-links-to-private-rfc-bridges:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-original-aux=zero:projection-aux-terminal-carry:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-bind-original-source-and-digest-endpoints-through-MAIN108-private-polynomial-quotients-without-product-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:all-framed-roles-verifier-compiled-domain-and-static-field-headers-and-protocol-constants:frame-bytes-must-be-message-bytes:private-variable-payloads-remain-unfixed:crl-frame-u64-length-equals-carried13bit-raw-length:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:projection-calls5through11-original-message-length-digest-typed-products:512-zero-padded-payload-words+exact-length+eight-digest-words:row0-private-terminal-row1-one-rest-cyclic:four-original-MAIN-point1-equalities-with-projection:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2870880:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors".to_vec();
     }
     #[test]
     fn compiled_profile_rejects_non_minimal_sha_padding() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
         let descriptor = core::str::from_utf8(fields[17]).unwrap();
         // The descriptor must record the actual SHA local residue count, so a
@@ -959,10 +1075,7 @@ mod tests {
             descriptor
                 .contains(":minimal-padding-no-marker-before-word14-of-a-non-final-active-block:")
         );
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_minimal_padding_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -982,22 +1095,19 @@ mod tests {
     // census, plus its non-minimal SHA padding field. Rejection fixture only;
     // no production reader accepts it.
     fn restore_pre_projection_join_profile_fields_v1(fields: &mut [Vec<u8>]) {
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         restore_pre_minimal_padding_profile_fields_v1(fields);
         fields[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+21-key-and-digest-join-descriptors+key-and-digest-alphas+24-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-canonical-frame-prefix-and-static-field-headers-with-carried-private-crl-length|sha-fixed-algebraic-width=548-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token+projection-hash-bus-reuses-exact-sha-call-family|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9435984|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
     }
     #[test]
     fn compiled_profile_rejects_unjoined_projection_inputs_and_unforced_serial_census() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
         let descriptor = core::str::from_utf8(fields[9]).unwrap();
         assert!(descriptor.contains("projection-inputs301+264-per-disclosure-root-powers2,8,16"));
         assert!(descriptor.contains("x5m1=version1+36-original-key-DEEP-values"));
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_projection_join_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -1014,13 +1124,10 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_unbound_sha_frame_prefix_relation() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_frame_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -1037,13 +1144,10 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_missing_projection_and_authoritative_crl_bindings() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_endpoint_binding_profile_fields_v1(&mut predecessor);
         let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old = independent_compiled_profile_digest_v1(&borrowed);
@@ -1061,7 +1165,7 @@ mod tests {
 
     #[test]
     fn historical_profile_restoration_is_independent_of_every_current_field() {
-        let base = vec![Vec::new(); COMPILED_PROFILE_FIELD_COUNT_V1];
+        let base = vec![Vec::new(); PRE_BINDING_FIELD_COUNT_V1];
         let restorers: [fn(&mut [Vec<u8>]); 3] = [
             restore_pre_endpoint_binding_profile_fields_v1,
             restore_pre_frame_profile_fields_v1,
@@ -1080,7 +1184,7 @@ mod tests {
                 hex::encode(independent_compiled_profile_digest_v1(&borrowed)),
                 expected
             );
-            for index in 0..COMPILED_PROFILE_FIELD_COUNT_V1 {
+            for index in 0..PRE_BINDING_FIELD_COUNT_V1 {
                 let mut substituted = historical.clone();
                 substituted[index] = vec![0xa5; index + 1];
                 restore(&mut substituted);
@@ -1106,9 +1210,9 @@ mod tests {
 
     #[test]
     fn compiled_profile_constructor_matches_the_independent_release_pin() {
-        let (sha_digests, p256_digest) =
-            compiled_profile_schedule_digests_v1().expect("all six frozen schedules");
-        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let (sha_digests, p256_digest, binding_digests) =
+            compiled_profile_schedule_digests_v1().expect("all frozen schedules and tables");
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest, &binding_digests);
         let independent = independent_compiled_profile_digest_v1(&fields);
         let recomputed =
             recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
@@ -1143,7 +1247,7 @@ mod tests {
     // Restore every field before older overrides so later relation changes cannot
     // silently manufacture a hybrid historical profile.
     fn restore_pre_endpoint_binding_profile_fields_v1(fields: &mut [Vec<u8>]) {
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[0] = b"iroha-zk-x509-stark-p256-v1".to_vec();
         fields[1] = b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1".to_vec();
         fields[2] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:name-oids-only-c-o-ou-cn:no-duplicate-name-attributes:c-printablestring-two-uppercase-ascii:o-ou-cn-utf8string-or-printablestring:max-name-value256:disclosed-attribute-hash-content-octets-only:utf8-well-formed-no-u0000-u001f-u007f-u009f:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-order-aki-ski-keyusage-basicconstraints-and-optional-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign-and-crlsign-only:ca-pathlen-required-explicit:direct-leaf-issuer-crlsign:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl".to_vec();
@@ -1184,7 +1288,7 @@ mod tests {
     // Reusing current schedule digests would synthesize a different old profile.
     fn restore_historical_catalog_schedule_fields_v1(fields: &mut [Vec<u8>]) {
         restore_pre_frame_profile_fields_v1(fields);
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+17-key-and-digest-join-descriptors+key-and-digest-alphas+20-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9412944|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
         fields[17] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints564=local-private-running-products:MAIN108-cross-proof-original-polynomial-quotients:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-private-source-digest-and-rfc-products:no-public-segment-products:main-16-quartic-native-endpoint-links-to-private-rfc-bridges:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-bind-original-source-and-digest-endpoints-through-MAIN108-private-polynomial-quotients-without-product-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors".to_vec();
         // Freeze the predecessor fixed evaluator/compiler semantics as well.
@@ -1222,7 +1326,7 @@ mod tests {
 
     fn restore_retired_public_terminal_profile_descriptors_v1(fields: &mut [Vec<u8>]) {
         restore_historical_catalog_schedule_fields_v1(fields);
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[9] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1681-degree4-authenticated72-times-73-relations-38bit-slack-affine-loglookup-30-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9420938|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
         fields[10] = b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated".to_vec();
         // Historical profiles predate the corrected CA domain descriptor.
@@ -1248,11 +1352,9 @@ mod tests {
     fn retired_profile_restoration_freezes_pre_aux_sha_and_p256_manifest_fields() {
         let sha_digests = [[0x51; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
         let p256_digest = [0x61; 48];
-        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
-        let mut canonical = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let binding_digests = [[0xc1; 48]; ZK_X509_VERIFIER_FIXED_BINDING_DIGEST_COUNT_V1];
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest, &binding_digests);
+        let mut canonical = pre_binding_fields_v1(&fields);
         let mut substituted = canonical.clone();
         for (index, field) in substituted.iter_mut().enumerate() {
             *field = vec![u8::try_from(index).unwrap(); index + 1];
@@ -1270,8 +1372,8 @@ mod tests {
     }
     #[test]
     fn compiled_profile_binds_private_terminal_closure() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let profile = core::str::from_utf8(fields[9]).unwrap();
         assert!(profile.contains("main-public-terminal-records=0|ca-public-terminal-records=0"));
         assert!(
@@ -1313,12 +1415,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_retired_public_terminal_exposure() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
-        let mut retired = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
+        let mut retired = pre_binding_fields_v1(&fields);
         restore_retired_public_terminal_profile_descriptors_v1(&mut retired);
         let retired_fields = retired.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let old_digest = independent_compiled_profile_digest_v1(&retired_fields);
@@ -1338,12 +1437,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_the_superseded_sha_padding_descriptor() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
-        let mut superseded = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
+        let mut superseded = pre_binding_fields_v1(&fields);
         restore_retired_public_terminal_profile_descriptors_v1(&mut superseded);
         let current = core::str::from_utf8(&superseded[17]).unwrap().to_owned();
         let word_boundary = "word-capacity-recurrence=local-compute+digest+memory-call-last:";
@@ -1389,12 +1485,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_retired_enterprise_eku_identifiers() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_historical_catalog_schedule_fields_v1(&mut predecessor);
         let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
         let marker = "-eku-canonical-profile-uuid-oids";
@@ -1420,12 +1513,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_ungated_rfc_root_helper_descriptor() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_historical_catalog_schedule_fields_v1(&mut predecessor);
         let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
         let marker = "source-node-root-kind-active-gated-helper-";
@@ -1476,7 +1566,7 @@ mod tests {
     // and the retained native schedule capture. Rejection fixtures only.
     fn restore_pre_frame_profile_fields_v1(fields: &mut [Vec<u8>]) {
         restore_pre_endpoint_binding_profile_fields_v1(fields);
-        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        assert_eq!(fields.len(), PRE_BINDING_FIELD_COUNT_V1);
         fields[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+17-key-and-digest-join-descriptors+key-and-digest-alphas+20-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9412944|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
         fields[17] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints564=local-private-running-products:MAIN108-cross-proof-original-polynomial-quotients:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-private-source-digest-and-rfc-products:no-public-segment-products:main-16-quartic-native-endpoint-links-to-private-rfc-bridges:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-bind-original-source-and-digest-endpoints-through-MAIN108-private-polynomial-quotients-without-product-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors".to_vec();
         fields[20] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries272-output-fields128384-work2pow28:digest=sha3-384-opaque48:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy".to_vec();
@@ -1490,17 +1580,14 @@ mod tests {
     }
     #[test]
     fn compiled_profile_rejects_unbound_certificate_slot_output_relation() {
-        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
-        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let (sha, p256, binding) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256, &binding);
         let current = independent_compiled_profile_digest_v1(&fields);
         let marker =
             "-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity";
         let descriptor = core::str::from_utf8(fields[9]).unwrap();
         assert_eq!(descriptor.matches(marker).count(), 1);
-        let mut predecessor = fields
-            .iter()
-            .map(|field| field.to_vec())
-            .collect::<Vec<_>>();
+        let mut predecessor = pre_binding_fields_v1(&fields);
         restore_pre_frame_profile_fields_v1(&mut predecessor);
         predecessor[9] = core::str::from_utf8(&predecessor[9])
             .unwrap()
