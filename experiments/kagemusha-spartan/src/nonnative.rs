@@ -2524,6 +2524,108 @@ pub struct KeyTables {
     pub counts: [usize; 5],
 }
 
+/// An already authenticated, canonical P-256 public key, represented by
+/// little-endian limbs of widths 88, 88 and 80. The source and table
+/// derivation must belong to the same global family.
+///
+/// This descriptor supplies no authority by itself. For an issuer, the
+/// caller must bind these cells to the key in a verified root certificate.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyLimbSource {
+    pub array: usize,
+    pub x: [usize; 3],
+    pub y: [usize; 3],
+    pub instance: usize,
+}
+
+/// Bind a `key_tables` derivation to an authenticated key and to the exact
+/// witness table consumed by a `comb_with_key_table` signature family.
+///
+/// `derivation_first` is the first array returned by `key_tables`;
+/// `witness_table` is the comb's absolute `A_WTABLE` array. This adds ordinary
+/// constraints, not a new table commitment or certificate field. The table
+/// stays in the witness: it must not also be installed as an omitted wallet
+/// row. Its lookup id remains the caller's distinct `KeyTable::Witness` id.
+///
+/// Every row index is fixed, and all six coordinate limbs are linked to the
+/// matching Gray-walk output. Merely checking the table's native construction
+/// or its fingerprint outside the relation would not establish this binding.
+pub fn bind_derived_key_table(
+    arrays: &mut [Array<Fp>],
+    derivation_first: usize,
+    witness_table: usize,
+    source: KeyLimbSource,
+) {
+    use ff::Field;
+
+    let chain = derivation_first + KT_DVAL;
+    let walk = derivation_first + KT_GVAL;
+    let family = arrays[chain].family;
+    assert_eq!(arrays[source.array].family, family, "key source family");
+    assert_eq!(arrays[walk].family, family, "key derivation family");
+    assert_eq!(arrays[witness_table].family, family, "key table family");
+    assert!(
+        !arrays[witness_table].fixed,
+        "a derived key table must remain a witness table"
+    );
+    assert_eq!(arrays[witness_table].rho, 9);
+    assert_eq!(arrays[witness_table].r_count, WALLET_ROWS);
+    assert_eq!(arrays[witness_table].cells(), WALLET_CELLS);
+    assert!(source.instance < arrays[source.array].r_count);
+    for cell in source.x.into_iter().chain(source.y) {
+        assert!(cell < arrays[source.array].cells());
+    }
+    let n = 1usize << arrays[chain].rho;
+    for (slot, cells) in [(1usize, source.x), (2, source.y)] {
+        let row = slot << 8;
+        assert!(row < arrays[chain].r_count);
+        let mut selected = vec![Fp::ZERO; n];
+        selected[row] = Fp::ONE;
+        let mut map = vec![None; n];
+        map[row] = Some(source.instance);
+        for (limb, cell) in cells.into_iter().enumerate() {
+            arrays[chain].rows.push([
+                constant(selected.clone()),
+                plus(
+                    &own(limb, n),
+                    &link(source.array, cell, map.clone(), -Fp::ONE),
+                ),
+                Vec::new(),
+            ]);
+        }
+    }
+    // The derivation visits h = gray(t) XOR 255 at step t. This inverse
+    // mapping is circuit material, never a witness-selected permutation.
+    let mut step_of = [0usize; 256];
+    for t in 0..256 {
+        step_of[(t ^ (t >> 1)) ^ 255] = t;
+    }
+    let ones = constant(vec![Fp::ONE; WALLET_ROWS]);
+    arrays[witness_table].rows.push([
+        plus(
+            &own(0, WALLET_ROWS),
+            &constant((0..WALLET_ROWS).map(|r| -Fp::from(r as u64)).collect()),
+        ),
+        ones.clone(),
+        Vec::new(),
+    ]);
+    for (cell, slot) in [(1usize, 1usize), (4, 2)] {
+        let map: Vec<_> = (0..WALLET_ROWS)
+            .map(|r| Some((slot << 9) | ((r >> 8) << 8) | step_of[r & 255]))
+            .collect();
+        for limb in 0..3 {
+            arrays[witness_table].rows.push([
+                plus(
+                    &own(cell + limb, WALLET_ROWS),
+                    &link(walk, limb, map.clone(), -Fp::ONE),
+                ),
+                ones.clone(),
+                Vec::new(),
+            ]);
+        }
+    }
+}
+
 /// A read of a non-native value by a key-table check: (array, first limb
 /// cell, instance, coefficient).
 type KRead = (usize, usize, usize, i64);
@@ -3538,6 +3640,171 @@ mod tests {
             refused(&c, &inst, &wit, &gens, A_ADD, 2, 3, one),
             "flipped flag"
         );
+    }
+
+    /// A valid signature and valid table derivation are insufficient unless
+    /// both use the externally authenticated issuer key. These tests exercise
+    /// the complete R1CS, without generating a large Spartan proof.
+    #[test]
+    fn derived_issuer_table_is_bound_to_authenticated_key_and_every_row() {
+        use crate::r1cs::Instance;
+        use crate::uniform::Copies;
+
+        let fixture = |authenticated: &Point,
+                       derived: &Point,
+                       signature: &(Point, BigUint, BigUint, BigUint)| {
+            let coordinates: Vec<_> = limbs(&authenticated.x)
+                .into_iter()
+                .chain(limbs(&authenticated.y))
+                .map(|x| fp_u(&x))
+                .collect();
+            let mut public = coordinates.clone();
+            public.resize(8, Fp::ZERO);
+            let mut arrays = vec![
+                Array {
+                    name: "authenticated issuer limbs",
+                    family: 0,
+                    rho: 0,
+                    r_count: 1,
+                    fixed: false,
+                    lookups: vec![],
+                    widths: vec![88, 88, 80, 88, 88, 80],
+                    rows: (0..6)
+                        .map(|k| {
+                            [
+                                plus(&own(k, 1), &link(1, 0, vec![Some(k)], -Fp::ONE)),
+                                constant(vec![Fp::ONE]),
+                                vec![],
+                            ]
+                        })
+                        .collect(),
+                    values: coordinates.into_iter().map(|v| vec![v]).collect(),
+                },
+                Array {
+                    name: "authenticated issuer public input",
+                    family: 0,
+                    rho: 3,
+                    r_count: 6,
+                    fixed: false,
+                    lookups: vec![],
+                    widths: vec![88],
+                    rows: vec![],
+                    values: vec![public],
+                },
+            ];
+            let first = arrays.len();
+            let derivation = key_tables(first, 0, derived);
+            let mut tables = derivation.tables;
+            arrays.extend(derivation.arrays);
+            let comb_first = arrays.len();
+            let comb = comb_with_key_table(
+                comb_first,
+                1,
+                1,
+                0,
+                std::slice::from_ref(signature),
+                KeyTable::Witness { id: 9 },
+            );
+            assert_eq!(comb.arrays[A_SEL].lookups[0].0, 9);
+            tables.extend(comb.tables);
+            arrays.extend(comb.arrays);
+            let table = comb_first + A_WTABLE;
+            bind_derived_key_table(
+                &mut arrays,
+                first,
+                table,
+                KeyLimbSource {
+                    array: 0,
+                    x: [0, 1, 2],
+                    y: [3, 4, 5],
+                    instance: 0,
+                },
+            );
+            let (c, inst, wit) = UniformCircuit::build_with_copies(
+                "authenticated-issuer-table",
+                arrays,
+                vec![0, 1],
+                vec![1, 1],
+                tables,
+                Copies {
+                    io_arrays: vec![(1, 8)],
+                    ..Copies::default()
+                },
+                14,
+                16,
+                b"authenticated issuer table",
+            );
+            (c, inst, wit, table)
+        };
+        let holds = |c: &UniformCircuit<Fp>, inst: &Instance<Fp>, wit: &Witness<Fp>| {
+            let mut witness = wit.w.clone();
+            let rel = c.instantiate(&c.shape, &[Fp::from(31), Fp::from(47)], Some(&mut witness));
+            let z = crate::r1cs::z_vector(&c.shape, inst, &Witness { w: witness });
+            let (a, b, cc) = rel.abc(&c.shape, &z);
+            a.into_iter().zip(b).zip(cc).all(|((a, b), c)| a * b == c)
+        };
+        let issuer = keyed_input("authenticated issuer table");
+        let foreign = keyed_input("foreign issuer table");
+        {
+            let (c, mut inst, mut wit, table) = fixture(&issuer.0, &issuer.0, &issuer);
+            assert!(holds(&c, &inst, &wit), "honest issuer and signature");
+            {
+                let (rotated, ri, rw, _) = fixture(&foreign.0, &foreign.0, &foreign);
+                assert!(holds(&rotated, &ri, &rw), "honest rotated issuer");
+                assert_eq!(
+                    (c.shape.sx, c.shape.row_bits, c.shape.col_bits, c.io_len),
+                    (
+                        rotated.shape.sx,
+                        rotated.shape.row_bits,
+                        rotated.shape.col_bits,
+                        rotated.io_len,
+                    ),
+                    "rotation preserves the shape"
+                );
+                assert_eq!(c.pi, rotated.pi);
+                assert_eq!(c.counts, rotated.counts);
+                assert_eq!(c.regions(), rotated.regions());
+                assert!(
+                    crate::template_differences(&c, &rotated, usize::MAX).is_empty(),
+                    "rotation preserves every constraint and lookup template"
+                );
+                for (a, b) in c.arrays.iter().zip(&rotated.arrays) {
+                    if a.fixed {
+                        assert_eq!(a.values, b.values, "rotation preserves fixed material");
+                    }
+                }
+                let rx: Vec<_> = (0..c.shape.sx).map(|i| Fp::from(101 + i as u64)).collect();
+                let ry: Vec<_> = (0..c.shape.sz())
+                    .map(|i| Fp::from(211 + i as u64))
+                    .collect();
+                let ch = [Fp::from(31), Fp::from(47)];
+                assert_eq!(
+                    c.evals(&rx, &ry, &ch),
+                    rotated.evals(&rx, &ry, &ch),
+                    "rotation preserves matrix evaluations"
+                );
+            }
+            for (cell, row) in [(0, 173), (1, 173), (6, 511)] {
+                let at = c.cell_index(table, cell, row);
+                wit.w[at] += Fp::ONE;
+                assert!(!holds(&c, &inst, &wit), "table cell {cell}, row {row}");
+                wit.w[at] -= Fp::ONE;
+            }
+            inst.io[8] += Fp::ONE;
+            assert!(!holds(&c, &inst, &wit), "authenticated key substitution");
+        }
+        {
+            // Every signature/derivation equation is valid for the foreign
+            // key; only the new authenticated-source binding rejects it.
+            let (c, inst, wit, _) = fixture(&issuer.0, &foreign.0, &foreign);
+            assert!(!holds(&c, &inst, &wit), "foreign derivation and signature");
+        }
+        {
+            // The authenticated key and its derivation agree, but the
+            // signature selects a different, otherwise valid lookup table.
+            let (c, inst, wit, _) = fixture(&issuer.0, &issuer.0, &foreign);
+            assert!(!holds(&c, &inst, &wit), "foreign signature lookup table");
+        }
     }
 
     /// Bootstrap's key tables (m = 16) derived from a key in uniform arrays:
