@@ -76,14 +76,14 @@ start from toy proofs and can contain false accumulators. They are compiler
 construction inputs, never acceptable monetary evidence. The final chain tests
 start from Bootstrap and require every accumulator to hold.
 
-The recursive research circuits expose the signed statement sponge's successor
-digest at P io position 4. Their statement absorbs the operation kind and the
+Bootstrap exposes its exact 30-field state commitment at P IO position 4.
+Send and Receive still expose their synthetic signed statement's successor digest there. Their statement absorbs the operation kind and the
 authenticated head of predecessor proof 0. For Receive, proof 1 is the incoming
 payer and cannot supply the wallet's predecessor. Bootstrap constrains its
 predecessor to zero. The successor digest is constrained through the sponge
 output, not accepted as a caller-selected public label. This provides a
-testable recursive linkage boundary; the signed statement is still synthetic
-and is not the canonical monetary `CoreHead`.
+testable recursive linkage boundary. Send and Receive remain synthetic monetary
+relations even when their predecessor is an authenticated Bootstrap.
 
 ## Certified table row
 
@@ -113,10 +113,10 @@ not a VK constant that would introduce an identity cycle.
 
 The current certificate transcript has no table-commitment field, and none
 was added. The credential's 64-byte payment-table commitment is signed and
-canonically encoded, but issuer/native intake recomputation and binding the
-authenticated commitment to the monetary wallet row remain separate obligations.
-These standalone relations are not yet the
-recursive Bootstrap relation. Other policy signer roles likewise still need
+canonically encoded. [Bootstrap](../BOOTSTRAP.md) now composes both authority
+relations, authenticates the exact initial state/statement/receipt, and binds that
+commitment to its omitted payment-table row. Issuer/native intake recomputation
+remains required by the approved protocol. Other policy signer roles likewise still need
 their own authority bindings. The production credential codec and existing
 native fixture remain at 468 bytes; research vectors document the explicit
 532-byte derivation without changing those production inputs.
@@ -124,22 +124,32 @@ native fixture remain at 468 bytes; research vectors document the explicit
 The composed credential relation includes the self-contained native evidence,
 renewal and regulatory predicate on the signed byte tape. Original platform
 admission, predecessor renewal continuity and runtime time-anchor decisions
-remain external or subsequent relation obligations. The complete 68-test
-research suite passed on 2026-11-12, including the full standalone
-authentication proofs and the existing recursive regressions; this does not
-turn the synthetic recursive own relations into monetary transitions.
+remain external or subsequent relation obligations. The current 126-test
+research suite passed with the lean schedule and ignored tests
+included, zero failures and unchanged experiment source hashes. It includes the full
+standalone authentication proofs, composed Bootstrap, component proofs and
+existing recursive regressions; this does not turn the synthetic recursive
+own relations into monetary transitions. See the source-bound
+`checkpoint-test-validation.json` and `checkpoint-full-tests.log` under
+`output/kagemusha-100x-20261108/spike/runs/codex-20261112/`.
+
+The subsequent [monetary component work](../MONETARY_COMPONENTS.md) constrains
+canonical Core30/Rest6, completed Request bytes, statements, held fees, Send
+arithmetic, quota/time controls and indexed-map operations. Those modules have
+explicit join ports; they do not replace the recursive Send/Receive relations.
+Their component proof and constraint-test coverage is distinct from a complete
+wallet operation or native custody/recovery check.
 
 ## Remaining release obligations
 
 The following are implementation obligations, not a claim of completed review:
 
-- Replace census-sized synthetic relations with the actual state transition,
-  credential/certificate, activation, policy, amount, fee, lineage and replay
-  rules. A link between synthetic statement heads does not establish monetary
+- Replace the remaining Send/Receive census relations with the actual state
+  transition, activation, policy, amount, fee, lineage and replay rules. A link between synthetic statement heads does not establish monetary
   balance or conservation.
-- Integrate the validated standalone root/issuer authentication and derived
-  issuer-table binding into Bootstrap, bind the payment-table commitment,
-  and authenticate the remaining policy signer roles. The approved future
+- Authenticate the remaining policy signer roles and compose the exact request,
+  map, quota and monetary transition components. Bootstrap now integrates
+  root/issuer authentication, the derived issuer table and payment-table binding. The approved future
   30-field core includes `prior_credential_root`; production's 29-field core
   cannot supply its field indices unchanged.
 - Define the full construction and canonical wire encoding, including strict
@@ -153,9 +163,21 @@ The following are implementation obligations, not a claim of completed review:
   The pair's two `Proof::to_bytes` outputs omit the separate 32-byte Link R, and ordinary
   `Instance.io` requires explicit reconstruction or encoding. The historical
   3,542-byte carrier overhead gives at least `9,952 + 32 + 3,542 = 13,526`
-  bytes for the current pair. A hypothetical 32-row pair gives
+  bytes for that historical pair. A hypothetical 32-row pair gives
   `7,904 + 32 + 3,542 = 11,478` bytes before additional inputs; neither is a
   complete envelope measurement or a demonstrated future fit.
+  The composed Bootstrap run subsequently measured 11,731 bytes for the actual
+  Norito pair envelope, or 7,699 bytes with all ordinary inputs reconstructed
+  from supplied external context. Those measurements exclude the full Payment
+  and separately authenticated context/credential bytes. The final eight-hop
+  run rebuilds the Bootstrap-seeded chain at the common layouts and passes all
+  six orderings matching their fixed templates, with true native P/S accumulators.
+  Its shared P layout is `2^19` constraints and 32 rows of 65,536; S is `2^18`
+  constraints and 16 rows of 32,768. This establishes the current research
+  fixed point, not complete Send/Receive monetary semantics or a full-carrier
+  fit. Evidence is `bootstrap-resume-fixed-point-8.log` and the source/binary
+  hash record `bootstrap-resume-fixed-point-validation.json` in the same run
+  directory.
 - Use cryptographic randomness and the existing hardware-backed custody,
   durable exact-byte retry and recovery boundaries in the canonical native
   wallet and SDKs. Do not add a second monetary implementation in the apps.

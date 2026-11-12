@@ -16,6 +16,7 @@ blake3 = "1.8.2"
 num-bigint = "0.4.8"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
+norito = { path = "../../crates/norito", default-features = false, features = ["base-codec"] }
 
 [profile.release]
 debug = 1

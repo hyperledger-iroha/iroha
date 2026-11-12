@@ -14,6 +14,7 @@ use num_bigint::BigUint;
 use crate::{
     certificate::{self, Cells, Certificate, RootContext, field_modulus, fp, pow2, scalar_bytes},
     fs::SpikeRng,
+    full::Wiring,
     nonnative::{self, KeyLimbSource, KeyTable},
     p256::{self, Point},
     r1cs::{Instance, Witness},
@@ -136,14 +137,24 @@ pub struct Built {
     issuer_table: usize,
 }
 
+pub(crate) struct Prepared {
+    pub wiring: Wiring<Fp>,
+    pub gfam: usize,
+    pub local: usize,
+    pub digest_cell: usize,
+    pub certificate_local: usize,
+    pub certificate_digest: usize,
+    pub issuer_table: usize,
+}
+
 /// Authenticate the exact future-generation issuer claims and their
 /// self-contained evidence/regulatory rules. This does not prove admission,
 /// predecessor renewal continuity, identity hashes or payment-table derivation.
-pub fn build(
+pub(crate) fn prepare(
     context: &RootContext,
     cert: &Certificate,
     credential: &Credential,
-) -> Result<Built, &'static str> {
+) -> Result<Prepared, &'static str> {
     let issuer = Point {
         x: BigUint::from_bytes_be(&cert.body[36..68]),
         y: BigUint::from_bytes_be(&cert.body[68..100]),
@@ -169,6 +180,7 @@ pub fn build(
     let prepared = certificate::prepare(context, cert)?;
     let gfam = prepared.gfam;
     let certificate_local = prepared.local;
+    let certificate_digest = prepared.digest_cell;
     let source = KeyLimbSource {
         array: prepared.local,
         x: prepared.issuer_x,
@@ -288,37 +300,6 @@ pub fn build(
         (fp(&(&s >> 128)), c.bytes(&sle[16..])),
     ];
     let local = w.push(c.a);
-    let mut output = vec![Fp::ZERO; 256];
-    for (i, b) in credential.body[PAYMENT_KEY..TABLE + 64].iter().enumerate() {
-        output[i] = Fp::from(*b as u64);
-    }
-    output[129] = dg;
-    let io = w.push(Array {
-        name: "authenticated credential claims",
-        family: gfam,
-        rho: 8,
-        r_count: 130,
-        fixed: false,
-        lookups: vec![],
-        widths: vec![255],
-        rows: vec![],
-        values: vec![output],
-    });
-    w.io_arrays.push((io, KEY_IO));
-    for (k, i) in (PAYMENT_KEY..TABLE + 64)
-        .enumerate()
-        .map(|(i, k)| (k, i))
-        .chain(std::iter::once((dcell, 129)))
-    {
-        w.arrays[local].rows.push([
-            plus(
-                &own(k, 1),
-                &scaled(&link(io, 0, vec![Some(i)], Fp::ONE), -Fp::ONE),
-            ),
-            constant(vec![Fp::ONE]),
-            vec![],
-        ]);
-    }
     for p in [key, table] {
         certificate::curve_relation(
             &mut w,
@@ -370,6 +351,71 @@ pub fn build(
     nonnative::bind_derived_key_table(&mut w.arrays, derivation, issuer_table, source);
     let mut ids = std::collections::HashSet::new();
     w.tables.retain(|(_, id)| ids.insert(*id));
+    Ok(Prepared {
+        wiring: w,
+        gfam,
+        local,
+        digest_cell: dcell,
+        certificate_local,
+        certificate_digest,
+        issuer_table,
+    })
+}
+
+pub fn build(
+    context: &RootContext,
+    cert: &Certificate,
+    credential: &Credential,
+) -> Result<Built, &'static str> {
+    let Prepared {
+        wiring: mut w,
+        gfam,
+        local,
+        digest_cell: dcell,
+        certificate_local,
+        certificate_digest,
+        issuer_table,
+    } = prepare(context, cert, credential)?;
+    certificate::expose(
+        &mut w,
+        gfam,
+        certificate_local,
+        certificate_digest,
+        context,
+        cert,
+    );
+    let dg = digest(credential);
+    let mut output = vec![Fp::ZERO; 256];
+    for (i, b) in credential.body[PAYMENT_KEY..TABLE + 64].iter().enumerate() {
+        output[i] = Fp::from(*b as u64);
+    }
+    output[129] = dg;
+    let io = w.push(Array {
+        name: "authenticated credential claims",
+        family: gfam,
+        rho: 8,
+        r_count: 130,
+        fixed: false,
+        lookups: vec![],
+        widths: vec![255],
+        rows: vec![],
+        values: vec![output],
+    });
+    w.io_arrays.push((io, KEY_IO));
+    for (k, i) in (PAYMENT_KEY..TABLE + 64)
+        .enumerate()
+        .map(|(i, k)| (k, i))
+        .chain(std::iter::once((dcell, 129)))
+    {
+        w.arrays[local].rows.push([
+            plus(
+                &own(k, 1),
+                &scaled(&link(io, 0, vec![Some(i)], Fp::ONE), -Fp::ONE),
+            ),
+            constant(vec![Fp::ONE]),
+            vec![],
+        ]);
+    }
     let (arrays, pi, counts, tables, copies) = w.finish();
     let (circuit, instance, witness) = UniformCircuit::build_with_copies(
         "credential-authentication",

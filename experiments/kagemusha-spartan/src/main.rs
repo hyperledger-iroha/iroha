@@ -3,28 +3,39 @@
 //! `cargo run --release -- [tamper|bench|all]` (default `all`).
 
 mod blocks;
+mod bootstrap;
+mod bootstrap_context;
+mod bootstrap_layout;
+mod carrier;
 mod census;
 mod certificate;
 mod credential;
 mod credential_policy;
 mod deferral;
+mod fee_schedule;
 mod fs;
 mod full;
 mod gadgets;
 mod grid;
+mod indexed_map;
 mod ipa;
 mod kern;
 mod ladders;
+mod monetary_state;
 mod nonnative;
 mod operation;
 mod p256;
 mod points;
 mod prof;
 mod r1cs;
+mod request;
 mod scalar;
+mod send_arithmetic;
+mod send_controls;
 mod sha;
 mod sparse;
 mod spartan;
+mod statement;
 mod uniform;
 mod verifier;
 mod wired;
@@ -3238,6 +3249,33 @@ struct LinkedPair {
     secs: f64,
 }
 
+/// Verify on each actual kind that challenge/link helpers leave the trusted
+/// fixed tail untouched, including all newly omitted padding rows.
+fn assert_fixed_tail<S: fs::Scalar>(
+    c: &uniform::UniformCircuit<S>,
+    witness: &Witness<S>,
+    rho: &[u8; 32],
+) {
+    use r1cs::Circuit;
+    let start = (c.shape.rows() - c.fixed_rows(&c.shape) + c.wallet_rows()) * c.shape.cols();
+    let fixed = c.fixed_values(&c.shape);
+    assert_eq!(&witness.w[start..], fixed.as_slice(), "original fixed tail");
+    let mut filled = witness.w.clone();
+    c.fill_link(rho, &mut filled);
+    assert_eq!(
+        &filled[start..],
+        fixed.as_slice(),
+        "link fill preserves fixed tail"
+    );
+    let challenges = vec![S::from(31), S::from(47)];
+    let _ = c.instantiate(&c.shape, &challenges, Some(&mut filled));
+    assert_eq!(
+        &filled[start..],
+        fixed.as_slice(),
+        "phase2 helpers preserve fixed tail"
+    );
+}
+
 /// Proves a uniform pair, linked (P's phase-1 digest d, S with d giving rho
 /// and R, P again with rho and R), and verifies both proofs. `seed` names
 /// the pair's randomness ("fixed point" keeps the Receive pair's original
@@ -3283,6 +3321,8 @@ fn prove_linked_pair(
         &Link::Second { d, rlc: &rlc },
         cs,
     );
+    assert_fixed_tail(cp, wp, &rho);
+    assert_fixed_tail(cs, ws, &rho);
     let (pp, d2, _) = spartan::prove_linked_circuit(
         &cp.shape,
         &gp,
@@ -3315,7 +3355,7 @@ fn prove_linked_pair(
         vs.as_ref().is_ok_and(|x| *x == rho),
         vp.as_ref().is_ok_and(|x| *x == d),
     );
-    LinkedPair {
+    let pair = LinkedPair {
         pp,
         ps,
         d,
@@ -3324,7 +3364,10 @@ fn prove_linked_pair(
         ok: sides.0 && sides.1,
         sides,
         secs,
-    }
+    };
+    carrier::measure_pair(seed, hop, cp, ip, cs, is, &pair)
+        .expect("canonical research carrier roundtrip");
+    pair
 }
 
 /// One Bootstrap circuit's line: size, layout and the Pixel model (it has no
@@ -3403,75 +3446,13 @@ fn report_pair(label: &str, l: &LinkedPair, gens: &full::PairGens) -> (bool, boo
     (hp, hs)
 }
 
-/// Bootstrap with the wallet's key tables, measured once: P-boot without and
-/// with them, each at its natural layout of 2^14-column rows (rows by phase,
-/// cells, constraint rows, the matrix program, the Pixel model), against what
-/// Receive's layout `layout` leaves Bootstrap.
-fn key_tables_fit(gens: &full::PairGens, layout: uniform::Layout, key: &full::WalletKey) {
-    let clock = Instant::now();
-    let measure = |tables: bool| {
-        let (w, idx) = full::p_boot(gens, key, tables);
-        let (c, _, wit) = uniform_of!("P-uniform", w, 14, 64, b"p-boot-uniform");
-        let (cells, rows) = c.sizes();
-        let (r, pl) = (c.regions(), c.link_phase_rows());
-        let model = pixel_kern(
-            &c.shape,
-            &c.width_classes(&wit.w),
-            rows,
-            r.0 + pl + r.1 + r.2,
-        );
-        let work = c.template_size().1;
-        (
-            c.shape.sx,
-            c.shape.rows(),
-            r,
-            pl,
-            cells,
-            rows,
-            work,
-            model,
-            idx.key_tables,
-        )
-    };
-    let (sx0, rows0, r0, pl0, cells0, crows0, work0, model0, _) = measure(false);
-    let (sx1, rows1, r1, pl1, cells1, crows1, work1, model1, kt) = measure(true);
-    let [dbl, add, c1, c2, c4] = kt.expect("the tables were derived").1;
-    let free2 = (1usize << layout.row_bits) - layout.p1 - layout.pl - layout.fixed;
-    let fits = sx1 <= layout.sx
-        && r1.0 <= layout.p1
-        && pl1 <= layout.pl
-        && r1.1 <= free2
-        && r1.2 <= layout.fixed;
-    println!(
-        "  Bootstrap's key tables, measured once ({:.1} s): {dbl} doublings and {add} additions; {c1} one-product, {c2} two-product and {c4} four-product checks",
-        clock.elapsed().as_secs_f64()
-    );
-    println!(
-        "    P-boot without them: 2^{sx0} constraints ({crows0} rows), {} + {pl0} + {} + {} of {rows0} witness rows, {cells0} cells, matrix-MLE products {work0}; Pixel model {model0}",
-        r0.0, r0.1, r0.2
-    );
-    println!(
-        "    P-boot with them: 2^{sx1} constraints ({crows1} rows), {} + {pl1} + {} + {} of {rows1} witness rows, {cells1} cells (+{}), matrix-MLE products {work1}; Pixel model {model1}",
-        r1.0,
-        r1.1,
-        r1.2,
-        cells1 - cells0
-    );
-    println!(
-        "    Receive's layout leaves Bootstrap 2^{} constraints and at most {} + {} + {free2} + {} rows (first, link, second phase, fixed): with the tables it {}",
-        layout.sx,
-        layout.p1,
-        layout.pl,
-        layout.fixed,
-        if fits { "FITS" } else { "does NOT fit" }
-    );
-}
+// One shared future-research profile; these are layout dimensions, not
+// selectable monetary semantics. Wider rows reduce the commitment carrier.
+const P_COL_BITS: usize = 16;
+const S_COL_BITS: usize = 15;
 
-/// P-boot at P-recv's layout `layout`, without the wallet's key tables:
-/// they do not fit it (`key_tables_fit`). `ZKS_BOOT_TABLES=on` tries them
-/// first and falls back, saying by how much they miss (the build at a target
-/// layout panics when a circuit does not fit; this catches it and builds the
-/// natural layout to measure).
+/// Every Bootstrap is the authenticated relation; an undersized shared layout
+/// is an error and never switches to the synthetic census relation.
 #[allow(clippy::type_complexity)]
 fn p_boot_at(
     gens: &full::PairGens,
@@ -3483,37 +3464,8 @@ fn p_boot_at(
     Witness<iroha_pasta::Fp>,
     full::BootIdx,
 ) {
-    let want = std::env::var("ZKS_BOOT_TABLES").is_ok_and(|v| v == "on");
-    if want {
-        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (w, idx) = full::p_boot(gens, key, true);
-            let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", layout);
-            (c, i, wb, idx)
-        }));
-        match built {
-            Ok(b) => return b,
-            Err(_) => {
-                let (w, _) = full::p_boot(gens, key, true);
-                let (c, _, _) = uniform_of!("P-uniform", w, 14, 64, b"p-boot-uniform");
-                let (r, pl) = (c.regions(), c.link_phase_rows());
-                println!(
-                    "  P-boot with the key tables does NOT fit P-recv's layout (2^{} constraints, {} rows: {} + {} + second phase + {} fixed): on its own it needs 2^{} constraints and {} + {pl} + {} + {} of {} rows; built without the tables",
-                    layout.sx,
-                    1usize << layout.row_bits,
-                    layout.p1,
-                    layout.pl,
-                    layout.fixed,
-                    c.shape.sx,
-                    r.0,
-                    r.1,
-                    r.2,
-                    c.shape.rows()
-                );
-            }
-        }
-    }
-    let (w, idx) = full::p_boot(gens, key, false);
-    let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", layout);
+    let (w, idx) = full::p_boot(gens, key);
+    let (c, i, wb) = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-boot-uniform", layout);
     (c, i, wb, idx)
 }
 
@@ -3573,25 +3525,42 @@ fn run_fixed_point() {
     let key_a = full::WalletKey::stand_in();
     for hop in 1..=hops {
         let clock = Instant::now();
+        let (pl, sl) = {
+            let (w, _) = full::p_recv(&gens, &pairs, &key_a);
+            let (pr, _, _) = uniform_of!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform");
+            let (w, _) = full::p_send(&gens, &pairs[0], &key_a);
+            let (pt, _, _) = uniform_of!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform");
+            let (w, _) = full::p_boot(&gens, &key_a);
+            let (pb, _, _) = uniform_of!("P-uniform", w, P_COL_BITS, 64, b"p-boot-uniform");
+            let (w, _) = full::s_recv(&gens, &pairs);
+            let (sr, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform");
+            let (w, _) = full::s_send(&gens, &pairs[0]);
+            let (st, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform");
+            let (w, _) = full::s_boot(&gens);
+            let (sb, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform");
+            (
+                bootstrap_layout::common(&[&pr, &pt, &pb]),
+                bootstrap_layout::common(&[&sr, &st, &sb]),
+            )
+        };
         let (w, idx) = full::p_recv(&gens, &pairs, &key_a);
-        let (cp, ip, wp) = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
+        let (cp, ip, wp) = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform", pl);
         let (w, sidx) = full::s_recv(&gens, &pairs);
-        let (cs, is, ws) = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
-        let (pl, sl) = (cp.layout(), cs.layout());
+        let (cs, is, ws) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform", sl);
         let send_p = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::p_send(gens, pred, &key_a);
-            let (c, i, wt) = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
+            let (c, i, wt) = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform", pl);
             (c, i, wt, idx)
         };
         let send_s = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::s_send(gens, pred);
-            let (c, i, wu) = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
+            let (c, i, wu) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform", sl);
             (c, i, wu, idx)
         };
         let boot_p = |gens: &full::PairGens| p_boot_at(gens, pl, &key_a);
         let boot_s = |gens: &full::PairGens| {
             let (w, idx) = full::s_boot(gens);
-            let (c, i, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
+            let (c, i, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform", sl);
             (c, i, wv, idx)
         };
         let (ct, it, wt, idx_t) = send_p(&gens, &pairs[0]);
@@ -3632,22 +3601,9 @@ fn run_fixed_point() {
         describe_hop_circuit("S-send", &cu, &wu, &sidx_t.defer);
         describe_boot_circuit("P-boot", &cb, &wb);
         describe_boot_circuit("S-boot", &cv, &wv);
-        if hop == 1
-            && let Some(own) = &bidx.own
-        {
-            println!(
-                "  P-boot's own relation (Bootstrap at the census's counts, a stand-in): {} permutations in its pool, {} signatures, {} insertions",
-                own.pool.perms,
-                own.digest_perms.len(),
-                own.insertion_values.map_or(0, |a| cb.arrays[a].r_count)
-            );
-        }
-        match bidx.key_tables {
-            Some((_, [dbl, add, c1, c2, c4])) => println!(
-                "  P-boot derives the wallet's comb tables (m = 16, 2 x 256 entries) from its key: {dbl} doublings, {add} additions; checks: {c1} one-product, {c2} two-product, {c4} four-product"
-            ),
-            None => println!("  P-boot without the key tables"),
-        }
+        println!(
+            "  P-boot: exact authenticated credential, 30-field initial Core, statement and receipt; issuer-derived table and certified payment table row"
+        );
         println!(
             "  split families: P-recv [{}]; S-recv [{}]; P-send [{}]; S-send [{}]; P-boot [{}]; S-boot [{}]",
             split_families_note(&cp),
@@ -3673,6 +3629,20 @@ fn run_fixed_point() {
         let recv = prove_linked_pair("fixed point", hop, &cp, &ip, &wp, &cs, &is, &ws);
         let send = prove_linked_pair("fixed point send", hop, &ct, &it, &wt, &cu, &iu, &wu);
         let boot = prove_linked_pair("fixed point boot", hop, &cb, &ib, &wb, &cv, &iv, &wv);
+        assert!(boot.ok, "Bootstrap verified before projection measurement");
+        let (context, input) = bootstrap::fixture(&key_a, &gens.p);
+        let projection = bootstrap::projection(&context, &input);
+        carrier::measure_pair_with_projection(
+            "authenticated Bootstrap",
+            hop,
+            &cb,
+            &ib,
+            &cv,
+            &iv,
+            &boot,
+            Some(&projection),
+        )
+        .expect("exact authenticated Bootstrap projection");
         report_pair("Receive", &recv, &gens);
         report_pair("Send", &send, &gens);
         let boot_holds = report_pair("Bootstrap", &boot, &gens);
@@ -3729,7 +3699,7 @@ fn run_fixed_point() {
                 p_breaks.iter().chain(&s_breaks).all(|b| *b),
                 "Bootstrap's kind and accumulator are pinned"
             );
-            key_tables_fit(&gens, cp.layout(), &key_a);
+            describe_boot_circuit("authenticated Bootstrap", &cb, &wb);
             {
                 fn tape<S: fs::Scalar>(c: &uniform::UniformCircuit<S>) -> String {
                     let ((muls, scales, ops), (regs, slots)) = (c.plan_stats(), c.plan_registers());
@@ -3851,9 +3821,23 @@ fn wallet_chains(
     let clock = Instant::now();
     let (cb, ib, wb, _) = p_boot_at(gens, pl, &key_b);
     let (w, _) = full::s_boot(gens);
-    let (cv, iv, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
+    let (cv, iv, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform", sl);
     same("Bootstrap (B)", 2, &cb, &cv);
     let l = prove_linked_pair("wallet B boot", hop, &cb, &ib, &wb, &cv, &iv, &wv);
+    assert!(l.ok, "second wallet Bootstrap verified before projection");
+    let (context, input) = bootstrap::fixture(&key_b, &gens.p);
+    let projection = bootstrap::projection(&context, &input);
+    carrier::measure_pair_with_projection(
+        "authenticated wallet B Bootstrap",
+        hop,
+        &cb,
+        &ib,
+        &cv,
+        &iv,
+        &l,
+        Some(&projection),
+    )
+    .expect("second wallet Bootstrap projection");
     println!(
         "    Bootstrap (B): built and proved in {:.1} s",
         clock.elapsed().as_secs_f64()
@@ -3873,9 +3857,9 @@ fn wallet_chains(
             if kind == full::RECEIVE {
                 let (w, idx) = full::p_recv(gens, inputs, key);
                 let head_context = idx.own.head.as_ref().expect("Receive's head").context;
-                let p = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
+                let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform", pl);
                 let (w, sidx) = full::s_recv(gens, inputs);
-                let s = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
+                let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform", sl);
                 (
                     p,
                     s,
@@ -3887,9 +3871,9 @@ fn wallet_chains(
             } else {
                 let (w, idx) = full::p_send(gens, &inputs[0], key);
                 let head_context = idx.own.head.as_ref().expect("Send's head").context;
-                let p = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
+                let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform", pl);
                 let (w, sidx) = full::s_send(gens, &inputs[0]);
-                let s = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
+                let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform", sl);
                 (
                     p,
                     s,
