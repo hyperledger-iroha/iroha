@@ -100,13 +100,34 @@ wallet to recompute it at credential intake. Its implementation is still
 pending in the production codec, issuer and native wallet. A synthetic signed
 statement in this experiment is not that production credential.
 
-Separate lookup tables for distinct signature keys are only a circuit primitive.
-They do not authenticate an issuer. The root, Enrollment and other policy keys
-must each be bound to their authority before their table can be trusted. The
-current certificate transcript does not contain a key-table commitment. A
-proof that merely accepts a caller-provided issuer table would not close this
-gap. Root-certified table commitments, or constrained derivation from an
-authenticated key, must be specified and tested before production integration.
+Separate lookup tables for distinct signature keys alone do not authenticate
+an issuer. The standalone [certificate relation](../CERTIFICATE.md) verifies
+the exact 108-byte certificate under a fixed root, constrains its Enrollment
+role and trusted public scheme, and exposes its canonical key and object
+digest. The [credential relation](../CREDENTIAL.md) verifies the approved
+532-byte body, joins that exact certificate digest, derives the issuer's
+table from the authenticated key, and binds every row to the distinct lookup
+table consumed by the signature verifier. Rotation and different trusted
+scheme inputs share the same root/provider verification key; the scheme is
+not a VK constant that would introduce an identity cycle.
+
+The current certificate transcript has no table-commitment field, and none
+was added. The credential's 64-byte payment-table commitment is signed and
+canonically encoded, but issuer/native intake recomputation and binding the
+authenticated commitment to the monetary wallet row remain separate obligations.
+These standalone relations are not yet the
+recursive Bootstrap relation. Other policy signer roles likewise still need
+their own authority bindings. The production credential codec and existing
+native fixture remain at 468 bytes; research vectors document the explicit
+532-byte derivation without changing those production inputs.
+
+The composed credential relation includes the self-contained native evidence,
+renewal and regulatory predicate on the signed byte tape. Original platform
+admission, predecessor renewal continuity and runtime time-anchor decisions
+remain external or subsequent relation obligations. The complete 68-test
+research suite passed on 2026-11-12, including the full standalone
+authentication proofs and the existing recursive regressions; this does not
+turn the synthetic recursive own relations into monetary transitions.
 
 ## Remaining release obligations
 
@@ -116,14 +137,25 @@ The following are implementation obligations, not a claim of completed review:
   credential/certificate, activation, policy, amount, fee, lineage and replay
   rules. A link between synthetic statement heads does not establish monetary
   balance or conservation.
-- Encode and authenticate the actual root and issuer keys and their tables;
-  test wrong roles, wrong schemes, replaced keys and substituted tables.
+- Integrate the validated standalone root/issuer authentication and derived
+  issuer-table binding into Bootstrap, bind the payment-table commitment,
+  and authenticate the remaining policy signer roles. The approved future
+  30-field core includes `prior_credential_root`; production's 29-field core
+  cannot supply its field indices unchanged.
 - Define the full construction and canonical wire encoding, including strict
   decoding and final accumulator decisions at every accepting boundary.
 - Meet the actual transport budgets. Before the new continuity work, the
   fixed-point proof pair was 5,024 + 4,928 = 9,952 bytes. That pair does not fit
-  the current 5,120-byte lineage-proof cap. A projected smaller witness is not
-  a passing wire-size test.
+  the current 5,120-byte lineage-proof cap or the historical future 8,458-byte
+  proof allowance. The owner's later future target permits a 12,000-byte full
+  QR carrier; the complete envelope still needs serialization and measurement.
+  A projected smaller witness is not a passing wire-size test.
+  The pair's two `Proof::to_bytes` outputs omit the separate 32-byte Link R, and ordinary
+  `Instance.io` requires explicit reconstruction or encoding. The historical
+  3,542-byte carrier overhead gives at least `9,952 + 32 + 3,542 = 13,526`
+  bytes for the current pair. A hypothetical 32-row pair gives
+  `7,904 + 32 + 3,542 = 11,478` bytes before additional inputs; neither is a
+  complete envelope measurement or a demonstrated future fit.
 - Use cryptographic randomness and the existing hardware-backed custody,
   durable exact-byte retry and recovery boundaries in the canonical native
   wallet and SDKs. Do not add a second monetary implementation in the apps.
