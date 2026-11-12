@@ -996,7 +996,7 @@ else:
         wallet_exports = re.findall(r'"(connect_norito_kagemusha_[A-Za-z0-9_]+)"', required_inventory)
         self.assertEqual(wallet_exports, [
             "connect_norito_kagemusha_wallet_" + suffix + "_v1"
-            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "begin_exchange", "end_exchange", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "observe", "account_original", "account_display", "enrollment", "enrollment_refusal")
+            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "begin_exchange", "end_exchange", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "suffix_unload_status", "suffix_unload_prepare", "suffix_unload_resume", "suffix_unload_execute_reviewed", "suffix_unload_instruction", "suffix_unload_attempt_outcome", "suffix_unload_ingest_finality", "suffix_unload_signed_wire", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "observe", "account_original", "account_display", "enrollment", "enrollment_refusal")
         ])
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
