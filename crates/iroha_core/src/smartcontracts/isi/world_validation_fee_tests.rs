@@ -3575,3 +3575,21 @@ fn due_payout_graph_refusal_discards_permission_events_and_retries_original_cert
         usize::try_from(original_height).unwrap()
     );
 }
+
+#[test]
+fn verified_fee_sponsor_proof_statement_must_name_the_claim() {
+    let claim_digest = Hash::new(b"vault-statement-claim-digest");
+    let claims_own = || super::FeeSponsorVaultProofStatement {
+        slot: 5,
+        tx_set_hash: *claim_digest.as_ref(),
+    };
+    assert_eq!(claims_own().mismatch(&claim_digest, 5), None);
+    let mut other_slot = claims_own();
+    other_slot.slot = 6;
+    assert_eq!(other_slot.mismatch(&claim_digest, 5), Some("slot"));
+    for index in 0..32 {
+        let mut other_set = claims_own();
+        other_set.tx_set_hash[index] ^= 1;
+        assert_eq!(other_set.mismatch(&claim_digest, 5), Some("tx_set_hash"));
+    }
+}

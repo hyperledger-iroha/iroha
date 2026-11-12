@@ -369,30 +369,33 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
             limits.transport,
         )?;
         validate_axt_advertisement(&artifact, *context)?;
-        let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
+        // Hash the exact full canonical statement and compare it with the
+        // caller's digest before preparing that statement, as the ordinary
+        // route does: a statement the caller did not expect is never parsed.
+        let digest = statement_digest(
+            &artifact.statement,
+            limits.public_statement.max_public_bytes,
+        )?;
+        if expected_statement_digest.is_some_and(|expected| digest != expected) {
+            return Err(Error::PublicIoMismatch {
+                field: "compact_artifact_public_statement_digest",
+            }
+            .into());
+        }
+        let bundle = super::with_prepared_statement_as::<V, _>(
             &artifact.statement,
             expected,
             ProofSemantics::AxtTransferClaim,
             limits.public_statement,
             |prepared| {
-                let digest = statement_digest(
-                    &artifact.statement,
-                    limits.public_statement.max_public_bytes,
-                )?;
-                if expected_statement_digest.is_some_and(|expected| digest != expected) {
-                    return Err(Error::PublicIoMismatch {
-                        field: "compact_artifact_public_statement_digest",
-                    });
-                }
-                let bundle = verify_axt_transfer_bundle_with_allocation(
+                verify_axt_transfer_bundle_with_allocation(
                     prepared,
                     expected,
                     *context,
                     &artifact.bundle_frame,
                     limits.bundle,
                     limits.max_segment_decode_allocation_charges,
-                )?;
-                Ok((bundle, digest))
+                )
             },
         )?;
         finish_artifact::<V>(

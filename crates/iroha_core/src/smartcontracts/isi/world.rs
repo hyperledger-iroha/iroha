@@ -150,7 +150,6 @@ pub mod isi {
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim,
-            VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
             VerifiedFeeSponsorVaultAllocation, fee_sponsor_vault_allocation_claim_digest,
             fee_sponsor_vault_policy_commitment, fee_sponsor_vault_source_state_root,
         },
@@ -949,12 +948,16 @@ pub mod isi {
         norito::json::from_slice(json.get().as_bytes())
             .map_err(|err| format!("verified fee sponsor vault JSON materialization failed: {err}"))
     }
+    /// Whether `existing` holds the live lease on `candidate`'s route.
+    ///
+    /// Admission runs before verification, so `candidate` may lack its verifier
+    /// digests; the stored row of the same allocation is not a conflict.
     fn fee_sponsor_vault_allocation_conflicts_on_live_route(
         existing: &VerifiedFeeSponsorVaultAllocation,
         candidate: &VerifiedFeeSponsorVaultAllocation,
         at_height: u64,
     ) -> bool {
-        existing != candidate
+        !same_fee_sponsor_vault_allocation_apart_from_verifier_digests(existing, candidate)
             && existing.program_id == candidate.program_id
             && existing.program_revision == candidate.program_revision
             && existing.asset_definition_id == candidate.asset_definition_id
@@ -989,13 +992,7 @@ pub mod isi {
         at_height: u64,
     ) -> Result<Quantity, String> {
         let mut locked = Quantity::zero();
-        for (key, payload) in world.smart_contract_state().iter() {
-            if !key
-                .to_string()
-                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
-            {
-                continue;
-            }
+        for (_, payload) in crate::state::verified_fee_sponsor_vault_allocation_rows(world) {
             let record = decode_verified_fee_sponsor_vault_allocation_state(payload)?;
             if &record.program_id != program_id
                 || &record.asset_definition_id != asset_definition_id
@@ -1025,13 +1022,7 @@ pub mod isi {
         world: &impl crate::state::WorldReadOnly,
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
     ) -> Result<bool, String> {
-        for (key, payload) in world.smart_contract_state().iter() {
-            if !key
-                .to_string()
-                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
-            {
-                continue;
-            }
+        for (_, payload) in crate::state::verified_fee_sponsor_vault_allocation_rows(world) {
             let record = decode_verified_fee_sponsor_vault_allocation_state(payload)?;
             if &record.program_id != program_id {
                 continue;
@@ -15465,6 +15456,34 @@ pub mod isi {
                     "verified fee sponsor vault proof asset binding mismatch",
                 ));
             }
+            // Every record field except the two verifier digests is known before
+            // verification. Admission ignores those two, so they stay zero here.
+            let candidate = VerifiedFeeSponsorVaultAllocation::new(
+                program_id.clone(),
+                *self.program_revision(),
+                self.asset_definition_id().clone(),
+                self.verified_allocation().clone(),
+                *self.source_dataspace_id(),
+                *self.source_height(),
+                *self.source_state_root(),
+                *self.expires_at_height(),
+                *self.lease_id(),
+                CryptoHash::new(&proof_blob.payload),
+                [0; 32],
+                CryptoHash::prehashed([0; 32]),
+                verified_at_height,
+                *self.manifest_root(),
+                binding,
+            );
+            // Every ledger refusal comes before the proof is verified: a replayed
+            // lease, a conflicting lease, a live route, a scheduled activation or
+            // missing capacity costs no verification.
+            let key = match fee_sponsor_vault_allocation_admission(state_transaction, &candidate)? {
+                // The stored row has this payload and height. It was verified when it
+                // was stored, and the same payload yields the same digests.
+                FeeSponsorVaultAllocationAdmission::Recorded => return Ok(()),
+                FeeSponsorVaultAllocationAdmission::Admissible(key) => key,
+            };
             let verified_fastpq = fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(
                 &proof_envelope,
                 proof_blob.expiry_slot,
@@ -15482,50 +15501,122 @@ pub mod isi {
                     format!("verified fee sponsor vault FASTPQ verification failed: {err}").into(),
                 )
             })?;
-            let record = VerifiedFeeSponsorVaultAllocation::new(
-                program_id.clone(),
-                *self.program_revision(),
-                self.asset_definition_id().clone(),
-                self.verified_allocation().clone(),
-                *self.source_dataspace_id(),
-                *self.source_height(),
-                *self.source_state_root(),
-                *self.expires_at_height(),
-                *self.lease_id(),
-                CryptoHash::new(&proof_blob.payload),
-                verified_fastpq.statement_digest,
-                verified_fastpq.proof_digest,
-                verified_at_height,
-                *self.manifest_root(),
-                binding,
-            );
-            apply_verified_fee_sponsor_vault_allocation(state_transaction, record)
+            if let Some(field) = (FeeSponsorVaultProofStatement {
+                slot: verified_fastpq.slot,
+                tx_set_hash: verified_fastpq.tx_set_hash,
+            })
+            .mismatch(&expected_claim_digest, *self.source_height())
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault proof statement {field} does not match the allocation claim"
+                )));
+            }
+            let record = VerifiedFeeSponsorVaultAllocation {
+                fastpq_statement_digest: verified_fastpq.statement_digest,
+                fastpq_proof_digest: verified_fastpq.proof_digest,
+                ..candidate
+            };
+            store_fee_sponsor_vault_allocation(state_transaction, key, &record)
         }
     }
-    /// Apply the independent ledger limits after the native verifier has produced its record.
+    /// The statement fields of a verified vault-allocation proof that the claim fixes.
     ///
-    /// The sole production caller retains authority, frozen policy and proof verification above.
-    /// Reading capacity and scheduled activation here keeps the ledger checks observable with a
-    /// test-only faulty-verifier record, without replacing any production verifier result.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Allocation consumes the verifier-produced capability bound to this execution height"
-    )]
-    fn apply_verified_fee_sponsor_vault_allocation(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        record: VerifiedFeeSponsorVaultAllocation,
-    ) -> Result<(), Error> {
+    /// The unanchored AXT verifier checks a proof against the statement its own
+    /// envelope states, so every public input is the prover's choice until compared
+    /// with something authoritative. The claim fixes two of them: the slot is the
+    /// source height and the transaction set is the claim digest. The roots are the
+    /// proved transfer's own sparse-Merkle roots over its claimed balances, derived
+    /// from the statement's transfers rather than from ledger state, and the
+    /// permission root is a label; none of them is compared with anything here.
+    ///
+    /// Matching the two makes the verified statement this claim's own. It does not
+    /// authenticate the proved funding transfer against the ledger: registration's
+    /// monetary authority remains the owner check, the recomputed vault snapshot and
+    /// the capacity rules.
+    struct FeeSponsorVaultProofStatement {
+        slot: u64,
+        tx_set_hash: [u8; 32],
+    }
+    impl FeeSponsorVaultProofStatement {
+        /// The first statement field that differs from what the claim fixes, if any.
+        fn mismatch(&self, claim_digest: &CryptoHash, source_height: u64) -> Option<&'static str> {
+            if self.slot != source_height {
+                return Some("slot");
+            }
+            if self.tx_set_hash != *claim_digest.as_ref() {
+                return Some("tx_set_hash");
+            }
+            None
+        }
+    }
+    /// Where an allocation stands against the ledger before its proof is verified.
+    enum FeeSponsorVaultAllocationAdmission {
+        /// The same allocation is already stored at this height.
+        Recorded,
+        /// No ledger rule refuses the allocation; it is stored under this key.
+        Admissible(StatePath),
+    }
+    /// Whether two records describe the same allocation, ignoring the verifier digests.
+    ///
+    /// The FASTPQ statement and proof digests are the only fields the verifier adds.
+    /// Both are fixed by the proof payload, which `proof_payload_hash` commits, and by
+    /// the proof expiry, which equals `expires_at_height`. Records that agree on every
+    /// other field therefore carry the same digests once both are verified.
+    fn same_fee_sponsor_vault_allocation_apart_from_verifier_digests(
+        left: &VerifiedFeeSponsorVaultAllocation,
+        right: &VerifiedFeeSponsorVaultAllocation,
+    ) -> bool {
+        let VerifiedFeeSponsorVaultAllocation {
+            program_id,
+            program_revision,
+            asset_definition_id,
+            verified_allocation,
+            source_dataspace_id,
+            source_height,
+            source_state_root,
+            expires_at_height,
+            lease_id,
+            proof_payload_hash,
+            fastpq_statement_digest: _,
+            fastpq_proof_digest: _,
+            verified_at_height,
+            manifest_root,
+            fastpq_binding,
+        } = left;
+        *program_id == right.program_id
+            && *program_revision == right.program_revision
+            && *asset_definition_id == right.asset_definition_id
+            && *verified_allocation == right.verified_allocation
+            && *source_dataspace_id == right.source_dataspace_id
+            && *source_height == right.source_height
+            && *source_state_root == right.source_state_root
+            && *expires_at_height == right.expires_at_height
+            && *lease_id == right.lease_id
+            && *proof_payload_hash == right.proof_payload_hash
+            && *verified_at_height == right.verified_at_height
+            && *manifest_root == right.manifest_root
+            && *fastpq_binding == right.fastpq_binding
+    }
+    /// Decide everything the ledger decides about an allocation, before its proof is verified.
+    ///
+    /// Only the verifier digests of `candidate` may be unknown here; no rule reads them.
+    /// The height, lease, live-route, scheduled-activation and capacity rules read only
+    /// authoritative state and fields the instruction itself carries.
+    fn fee_sponsor_vault_allocation_admission(
+        state_transaction: &StateTransaction<'_, '_>,
+        candidate: &VerifiedFeeSponsorVaultAllocation,
+    ) -> Result<FeeSponsorVaultAllocationAdmission, Error> {
         let verified_at_height = state_transaction.block_height();
-        if record.verified_at_height != verified_at_height {
+        if candidate.verified_at_height != verified_at_height {
             return Err(invalid_fee_sponsor_program(
                 "verified fee sponsor vault allocation belongs to another execution height",
             ));
         }
-        let program_id = record.program_id.clone();
+        let program_id = &candidate.program_id;
         let program = state_transaction
             .world
             .fee_sponsor_programs
-            .get(&program_id)
+            .get(program_id)
             .ok_or_else(|| {
                 invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation references an unknown program",
@@ -15533,9 +15624,9 @@ pub mod isi {
             })?;
         let vault_key = iroha_data_model::nexus::FeeSponsorVaultKey {
             program_id: program_id.clone(),
-            asset_definition_id: record.asset_definition_id.clone(),
+            asset_definition_id: candidate.asset_definition_id.clone(),
         };
-        let vault_balance = state_transaction
+        let vault_balance = &state_transaction
             .world
             .fee_sponsor_vaults
             .get(&vault_key)
@@ -15544,25 +15635,22 @@ pub mod isi {
                     "verified fee sponsor vault allocation references an unfunded vault",
                 )
             })?
-            .balance
-            .clone();
+            .balance;
         let key = verified_fee_sponsor_vault_allocation_state_key(
-            &program_id,
-            &record.asset_definition_id,
-            &record.lease_id,
+            program_id,
+            &candidate.asset_definition_id,
+            &candidate.lease_id,
         )?;
-        let encoded = encode_verified_fee_sponsor_vault_allocation_state(&record)
-            .map_err(invalid_fee_sponsor_program)?;
-        for (existing_key, payload) in state_transaction.world.smart_contract_state.iter() {
-            if !existing_key
-                .to_string()
-                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
-            {
-                continue;
-            }
+        for (_, payload) in
+            crate::state::verified_fee_sponsor_vault_allocation_rows(&state_transaction.world)
+        {
             let existing = decode_verified_fee_sponsor_vault_allocation_state(payload)
                 .map_err(invalid_fee_sponsor_program)?;
-            if existing.lease_id == record.lease_id && existing != record {
+            if existing.lease_id == candidate.lease_id
+                && !same_fee_sponsor_vault_allocation_apart_from_verifier_digests(
+                    &existing, candidate,
+                )
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "fee sponsor vault spend lease id is already bound to another allocation"
                         .into(),
@@ -15570,7 +15658,7 @@ pub mod isi {
             }
             if fee_sponsor_vault_allocation_conflicts_on_live_route(
                 &existing,
-                &record,
+                candidate,
                 verified_at_height,
             ) {
                 return Err(invalid_fee_sponsor_program(format!(
@@ -15582,15 +15670,15 @@ pub mod isi {
         if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
             let existing = decode_verified_fee_sponsor_vault_allocation_state(existing)
                 .map_err(invalid_fee_sponsor_program)?;
-            if existing == record {
-                return Ok(());
+            if same_fee_sponsor_vault_allocation_apart_from_verifier_digests(&existing, candidate) {
+                return Ok(FeeSponsorVaultAllocationAdmission::Recorded);
             }
             return Err(InstructionExecutionError::InvariantViolation(
                 "conflicting verified fee sponsor vault allocation already exists".into(),
             ));
         }
         if let Some(activation) = program.scheduled_activation
-            && record.expires_at_height >= activation.activate_at_height
+            && candidate.expires_at_height >= activation.activate_at_height
         {
             return Err(invalid_fee_sponsor_program(format!(
                 "fee sponsor vault spend lease must expire before scheduled revision activation height {}",
@@ -15599,28 +15687,80 @@ pub mod isi {
         }
         let locked = locked_fee_sponsor_vault_capacity(
             &state_transaction.world,
-            &program_id,
-            &record.asset_definition_id,
+            program_id,
+            &candidate.asset_definition_id,
             verified_at_height,
         )
         .map_err(invalid_fee_sponsor_program)?;
         let required = locked
-            .checked_add(&record.verified_allocation)
+            .checked_add(&candidate.verified_allocation)
             .map_err(|_| {
                 invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation lock arithmetic overflow",
                 )
             })?;
-        if required > vault_balance {
+        if required > *vault_balance {
             return Err(invalid_fee_sponsor_program(format!(
                 "verified fee sponsor vault allocations exceed source capacity: requires {required}, available {vault_balance}"
             )));
         }
+        Ok(FeeSponsorVaultAllocationAdmission::Admissible(key))
+    }
+    /// Store a verified allocation under the key its admission returned.
+    fn store_fee_sponsor_vault_allocation(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        key: StatePath,
+        record: &VerifiedFeeSponsorVaultAllocation,
+    ) -> Result<(), Error> {
+        let encoded = encode_verified_fee_sponsor_vault_allocation_state(record)
+            .map_err(invalid_fee_sponsor_program)?;
         state_transaction
             .world
             .smart_contract_state
             .insert(key, encoded);
         Ok(())
+    }
+    /// Apply the ledger rules to a record a test-only faulty verifier supplies.
+    ///
+    /// This runs the production admission and store on a complete record, so the
+    /// capacity, identity and height rules stay observable without a real proof. Unlike
+    /// production, a stored row that differs from `record` only in its verifier
+    /// digests is a conflict here, because a faulty verifier can supply any digests.
+    #[cfg(test)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Allocation consumes the verifier-produced capability bound to this execution height"
+    )]
+    fn apply_verified_fee_sponsor_vault_allocation(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        record: VerifiedFeeSponsorVaultAllocation,
+    ) -> Result<(), Error> {
+        match fee_sponsor_vault_allocation_admission(state_transaction, &record)? {
+            FeeSponsorVaultAllocationAdmission::Recorded => {
+                let key = verified_fee_sponsor_vault_allocation_state_key(
+                    &record.program_id,
+                    &record.asset_definition_id,
+                    &record.lease_id,
+                )?;
+                let stored = state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(&key)
+                    .map(|payload| decode_verified_fee_sponsor_vault_allocation_state(payload))
+                    .transpose()
+                    .map_err(invalid_fee_sponsor_program)?;
+                if stored.as_ref() == Some(&record) {
+                    Ok(())
+                } else {
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting verified fee sponsor vault allocation already exists".into(),
+                    ))
+                }
+            }
+            FeeSponsorVaultAllocationAdmission::Admissible(key) => {
+                store_fee_sponsor_vault_allocation(state_transaction, key, &record)
+            }
+        }
     }
     fn invalid_fee_sponsor_program(message: impl Into<String>) -> Error {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(

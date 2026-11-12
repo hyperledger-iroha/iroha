@@ -38,7 +38,7 @@ use super::{
     deep_relation::DeepRelation,
     deep_striped_merkle::{RowCommitmentPlan, StreamLimits, open_cached_rows},
     deep_trace_source::OwnedTraceSource,
-    masked_quotient::{checked_add as add, checked_mul as mul},
+    plan_arithmetic::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
 use crate::{DigestExecutionV1, Error, Result, field::GoldilocksFp4V1 as F};
@@ -942,13 +942,17 @@ fn encode_bounded(proof: &DeepProof, maximum: usize) -> Result<Vec<u8>> {
 /// Keep the established quotient-phase pool reserve and each row/coefficient
 /// live-staging envelope. SHA3 row/coefficient forecasts do not include root
 /// tables: those public tables can persist from an earlier exact-root FFT in
-/// the same process. Charge their full cache outside every phase maximum.
+/// the same process. Charge both full caches outside every phase maximum: the
+/// device's stage tables and the CPU transform's root-power tables.
 fn active_phase_payload(quotient: usize, rows: usize, coefficients: usize) -> Result<usize> {
     add(
         add(quotient, crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)?
             .max(rows)
             .max(coefficients),
-        crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE,
+        add(
+            crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE,
+            crate::cyclotomic::ROOT_TABLE_CACHE_MAX_BYTES,
+        )?,
     )
 }
 

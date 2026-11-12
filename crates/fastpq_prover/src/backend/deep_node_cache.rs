@@ -11,8 +11,8 @@ use zeroize::Zeroize;
 use super::{
     deep_binding::{Context, Oracle},
     deep_geometry::{LDE_ROWS, QUERY_COUNT},
-    masked_quotient::{checked_add as add, checked_mul as mul},
     merkle_multiproof::{MultiproofLimits, MultiproofPlan},
+    plan_arithmetic::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
 use crate::{DigestExecutionV1, Error, Result};

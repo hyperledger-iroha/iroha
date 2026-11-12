@@ -77,23 +77,40 @@ pub fn hash_cpu(jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
     output
         .par_chunks_mut(2)
         .zip(jobs.par_chunks(2))
-        .for_each(|(out, pair)| {
-            #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
-            if simd::available()
-                && pair.len() == 2
-                && pair[0].body().len() == pair[1].body().len()
-                && pair[0].prefix().with_absorbed_state_v1(|_, p| p)
-                    == pair[1].prefix().with_absorbed_state_v1(|_, p| p)
-            {
-                let values = simd::hash_pair(pair[0], pair[1]);
-                out.copy_from_slice(&values);
-                return;
-            }
-            for (out, job) in out.iter_mut().zip(pair) {
-                *out = job.scalar().into_bytes();
-            }
-        });
+        .for_each(|(out, pair)| hash_pair_or_scalar(pair, out));
     Ok(())
+}
+/// The same ordered output as [`hash_cpu`], computed on the calling thread.
+///
+/// A caller that already runs one job per worker uses this inside its job, so
+/// consecutive continuations still share the paired kernel.
+#[cfg(any(test, feature = "simd"))]
+pub fn hash_cpu_in_order(jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
+    validate(jobs, output.len())?;
+    for (out, pair) in output.chunks_mut(2).zip(jobs.chunks(2)) {
+        hash_pair_or_scalar(pair, out);
+    }
+    Ok(())
+}
+/// Hash at most two consecutive jobs: together when the paired kernel is
+/// available and both share a body length and prefix position, otherwise each
+/// through the scalar owner.
+#[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
+fn hash_pair_or_scalar(pair: &[Job<'_>], out: &mut [[u8; 32]]) {
+    #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+    if simd::available()
+        && pair.len() == 2
+        && pair[0].body().len() == pair[1].body().len()
+        && pair[0].prefix().with_absorbed_state_v1(|_, p| p)
+            == pair[1].prefix().with_absorbed_state_v1(|_, p| p)
+    {
+        let values = simd::hash_pair(pair[0], pair[1]);
+        out.copy_from_slice(&values);
+        return;
+    }
+    for (out, job) in out.iter_mut().zip(pair) {
+        *out = job.scalar().into_bytes();
+    }
 }
 /// Fixed actual buffer extents, padded to the existing shared-page owner.
 /// The enclosing prover separately charges the complete retained global pool.

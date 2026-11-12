@@ -12,9 +12,27 @@ constitutes independent cryptographic or deployment qualification.
 
 - Core's ordinary lane and standalone callers use
   `fastpq_prover::offline_compact` to prove and verify complete ordered quantity
-  statements. The producer self-verifies before returning. Verifiers derive
-  `ExpectedStatement::from_statement` from their own authenticated statement;
-  artifact contents cannot choose the verifier's expectations or semantic role.
+  statements. The producer self-verifies before returning. On that facade a
+  verifier supplies an `ExpectedStatement` derived from its own authenticated
+  statement; artifact contents cannot choose the verifier's expectations or
+  semantic role.
+- The AXT envelope verifiers (`verify_axt_proof_envelope*`) are the exception:
+  an envelope is a self-contained carrier, so they take the statement from the
+  envelope's own artifact and check it against itself, the envelope mirrors and
+  the binding, whose source data space the statement must name. The anchored
+  verifier then compares the data space, both roots and the transaction set
+  with a finalized anchor; slot and permission root have no anchored
+  counterpart yet. The unanchored verifiers compare none of them, and return
+  the stated slot, roots and transaction set for the caller to check. A caller
+  that ignores those fields has authenticated only internal consistency. Every
+  envelope verifier admits the fixed parameter set alone.
+- The fee-sponsor vault allocation is the only production consumer of an
+  unanchored envelope. It requires the stated slot and transaction set to be
+  its source height and claim digest. The stated roots are the proved
+  transfer's own touched-balance roots and are compared with no ledger root, so
+  the proof does not authenticate the funding transfer; the allocation's
+  authority is the owner check, the recomputed vault snapshot and the capacity
+  rules ([fee model](nexus_fee_model.md)).
 - The public statement binds dataspace, slot, touched-balance roots, permission
   context, transaction-set commitment, ordering and the complete canonical
   transfer statement. Each segment binds its ordinal and ordered root chain.
@@ -27,8 +45,8 @@ constitutes independent cryptographic or deployment qualification.
 - The sealed relation proves the complete 32-level SMT updates. Its fixed child
   has 65,536 trace rows, 342 total columns, 923 AIR slots and 8,388,608 evaluation
   rows. It commits 301 private columns and independently reconstructs 41 public
-  columns. Sixty-four distinct queries and the fixed higher-arity FRI schedule
-  provide bounded verification without full private-witness replay.
+  columns. Seventy-seven distinct queries and the fixed higher-arity FRI
+  schedule provide bounded verification without full private-witness replay.
 - Trace masks, quotient masks and an independent composition mask use fresh
   cryptographic entropy. Exact quotient division rejects nonzero remainders.
   Private source, coefficients, replay buffers and partial owners clear on
@@ -81,8 +99,9 @@ owners. Unknown device completion quarantines retained buffers and blocks new
 proof admission for the rest of that process; recovery requires a fresh process.
 
 Same-attempt internal-node caches are bound to immutable context and original
-roots. Selected leaf stripes and siblings are regenerated after queries are
-chosen; each opening reconstructs the committed root. The resource plan includes
+roots. Selected leaves and siblings are recomputed after queries are chosen
+(rows at their own points, coefficient oracles by stripe); each opening
+reconstructs the committed root. The resource plan includes
 retained nodes, coverage, pending owners and opening scratch together. The cache
 does not change entropy order, committed polynomials, transcript or proof bytes.
 

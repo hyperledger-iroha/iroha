@@ -140,23 +140,34 @@ impl GoldilocksFp4V1 {
                   switching to `core::ops::Mul` would change the public surface"
     )]
     pub fn mul(self, other: Self) -> Self {
-        let mut product = [0_u64; 7];
-        for left in 0..4 {
-            for right in 0..4 {
-                product[left + right] = add_base(
-                    product[left + right],
-                    mul_base(self.coefficients[left], other.coefficients[right]),
-                );
-            }
-        }
-        for degree in (4..=6).rev() {
-            product[degree - 4] = add_base(
-                product[degree - 4],
-                mul_base(product[degree], FP4_NON_RESIDUE_V1),
-            );
-        }
+        // Schoolbook convolution with one reduction per output coefficient.
+        // Each coefficient is a sum of at most four 128-bit products, so the
+        // accumulator counts its 2^128 wraps and folds them once at the end.
+        // The three high terms (degrees 4..=6) are reduced first and re-enter
+        // the low coefficients through the nonresidue.
+        let [a0, a1, a2, a3] = self.coefficients;
+        let [b0, b1, b2, b3] = other.coefficients;
+        let high4 = WideSum::of(a1, b3).plus(a2, b2).plus(a3, b1).reduce();
+        let high5 = WideSum::of(a2, b3).plus(a3, b2).reduce();
+        let high6 = WideSum::of(a3, b3).reduce();
         Self {
-            coefficients: [product[0], product[1], product[2], product[3]],
+            coefficients: [
+                WideSum::of(a0, b0).plus(high4, FP4_NON_RESIDUE_V1).reduce(),
+                WideSum::of(a0, b1)
+                    .plus(a1, b0)
+                    .plus(high5, FP4_NON_RESIDUE_V1)
+                    .reduce(),
+                WideSum::of(a0, b2)
+                    .plus(a1, b1)
+                    .plus(a2, b0)
+                    .plus(high6, FP4_NON_RESIDUE_V1)
+                    .reduce(),
+                WideSum::of(a0, b3)
+                    .plus(a1, b2)
+                    .plus(a2, b1)
+                    .plus(a3, b0)
+                    .reduce(),
+            ],
         }
     }
 
@@ -216,41 +227,57 @@ impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksFp4V1 {
     }
 }
 
+/// `2^64 mod p`, which is `2^32 - 1`.
+const EPSILON_V1: u64 = 0xffff_ffff;
+
 /// Add arbitrary u64 representatives and return their canonical field sum.
 ///
 /// This is arithmetic normalization, not admission of noncanonical proof cells.
 #[inline]
 pub fn add_base(left: u64, right: u64) -> u64 {
-    let left = reduce_base(left);
-    let right = reduce_base(right);
-    let sum = left.wrapping_add(right);
-    let mut reduced = sum;
-    if sum < left {
-        // The reviewed Poseidon carry correction uses 2^64 = 2^32-1 (mod p).
-        // Canonical inputs bound the carried sum below 2^64-2*(2^32-1),
-        // so adding this correction cannot itself overflow.
-        reduced = reduced.wrapping_sub(GOLDILOCKS_MODULUS_V1);
-    }
-    reduce_base(reduced)
+    add_canonical(reduce_base(left), reduce_base(right))
 }
 
 /// Subtract arbitrary u64 representatives with a canonical, nonnegative result.
 #[inline]
 pub fn sub_base(left: u64, right: u64) -> u64 {
-    let left = reduce_base(left);
-    let right = reduce_base(right);
-    if left >= right {
-        left - right
-    } else {
-        // The positive difference is at most p-1; neither subtraction can wrap.
-        GOLDILOCKS_MODULUS_V1 - (right - left)
-    }
+    sub_canonical(reduce_base(left), reduce_base(right))
 }
 
 /// Multiply arbitrary u64 representatives and return their canonical field product.
 #[inline]
 pub fn mul_base(left: u64, right: u64) -> u64 {
     reduce_wide(u128::from(left) * u128::from(right))
+}
+
+/// Add two canonical elements.
+///
+/// Hot transform kernels call this after establishing canonical operands; a
+/// noncanonical operand is a caller bug and may yield a noncanonical result.
+/// Use [`add_base`] for values that have not been normalized.
+#[inline]
+pub(crate) fn add_canonical(left: u64, right: u64) -> u64 {
+    debug_assert!(left < GOLDILOCKS_MODULUS_V1 && right < GOLDILOCKS_MODULUS_V1);
+    // The true sum is below 2p. It needs one subtraction of p exactly when it
+    // carried out of 64 bits or the wrapped sum is itself at least p; in both
+    // cases the wrapping difference is the canonical result.
+    let (sum, carried) = left.overflowing_add(right);
+    let (reduced, borrowed) = sum.overflowing_sub(GOLDILOCKS_MODULUS_V1);
+    if carried || !borrowed { reduced } else { sum }
+}
+
+/// Subtract two canonical elements. See [`add_canonical`] for the contract.
+#[inline]
+pub(crate) fn sub_canonical(left: u64, right: u64) -> u64 {
+    debug_assert!(left < GOLDILOCKS_MODULUS_V1 && right < GOLDILOCKS_MODULUS_V1);
+    // A borrow leaves `left - right + 2^64`; adding p modulo 2^64 gives the
+    // canonical `left - right + p`.
+    let (difference, borrowed) = left.overflowing_sub(right);
+    if borrowed {
+        difference.wrapping_add(GOLDILOCKS_MODULUS_V1)
+    } else {
+        difference
+    }
 }
 
 #[inline]
@@ -265,25 +292,98 @@ fn reduce_base(value: u64) -> u64 {
 
 #[inline]
 fn reduce_wide(value: u128) -> u64 {
-    // Same bounded pseudo-Mersenne fold as
-    // fastpq_isi::poseidon_digest384::reduce_wide_v1. With high = h0+2^32*h1,
-    // 2^64 = 2^32-1 and 2^96 = -1 (mod p), giving low+(2^32-1)*h0-h1.
+    // Pseudo-Mersenne fold for every u128 input, equal to
+    // fastpq_isi::poseidon_digest384::reduce_wide_v1. With the high word
+    // h0 + 2^32*h1, 2^64 = 2^32-1 and 2^96 = -1 (mod p) give
+    // low + (2^32-1)*h0 - h1. All three steps stay in u64.
     let low =
         u64::try_from(value & u128::from(u64::MAX)).expect("masked low product word fits u64");
     let high = u64::try_from(value >> 64).expect("high product word fits u64");
-    let high_low = i128::from(high & 0xffff_ffff);
-    let high_high = i128::from(high >> 32);
-    let mut accumulated = i128::from(low) + (high_low << 32) - high_low - high_high;
-    let modulus = i128::from(GOLDILOCKS_MODULUS_V1);
-    // For every u128 input, -(2^32-1) <= accumulated <= 2p-2. These signed
-    // operations fit i128; one correction in each direction gives [0,p).
-    if accumulated < 0 {
-        accumulated += modulus;
+    let high_low = high & EPSILON_V1;
+    let high_high = high >> 32;
+    // low - h1 (mod p). A borrow leaves the difference plus 2^64 = p + EPSILON,
+    // which is at least 2^64 - (2^32-1), so removing EPSILON cannot wrap.
+    let (mut folded, borrowed) = low.overflowing_sub(high_high);
+    if borrowed {
+        folded = folded.wrapping_sub(EPSILON_V1);
     }
-    if accumulated >= modulus {
-        accumulated -= modulus;
+    // (2^32-1)*h0 is below 2^64. A carry leaves the sum minus 2^64, which is
+    // below 2^64 - 2^33 + 1, so restoring EPSILON for it cannot wrap either.
+    let (sum, carried) = folded.overflowing_add(high_low * EPSILON_V1);
+    reduce_base(if carried {
+        sum.wrapping_add(EPSILON_V1)
+    } else {
+        sum
+    })
+}
+
+/// Terms one accumulator of [`dot_base`] sums before it is reduced: each term
+/// wraps the 128-bit accumulator at most once, and `2^16` wraps shifted by 32
+/// bits stay below the modulus.
+const DOT_CHUNK_TERMS_V1: usize = 1 << 16;
+
+/// Canonical sum of the products of paired representatives.
+///
+/// Both slices have the same length. Each chunk of terms is accumulated as
+/// wide products and reduced once, so the terms carry no dependency on each
+/// other. The result equals summing `mul_base` terms with `add_base`.
+pub(crate) fn dot_base(left: &[u64], right: &[u64]) -> u64 {
+    debug_assert_eq!(left.len(), right.len());
+    let mut total = 0;
+    for (left, right) in left
+        .chunks(DOT_CHUNK_TERMS_V1)
+        .zip(right.chunks(DOT_CHUNK_TERMS_V1))
+    {
+        let mut low = 0_u128;
+        let mut wraps = 0_u64;
+        for (&left, &right) in left.iter().zip(right) {
+            let (sum, wrapped) = low.overflowing_add(u128::from(left) * u128::from(right));
+            low = sum;
+            wraps += u64::from(wrapped);
+        }
+        // `2^128 = -2^32 (mod p)`: each wrap subtracts `2^32`.
+        total = add_canonical(total, sub_canonical(reduce_wide(low), wraps << 32));
     }
-    u64::try_from(accumulated).expect("Goldilocks reduction is canonical")
+    total
+}
+
+/// A sum of at most four 128-bit products of base-field representatives.
+///
+/// The accumulator wraps modulo `2^128`; `wraps` counts those carries so one
+/// reduction serves the whole sum. `2^128 = -2^32 (mod p)`, so each wrap
+/// subtracts `2^32` from the reduced low part.
+#[derive(Clone, Copy)]
+struct WideSum {
+    low: u128,
+    wraps: u64,
+}
+
+impl WideSum {
+    #[inline]
+    fn of(left: u64, right: u64) -> Self {
+        Self {
+            low: u128::from(left) * u128::from(right),
+            wraps: 0,
+        }
+    }
+
+    #[inline]
+    fn plus(self, left: u64, right: u64) -> Self {
+        let (low, wrapped) = self
+            .low
+            .overflowing_add(u128::from(left) * u128::from(right));
+        Self {
+            low,
+            wraps: self.wraps + u64::from(wrapped),
+        }
+    }
+
+    #[inline]
+    fn reduce(self) -> u64 {
+        // At most three wraps occur, so `wraps << 32` is canonical.
+        debug_assert!(self.wraps <= 3);
+        sub_canonical(reduce_wide(self.low), self.wraps << 32)
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +655,120 @@ mod tests {
                 left.mul_base(a[0]).coefficients(),
                 a.map(|value| oracle_mul(value, a[0]))
             );
+        }
+    }
+
+    #[test]
+    fn canonical_kernels_match_modulo_at_every_carry_and_borrow_boundary() {
+        let values = [
+            0,
+            1,
+            2,
+            (1 << 32) - 1,
+            1 << 32,
+            (1 << 32) + 1,
+            GOLDILOCKS_MODULUS_V1 / 2,
+            GOLDILOCKS_MODULUS_V1 / 2 + 1,
+            1 << 63,
+            GOLDILOCKS_MODULUS_V1 - (1 << 32),
+            GOLDILOCKS_MODULUS_V1 - 2,
+            GOLDILOCKS_MODULUS_V1 - 1,
+        ];
+        for left in values {
+            for right in values {
+                assert_eq!(add_canonical(left, right), oracle_add(left, right));
+                assert_eq!(sub_canonical(left, right), oracle_sub(left, right));
+            }
+        }
+        let mut state = 0x3c6e_f372_fe94_f82b;
+        for _ in 0..65_536 {
+            let left = oracle_residue(u128::from(next_word(&mut state)));
+            let right = oracle_residue(u128::from(next_word(&mut state)));
+            assert_eq!(add_canonical(left, right), oracle_add(left, right));
+            assert_eq!(sub_canonical(left, right), oracle_sub(left, right));
+        }
+    }
+
+    #[test]
+    fn dot_product_matches_term_by_term_sums_across_chunks_and_representatives() {
+        let mut state = 0x510e_527f_ade6_82d1;
+        // Empty, single, one whole chunk, a ragged second chunk and all-maximal
+        // terms, which wrap the accumulator on almost every addition.
+        for length in [0, 1, 7, DOT_CHUNK_TERMS_V1, DOT_CHUNK_TERMS_V1 + 5] {
+            let left: Vec<u64> = (0..length).map(|_| next_word(&mut state)).collect();
+            let right: Vec<u64> = (0..length).map(|_| next_word(&mut state)).collect();
+            let expected = left
+                .iter()
+                .zip(&right)
+                .fold(0, |sum, (&a, &b)| oracle_add(sum, oracle_mul(a, b)));
+            assert_eq!(dot_base(&left, &right), expected, "length {length}");
+        }
+        for word in [GOLDILOCKS_MODULUS_V1 - 1, u64::MAX] {
+            let terms = vec![word; DOT_CHUNK_TERMS_V1 + 3];
+            let square = oracle_mul(word, word);
+            let expected = (0..terms.len()).fold(0, |sum, _| oracle_add(sum, square));
+            let actual = dot_base(&terms, &terms);
+            assert_eq!(actual, expected);
+            assert!(actual < GOLDILOCKS_MODULUS_V1);
+        }
+    }
+
+    /// Independent convolution with one modular reduction per base operation.
+    fn oracle_extension_mul(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+        let mut expected = [0; 4];
+        for i in 0..4 {
+            for j in 0..4 {
+                let factor = if i + j >= 4 { 7 } else { 1 };
+                expected[(i + j) % 4] = oracle_add(
+                    expected[(i + j) % 4],
+                    oracle_mul(oracle_mul(a[i], b[j]), factor),
+                );
+            }
+        }
+        expected
+    }
+
+    #[test]
+    fn extension_product_folds_every_accumulator_wrap_and_any_representative() {
+        // Canonical maxima force the greatest number of 2^128 accumulator
+        // wraps; noncanonical words pin the arbitrary-representative contract
+        // that the single-reduction product shares with the scalar helpers.
+        let words = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            GOLDILOCKS_MODULUS_V1 - 1,
+            GOLDILOCKS_MODULUS_V1,
+            u64::MAX,
+        ];
+        for a0 in words {
+            for a1 in words {
+                for b0 in words {
+                    for b1 in words {
+                        for (a, b) in [
+                            ([a0, a1, a0, a1], [b0, b1, b1, b0]),
+                            ([a1, a1, a0, a0], [b1, b0, b1, b0]),
+                            ([a0; 4], [b0, b1, b1, b1]),
+                        ] {
+                            let left = GoldilocksFp4V1::from_coefficients_unchecked_for_test(a);
+                            let right = GoldilocksFp4V1::from_coefficients_unchecked_for_test(b);
+                            let product = left.mul(right).coefficients();
+                            assert_eq!(product, oracle_extension_mul(a, b), "{a:?} * {b:?}");
+                            assert!(product.iter().all(|&word| word < GOLDILOCKS_MODULUS_V1));
+                        }
+                    }
+                }
+            }
+        }
+        let mut state = 0xa54f_f53a_5f1d_36f1;
+        for _ in 0..16_384 {
+            let a = core::array::from_fn(|_| next_word(&mut state));
+            let b = core::array::from_fn(|_| next_word(&mut state));
+            let product = GoldilocksFp4V1::from_coefficients_unchecked_for_test(a)
+                .mul(GoldilocksFp4V1::from_coefficients_unchecked_for_test(b))
+                .coefficients();
+            assert_eq!(product, oracle_extension_mul(a, b));
         }
     }
 

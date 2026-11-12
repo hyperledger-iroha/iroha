@@ -327,6 +327,55 @@ impl CoefficientStripe<'_> {
         }
         Ok(())
     }
+    /// The field values of one committed leaf, in leaf order.
+    ///
+    /// A single-oracle layer commits one complete fiber per leaf; the joined
+    /// quotient and mask oracle commits its columns at one row.
+    pub(super) fn leaf(&self, row: usize, output: &mut [F]) -> Result<()> {
+        if self.plan.width == 1 {
+            return self.fiber(row, output);
+        }
+        if self.plan.arity != 1 || output.len() != self.plan.width {
+            return Err(invalid("DEEP joined leaf needs its exact column shape"));
+        }
+        for (column, value) in output.iter_mut().enumerate() {
+            *value = self.value(column, row)?;
+        }
+        Ok(())
+    }
+    /// Write one committed leaf as its canonical payload: each field value of
+    /// [`Self::leaf`] as four little-endian words.
+    pub(super) fn pack_leaf(&self, row: usize, output: &mut [u8]) -> Result<()> {
+        let (fields, rows, stride) = if self.plan.width == 1 {
+            (self.plan.arity, self.fiber_rows(), self.fiber_rows())
+        } else if self.plan.arity == 1 {
+            (self.plan.width, self.plan.degree, 0)
+        } else {
+            return Err(invalid("DEEP joined leaf needs its exact column shape"));
+        };
+        if row >= rows || output.len() != fields * F::BYTES {
+            return Err(invalid("DEEP coefficient leaf has another exact shape"));
+        }
+        for (field, bytes) in output
+            .as_chunks_mut::<{ F::BYTES }>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            // A fiber walks one column by its stride; a joined leaf walks the
+            // columns at one row.
+            let (column, source) = if self.plan.width == 1 {
+                (0, row + field * stride)
+            } else {
+                (field, row)
+            };
+            for (coordinate, word) in bytes.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                *word =
+                    self.lanes[(column * 4 + coordinate) * self.plan.degree + source].to_le_bytes();
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Fold exact coefficient blocks, retaining full Fp4 challenges and zero padding.

@@ -75,12 +75,24 @@ const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 mod compact;
 
 /// Result returned after an AXT `FastPQ` envelope has been verified.
+///
+/// Only this crate's envelope verifiers construct it: other crates read its
+/// fields but cannot build one from unverified values.
+///
+/// The roots, transaction-set commitment and digests are the ones the envelope
+/// itself states. The anchored verifier has compared the data space, both roots
+/// and the transaction set with a finalized anchor; the unanchored verifiers
+/// have not, so their caller must compare these fields with its own
+/// authenticated state before relying on them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AxtVerifiedProof {
     /// Digest of the statement bound to the AXT descriptor and `FastPQ` batch.
     pub statement_digest: [u8; 32],
     /// Digest of the envelope-carried `FastPQ` proof payload.
     pub proof_digest: Hash,
+    /// Proven source slot.
+    pub slot: u64,
     /// Proven pre-execution state root.
     pub old_root: [u8; 32],
     /// Proven post-execution state root.

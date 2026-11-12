@@ -78,6 +78,39 @@ fn cloned_prefix_preserves_full_input_and_partial_rate_block() {
     }
 }
 
+#[test]
+fn lane_absorb_and_squeeze_match_single_bytes_at_every_alignment() {
+    // Single-byte calls take only the byte path. Every other split crosses the
+    // head, whole-lane and tail paths at a different lane and rate offset.
+    let bytes = input(2 * KECCAK_RATE_256_V1 + 29);
+    let mut reference = Shake256V1::new();
+    for byte in &bytes {
+        reference.update(core::slice::from_ref(byte));
+    }
+    let mut reference = reference.finalize();
+    let mut expected = [0; 2 * KECCAK_RATE_256_V1 + 29];
+    for byte in &mut expected {
+        reference.read(core::slice::from_mut(byte));
+    }
+    for first in 0..=KECCAK_RATE_256_V1 + 9 {
+        for second in [0, 1, 7, 8, 9, 63, 64, 136] {
+            let middle = (first + second).min(bytes.len());
+            let mut xof = Shake256V1::new();
+            xof.update(&bytes[..first]);
+            xof.update(&bytes[first..middle]);
+            xof.update(&bytes[middle..]);
+            let mut reader = xof.finalize();
+            let mut actual = [0; 2 * KECCAK_RATE_256_V1 + 29];
+            let (head, rest) = actual.split_at_mut(first);
+            let (body, tail) = rest.split_at_mut(middle - first);
+            reader.read(head);
+            reader.read(body);
+            reader.read(tail);
+            assert_eq!(actual, expected, "splits {first} and {middle}");
+        }
+    }
+}
+
 struct Observation;
 impl Observation {
     fn start() -> Self {

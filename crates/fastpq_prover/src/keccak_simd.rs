@@ -91,14 +91,21 @@ pub(super) fn hash_pair(left: Job<'_>, right: Job<'_>) -> [[u8; 32]; 2] {
         let mut full = [false; 2];
         for lane in 0..2 {
             let count = (RATE - positions[lane]).min(jobs[lane].body().len() - offsets[lane]);
-            for &byte in &jobs[lane].body()[offsets[lane]..offsets[lane] + count] {
-                state[positions[lane] / 8][lane] ^= u64::from(byte) << ((positions[lane] % 8) * 8);
-                positions[lane] += 1;
-            }
+            absorb(
+                &mut state,
+                lane,
+                &mut positions[lane],
+                &jobs[lane].body()[offsets[lane]..offsets[lane] + count],
+            );
             offsets[lane] += count;
             full[lane] = positions[lane] == RATE;
         }
-        if full[0] || full[1] {
+        if full[0] && full[1] {
+            // Both lanes completed a rate block together: the common case of
+            // equal lengths and positions.
+            permute(&mut state);
+            positions = [0; 2];
+        } else if full[0] || full[1] {
             // Heterogeneous lengths/positions are public. Preserve an inactive
             // lane under a clearing owner; do not accidentally permute it.
             let saved = Clearing::new(*state);
@@ -126,6 +133,29 @@ pub(super) fn hash_pair(left: Job<'_>, right: Job<'_>) -> [[u8; 32]; 2] {
         }
     }
     output
+}
+/// XOR `bytes` into one lane of the interleaved state from byte `position` of
+/// the rate block: single bytes up to a word boundary, whole little-endian
+/// words, then the short tail. The caller bounds `bytes` by the rest of the
+/// rate block, so no permutation falls inside the run.
+fn absorb(state: &mut [[u64; 2]; 25], lane: usize, position: &mut usize, mut bytes: &[u8]) {
+    while !position.is_multiple_of(8) {
+        let Some((&byte, rest)) = bytes.split_first() else {
+            return;
+        };
+        state[*position / 8][lane] ^= u64::from(byte) << ((*position % 8) * 8);
+        *position += 1;
+        bytes = rest;
+    }
+    let (words, tail) = bytes.as_chunks::<8>();
+    for word in words {
+        state[*position / 8][lane] ^= u64::from_le_bytes(*word);
+        *position += 8;
+    }
+    for &byte in tail {
+        state[*position / 8][lane] ^= u64::from(byte) << ((*position % 8) * 8);
+        *position += 1;
+    }
 }
 fn permute(state: &mut [[u64; 2]; 25]) {
     // SAFETY: the sole production caller checks available() before hash_pair.

@@ -1480,7 +1480,7 @@
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
        "symbol": "let key = verified_fee_sponsor_vault_allocation_state_key(",
-       "within": "fn apply_verified_fee_sponsor_vault_allocation("
+       "within": "fn fee_sponsor_vault_allocation_admission("
       }
      ]
     },
@@ -1491,7 +1491,7 @@
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
        "symbol": "let locked = locked_fee_sponsor_vault_capacity(",
-       "within": "fn apply_verified_fee_sponsor_vault_allocation("
+       "within": "fn fee_sponsor_vault_allocation_admission("
       },
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -5701,7 +5701,8 @@
    ],
    "defects": [],
    "apply_sites": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "fn apply_verified_fee_sponsor_vault_allocation("}
+    {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "fn fee_sponsor_vault_allocation_admission("},
+    {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "fn store_fee_sponsor_vault_allocation("}
    ]
   },
   {

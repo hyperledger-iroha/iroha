@@ -310,20 +310,18 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
         };
         for stripe in 0..stripes {
             for start in (0..128 / stripes).step_by(3) {
-                let indices = (start..(start + 3).min(128 / stripes))
-                    .map(|row| stripe + row * stripes)
-                    .collect::<Vec<_>>();
-                let mut values = SecretPolynomial::zeroed(indices.len()).unwrap();
-                for (&i, v) in indices.iter().zip(values.iter_mut()) {
-                    *v = levels[0][i].into_bytes();
+                let length = (128 / stripes - start).min(3);
+                let mut values = SecretPolynomial::zeroed(length).unwrap();
+                for (offset, v) in values.iter_mut().enumerate() {
+                    *v = levels[0][stripe + (start + offset) * stripes].into_bytes();
                 }
                 stream
-                    .push_batch(
-                        &indices,
+                    .push_run(
                         &mut values,
-                        |level, indices, left, right| {
-                            for ((&index, &l), r) in indices.iter().zip(left).zip(right) {
-                                *r = hash(level, index, digest(l), digest(*r))?.into_bytes();
+                        |level, first, step, left, right| {
+                            for (offset, (&l, r)) in left.iter().zip(right).enumerate() {
+                                *r = hash(level, first + offset * step, digest(l), digest(*r))?
+                                    .into_bytes();
                             }
                             Ok(())
                         },

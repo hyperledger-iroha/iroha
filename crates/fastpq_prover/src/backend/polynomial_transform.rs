@@ -8,10 +8,11 @@
 use fastpq_isi::FASTPQ_FINAL_V1;
 
 use super::{
-    FriDomain, field_pow, fixed_domain::FixedTraceDomain, polynomial_field::PolynomialField,
-    secret_polynomial::SecretPolynomial,
+    FriDomain, field_pow, fixed_domain::FixedTraceDomain, mul_mod,
+    polynomial_field::PolynomialField, secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, cyclotomic, field::GoldilocksFp4V1 as F};
+use rayon::prelude::*;
 
 /// Exact source-root subgroup and an explicit nonzero quartic-extension offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +164,59 @@ impl PolynomialDomain {
             .mul_base(field_pow(self.generator, index as u64)))
     }
 
+    /// The offset as a base-field element, when it is one.
+    ///
+    /// Every point of such a coset lies in the base field, so polynomials with
+    /// base-field coefficients take base-field values on it.
+    pub(super) fn base_offset(self) -> Option<u64> {
+        let [offset, first, second, third] = self.offset.coefficients();
+        (first == 0 && second == 0 && third == 0).then_some(offset)
+    }
+
+    /// Base-field point at an exact bounded natural-order index.
+    ///
+    /// Fails for a coset whose offset lies outside the base field.
+    pub(super) fn base_point(self, index: usize) -> Result<u64> {
+        let offset = self
+            .base_offset()
+            .ok_or_else(|| invalid("polynomial domain offset lies outside the base field"))?;
+        if index >= self.rows {
+            return Err(Error::QueryIndexOutOfRange {
+                index,
+                len: self.rows,
+            });
+        }
+        Ok(mul_mod(offset, field_pow(self.generator, index as u64)))
+    }
+
+    /// Evaluate public base-field coefficients on a base-field coset.
+    ///
+    /// This is one lane of [`Self::evaluate`]: the other three lanes of an
+    /// embedded base-field polynomial are zero on such a coset. The result is
+    /// public data; private coefficients use the clearing four-lane owner.
+    pub(super) fn evaluate_base(self, coefficients: &[u64]) -> Result<Vec<u64>> {
+        let offset = self
+            .base_offset()
+            .ok_or_else(|| invalid("polynomial domain offset lies outside the base field"))?;
+        if coefficients.is_empty() || coefficients.len() > self.rows {
+            return Err(invalid(
+                "polynomial coefficients exceed their exact extent or transform",
+            ));
+        }
+        for (index, &coefficient) in coefficients.iter().enumerate() {
+            coefficient.validate("polynomial_transform_coefficients", &[index])?;
+        }
+        let mut lane = reserved(self.rows)?;
+        let mut twist = 1;
+        for &coefficient in coefficients {
+            lane.push(mul_mod(coefficient, twist));
+            twist = mul_mod(twist, offset);
+        }
+        lane.resize(self.rows, 0);
+        cyclotomic::fft(&mut lane, self.cyclotomic());
+        Ok(lane)
+    }
+
     /// Evaluate full coefficients, after canonicality and degree-padding checks.
     pub(super) fn evaluate(
         self,
@@ -191,9 +245,11 @@ impl PolynomialDomain {
             }
             twist = twist.mul(self.offset);
         }
-        for lane in &mut lanes.values {
-            cyclotomic::fft(lane, self.cyclotomic());
-        }
+        // One sequential transform per lane; the four lanes are independent.
+        lanes
+            .values
+            .par_iter_mut()
+            .for_each(|lane| cyclotomic::fft(lane, self.cyclotomic()));
         Ok(lanes)
     }
 
@@ -226,9 +282,10 @@ impl PolynomialDomain {
                 "polynomial lanes belong to a different exact transform domain",
             ));
         }
-        for lane in &mut lanes.values {
-            cyclotomic::ifft(lane, self.cyclotomic());
-        }
+        lanes
+            .values
+            .par_iter_mut()
+            .for_each(|lane| cyclotomic::ifft(lane, self.cyclotomic()));
         let mut coefficients = SecretPolynomial::zeroed(self.rows)?;
         let mut untwist = F::ONE;
         for index in 0..self.rows {

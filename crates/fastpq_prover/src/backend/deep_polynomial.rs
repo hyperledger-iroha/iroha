@@ -26,6 +26,7 @@ use super::{
     polynomial_transform::validate_coefficients, secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
+use rayon::prelude::*;
 
 /// Exclusive degree bound and exact returned coefficient extent.
 pub(super) const DEGREE_BOUND: usize = super::deep_geometry::FRI_DEGREES[0];
@@ -147,17 +148,27 @@ impl<'a> DeepPolynomialSource<'a> {
     /// The checked pair retains the trace generator supplied by the geometry
     /// owner. This step does not establish commitment or AIR consistency.
     pub(super) fn prepare(self, points: OodPair) -> PreparedDeepPolynomial<'a> {
-        let trace_answers = points.points().map(|point| {
-            core::array::from_fn(|column| {
-                (0..self.trace.extent(column))
-                    .rev()
-                    .fold(F::ZERO, |value, degree| {
-                        value
-                            .mul(point)
-                            .add(F::embed_base(self.trace.coefficient(column, degree)))
-                    })
+        // One Horner evaluation per column and point. The columns are
+        // independent, so they are evaluated as one job each and collected in
+        // column order.
+        let [first, second] = points.points();
+        let pairs: Vec<[F; 2]> = (0..COMMITTED_COLUMN_COUNT)
+            .into_par_iter()
+            .map(|column| {
+                (0..self.trace.extent(column)).rev().fold(
+                    [F::ZERO; 2],
+                    |[at_first, at_second], degree| {
+                        let coefficient = F::embed_base(self.trace.coefficient(column, degree));
+                        [
+                            at_first.mul(first).add(coefficient),
+                            at_second.mul(second).add(coefficient),
+                        ]
+                    },
+                )
             })
-        });
+            .collect();
+        let trace_answers =
+            core::array::from_fn(|point| core::array::from_fn(|column| pairs[column][point]));
         let quotient_answers = self.quotient_halves().map(|half| {
             half.iter().rev().fold(F::ZERO, |value, &coefficient| {
                 value.mul(points.points()[0]).add(coefficient)

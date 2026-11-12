@@ -28,7 +28,7 @@ use super::{
     super::{
         field_pow,
         fixed_domain::FixedTraceDomain,
-        masked_quotient::{checked_add, checked_mul, transform_work},
+        plan_arithmetic::{checked_add, checked_mul, transform_work},
         polynomial_division::VanishingDivisionPlan,
         polynomial_transform::PolynomialDomain,
         secret_polynomial::SecretPolynomial,

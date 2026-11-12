@@ -53,10 +53,18 @@ fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
     }
 }
 
-fn batch_hash(level: usize, indices: &[usize], left: &[[u8; 32]], right: &mut [[u8; 32]]) {
-    for ((&index, &left), right) in indices.iter().zip(left).zip(right.iter_mut()) {
-        *right = hash(level, index, digest(left), digest(*right)).into_bytes();
+/// Reference level run: the parent at `offset` has index `first + offset * step`.
+fn run_hash(
+    level: usize,
+    first: usize,
+    step: usize,
+    left: &[[u8; 32]],
+    right: &mut [[u8; 32]],
+) -> Result<()> {
+    for (offset, (&left, right)) in left.iter().zip(right.iter_mut()).enumerate() {
+        *right = hash(level, first + offset * step, digest(left), digest(*right)).into_bytes();
     }
+    Ok(())
 }
 
 #[test]
@@ -85,23 +93,14 @@ fn batched_rows_preserve_every_small_frontier_and_canonical_parent_coordinate() 
                     for stripe in 0..stripes {
                         for start in (0..count / stripes).step_by(capacity) {
                             let length = (count / stripes - start).min(capacity);
-                            let indices = (start..start + length)
-                                .map(|row| stripe + row * stripes)
-                                .collect::<Vec<_>>();
                             let mut values = SecretPolynomial::zeroed(length).unwrap();
-                            for (&index, value) in indices.iter().zip(values.iter_mut()) {
-                                *value = leaves[index].into_bytes();
+                            for (offset, value) in values.iter_mut().enumerate() {
+                                *value = leaves[stripe + (start + offset) * stripes].into_bytes();
                             }
                             stream
-                                .push_batch(
-                                    &indices,
-                                    &mut values,
-                                    |level, indices, left, right| {
-                                        batch_hash(level, indices, left, right);
-                                        Ok(())
-                                    },
-                                    |level, index, left, right| Ok(hash(level, index, left, right)),
-                                )
+                                .push_run(&mut values, run_hash, |level, index, left, right| {
+                                    Ok(hash(level, index, left, right))
+                                })
                                 .unwrap();
                         }
                     }
@@ -119,44 +118,25 @@ fn batched_rows_preserve_every_small_frontier_and_canonical_parent_coordinate() 
 }
 
 #[test]
-fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
-    for indices in [vec![], vec![0, 1], vec![0, 2, 4], vec![2]] {
+fn empty_overlong_or_partial_parent_runs_poison_the_complete_stream() {
+    // A four-leaf, two-stripe tree has two rows per stripe: a run is one or
+    // two digests, and after one row only one more fits in that stripe.
+    for (first, second) in [(0, 0), (0, 3), (1, 0), (1, 2)] {
         let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
             .unwrap()
             .start()
             .unwrap();
-        let mut values = SecretPolynomial::zeroed(indices.len()).unwrap();
-        assert!(
-            stream
-                .push_batch(
-                    &indices,
-                    &mut values,
-                    |level, indices, left, right| {
-                        batch_hash(level, indices, left, right);
-                        Ok(())
-                    },
-                    |level, index, left, right| Ok(hash(level, index, left, right))
-                )
-                .is_err()
-        );
-        assert!(
-            stream
-                .push_batch(
-                    &[0],
-                    &mut [[0; 32]],
-                    |level, indices, left, right| {
-                        batch_hash(level, indices, left, right);
-                        Ok(())
-                    },
-                    |level, index, left, right| Ok(hash(level, index, left, right))
-                )
-                .is_err()
-        );
-        assert!(
-            stream
-                .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
-                .is_err()
-        );
+        let upper = |level, index, left, right| Ok(hash(level, index, left, right));
+        if first > 0 {
+            let mut values = SecretPolynomial::zeroed(first).unwrap();
+            stream.push_run(&mut values, run_hash, upper).unwrap();
+        }
+        let mut values = SecretPolynomial::zeroed(second).unwrap();
+        assert!(stream.push_run(&mut values, run_hash, upper).is_err());
+        // The refused run poisoned the traversal: a well-formed run and the
+        // root are both unavailable afterwards.
+        assert!(stream.push_run(&mut [[0; 32]], run_hash, upper).is_err());
+        assert!(stream.finish(upper).is_err());
     }
     // Every opaque digest bit pattern is valid; malformed field-word rejection
     // belonged to the retired digest. Ordering/shape and callback failures remain.
@@ -166,28 +146,19 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
             .start()
             .unwrap();
         stream
-            .push_batch(
-                &[0, 2],
-                &mut [[1; 32]; 2],
-                |level, indices, left, right| {
-                    batch_hash(level, indices, left, right);
-                    Ok(())
-                },
-                |level, index, left, right| Ok(hash(level, index, left, right)),
-            )
+            .push_run(&mut [[1; 32]; 2], run_hash, |level, index, left, right| {
+                Ok(hash(level, index, left, right))
+            })
             .unwrap();
-        let partial = |_: usize, _: &[usize], _: &[[u8; 32]], right: &mut [[u8; 32]]| {
+        let partial = |_: usize, _: usize, _: usize, _: &[[u8; 32]], right: &mut [[u8; 32]]| {
             right[0] = [marker; 32];
             Err(invalid("partial parent failure"))
         };
         assert!(
             stream
-                .push_batch(
-                    &[1, 3],
-                    &mut [[2; 32]; 2],
-                    partial,
-                    |level, index, left, right| Ok(hash(level, index, left, right))
-                )
+                .push_run(&mut [[2; 32]; 2], partial, |level, index, left, right| Ok(
+                    hash(level, index, left, right)
+                ))
                 .is_err()
         );
         assert!(
@@ -202,15 +173,9 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         .unwrap();
     assert!(
         stream
-            .push_batch(
-                &[0, 1],
-                &mut [[1; 32]; 2],
-                |level, indices, left, right| {
-                    batch_hash(level, indices, left, right);
-                    Ok(())
-                },
-                |_, _, _, _| Err(invalid("upper hash failure"))
-            )
+            .push_run(&mut [[1; 32]; 2], run_hash, |_, _, _, _| Err(invalid(
+                "upper hash failure"
+            )))
             .is_err()
     );
     assert!(
@@ -221,49 +186,45 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
 }
 
 #[test]
-fn full_capacity_batches_preserve_sparse_frontiers_across_run_boundaries() {
+fn whole_stripe_and_split_runs_preserve_sparse_frontiers_across_run_boundaries() {
     let count = super::super::deep_leaf_batch::CAPACITY * 4;
     let values = leaves(count);
     let expected = reference(&values);
     let queries = [0, 1, count / 2 - 1, count / 2, count - 2, count - 1];
-    let plan = StripedMerklePlan::new(count, 2, &queries, limits()).unwrap();
-    let positions = plan.openings.as_ref().unwrap().sibling_positions().to_vec();
-    let mut stream = plan.start().unwrap();
-    for stripe in 0..2 {
-        for start in (0..count / 2).step_by(super::super::deep_leaf_batch::CAPACITY) {
-            let indices = (start..start + super::super::deep_leaf_batch::CAPACITY)
-                .map(|row| stripe + 2 * row)
-                .collect::<Vec<_>>();
-            let mut batch = SecretPolynomial::zeroed(indices.len()).unwrap();
-            for (&index, value) in indices.iter().zip(batch.iter_mut()) {
-                *value = values[index].into_bytes();
+    // One run per stripe, the production shape, and runs that split a stripe
+    // at an uneven boundary produce the same root and frontier.
+    for run in [count / 2, super::super::deep_leaf_batch::CAPACITY, 1000] {
+        let plan = StripedMerklePlan::new(count, 2, &queries, limits()).unwrap();
+        let positions = plan.openings.as_ref().unwrap().sibling_positions().to_vec();
+        let mut stream = plan.start().unwrap();
+        for stripe in 0..2 {
+            for start in (0..count / 2).step_by(run) {
+                let length = (count / 2 - start).min(run);
+                let mut batch = SecretPolynomial::zeroed(length).unwrap();
+                for (offset, value) in batch.iter_mut().enumerate() {
+                    *value = values[stripe + 2 * (start + offset)].into_bytes();
+                }
+                stream
+                    .push_run(&mut batch, run_hash, |level, index, left, right| {
+                        Ok(hash(level, index, left, right))
+                    })
+                    .unwrap();
             }
-            stream
-                .push_batch(
-                    &indices,
-                    &mut batch,
-                    |level, indices, left, right| {
-                        batch_hash(level, indices, left, right);
-                        Ok(())
-                    },
-                    |level, index, left, right| Ok(hash(level, index, left, right)),
-                )
-                .unwrap();
         }
+        let result = stream
+            .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
+            .unwrap();
+        assert_eq!(result.root, expected.last().unwrap()[0]);
+        assert_eq!(
+            result.siblings,
+            positions
+                .iter()
+                .map(|p| expected[p.level][p.index])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(result.parent_hashes, count - 1);
+        assert_eq!(result.leaf_hashes, count);
     }
-    let result = stream
-        .finish(|level, index, left, right| Ok(hash(level, index, left, right)))
-        .unwrap();
-    assert_eq!(result.root, expected.last().unwrap()[0]);
-    assert_eq!(
-        result.siblings,
-        positions
-            .iter()
-            .map(|p| expected[p.level][p.index])
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(result.parent_hashes, count - 1);
-    assert_eq!(result.leaf_hashes, count);
 }
 
 #[test]
@@ -655,13 +616,9 @@ fn extra_push_after_complete_coverage_poisoned_even_if_error_is_ignored() {
         } else {
             assert!(
                 stream
-                    .push_batch(
-                        &[0],
+                    .push_run(
                         &mut [leaves(1)[0].into_bytes()],
-                        |level, indices, left, right| {
-                            batch_hash(level, indices, left, right);
-                            Ok(())
-                        },
+                        run_hash,
                         |level, index, left, right| Ok(hash(level, index, left, right))
                     )
                     .is_err()

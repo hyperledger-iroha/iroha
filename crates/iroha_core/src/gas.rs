@@ -115,6 +115,14 @@ const SCCP_LIGHT_CLIENT_VERIFY: u64 = DEFAULT_ZK_GAS_BASE_VERIFY;
 /// Light-client proof bytes per gas unit (decoding and hashing). A maximal 8 MiB source proof
 /// stays below the shipped 1 680 000 block gas limit.
 const SCCP_PROOF_BYTES_PER_GAS: u64 = 8;
+/// Public inputs of an AXT FASTPQ statement: data space, slot, old and new roots, permission
+/// root and transaction set.
+const FASTPQ_AXT_PUBLIC_INPUTS: u64 = 6;
+/// FASTPQ proof bytes per gas unit. The verifier decodes and Merkle-hashes these bytes, the
+/// work SCCP light-client proof bytes are priced for, so they use the same rate. The ZK
+/// schedule's per-proof-byte rate is set for small SNARK proofs: at that rate an ordinary
+/// 500 KB FASTPQ proof alone would exceed the shipped 1 680 000 block gas limit.
+const FASTPQ_PROOF_BYTES_PER_GAS: u64 = 8;
 /// Per byte of SCCP payload or recipient data hashed and stored.
 const PER_BYTE_SCCP: u64 = 1;
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
@@ -236,6 +244,23 @@ fn gas_for_kaigi_proof_verification(
         .saturating_add(zk_gas.per_proof_byte.saturating_mul(proof_bytes))
         .saturating_add(zk_gas.per_nullifier.saturating_mul(nullifiers))
         .saturating_add(zk_gas.per_commitment.saturating_mul(commitments))
+}
+/// Verification gas of an AXT FASTPQ proof blob under the executing block's schedule `zk_gas`:
+/// one proof base, the statement's public inputs, and the blob's bytes at
+/// [`FASTPQ_PROOF_BYTES_PER_GAS`].
+fn gas_for_fastpq_axt_proof(
+    proof_blob: &iroha_data_model::nexus::ProofBlob,
+    zk_gas: &ActualConfidentialGas,
+) -> u64 {
+    let proof_bytes = u64::try_from(proof_blob.payload.len()).unwrap_or(u64::MAX);
+    zk_gas
+        .proof_base
+        .saturating_add(
+            zk_gas
+                .per_public_input
+                .saturating_mul(FASTPQ_AXT_PUBLIC_INPUTS),
+        )
+        .saturating_add(proof_bytes.div_ceil(FASTPQ_PROOF_BYTES_PER_GAS))
 }
 fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
     BASE_REGISTER_PIN_MANIFEST.saturating_add(
@@ -741,6 +766,12 @@ fn meter_instruction_without_proof_attachment(
     if let Some(gas) = sccp_instruction_gas(any) {
         return gas;
     }
+    if let Some(allocation) =
+        any.downcast_ref::<dm_isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation>()
+    {
+        return BASE_REGISTER
+            .saturating_add(gas_for_fastpq_axt_proof(&allocation.proof_blob, zk_gas));
+    }
     // Unclassified instructions have a fixed first-release cost. Avoid encoding
     // the full instruction here: the retired per-byte factor was zero, so that
     // allocation and traversal could not affect the charged gas.
@@ -818,6 +849,11 @@ fn confidential_gas_cost_without_proof_attachment(
     }
     if any.is::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1>() {
         return parliament_anonymous_registration_proof_gas();
+    }
+    if let Some(allocation) =
+        any.downcast_ref::<dm_isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation>()
+    {
+        return gas_for_fastpq_axt_proof(&allocation.proof_blob, zk_gas);
     }
     0
 }
@@ -932,6 +968,108 @@ mod tests {
     use iroha_test_samples::gen_account_in;
     fn sample_account() -> AccountId {
         gen_account_in("wonderland").0
+    }
+    /// A vault allocation pays for verifying its FASTPQ proof under the block's committed
+    /// schedule: one proof base and six public inputs, plus the blob's bytes at the hashing
+    /// rate rather than the schedule's per-proof-byte rate. The receipt reports that
+    /// verification share as confidential gas, and a maximal blob still fits a shipped block.
+    #[test]
+    fn fee_sponsor_vault_allocation_meters_its_fastpq_proof_with_the_committed_schedule() {
+        use iroha_data_model::{
+            isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
+            nexus::{MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ProofBlob},
+        };
+        use iroha_model_base::topology::DataSpaceId;
+
+        const SHIPPED_BLOCK_GAS_LIMIT: u64 = 1_680_000;
+
+        let owner = sample_account();
+        let allocation = |proof_bytes: usize| -> InstructionBox {
+            RegisterVerifiedFeeSponsorVaultAllocation {
+                program_id: FeeSponsorProgramId::new(
+                    owner.clone(),
+                    "gas".parse().expect("program name"),
+                ),
+                program_revision: 1,
+                asset_definition_id: AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").expect("valid domain id"),
+                    "xor".parse().expect("asset name"),
+                ),
+                verified_allocation: 1_u32.into(),
+                source_dataspace_id: DataSpaceId::UNIVERSAL,
+                source_height: 1,
+                source_state_root: iroha_crypto::Hash::new(b"gas-source"),
+                expires_at_height: 2,
+                lease_id: iroha_crypto::Hash::new(b"gas-lease"),
+                manifest_root: [1; 32],
+                proof_blob: ProofBlob {
+                    payload: vec![0xA5; proof_bytes],
+                    expiry_slot: None,
+                },
+            }
+            .into()
+        };
+        let schedule = ActualConfidentialGas {
+            proof_base: 1_337,
+            per_public_input: 41,
+            per_proof_byte: 17,
+            per_nullifier: 43,
+            per_commitment: 47,
+        };
+        let meter = |instruction: &InstructionBox, zk_gas: &ActualConfidentialGas| {
+            meter_instruction(instruction, zk_gas).expect("gas attempt must complete")
+        };
+
+        let instruction = allocation(1_000);
+        let expected_proof_gas = 1_337 + 41 * 6 + 1_000_u64.div_ceil(8);
+        assert_eq!(
+            meter(&instruction, &schedule),
+            BASE_REGISTER + expected_proof_gas
+        );
+        assert_eq!(
+            confidential_gas_cost(&instruction, &schedule).expect("gas attempt must complete"),
+            expected_proof_gas
+        );
+        // Proof bytes cost one gas per started eight-byte unit, whatever `per_proof_byte` says.
+        assert_eq!(
+            meter(&allocation(1_001), &schedule) - meter(&instruction, &schedule),
+            1
+        );
+        assert_eq!(
+            meter(&allocation(1_008), &schedule),
+            meter(&allocation(1_001), &schedule)
+        );
+        let other_byte_rate = ActualConfidentialGas {
+            per_proof_byte: 1,
+            ..schedule
+        };
+        assert_eq!(
+            meter(&instruction, &other_byte_rate),
+            meter(&instruction, &schedule)
+        );
+        // The committed base and public-input rates move the price.
+        let raised = ActualConfidentialGas {
+            proof_base: schedule.proof_base + 1,
+            per_public_input: schedule.per_public_input + 1,
+            ..schedule
+        };
+        assert_eq!(
+            meter(&instruction, &raised) - meter(&instruction, &schedule),
+            1 + 6
+        );
+        // A maximal blob under the protocol default fits a block of the shipped limit.
+        let maximal = meter(
+            &allocation(MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES),
+            &DEFAULT_ZK_GAS,
+        );
+        assert_eq!(
+            maximal,
+            BASE_REGISTER
+                + DEFAULT_ZK_GAS_BASE_VERIFY
+                + 6 * DEFAULT_ZK_GAS_PER_PUBLIC_INPUT
+                + 262_144
+        );
+        assert!(maximal < SHIPPED_BLOCK_GAS_LIMIT);
     }
     #[test]
     fn set_kv_scales_with_value_length() {

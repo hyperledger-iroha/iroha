@@ -65,7 +65,7 @@ phase as well as digest dispatches. These are structural charges, not process
 RSS reservations or latency promises.
 The same limits include retained internal Merkle nodes, coverage, pending
 owners and opening scratch. Same-attempt caches bind immutable context and the
-original roots; selected leaf stripes are regenerated and every opening must
+original roots; selected leaves are recomputed and every opening must
 reconstruct its committed root before disclosure.
 
 Only one producer runs per process; bundle segments are sequential. Applications

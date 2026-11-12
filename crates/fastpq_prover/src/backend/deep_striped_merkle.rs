@@ -2,8 +2,10 @@
 //!
 //! Stripe s emits indices s+B*j. Maintain log2(B) pending subtree digests
 //! per row j, then stream each completed B-leaf subtree into one upper stack.
-//! For N=65536/B=128 this uses 7*N digest slots instead of a complete M-leaf
-//! tree. Every leaf/parent keeps its natural coordinate and existing hash role.
+//! For N=65536/B=128 this uses 7*N pending digest slots and one N-digest stripe
+//! run instead of a complete M-leaf tree. A stripe's leaves, and its parents on
+//! each lower level, are hashed as one ordered run each; the upper stack is
+//! sequential. Every leaf/parent keeps its natural coordinate and hash role.
 //! First commitments retain bounded internal nodes; selected-leaf replay later
 //! reconstructs the original canonical frontier without rehashing the full tree.
 //! No full leaf-value oracle is retained. Digest owners are erased on drop.
@@ -77,7 +79,9 @@ impl StripedMerklePlan {
             )?)
         };
         let siblings = openings.as_ref().map_or(0, |plan| plan.work().siblings);
-        let slots = add(mul(rows, lower_levels)?, upper_levels)?;
+        // One pending digest per row and lower level, the upper stack, and the
+        // run of one whole stripe of leaf digests its caller hashes and merges.
+        let slots = add(mul(rows, add(lower_levels, 1)?)?, upper_levels)?;
         // Stack digests; guarded frontier + final public frontier; plan-owned
         // query positions and sibling coordinates. Vec metadata/allocator/RSS
         // are excluded, matching the other construction payload plans.
@@ -234,16 +238,22 @@ impl StripedMerkle {
         Ok(())
     }
 
-    /// Merge a bounded run from one stripe. Lower parents at a given level are
-    /// independent across rows and can be hashed together; the final upper stack
-    /// retains its canonical row order. Caller-owned clearing leaf storage is
-    /// reused for the intermediate parents. Any malformed run or callback error
-    /// poisons this traversal before another root can be returned.
-    pub(super) fn push_batch(
+    /// Merge the next run of consecutive rows of the current stripe.
+    ///
+    /// `values` holds the leaf digests of those rows in row order; a whole
+    /// stripe is one run. Their natural indices follow from the traversal
+    /// position, so a caller cannot supply another order. Lower parents on one
+    /// level are independent across rows and form an arithmetic progression of
+    /// natural indices: `lower_hash(level, first_index, index_step, left, right)`
+    /// hashes them together, overwriting each right child with its parent. The
+    /// final upper stack keeps its canonical row order. Caller-owned clearing
+    /// leaf storage is reused for the intermediate parents. An empty or overlong
+    /// run, or a callback error, poisons this traversal before another root can
+    /// be returned.
+    pub(super) fn push_run(
         &mut self,
-        indices: &[usize],
         values: &mut [[u8; 32]],
-        mut lower_hash: impl FnMut(usize, &[usize], &[[u8; 32]], &mut [[u8; 32]]) -> Result<()>,
+        mut lower_hash: impl FnMut(usize, usize, usize, &[[u8; 32]], &mut [[u8; 32]]) -> Result<()>,
         mut upper_hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
     ) -> Result<()> {
         use zeroize::Zeroize;
@@ -255,25 +265,17 @@ impl StripedMerkle {
             ));
         }
         self.failed = true;
+        let stripes = self.plan.stripes;
         let stripe = self.seen / self.plan.rows;
         let row = self.seen % self.plan.rows;
-        if indices.is_empty()
-            || indices.len() > super::deep_leaf_batch::CAPACITY
-            || indices.len() != values.len()
-            || indices.len() > self.plan.rows - row
-            || indices
-                .iter()
-                .enumerate()
-                .any(|(offset, &index)| index != stripe + (row + offset) * self.plan.stripes)
-        {
+        if values.is_empty() || values.len() > self.plan.rows - row {
             return Err(invalid(
-                "striped commitment batch differs from canonical replay order",
+                "striped commitment run differs from canonical replay order",
             ));
         }
-        for (&index, &words) in indices.iter().zip(values.iter()) {
-            self.capture(0, index, digest(words))?;
+        for (offset, &words) in values.iter().enumerate() {
+            self.capture(0, stripe + (row + offset) * stripes, digest(words))?;
         }
-        let mut parent_indices = [0; super::deep_leaf_batch::CAPACITY];
         for level in 0..self.plan.lower_levels {
             let start = level * self.plan.rows + row;
             let end = start + values.len();
@@ -283,12 +285,16 @@ impl StripedMerkle {
                 self.failed = false;
                 return Ok(());
             }
-            for (parent, &index) in parent_indices.iter_mut().zip(indices) {
-                *parent = index >> (level + 1);
-            }
+            // Row `r` of this stripe has natural index `stripe + r * stripes`.
+            // The stripe count is a multiple of `2^(level + 1)`, so the parent
+            // index `(stripe + r * stripes) >> (level + 1)` advances by a fixed
+            // step from one row to the next.
+            let index_step = stripes >> (level + 1);
+            let first_index = (stripe >> (level + 1)) + row * index_step;
             lower_hash(
                 level + 1,
-                &parent_indices[..values.len()],
+                first_index,
+                index_step,
                 &self.lower[start..end],
                 values,
             )?;
@@ -298,11 +304,12 @@ impl StripedMerkle {
                 consumed.zeroize();
             }
             self.parents += values.len();
-            for (&index, &words) in parent_indices.iter().zip(values.iter()) {
-                self.capture(level + 1, index, digest(words))?;
+            for (offset, &words) in values.iter().enumerate() {
+                self.capture(level + 1, first_index + offset * index_step, digest(words))?;
             }
         }
-        for (offset, (&index, words)) in indices.iter().zip(values.iter_mut()).enumerate() {
+        for (offset, words) in values.iter_mut().enumerate() {
+            let index = stripe + (row + offset) * stripes;
             let mut value = digest(*words);
             let mut upper = 0;
             let mut level = self.plan.lower_levels;
@@ -507,7 +514,6 @@ fn stream_rows(
         deep_binding::Oracle,
         deep_proof::{RowOpening, RowValues},
     };
-    const BATCH: usize = super::deep_leaf_batch::CAPACITY;
     if replay.width() != WIDTH
         || tree.leaves != replay.plan().lde_rows()
         || tree.stripes != replay.plan().stripes()
@@ -524,14 +530,15 @@ fn stream_rows(
             "DEEP row frontier differs from selected row positions",
         ));
     }
+    let stripes = tree.stripes;
+    let stripe_rows = tree.rows;
     let mut stream = if let Some(cache) = cache {
         tree.start_cached(cache)?
     } else {
         tree.start()?
     };
-    let mut row = SecretPolynomial::zeroed(WIDTH)?;
-    let mut bytes = SecretPolynomial::zeroed(BATCH * WIDTH * 8)?;
-    let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(BATCH)?;
+    // One stripe of leaf digests, reused for that stripe's lower parents.
+    let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(stripe_rows)?;
     let mut selected = SecretPolynomial::zeroed(queries.len() * WIDTH)?;
     let parent = |level: usize, index: usize, left, right| {
         binding
@@ -539,52 +546,43 @@ fn stream_rows(
             .map_err(binding_error)
     };
     replay.visit_all(|stripe| {
-        for start in (0..stripe.rows()).step_by(BATCH) {
-            let count = (stripe.rows() - start).min(BATCH);
-            let mut indices = [0; BATCH];
-            for (offset, packed) in bytes[..count * WIDTH * 8]
-                .as_chunks_mut::<{ WIDTH * 8 }>()
-                .0
-                .iter_mut()
-                .enumerate()
-            {
-                let index = stripe.global_index(start + offset);
-                indices[offset] = index;
-                stripe.fill_row(start + offset, &mut row)?;
-                for (&value, word) in row.iter().zip(packed.as_chunks_mut::<8>().0.iter_mut()) {
-                    *word = value.to_le_bytes();
-                }
-                if let Ok(position) = queries.binary_search(&index) {
-                    selected[position * WIDTH..(position + 1) * WIDTH].copy_from_slice(&row);
-                }
-            }
-            super::deep_leaf_batch::hash(
-                binding,
-                Oracle::Row,
-                &indices[..count],
-                &bytes[..count * WIDTH * 8],
-                WIDTH * 8,
-                &mut leaves[..count],
-                execution,
-            )?;
-            stream.push_batch(
-                &indices[..count],
-                &mut leaves[..count],
-                |level, indices, left, right| {
-                    super::deep_parent_batch::hash_in_place(
-                        binding,
-                        Oracle::Row,
-                        level,
-                        indices,
-                        left,
-                        right,
-                        execution,
-                    )
-                },
-                parent,
-            )?;
+        if stripe.rows() != stripe_rows {
+            return Err(invalid("DEEP row stripe differs from its tree plan"));
         }
-        Ok(())
+        // Every job packs and hashes its own rows of this stripe.
+        super::deep_leaf_batch::hash_run(
+            binding,
+            Oracle::Row,
+            WIDTH * 8,
+            |row| stripe.global_index(row),
+            |row, payload| stripe.fill_row_bytes(row, payload),
+            &mut leaves,
+            execution,
+        )?;
+        for (&index, values) in queries
+            .iter()
+            .zip(selected.as_chunks_mut::<WIDTH>().0.iter_mut())
+        {
+            if index % stripes == stripe.stripe_index() {
+                stripe.fill_row(index / stripes, values)?;
+            }
+        }
+        stream.push_run(
+            &mut leaves,
+            |level, first_index, index_step, left, right| {
+                super::deep_parent_batch::hash_run_in_place(
+                    binding,
+                    Oracle::Row,
+                    level,
+                    first_index,
+                    index_step,
+                    left,
+                    right,
+                    execution,
+                )
+            },
+            parent,
+        )
     })?;
     let finished = stream.finish(parent)?;
     let mut rows = Vec::new();
@@ -605,7 +603,7 @@ fn stream_rows(
     })
 }
 
-/// Regenerate only queried rows and leaf siblings under the committed mask owner.
+/// Evaluate only queried rows and leaf siblings under the committed mask owner.
 pub(super) fn open_cached_rows(
     cache: CommittedNodes<'_>,
     replay: &mut super::deep_masked_replay::MaskedTraceReplay,
@@ -613,7 +611,6 @@ pub(super) fn open_cached_rows(
     execution: crate::DigestExecutionV1,
 ) -> Result<RowCommitment> {
     use super::{
-        compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH,
         deep_binding::Oracle,
         deep_proof::{RowOpening, RowValues},
     };
@@ -624,21 +621,7 @@ pub(super) fn open_cached_rows(
         return Err(invalid("cached row openings differ from the exact profile"));
     }
     let opened = cache.open(queries, execution, |indices, output| {
-        let mut row = SecretPolynomial::zeroed(WIDTH)?;
-        replay.visit_selected_stripes(indices, |stripe| {
-            for (&index, target) in indices
-                .iter()
-                .zip(output.as_chunks_mut::<{ WIDTH * 8 }>().0.iter_mut())
-            {
-                if index % replay_stripes() == stripe.stripe_index() {
-                    stripe.fill_row(index / replay_stripes(), &mut row)?;
-                    for (&value, word) in row.iter().zip(target.as_chunks_mut::<8>().0.iter_mut()) {
-                        *word = value.to_le_bytes();
-                    }
-                }
-            }
-            Ok(())
-        })
+        replay.evaluate_selected_rows(indices, output)
     })?;
     let mut rows = Vec::new();
     rows.try_reserve_exact(queries.len())
@@ -662,9 +645,6 @@ pub(super) fn open_cached_rows(
         rows,
         cache: None,
     })
-}
-fn replay_stripes() -> usize {
-    super::deep_geometry::LDE_ROWS / super::deep_geometry::TRACE_ROWS
 }
 
 #[allow(

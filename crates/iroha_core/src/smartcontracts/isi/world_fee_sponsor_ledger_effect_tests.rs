@@ -270,3 +270,223 @@ fn faulty_verifier_fee_sponsor_failed_batch_discards_earlier_allocation() {
         baseline
     );
 }
+
+// Registration applies the ledger rules before it verifies the proof, so admission
+// sees the candidate without its verifier digests; these controls
+// zero them to show that no ledger rule reads them.
+fn fee_sponsor_unverified_candidate(
+    record: &VerifiedFeeSponsorVaultAllocation,
+) -> VerifiedFeeSponsorVaultAllocation {
+    VerifiedFeeSponsorVaultAllocation {
+        fastpq_statement_digest: [0; 32],
+        fastpq_proof_digest: Hash::prehashed([0; 32]),
+        ..record.clone()
+    }
+}
+
+#[test]
+fn fee_sponsor_admission_finds_the_stored_allocation_without_verifier_digests() {
+    let (state, first) = fee_sponsor_faulty_effect_fixture();
+    let mut block = state.block(BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    let baseline = fee_sponsor_faulty_effect_rows(&transaction);
+    let candidate = fee_sponsor_unverified_candidate(&first);
+    let key = match super::fee_sponsor_vault_allocation_admission(&transaction, &candidate)
+        .expect("the empty ledger admits the lease")
+    {
+        super::FeeSponsorVaultAllocationAdmission::Admissible(key) => key,
+        super::FeeSponsorVaultAllocationAdmission::Recorded => {
+            panic!("nothing is stored before the first allocation")
+        }
+    };
+    assert_eq!(
+        key,
+        super::verified_fee_sponsor_vault_allocation_state_key(
+            &first.program_id,
+            &first.asset_definition_id,
+            &first.lease_id,
+        )
+        .expect("canonical lease key"),
+    );
+    assert_eq!(
+        fee_sponsor_faulty_effect_rows(&transaction),
+        baseline,
+        "admission alone writes nothing",
+    );
+    super::apply_verified_fee_sponsor_vault_allocation(&mut transaction, first.clone())
+        .expect("six units fit the ten-unit vault");
+    let stored = fee_sponsor_faulty_effect_rows(&transaction);
+    assert_eq!(
+        stored,
+        fee_sponsor_expected_rows_with_allocation(baseline, &first)
+    );
+    assert!(
+        matches!(
+            super::fee_sponsor_vault_allocation_admission(&transaction, &candidate)
+                .expect("the same payload at the same height is the stored allocation"),
+            super::FeeSponsorVaultAllocationAdmission::Recorded
+        ),
+        "a stored lease is never admitted twice"
+    );
+    assert_eq!(fee_sponsor_faulty_effect_rows(&transaction), stored);
+}
+
+#[test]
+fn fee_sponsor_admission_refuses_replays_and_conflicts_without_verifier_digests() {
+    let (state, first) = fee_sponsor_faulty_effect_fixture();
+    let mut block = state.block(BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    super::apply_verified_fee_sponsor_vault_allocation(&mut transaction, first.clone()).unwrap();
+    // A row that another block verified and stored records that block's height.
+    let mut earlier = first.clone();
+    earlier.lease_id = Hash::new(b"lease-stored-by-another-block");
+    earlier.source_dataspace_id = DataSpaceId::new(2);
+    earlier.verified_allocation = Quantity::one();
+    earlier.verified_at_height = 7;
+    let earlier_key = super::verified_fee_sponsor_vault_allocation_state_key(
+        &earlier.program_id,
+        &earlier.asset_definition_id,
+        &earlier.lease_id,
+    )
+    .unwrap();
+    super::store_fee_sponsor_vault_allocation(&mut transaction, earlier_key, &earlier).unwrap();
+    let rows = fee_sponsor_faulty_effect_rows(&transaction);
+    let lease_rebound = |error: &InstructionExecutionError| matches!(error, InstructionExecutionError::InvariantViolation(message) if message.contains("already bound to another allocation"));
+    // Resubmitting that exact payload in this block is another allocation for the
+    // lease, refused without verifying the proof again.
+    let mut replay = fee_sponsor_unverified_candidate(&earlier);
+    replay.verified_at_height = 1;
+    let error = super::fee_sponsor_vault_allocation_admission(&transaction, &replay)
+        .err()
+        .expect("a replay at another height is refused");
+    assert!(lease_rebound(&error), "{error:?}");
+    // Another payload under a stored lease id.
+    let mut other_payload = fee_sponsor_unverified_candidate(&first);
+    other_payload.proof_payload_hash = Hash::new(b"another-proof-payload");
+    let error = super::fee_sponsor_vault_allocation_admission(&transaction, &other_payload)
+        .err()
+        .expect("a lease id binds one payload");
+    assert!(lease_rebound(&error), "{error:?}");
+    // A fresh lease on a route that already has a live lease.
+    let mut same_route = fee_sponsor_unverified_candidate(&first);
+    same_route.lease_id = Hash::new(b"fresh-lease-on-a-live-route");
+    same_route.verified_allocation = Quantity::one();
+    let error = super::fee_sponsor_vault_allocation_admission(&transaction, &same_route)
+        .err()
+        .expect("one live lease per route");
+    assert!(
+        matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("already has an unexpired spend lease")),
+        "{error:?}"
+    );
+    // A fresh lease on a free route that the vault cannot cover: seven of ten units
+    // are locked, so four more do not fit.
+    let mut excess = fee_sponsor_unverified_candidate(&first);
+    excess.lease_id = Hash::new(b"fresh-lease-beyond-capacity");
+    excess.source_dataspace_id = DataSpaceId::new(3);
+    excess.verified_allocation = Quantity::from(4_u32);
+    let error = super::fee_sponsor_vault_allocation_admission(&transaction, &excess)
+        .err()
+        .expect("capacity is checked before verification");
+    assert!(
+        matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("exceed source capacity")),
+        "{error:?}"
+    );
+    // A lease that would outlive a scheduled revision activation.
+    let mut program = transaction
+        .world
+        .fee_sponsor_programs
+        .get(&first.program_id)
+        .unwrap()
+        .clone();
+    program.scheduled_activation = Some(iroha_data_model::nexus::FeeSponsorProgramActivation {
+        revision: 2,
+        activate_at_height: 10,
+    });
+    transaction
+        .world
+        .fee_sponsor_programs
+        .insert(first.program_id.clone(), program);
+    let mut outliving = fee_sponsor_unverified_candidate(&first);
+    outliving.lease_id = Hash::new(b"fresh-lease-past-activation");
+    outliving.source_dataspace_id = DataSpaceId::new(3);
+    outliving.verified_allocation = Quantity::one();
+    let error = super::fee_sponsor_vault_allocation_admission(&transaction, &outliving)
+        .err()
+        .expect("a lease ends before the scheduled activation");
+    assert!(
+        matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("must expire before scheduled revision")),
+        "{error:?}"
+    );
+    // A verified record that differs from the stored row only in its digests is a
+    // conflict for a faulty verifier, never a silent no-op.
+    let mut redigested = first.clone();
+    redigested.fastpq_proof_digest = Hash::new(b"another-proof-digest");
+    let error = super::apply_verified_fee_sponsor_vault_allocation(&mut transaction, redigested)
+        .expect_err("a faulty verifier cannot overwrite stored digests");
+    assert!(
+        matches!(&error, InstructionExecutionError::InvariantViolation(message) if message.contains("conflicting verified fee sponsor vault allocation")),
+        "{error:?}"
+    );
+    assert_eq!(fee_sponsor_faulty_effect_rows(&transaction), rows);
+}
+
+#[test]
+fn fee_sponsor_allocation_rows_are_exactly_the_prefixed_contract_state() {
+    let (state, first) = fee_sponsor_faulty_effect_fixture();
+    let mut block = state.block(BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    super::apply_verified_fee_sponsor_vault_allocation(&mut transaction, first.clone()).unwrap();
+    let mut second = first.clone();
+    second.lease_id = Hash::new(b"prefix-walk-second-lease");
+    second.source_dataspace_id = DataSpaceId::new(2);
+    second.verified_allocation = Quantity::from(4_u32);
+    super::apply_verified_fee_sponsor_vault_allocation(&mut transaction, second).unwrap();
+    // Neighbours on both sides of the prefix: usage rows and keys that sort just
+    // before and just after every allocation key.
+    for neighbour in [
+        VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&first.lease_id),
+        "pkdeploy_verified_fee_sponsor_vault_allocatioM".to_owned(),
+        "pkdeploy_verified_fee_sponsor_vault_allocatioo".to_owned(),
+        "pkdeploy_verified_fee_sponsor_vault_allocatiop_after".to_owned(),
+    ] {
+        transaction
+            .world
+            .smart_contract_state
+            .insert(StatePath::from_str(&neighbour).unwrap(), vec![1]);
+    }
+    let walked: Vec<StatePath> =
+        crate::state::verified_fee_sponsor_vault_allocation_rows(&transaction.world)
+            .map(|(key, _)| key.clone())
+            .collect();
+    let filtered: Vec<StatePath> = transaction
+        .world
+        .smart_contract_state
+        .iter()
+        .filter(|(key, _)| {
+            key.as_ref().starts_with(
+                iroha_data_model::nexus::VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+            )
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    assert_eq!(walked.len(), 2);
+    assert_eq!(walked, filtered);
+}

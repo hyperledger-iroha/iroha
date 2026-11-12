@@ -186,6 +186,56 @@ fn assert_profile_rejected_before_child_decode(
 }
 
 #[test]
+fn axt_statement_digest_is_compared_before_the_offered_statement_is_prepared() {
+    let fixture = fixture();
+    let bytes = norito::encode_canonical(&axt(&fixture, vec![0])).unwrap();
+    let expected = fixture.expected();
+    let digest = statement_digest(&fixture.model(), usize::MAX).unwrap();
+    let mut other_digest = digest;
+    other_digest[0] ^= 1;
+    let mut other_expected = fixture.expected();
+    other_expected.slot ^= 1;
+    let digest_mismatch = |result: &Result<VerifiedArtifact, ArtifactError>| {
+        matches!(
+            result,
+            Err(ArtifactError::Verify(Error::PublicIoMismatch {
+                field: "compact_artifact_public_statement_digest"
+            }))
+        )
+    };
+    // The caller's digest alone refuses the offered statement.
+    assert!(digest_mismatch(&verify_bound_quantity_axt_artifact(
+        &bytes,
+        &expected,
+        other_digest,
+        fixture.context(),
+        policy(),
+    )));
+    // When the public inputs differ too, the digest still answers first: the
+    // statement is hashed, never prepared against the caller's inputs.
+    assert!(digest_mismatch(&verify_bound_quantity_axt_artifact(
+        &bytes,
+        &other_expected,
+        other_digest,
+        fixture.context(),
+        policy(),
+    )));
+    // With the expected digest, preparation compares the public inputs.
+    let prepared = verify_bound_quantity_axt_artifact(
+        &bytes,
+        &other_expected,
+        digest,
+        fixture.context(),
+        policy(),
+    );
+    assert!(matches!(
+        prepared,
+        Err(ArtifactError::Verify(Error::PublicIoMismatch { .. }))
+    ));
+    assert!(!digest_mismatch(&prepared));
+}
+
+#[test]
 fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations() {
     use norito::schema::identity::NoritoSchema as _;
 

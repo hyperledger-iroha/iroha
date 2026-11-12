@@ -6,30 +6,20 @@
 //! all four challenge coordinates. This owner does not select a protocol,
 //! transcript, degree bound, query count or production admission policy.
 //!
-//! TODO: Wire this owner into the reviewed compact protocol's authenticated
-//! fibers and degree progression before replacing the existing binary profile.
+//! The bounded verifier folds every authenticated fiber of the fixed profile
+//! through [`FriFoldPlan::fold_coset`]. The producer folds in coefficient space
+//! (`deep_coefficient_replay::fold_coefficients`), which is the same map.
 
-#[cfg(test)]
-use rayon::prelude::*;
-
-#[cfg(test)]
-use super::FriDomain;
 use super::polynomial_field::PolynomialField;
 use super::{GOLDILOCKS_MODULUS, field_inverse, field_pow, mul_mod};
 use crate::{Error, Result, field::GoldilocksFp4V1};
 
 const MAX_ARITY: usize = 16;
-#[cfg(test)]
-const MAX_LAYER_JOBS: usize = 32;
-#[cfg(test)]
-const PARALLEL_OUTPUT_THRESHOLD: usize = 1024;
 
 /// Checked, fixed-size inverse transform for one multiplicative fiber shape.
 #[derive(Clone, Debug)]
 pub(super) struct FriFoldPlan {
     arity: usize,
-    #[cfg(test)]
-    coset_generator: u64,
     inverse_arity: u64,
     inverse_twiddles: [u64; MAX_ARITY / 2],
     reverse: [usize; MAX_ARITY],
@@ -64,8 +54,6 @@ impl FriFoldPlan {
         });
         Ok(Self {
             arity,
-            #[cfg(test)]
-            coset_generator,
             inverse_arity: field_inverse(arity as u64),
             inverse_twiddles,
             reverse,
@@ -93,70 +81,6 @@ impl FriFoldPlan {
             value.validate("fri_fold_value", &[index])?;
         }
         Ok(self.fold_canonical(values, challenge, field_inverse(x)))
-    }
-
-    /// Fold a complete layer into an exactly sized caller-owned output slice.
-    ///
-    /// Validation finishes before any output is changed. Groups are strided:
-    /// `values[i + j * output.len()]` belongs to the fiber rooted at `domain[i]`.
-    /// Each job owns a fixed 16-element stack workspace; no per-fiber allocation
-    /// or inversion occurs. Serial and parallel execution use the same kernel.
-    ///
-    /// TODO: route complete-layer folding through this kernel once the compact
-    /// protocol replaces the existing binary FRI profile.
-    #[cfg(test)]
-    pub(super) fn fold_layer_into(
-        &self,
-        values: &[GoldilocksFp4V1],
-        challenge: GoldilocksFp4V1,
-        domain: FriDomain,
-        output: &mut [GoldilocksFp4V1],
-    ) -> Result<()> {
-        if values.len() < self.arity
-            || !values.len().is_power_of_two()
-            || output.len() != values.len() / self.arity
-            || domain.generator == 0
-            || domain.generator >= GOLDILOCKS_MODULUS
-            || domain.offset == 0
-            || domain.offset >= GOLDILOCKS_MODULUS
-            || field_pow(domain.generator, values.len() as u64) != 1
-            || field_pow(domain.generator, (values.len() / 2) as u64) == 1
-            || domain.coset_generator(output.len()) != self.coset_generator
-        {
-            return Err(Error::FriDomainSize {
-                length: values.len(),
-                arity: self.arity,
-            });
-        }
-        challenge.validate("fri_fold_challenge", &[])?;
-        for (index, &value) in values.iter().enumerate() {
-            value.validate("fri_fold_value", &[index])?;
-        }
-        let inverse_offset = field_inverse(domain.offset);
-        let inverse_generator = field_inverse(domain.generator);
-        let output_len = output.len();
-        let fill = |start: usize, destination: &mut [GoldilocksFp4V1]| {
-            let mut inverse_x = mul_mod(inverse_offset, field_pow(inverse_generator, start as u64));
-            let mut fiber = [GoldilocksFp4V1::ZERO; MAX_ARITY];
-            for (local_index, result) in destination.iter_mut().enumerate() {
-                let index = start + local_index;
-                for (position, value) in fiber[..self.arity].iter_mut().enumerate() {
-                    *value = values[index + position * output_len];
-                }
-                *result = self.fold_canonical(&fiber[..self.arity], challenge, inverse_x);
-                inverse_x = mul_mod(inverse_x, inverse_generator);
-            }
-        };
-        if output_len < PARALLEL_OUTPUT_THRESHOLD {
-            fill(0, output);
-        } else {
-            let chunk_len = output_len.div_ceil(MAX_LAYER_JOBS);
-            output
-                .par_chunks_mut(chunk_len)
-                .enumerate()
-                .for_each(|(chunk, destination)| fill(chunk * chunk_len, destination));
-        }
-        Ok(())
     }
 
     fn fold_canonical(

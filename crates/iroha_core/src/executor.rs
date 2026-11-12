@@ -1816,26 +1816,6 @@ fn successful_claim_fee_exempt_payload(
     }
     result
 }
-fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
-    let any = instruction.as_any();
-    any.downcast_ref::<iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation>()
-        .is_some()
-}
-fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
-    nexus_protocol_fee_exempt_instruction(instruction)
-}
-fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
-    !instructions.is_empty() && instructions.iter().all(nexus_fee_exempt_instruction)
-}
-fn nexus_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
-    nexus_fee_exempt_payload(transaction.payload())
-}
-fn nexus_fee_exempt_payload(payload: &TransactionPayload) -> bool {
-    let Executable::Instructions(instructions) = &payload.instructions else {
-        return false;
-    };
-    nexus_fee_exempt_instructions(instructions.as_ref())
-}
 fn fee_exempt_payload(
     world: &impl WorldReadOnly,
     fees: &RootFeePolicy,
@@ -1845,8 +1825,7 @@ fn fee_exempt_payload(
     next_block_height: u64,
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     Ok(root_fees::permits_public_exemption(world)?
-        && (nexus_fee_exempt_payload(payload)
-            || successful_claim_fee_exempt_payload(world, fees, payload, observation_time_ms)?
+        && (successful_claim_fee_exempt_payload(world, fees, payload, observation_time_ms)?
             || crate::smartcontracts::isi::sccp::fees::exempt_on_success(
                 world,
                 payload,
@@ -1867,25 +1846,23 @@ fn fee_exempt_transaction(
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     // `world` is the committed parent World, the one SCCP eligibility is judged against.
     Ok(root_fees::permits_public_exemption(world)?
-        && (nexus_fee_exempt_transaction(transaction)
-            || successful_claim_fee_exempt_transaction(
-                world,
-                fees,
-                transaction,
-                observation_time_ms,
-            )?
-            || crate::smartcontracts::isi::sccp::fees::exempt_on_success(
-                world,
-                transaction.payload(),
-                sccp_committed_time_ms,
-                next_block_height,
-            )))
+        && (successful_claim_fee_exempt_transaction(
+            world,
+            fees,
+            transaction,
+            observation_time_ms,
+        )? || crate::smartcontracts::isi::sccp::fees::exempt_on_success(
+            world,
+            transaction.payload(),
+            sccp_committed_time_ms,
+            next_block_height,
+        )))
 }
 /// Return how the Nexus fee applies to `transaction` executing in `state_transaction`, with
 /// its SCCP exempt class when it has one.
 ///
-/// Protocol and successful-claim exemptions are judged against the executing World and hold
-/// whatever the outcome. SCCP exemptions are judged against the committed parent World of the
+/// Successful-claim exemptions are judged against the executing World and hold whatever the
+/// outcome. SCCP exemptions are judged against the committed parent World of the
 /// executing block, exactly like queue admission, fee quoting and the per-block exempt cap,
 /// and hold on success only: a failure is charged the ordinary fee (`specs/sccp.md` §4.19).
 fn transaction_fee_exemption(
@@ -1904,18 +1881,17 @@ fn transaction_fee_exemption(
     {
         return Ok((ExecutionFeeExemption::Charged, None));
     }
-    if nexus_fee_exempt_transaction(transaction)
-        || successful_claim_fee_exempt_transaction(
-            world,
-            root_fees::execution_policy(state_transaction).map_err(|reason| {
-                crate::execution_attempt::ExecutionAttemptError::Rejected(
-                    ValidationFail::InternalError(reason.into()),
-                )
-            })?,
-            transaction,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
+    if successful_claim_fee_exempt_transaction(
+        world,
+        root_fees::execution_policy(state_transaction).map_err(|reason| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ValidationFail::InternalError(reason.into()),
+            )
+        })?,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
         return Ok((ExecutionFeeExemption::Exempt, None));
     }
@@ -2407,20 +2383,14 @@ fn select_fee_sponsor_relay_lease(
 ) -> Result<(VerifiedFeeSponsorVaultAllocation, Quantity), NexusFeeAdmissionError> {
     let source_dataspace_id = route_dataspace_id.unwrap_or(DataSpaceId::UNIVERSAL);
     let mut candidates = Vec::new();
-    for (key, payload) in world.smart_contract_state().iter() {
-        if !key
-            .to_string()
-            .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
-        {
-            continue;
-        }
+    for (key, payload) in crate::state::verified_fee_sponsor_vault_allocation_rows(world) {
         let record = decode_verified_fee_sponsor_vault_allocation_state(payload)?;
         let canonical_key = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
             &record.asset_definition_id,
             &record.lease_id,
         );
-        if key.to_string() != canonical_key {
+        if key.as_ref() != canonical_key {
             return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
                 "verified fee sponsor vault allocation `{}` is stored under a non-canonical key",
                 record.lease_id

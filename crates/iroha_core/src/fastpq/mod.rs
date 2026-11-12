@@ -83,6 +83,8 @@ pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
 pub(crate) const AXT_UNANCHORED_REMOTE_SPEND_REJECTION: &str = "handle-backed FASTPQ remote spend is unavailable until authoritative finalized source roots and transaction set, and fresh issuer authorization of the exact intent, proof, and effective amount, are authenticated";
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
+/// Accelerator digests recomputed on the CPU before a batch is accepted.
+const GPU_DIGEST_AUDIT_SAMPLES: usize = 8;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
 static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
@@ -406,9 +408,17 @@ impl PoseidonDigestBatch {
     }
     // Never install a prefix or ignore trailing accelerator output. A cardinality
     // failure quarantines acceleration; the caller recomputes the entire batch.
+    //
+    // These digests enter block outputs every validator must agree on, so a
+    // fixed spread of them is also recomputed on the CPU before any is
+    // installed. A kernel or driver that computes another function is caught
+    // on its first batch and quarantined like a cardinality failure. The audit
+    // cannot see a fault confined to positions it does not sample.
     fn accept_gpu_digests(&self, digests: Option<Vec<[u8; 32]>>) -> Option<Vec<Hash>> {
         match digests {
-            Some(digests) if digests.len() == self.slices.len() => {
+            Some(digests)
+                if digests.len() == self.slices.len() && self.audited_digests_match(&digests) =>
+            {
                 Some(digests.into_iter().map(Hash::prehashed).collect())
             }
             _ => {
@@ -416,6 +426,27 @@ impl PoseidonDigestBatch {
                 None
             }
         }
+    }
+    /// Recompute [`GPU_DIGEST_AUDIT_SAMPLES`] evenly spread digests, always
+    /// including the first and the last, and compare them with the
+    /// accelerator's. `digests` has one entry per slice.
+    fn audited_digests_match(&self, digests: &[[u8; 32]]) -> bool {
+        let count = self.slices.len();
+        let samples = GPU_DIGEST_AUDIT_SAMPLES.min(count);
+        (0..samples).all(|sample| {
+            let position = if samples > 1 {
+                sample * (count - 1) / (samples - 1)
+            } else {
+                0
+            };
+            let slice = &self.slices[position];
+            let offset = slice.offset();
+            // Compare the values that would be installed, as `hash_cpu` forms them.
+            Hash::prehashed(digests[position])
+                == Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(
+                    &self.words[offset..offset + slice.len()],
+                ))
+        })
     }
     fn resolve_pending_or_cpu(
         &self,

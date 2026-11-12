@@ -25,11 +25,17 @@ fn paired_cpu_matches_scalar_for_different_partial_rates_lengths_and_worker_coun
                     for (job, actual) in jobs.iter().zip(output.iter()) {
                         assert_eq!(*actual, job.scalar().into_bytes());
                     }
+                    // The calling-thread entry pairs the same consecutive jobs.
+                    let mut in_order = Zeroizing::new(vec![[0; 32]; jobs.len()]);
+                    hash_cpu_in_order(&jobs, &mut in_order).unwrap();
+                    assert_eq!(*in_order, *output);
                     let heterogeneous = [jobs[0], jobs[jobs.len() - 1], jobs[3]];
                     hash_cpu(&heterogeneous, &mut output[..3]).unwrap();
                     for (job, actual) in heterogeneous.iter().zip(output.iter()) {
                         assert_eq!(*actual, job.scalar().into_bytes());
                     }
+                    hash_cpu_in_order(&heterogeneous, &mut in_order[..3]).unwrap();
+                    assert_eq!(in_order[..3], output[..3]);
                 }
             });
     }
@@ -68,6 +74,9 @@ fn bounded_jobs_reject_malformed_shapes_before_touching_output() {
     assert!(hash_cpu(&[], &mut output).is_err());
     assert!(hash_cpu(&[job, job], &mut output).is_err());
     assert!(hash_cpu(&[Job::new(&prefix, &[0; 8193])], &mut output).is_err());
+    assert!(hash_cpu_in_order(&[], &mut output).is_err());
+    assert!(hash_cpu_in_order(&[job, job], &mut output).is_err());
+    assert!(hash_cpu_in_order(&[Job::new(&prefix, &[0; 8193])], &mut output).is_err());
     assert_eq!(output, [[0xA7; 32]; 1]);
     let jobs = vec![job; MAX_JOBS];
     let mut output = vec![[0; 32]; MAX_JOBS];

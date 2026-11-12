@@ -4,6 +4,8 @@
 //! FFT of C_k+(a^N-1)r_k, twisted by a^k. Only one 301-column stripe is
 //! live, even though the full domain has 128 stripes. Public columns never
 //! enter this owner. The immutable coefficient view also feeds DEEP composition.
+//! The few rows opened after the queries are evaluated at their own points
+//! from the same coefficients and masks, without a stripe.
 //!
 //! Fresh coefficients use caller-supplied cryptographic entropy and canonical
 //! rejection sampling, with an explicit, bounded failure path. Owned secrets
@@ -31,7 +33,7 @@ use super::{
 use crate::{
     Error, Result,
     cyclotomic::{self, Domain},
-    field::GoldilocksFp4V1 as F,
+    field::{GoldilocksFp4V1 as F, dot_base},
 };
 
 /// Worst-case base opening closure: two shifts of 77 queries and two Fp4 points.
@@ -308,18 +310,21 @@ impl MaskedStripe<'_> {
         }
         Ok(())
     }
-}
-
-/// Selected rows retain clearing ownership until the final proof DTO is constructed.
-#[cfg(test)]
-pub(super) struct SelectedMaskedRows {
-    width: usize,
-    values: SecretPolynomial<u64>,
-}
-#[cfg(test)]
-impl SelectedMaskedRows {
-    pub(super) fn rows(&self) -> impl Iterator<Item = &[u64]> {
-        self.values.chunks_exact(self.width)
+    /// Write one row as its canonical leaf payload: every cell as one
+    /// little-endian word, in column order.
+    pub(super) fn fill_row_bytes(&self, row: usize, output: &mut [u8]) -> Result<()> {
+        if row >= self.plan.rows || output.len() != self.plan.width * size_of::<u64>() {
+            return Err(invalid("masked stripe requires an exact bounded row"));
+        }
+        for (word, column) in output
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(self.values.chunks_exact(self.plan.rows))
+        {
+            *word = column[row].to_le_bytes();
+        }
+        Ok(())
     }
 }
 
@@ -467,26 +472,64 @@ impl MaskedTraceReplay {
         self.replay_selected(|stripe| stripe % step == 0, |stripe| visit(stripe, step))
     }
 
-    /// Regenerate exact caller-selected natural rows, charging one full pass.
-    pub(super) fn visit_selected_stripes(
+    /// Evaluate exact caller-selected natural rows, charging one full pass.
+    ///
+    /// A selected row is every committed polynomial at one domain point. At most
+    /// twice the query count of rows is ever selected, so those points are
+    /// evaluated directly from the retained coefficients instead of replaying
+    /// their whole stripes: per row, the powers of its point once, then one dot
+    /// product per column. For a point `x`, `x^N` is the stripe's `offset^N`,
+    /// so the masked value `C(x) + (x^N - 1) r(x)` is exactly the stripe value.
+    ///
+    /// `output` receives each row as its canonical leaf payload, in `indices`
+    /// order. The powers are public; no stripe buffer is allocated.
+    pub(super) fn evaluate_selected_rows(
         &mut self,
         indices: &[usize],
-        visit: impl FnMut(MaskedStripe<'_>) -> Result<()>,
+        output: &mut [u8],
     ) -> Result<()> {
+        let row_bytes = self.plan.width * size_of::<u64>();
         if indices.is_empty()
             || indices.len() > self.plan.max_selected
             || indices.iter().any(|&i| i >= self.plan.lde_rows())
             || indices.windows(2).any(|pair| pair[0] >= pair[1])
+            || output.len() != indices.len() * row_bytes
         {
             return Err(invalid(
                 "selected masked rows must be sorted, unique and bounded",
             ));
         }
-        let mut selected = [false; LDE_ROWS / TRACE_ROWS];
-        for &index in indices {
-            selected[index % self.plan.stripes] = true;
+        self.ensure_pass_available()?;
+        self.remaining_passes -= 1;
+        let rows = self.plan.rows;
+        let mut powers = Vec::new();
+        powers
+            .try_reserve_exact(rows)
+            .map_err(|_| invalid("selected row power table allocation failed"))?;
+        powers.resize(rows, 0);
+        for (&index, payload) in indices.iter().zip(output.chunks_exact_mut(row_bytes)) {
+            let point = self.plan.domain.point(index);
+            let mut power = 1;
+            for slot in &mut powers {
+                *slot = power;
+                power = mul_mod(power, point);
+            }
+            // The loop leaves `point^N`.
+            let vanishing = sub_mod(power, 1);
+            let powers = &powers[..];
+            payload
+                .par_chunks_exact_mut(size_of::<u64>())
+                .zip(self.coefficients.par_chunks(rows))
+                .zip(self.entropy.trace.par_chunks(self.plan.trace_mask))
+                .for_each(|((word, coefficients), mask)| {
+                    let value = add_mod(
+                        dot_base(coefficients, powers),
+                        mul_mod(vanishing, dot_base(mask, &powers[..mask.len()])),
+                    );
+                    word.copy_from_slice(&value.to_le_bytes());
+                });
         }
-        self.replay_selected(|stripe| selected[stripe], visit)
+        Ok(())
     }
     fn replay_selected(
         &mut self,
@@ -528,41 +571,6 @@ impl MaskedTraceReplay {
             })?;
         }
         Ok(())
-    }
-
-    /// At most twice the fixed query count, preserving duplicates and order.
-    /// Every selected stripe is replayed once, including leaf-level siblings.
-    #[cfg(test)]
-    pub(super) fn selected_rows(&mut self, indices: &[usize]) -> Result<SelectedMaskedRows> {
-        if indices.len() > self.plan.max_selected
-            || indices
-                .iter()
-                .any(|&i| i >= self.plan.rows * self.plan.stripes)
-        {
-            return Err(invalid(
-                "DEEP masked row selection exceeds the fixed query budget",
-            ));
-        }
-        let width = self.plan.width;
-        let mut values = SecretPolynomial::zeroed(indices.len() * width)?;
-        if !indices.is_empty() {
-            let mut selected = [false; LDE_ROWS / TRACE_ROWS];
-            for &index in indices {
-                selected[index % self.plan.stripes] = true;
-            }
-            self.replay_selected(
-                |stripe| selected[stripe],
-                |stripe| {
-                    for (&index, row) in indices.iter().zip(values.chunks_exact_mut(width)) {
-                        if index % stripe.plan.stripes == stripe.stripe {
-                            stripe.fill_row(index / stripe.plan.stripes, row)?;
-                        }
-                    }
-                    Ok(())
-                },
-            )?;
-        }
-        Ok(SelectedMaskedRows { width, values })
     }
 }
 

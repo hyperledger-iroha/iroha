@@ -302,6 +302,31 @@ fn anchored_axt_public_inputs_compare_every_dataspace_and_digest_byte() {
     }
 }
 
+#[test]
+fn unanchored_axt_verifier_rejects_a_statement_naming_another_dataspace() {
+    let binding = transfer_binding();
+    let batch = real_transfer_claim_batch(&binding);
+    let mut artifact = compact::prepare(&batch, &binding).unwrap();
+    assert_eq!(
+        artifact.statement.public_inputs.dsid,
+        dsid_bytes(binding.source_dsid)
+    );
+    let names_dsid = |result: Result<AxtVerifiedProof>| matches!(result, Err(Error::InvalidAxtBinding { details }) if details.contains("public dsid does not match AXT binding"));
+    // The prepared child is empty, so the producer's statement still fails, but
+    // only later, at the proof.
+    let produced = envelope_with_payload(
+        binding.clone(),
+        norito::encode_canonical(&artifact).unwrap(),
+    );
+    let produced = verify_axt_proof_envelope(&produced);
+    assert!(produced.is_err());
+    assert!(!names_dsid(produced));
+    // Without this check the statement's dsid is a label the prover chooses.
+    artifact.statement.public_inputs.dsid = dsid_bytes(binding.source_dsid + 1);
+    let relabelled = envelope_with_payload(binding, norito::encode_canonical(&artifact).unwrap());
+    assert!(names_dsid(verify_axt_proof_envelope(&relabelled)));
+}
+
 fn sample_binding() -> AxtFastpqBinding {
     AxtFastpqBinding {
         parameter: DEFAULT_PARAMETER.to_string(),
@@ -2040,6 +2065,15 @@ fn envelope_selectors_reject_mismatch_before_canonical_artifact_decoding() {
     assert!(
         matches!(verify_axt_proof_envelope(&envelope), Err(Error::InvalidAxtBinding { details }) if details.contains("verifier_id"))
     );
+    // A canonical binding naming another parameter set is refused by name.
+    // The one-byte payload cannot decode, so this precedes artifact decoding.
+    envelope.fastpq_binding = Some(binding.clone());
+    envelope.fastpq_binding.as_mut().unwrap().parameter = "fastpq-another-profile".into();
+    assert!(matches!(
+        verify_axt_proof_envelope(&envelope),
+        Err(Error::ParameterMismatch { expected, actual })
+            if expected == DEFAULT_PARAMETER && actual == "fastpq-another-profile"
+    ));
     envelope.fastpq_binding = Some(binding);
     envelope.dsid = DataSpaceId::new(8);
     assert!(

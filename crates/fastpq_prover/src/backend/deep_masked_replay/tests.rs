@@ -135,20 +135,49 @@ fn masked_128_stripes_match_full_materialization_horner_and_next_rotation() {
     );
 }
 
+/// The rows of `indices` as canonical leaf payloads, through the direct evaluator.
+fn evaluated(replay: &mut MaskedTraceReplay, indices: &[usize]) -> Result<Vec<Vec<u64>>> {
+    let width = replay.width();
+    let mut payload = vec![0xa5; indices.len() * width * 8];
+    replay.evaluate_selected_rows(indices, &mut payload)?;
+    Ok(payload
+        .chunks_exact(width * 8)
+        .map(|row| {
+            row.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|word| u64::from_le_bytes(*word))
+                .collect()
+        })
+        .collect())
+}
+
 #[test]
-fn masked_selected_rows_cover_frontiers_duplicates_and_budget_failures() {
+fn selected_rows_match_horner_at_frontiers_and_refuse_other_selections() {
     let (mut replay, _) = small(4, 1, 4, 2);
     let coefficients = explicit_columns(&replay);
     let domain = replay.plan.domain;
-    let indices = [511, 0, 127, 128, 511, 1, 129];
-    let selected = replay.selected_rows(&indices).unwrap();
-    for (&index, row) in indices.iter().zip(selected.rows()) {
+    // First and last row, both sides of a stripe boundary and adjacent leaves.
+    let indices = [0, 1, 127, 128, 129, 511];
+    let rows = evaluated(&mut replay, &indices).unwrap();
+    for (&index, row) in indices.iter().zip(&rows) {
         assert_eq!(row, &[horner(&coefficients[0], domain.point(index))]);
     }
-    assert!(replay.selected_rows(&[512]).is_err());
+    assert_eq!(replay.remaining_passes, 1);
+    // Empty, out-of-range, unsorted, duplicate and overlong selections, and an
+    // output of another length, are refused without charging a pass.
     assert_eq!(QUERY_COUNT, 77);
-    assert!(replay.selected_rows(&[0; 2 * QUERY_COUNT + 1]).is_err());
-    assert_eq!(replay.selected_rows(&[]).unwrap().rows().count(), 0);
+    for invalid in [
+        vec![],
+        vec![512],
+        vec![3, 1],
+        vec![0, 0],
+        (0..=2 * QUERY_COUNT).collect(),
+    ] {
+        assert!(evaluated(&mut replay, &invalid).is_err());
+    }
+    assert!(replay.evaluate_selected_rows(&[0, 1], &mut [0; 8]).is_err());
+    assert!(replay.evaluate_selected_rows(&[0], &mut [0; 16]).is_err());
     assert_eq!(replay.remaining_passes, 1);
     assert!(
         replay
@@ -156,39 +185,22 @@ fn masked_selected_rows_cover_frontiers_duplicates_and_budget_failures() {
             .is_err()
     );
     assert_eq!(replay.remaining_passes, 0);
-    assert!(replay.selected_rows(&[0]).is_err());
+    assert!(evaluated(&mut replay, &[0]).is_err());
 }
 
 #[test]
-fn selected_rows_and_stripes_accept_the_exact_query_plus_sibling_boundary() {
+fn selected_rows_accept_the_exact_query_plus_sibling_boundary() {
     assert_eq!(QUERY_COUNT, 77);
-    let (mut replay, _) = small(4, 1, 4, 2);
+    let (mut replay, _) = small(4, 1, 4, 1);
     let coefficients = explicit_columns(&replay);
     let domain = replay.plan.domain;
-    // Duplicate rows still consume the bounded receiver but preserve caller order.
-    let duplicate_rows = [511; 2 * QUERY_COUNT];
-    let selected = replay.selected_rows(&duplicate_rows).unwrap();
-    assert_eq!(selected.rows().count(), 154);
-    for row in selected.rows() {
-        assert_eq!(row, &[horner(&coefficients[0], domain.point(511))]);
-    }
-    // The canonical sorted path accepts all 154 distinct current/sibling rows.
+    // All 154 distinct current and sibling rows are one selection.
     let indices = (0..2 * QUERY_COUNT).collect::<Vec<_>>();
-    let mut checked = 0;
-    replay
-        .visit_selected_stripes(&indices, |stripe| {
-            for &index in &indices {
-                if index % 128 == stripe.stripe_index() {
-                    let mut row = [0];
-                    stripe.fill_row(index / 128, &mut row)?;
-                    assert_eq!(row[0], horner(&coefficients[0], domain.point(index)));
-                    checked += 1;
-                }
-            }
-            Ok(())
-        })
-        .unwrap();
-    assert_eq!(checked, 154);
+    let rows = evaluated(&mut replay, &indices).unwrap();
+    assert_eq!(rows.len(), 154);
+    for (&index, row) in indices.iter().zip(&rows) {
+        assert_eq!(row, &[horner(&coefficients[0], domain.point(index))]);
+    }
     assert!(replay.ensure_pass_available().is_err());
 }
 
@@ -445,45 +457,66 @@ fn physical_source_shape_canonicality_and_public_projection_precede_entropy() {
 }
 
 #[test]
-fn selected_leaf_and_sibling_stripes_preserve_masked_bytes_and_pass_limits() {
-    let (mut replay, _) = small(16, 3, 7, 1);
+fn selected_rows_equal_the_committed_stripe_rows_in_every_column_and_worker_count() {
+    let (mut replay, _) = small(16, 3, 7, 3);
     let columns = explicit_columns(&replay);
     let plan = replay.plan();
-    for invalid in [
-        vec![],
-        vec![0, 0],
-        vec![3, 1],
-        vec![plan.lde_rows()],
-        (0..=2 * QUERY_COUNT).collect(),
-    ] {
-        assert!(
-            replay
-                .visit_selected_stripes(&invalid, |_| panic!("invalid selection visited"))
-                .is_err()
-        );
-        assert!(replay.ensure_pass_available().is_ok());
-    }
-    let indices = [0, 1, 63, 64, 127, 128, 129, 2047];
-    let mut visited = [false; 128];
+    // The rows the commitment pass hashed: every stripe through the transform.
+    let mut committed = vec![vec![0; 3]; plan.lde_rows()];
     replay
-        .visit_selected_stripes(&indices, |stripe| {
-            let index = stripe.stripe_index();
-            assert!(!visited[index]);
-            visited[index] = true;
-            for &row in &indices {
-                if row % 128 == index {
-                    let mut actual = [0; 3];
-                    stripe.fill_row(row / 128, &mut actual)?;
-                    for (column, &value) in actual.iter().enumerate() {
-                        assert_eq!(value, horner(&columns[column], plan.domain.point(row)));
-                    }
-                }
+        .visit_all(|stripe| {
+            for row in 0..stripe.rows() {
+                stripe.fill_row(row, &mut committed[stripe.global_index(row)])?;
             }
             Ok(())
         })
         .unwrap();
-    for (stripe, &seen) in visited.iter().enumerate() {
-        assert_eq!(seen, indices.iter().any(|i| i % 128 == stripe));
+    // Mask extent 7 exceeds no row count here; rows span several stripes.
+    let indices = [0, 1, 63, 64, 127, 128, 129, 2047];
+    for threads in [1, 4] {
+        let rows = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| evaluated(&mut replay, &indices))
+            .unwrap();
+        for (&index, row) in indices.iter().zip(&rows) {
+            assert_eq!(row, &committed[index], "row {index}");
+            for (column, &value) in row.iter().enumerate() {
+                assert_eq!(value, horner(&columns[column], plan.domain.point(index)));
+            }
+        }
     }
     assert!(replay.ensure_pass_available().is_err());
+}
+
+#[test]
+fn row_payload_bytes_are_the_little_endian_words_of_the_gathered_row() {
+    let (mut replay, _) = small(16, 3, 7, 1);
+    let width = replay.width();
+    replay
+        .visit_all(|stripe| {
+            let mut row = vec![0; width];
+            let mut payload = vec![0xa5; width * 8];
+            for index in 0..stripe.rows() {
+                stripe.fill_row(index, &mut row)?;
+                stripe.fill_row_bytes(index, &mut payload)?;
+                let expected: Vec<u8> = row.iter().flat_map(|word| word.to_le_bytes()).collect();
+                assert_eq!(payload, expected);
+            }
+            // A row past the stripe and a payload of another width are refused.
+            assert!(stripe.fill_row_bytes(stripe.rows(), &mut payload).is_err());
+            assert!(
+                stripe
+                    .fill_row_bytes(0, &mut payload[..width * 8 - 1])
+                    .is_err()
+            );
+            assert!(
+                stripe
+                    .fill_row_bytes(0, &mut vec![0; width * 8 + 8])
+                    .is_err()
+            );
+            Ok(())
+        })
+        .unwrap();
 }

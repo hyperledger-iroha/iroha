@@ -267,3 +267,64 @@ fn selected_group_stripes_accept_the_exact_query_plus_sibling_boundary() {
     assert_eq!(checked, 154 * 4);
     assert!(replay.ensure_pass_available().is_err());
 }
+
+#[test]
+fn packed_leaves_are_the_canonical_bytes_of_fibers_and_joined_rows() {
+    // Single-oracle layers commit one complete fiber per leaf.
+    for (rows, degree, arity) in [(1024, 16, 16), (1024, 16, 8), (512, 8, 4), (128, 2, 1)] {
+        let plan = CoefficientReplayPlan::with_shape(rows, degree, 1, arity, limits(1)).unwrap();
+        let coefficients = (0..degree).map(|i| dense(i + 211)).collect::<Vec<_>>();
+        let sources = [&coefficients[..]];
+        let mut replay = CoefficientReplay::new(plan, &sources).unwrap();
+        replay
+            .visit_all(|stripe| {
+                let mut fiber = vec![F::ZERO; arity];
+                let mut leaf = vec![F::ZERO; arity];
+                let mut payload = vec![0xa5; arity * F::BYTES];
+                for row in 0..stripe.fiber_rows() {
+                    stripe.fiber(row, &mut fiber)?;
+                    stripe.leaf(row, &mut leaf)?;
+                    stripe.pack_leaf(row, &mut payload)?;
+                    assert_eq!(leaf, fiber);
+                    let expected: Vec<u8> =
+                        fiber.iter().flat_map(|value| value.to_le_bytes()).collect();
+                    assert_eq!(payload, expected);
+                }
+                assert!(stripe.pack_leaf(stripe.fiber_rows(), &mut payload).is_err());
+                assert!(stripe.pack_leaf(0, &mut payload[1..]).is_err());
+                assert!(stripe.leaf(0, &mut []).is_err());
+                Ok(())
+            })
+            .unwrap();
+    }
+    // The joined oracle commits its three columns at one row.
+    let plan = CoefficientReplayPlan::with_shape(1024, 16, 3, 1, limits(1)).unwrap();
+    let first = (0..16).map(dense).collect::<Vec<_>>();
+    let second = (0..7).map(|i| dense(i + 31)).collect::<Vec<_>>();
+    let third = (0..16).map(|i| dense(i + 57)).collect::<Vec<_>>();
+    let sources = [&first[..], &second[..], &third[..]];
+    let mut replay = CoefficientReplay::new(plan, &sources).unwrap();
+    replay
+        .visit_all(|stripe| {
+            let mut leaf = [F::ZERO; 3];
+            let mut payload = [0xa5; 3 * F::BYTES];
+            for row in 0..stripe.rows() {
+                stripe.leaf(row, &mut leaf)?;
+                stripe.pack_leaf(row, &mut payload)?;
+                for (column, value) in leaf.iter().enumerate() {
+                    assert_eq!(*value, stripe.value(column, row)?);
+                    assert_eq!(
+                        payload[column * F::BYTES..(column + 1) * F::BYTES],
+                        value.to_le_bytes()
+                    );
+                }
+            }
+            assert!(stripe.pack_leaf(stripe.rows(), &mut payload).is_err());
+            assert!(stripe.pack_leaf(0, &mut payload[..2 * F::BYTES]).is_err());
+            assert!(stripe.leaf(0, &mut leaf[..2]).is_err());
+            // A fiber needs a single-oracle layer.
+            assert!(stripe.fiber(0, &mut leaf[..1]).is_err());
+            Ok(())
+        })
+        .unwrap();
+}

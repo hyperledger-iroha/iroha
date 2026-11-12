@@ -11,8 +11,8 @@
 //!
 //! TODO: Integrate and qualify the complete canonical outer bundle, cumulative
 //! proof/decoder budgets, authenticated caller and aggregate soundness argument.
-//! The offline engine fixes375 queries; production replay and default limits
-//! remain unmodified pending a complete qualified artifact cutover.
+//! The offline engine fixes 77 queries; default limits remain unmodified
+//! pending a complete qualified artifact.
 
 #[cfg(test)]
 use norito::{NoritoSerialize, codec::Encode};

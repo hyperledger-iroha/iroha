@@ -283,7 +283,9 @@ fn public_self_check_allowance_dominates_the_complete_bounded_verifier() {
 #[test]
 fn retained_device_pool_remains_charged_during_the_larger_cpu_quotient_phase() {
     let pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
-    let twiddles = crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE;
+    // Device stage tables and the CPU transform's root-power tables.
+    let twiddles = crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE
+        + crate::cyclotomic::ROOT_TABLE_CACHE_MAX_BYTES;
     assert_eq!(
         active_phase_payload(2 * pool, pool + 8, pool + 16).unwrap(),
         3 * pool + twiddles

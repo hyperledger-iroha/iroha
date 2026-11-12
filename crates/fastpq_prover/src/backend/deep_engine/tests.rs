@@ -1121,6 +1121,39 @@ fn committed_result_is_unavailable_for_decoded_but_unauthenticated_carriers() {
 }
 
 #[test]
+fn hand_built_frames_with_another_commitment_or_round_count_are_rejected_not_indexed() {
+    // No decoder runs here, so nothing has fixed the vector lengths: the
+    // transcript replay itself must refuse them before indexing a commitment.
+    let relation = policy_relation();
+    let binding = Context::for_relation(&relation).unwrap();
+    let (proof, _, _) = constant_fixture(&queries(true));
+    for roots in [0, 1, 5, 7] {
+        let mut altered = proof.clone();
+        altered
+            .fri_roots
+            .resize(roots, WireDigest::from_bytes([0x37; 32]));
+        assert!(
+            verify_bound(&relation, &altered, 0, &binding).is_err(),
+            "{roots} FRI commitments"
+        );
+    }
+    for rounds in [0, 4, 6] {
+        let mut altered = proof.clone();
+        altered.rounds.resize(
+            rounds,
+            FriRound {
+                groups: Vec::new(),
+                siblings: Vec::new(),
+            },
+        );
+        assert!(
+            verify_bound(&relation, &altered, 0, &binding).is_err(),
+            "{rounds} FRI rounds"
+        );
+    }
+}
+
+#[test]
 fn producer_preflight_rejects_the_fixed_statement_envelope_before_private_work() {
     let reference = policy_relation();
     let mut digest = [0; 8];

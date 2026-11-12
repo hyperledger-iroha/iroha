@@ -41,11 +41,8 @@ mod air_expression;
 #[path = "backend/air_quotient.rs"]
 #[cfg(any(test, feature = "dev-tools"))]
 mod air_quotient;
-#[cfg(test)]
-#[path = "backend/coefficient_masking.rs"]
-mod coefficient_masking;
-#[path = "backend/masked_quotient.rs"]
-mod masked_quotient;
+#[path = "backend/plan_arithmetic.rs"]
+mod plan_arithmetic;
 #[path = "backend/polynomial_division.rs"]
 mod polynomial_division;
 #[path = "backend/polynomial_field.rs"]
@@ -151,18 +148,12 @@ mod deep_polynomial;
 mod deep_proof;
 #[path = "backend/deep_prover.rs"]
 mod deep_prover;
-#[cfg(test)]
-#[path = "backend/deep_prover_plan.rs"]
-mod deep_prover_plan;
 #[path = "backend/deep_relation.rs"]
 mod deep_relation;
 #[path = "backend/deep_striped_merkle.rs"]
 mod deep_striped_merkle;
 #[path = "backend/deep_trace_source.rs"]
 mod deep_trace_source;
-#[cfg(test)]
-#[path = "backend/extension_trace.rs"]
-mod extension_trace;
 #[path = "backend/fixed_domain.rs"]
 mod fixed_domain;
 #[path = "backend/fixed_schedule.rs"]
@@ -179,9 +170,6 @@ mod frozen_record;
 mod merkle_multiproof;
 #[path = "backend/offline_compact.rs"]
 pub mod offline_compact;
-#[cfg(test)]
-#[path = "backend/phased_trace.rs"]
-mod phased_trace;
 #[path = "backend/public_table.rs"]
 mod public_table;
 #[path = "backend/transcript_profile.rs"]

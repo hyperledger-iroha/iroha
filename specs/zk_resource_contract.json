@@ -22306,17 +22306,19 @@
         ]
       },
       {
-        "reason": "Node-local work sizing compared by name: the parallel and GPU thresholds of digest finalization, the candidate window of a history checkpoint, a peer cache, the partition count of query projections, a staging retry count, the top-holder count of a rendered list, and the scan and eviction batch sizes of the webhook queue and the prover report store. They size how one node does its own work or renders one response; no peer decides anything on them. Also the block quantum in which the telemetry status journal is classified and the five simultaneous representations of one signed-query body by which Torii divides an ingress memory slot. So are the manifest-chunk digit selection, grow and shrink thresholds and writer threads of a tiered State snapshot, the heights one background archive-finality audit slice verifies, the records and bytes one finalized provider-ingest retention compaction prunes, and the worker split of portable finality page verification.",
+        "reason": "Node-local work sizing compared by name: the parallel and GPU thresholds of digest finalization and the number of accelerator digests it recomputes on the CPU before accepting a batch (a mismatch only sends that node back to its CPU result), the candidate window of a history checkpoint, a peer cache, the partition count of query projections, a staging retry count, the top-holder count of a rendered list, and the scan and eviction batch sizes of the webhook queue and the prover report store. They size how one node does its own work or renders one response; no peer decides anything on them. Also the block quantum in which the telemetry status journal is classified and the five simultaneous representations of one signed-query body by which Torii divides an ingress memory slot. So are the manifest-chunk digit selection, grow and shrink thresholds and writer threads of a tiered State snapshot, the heights one background archive-finality audit slice verifies, the records and bytes one finalized provider-ingest retention compaction prunes, and the worker split of portable finality page verification.",
         "files": [
           {
             "path": "crates/iroha_core/src/fastpq/mod.rs",
             "symbols": [
               "DIGEST_FINALIZE_PARALLEL_THRESHOLD",
-              "DIGEST_FINALIZE_GPU_THRESHOLD"
+              "DIGEST_FINALIZE_GPU_THRESHOLD",
+              "GPU_DIGEST_AUDIT_SAMPLES"
             ],
             "exprs": {
               "DIGEST_FINALIZE_PARALLEL_THRESHOLD": "32",
-              "DIGEST_FINALIZE_GPU_THRESHOLD": "64"
+              "DIGEST_FINALIZE_GPU_THRESHOLD": "64",
+              "GPU_DIGEST_AUDIT_SAMPLES": "8"
             }
           },
           {

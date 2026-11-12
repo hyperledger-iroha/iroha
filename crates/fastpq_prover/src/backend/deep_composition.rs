@@ -14,8 +14,9 @@
 //! The point evaluator is for bounded verifier queries. The honest producer must
 //! form the combined coefficient polynomial, divide exactly and LDE that result,
 //! rather than repeat this inversion and 606-term batch at every LDE point.
-//! TODO: Integrate reviewed OOD/transcript, polynomial-opening and masking
-//! ownership before this arithmetic participates in proof admission.
+//! The bounded verifier uses this arithmetic for the out-of-domain check and at
+//! every query; the transcript, the openings and the masking belong to their
+//! own owners. TODO: Independently qualify the complete composition argument.
 
 use super::polynomial_field::PolynomialField;
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};

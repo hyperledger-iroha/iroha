@@ -274,3 +274,132 @@ fn bounded_leaf_jobs_return_the_first_input_error_after_workers_finish() {
             });
     }
 }
+
+/// Public word pattern of the leaf at one run offset.
+fn run_payload(offset: usize, payload: &mut [u8]) -> Result<()> {
+    for (word, bytes) in payload.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+        *bytes = ((offset * 131 + word) as u64).to_le_bytes();
+    }
+    Ok(())
+}
+
+#[test]
+fn leaf_runs_match_canonical_hashes_across_job_boundaries_and_worker_counts() {
+    let binding = Context::new(b"SHA3 ordered leaf run").unwrap();
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                for oracle in [
+                    Oracle::Row,
+                    Oracle::QuotientAndMask,
+                    Oracle::Fri(0),
+                    Oracle::Fri(4),
+                    Oracle::Terminal,
+                ] {
+                    let (_, _, leaves, width) = oracle.shape().unwrap();
+                    // One leaf, one whole job, a ragged tail and several jobs.
+                    for count in [
+                        1,
+                        RUN_JOB_LEAVES,
+                        RUN_JOB_LEAVES + 7,
+                        5 * RUN_JOB_LEAVES + 1,
+                    ] {
+                        let count = count.min(leaves);
+                        // A stride-three index keeps offsets and indices distinct.
+                        let index = |offset: usize| (3 * offset) % leaves;
+                        let mut outputs = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();
+                        hash_run(
+                            &binding,
+                            oracle,
+                            width,
+                            index,
+                            run_payload,
+                            &mut outputs,
+                            DigestExecutionV1::Cpu,
+                        )
+                        .unwrap();
+                        let mut payload = vec![0; width];
+                        for (offset, actual) in outputs.iter().enumerate() {
+                            run_payload(offset, &mut payload).unwrap();
+                            let expected = binding
+                                .hash_leaf(oracle, u32::try_from(index(offset)).unwrap(), &payload)
+                                .unwrap();
+                            assert_eq!(
+                                *actual,
+                                expected.into_bytes(),
+                                "{oracle:?} offset {offset}"
+                            );
+                        }
+                    }
+                }
+            });
+    }
+}
+
+#[test]
+fn leaf_runs_refuse_other_shapes_and_return_the_earliest_offset_error() {
+    let binding = Context::new(b"SHA3 ordered leaf run errors").unwrap();
+    let mut none = [[0; 32]; 0];
+    let mut one = [[0x5a; 32]; 1];
+    let index = |offset: usize| offset;
+    for (leaf_bytes, output) in [(96, &mut none[..]), (0, &mut one[..])] {
+        assert!(
+            hash_run(
+                &binding,
+                Oracle::QuotientAndMask,
+                leaf_bytes,
+                index,
+                run_payload,
+                output,
+                DigestExecutionV1::Cpu
+            )
+            .is_err()
+        );
+    }
+    let mut oversized = SecretPolynomial::<[u8; 32]>::zeroed(MAX_RUN_LEAVES + 1).unwrap();
+    assert!(
+        hash_run(
+            &binding,
+            Oracle::QuotientAndMask,
+            96,
+            index,
+            |_, _| panic!("an overlong run is refused before any leaf is packed"),
+            &mut oversized,
+            DigestExecutionV1::Cpu
+        )
+        .is_err()
+    );
+    // Two failing offsets in different jobs: the earlier one is reported,
+    // whichever worker finishes first.
+    let count = 4 * RUN_JOB_LEAVES;
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut outputs = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();
+                let error = hash_run(
+                    &binding,
+                    Oracle::QuotientAndMask,
+                    96,
+                    index,
+                    |offset, payload| {
+                        if offset == RUN_JOB_LEAVES + 3 || offset == 3 * RUN_JOB_LEAVES {
+                            return Err(Error::QueryIndexOverflow { index: offset });
+                        }
+                        run_payload(offset, payload)
+                    },
+                    &mut outputs,
+                    DigestExecutionV1::Cpu,
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(error, Error::QueryIndexOverflow { index } if index == RUN_JOB_LEAVES + 3)
+                );
+            });
+    }
+}

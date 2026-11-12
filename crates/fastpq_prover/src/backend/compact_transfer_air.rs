@@ -27,13 +27,15 @@
 use super::{
     air_degree::{AirDegreeBounds, PolynomialDegree},
     compact_hash_quotient::PolynomialHashEvaluator,
-    masked_quotient::{checked_add, checked_mul, transform_work},
-    polynomial_transform::{PolynomialDomain, PolynomialLanes, reserved},
+    plan_arithmetic::{checked_add, checked_mul, transform_work},
+    polynomial_transform::{PolynomialDomain, reserved},
     secret_polynomial::SecretPolynomial,
 };
+#[cfg(test)]
 use crate::field::GoldilocksFp4V1;
 use fastpq_isi::FASTPQ_FINAL_V1;
 use norito::{NoritoSerialize, codec::Encode as NoritoEncode};
+use rayon::prelude::*;
 
 use super::{
     compact_hash_quotient::{CompactHashQuotient, HashNumerators, LOCAL_SLOTS, TRANSITION_SLOTS},
@@ -245,22 +247,25 @@ impl CompactTransferAir {
         let fixed = checked_mul(FIXED_COLUMN_COUNT, domain.rows())?;
         let phases = checked_mul(cycle, PHYSICAL_HASH_ROWS)?;
         let masks = checked_mul(cycle, graph.selector_masks)?;
-        // Retained fixed lanes, public phases/masks, private graph scratch, one
-        // temporary public coefficient conversion and selector/mask scratch.
+        // Retained fixed lanes, public phases/masks and one private graph
+        // scratch. Every cell is one base-field word on the base-field coset.
         let cells = checked_add(
             checked_add(fixed, phases)?,
             checked_add(masks, graph.nodes)?,
         )?;
+        // The fixed columns are interpolated one per job, each holding its own
+        // N-row coefficient column; charge every column as if all ran at once.
+        // Selector and mask scratch is public and belongs to one point at a time.
         let transient = checked_add(
-            PHYSICAL_ROW_COUNT,
+            checked_mul(FIXED_COLUMN_COUNT, PHYSICAL_ROW_COUNT)?,
             checked_add(2 * PHYSICAL_HASH_ROWS, graph.selector_masks)?,
         )?;
-        let payload_bytes = checked_add(
-            checked_mul(checked_add(cells, transient)?, GoldilocksFp4V1::BYTES)?,
-            checked_mul(
-                PHYSICAL_ROW_COUNT + FIXED_COLUMN_COUNT * FIXED_ROW_COUNT,
-                core::mem::size_of::<u64>(),
+        let payload_bytes = checked_mul(
+            checked_add(
+                checked_add(cells, transient)?,
+                FIXED_COLUMN_COUNT * FIXED_ROW_COUNT,
             )?,
+            core::mem::size_of::<u64>(),
         )?;
         let fixed_work = checked_mul(
             FIXED_COLUMN_COUNT,
@@ -299,12 +304,17 @@ impl CompactTransferAir {
             payload_bytes,
             work_units,
             point_work_units,
-            #[cfg(test)]
             scratch_cells: graph.nodes,
         })
     }
 
-    /// Prepare actual public fixed polynomials on the checked full Fp4 coset.
+    /// Prepare actual public fixed polynomials on the checked base-field coset.
+    ///
+    /// The numerator coset has a base-field offset, so the committed columns,
+    /// the public columns, the selectors and these fixed columns all take
+    /// base-field values on it. The prepared evaluator therefore works in the
+    /// base field; an offset outside it is refused. Its values embed exactly
+    /// into the extension the challenges live in.
     pub(super) fn prepare_polynomial_evaluator(
         &self,
         domain: PolynomialDomain,
@@ -313,21 +323,22 @@ impl CompactTransferAir {
         // Rechecking geometry keeps this internal preparation independently bound.
         self.polynomial_preparation_cost(domain)?;
         let (phases, hash) = self.hash.polynomial_evaluator(domain)?;
-        let mut fixed = reserved(FIXED_COLUMN_COUNT)?;
         let planner = Planner::new(&FASTPQ_FINAL_V1);
-        for column in 0..FIXED_COLUMN_COUNT {
-            // These coefficients are public statement data, never witness or mask
-            // storage. The existing N-point base IFFT is their interpolation owner.
-            let mut base = reserved(PHYSICAL_ROW_COUNT)?;
-            base.resize(PHYSICAL_ROW_COUNT, 0);
-            for (&position, row) in self.fixed.positions().iter().zip(self.fixed.rows()) {
-                base[position] = row[column];
-            }
-            planner.ifft_columns(core::slice::from_mut(&mut base));
-            let mut coefficients = reserved(PHYSICAL_ROW_COUNT)?;
-            coefficients.extend(base.iter().copied().map(GoldilocksFp4V1::embed_base));
-            fixed.push(domain.evaluate(&coefficients, PHYSICAL_ROW_COUNT)?);
-        }
+        // One independent column per job, collected in column order.
+        let fixed = (0..FIXED_COLUMN_COUNT)
+            .into_par_iter()
+            .map(|column| {
+                // These coefficients are public statement data, never witness or mask
+                // storage. The existing N-point base IFFT is their interpolation owner.
+                let mut base = reserved(PHYSICAL_ROW_COUNT)?;
+                base.resize(PHYSICAL_ROW_COUNT, 0);
+                for (&position, row) in self.fixed.positions().iter().zip(self.fixed.rows()) {
+                    base[position] = row[column];
+                }
+                planner.ifft_columns(core::slice::from_mut(&mut base));
+                domain.evaluate_base(&base)
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(PreparedPolynomialAir {
             domain,
             smt: CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &self.fixed)?,
@@ -493,17 +504,19 @@ pub(super) struct PolynomialPreparationCost {
     pub(super) payload_bytes: usize,
     pub(super) work_units: usize,
     pub(super) point_work_units: usize,
-    /// One graph workspace is included above; parallel callers charge each extra copy.
-    #[cfg(test)]
+    /// Base-field words of one graph workspace. One is included above;
+    /// parallel callers charge each extra copy.
     pub(super) scratch_cells: usize,
 }
 
 /// Immutable exact public polynomial caches shared by bounded arithmetic workers.
+///
+/// Every cached value is a base-field evaluation on the base-field numerator coset.
 pub(super) struct PreparedPolynomialAir<'a> {
     domain: PolynomialDomain,
     smt: CompactSmtQuotient<'a>,
-    phases: Vec<[GoldilocksFp4V1; PHYSICAL_HASH_ROWS]>,
-    fixed: Vec<PolynomialLanes>,
+    phases: Vec<[u64; PHYSICAL_HASH_ROWS]>,
+    fixed: Vec<Vec<u64>>,
     hash: PolynomialHashEvaluator<'a>,
 }
 
@@ -520,17 +533,20 @@ impl<'source> PreparedPolynomialAir<'source> {
 /// One zeroizing hash workspace tied to its immutable public polynomial owner.
 pub(super) struct PolynomialAirEvaluator<'cache, 'source> {
     prepared: &'cache PreparedPolynomialAir<'source>,
-    scratch: SecretPolynomial<GoldilocksFp4V1>,
+    scratch: SecretPolynomial<u64>,
 }
 
 impl PolynomialAirEvaluator<'_, '_> {
     /// Write every actual AIR slot into the caller's fixed guarded output slice.
+    ///
+    /// `current` and `next` are the complete base-field rows at the indexed
+    /// coset point and its trace rotation.
     pub(super) fn evaluate_into(
         &mut self,
         index: usize,
-        current: &[GoldilocksFp4V1],
-        next: &[GoldilocksFp4V1],
-        output: &mut [GoldilocksFp4V1],
+        current: &[u64],
+        next: &[u64],
+        output: &mut [u64],
     ) -> Result<()> {
         let prepared = self.prepared;
         if index >= prepared.domain.rows() {
@@ -539,10 +555,10 @@ impl PolynomialAirEvaluator<'_, '_> {
                 len: prepared.domain.rows(),
             });
         }
-        let current: &[GoldilocksFp4V1; COLUMN_COUNT] = current
+        let current: &[u64; COLUMN_COUNT] = current
             .try_into()
             .map_err(|_| shape("polynomial AIR needs exactly 342 current cells"))?;
-        let next: &[GoldilocksFp4V1; COLUMN_COUNT] = next
+        let next: &[u64; COLUMN_COUNT] = next
             .try_into()
             .map_err(|_| shape("polynomial AIR needs exactly 342 next cells"))?;
         if output.len() != CONSTRAINT_COUNT {
@@ -553,9 +569,9 @@ impl PolynomialAirEvaluator<'_, '_> {
                 value.validate("polynomial_air_opening", &[column])?;
             }
         }
-        let mut sparse = [GoldilocksFp4V1::ZERO; FIXED_COLUMN_COUNT];
+        let mut sparse = [0; FIXED_COLUMN_COUNT];
         for (value, column) in sparse.iter_mut().zip(&prepared.fixed) {
-            *value = column.value(index)?;
+            *value = column[index];
         }
         let fixed =
             CompactSmtFixedValues::new(prepared.phases[index % prepared.phases.len()], sparse)?;
@@ -982,57 +998,79 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "explicit complete Fp4 public polynomial preparation and actual AIR point oracle"]
-    fn full_polynomial_preparation_matches_existing_air_at_cycle_boundaries() {
-        use super::super::masked_quotient::{NUMERATOR_JOBS, evaluate_parallel_rows};
+    fn base_polynomial_preparation_matches_existing_air_at_cycle_boundaries() {
+        use super::super::deep_masked_quotient::{NUMERATOR_JOBS, evaluate_parallel_rows};
         let air = CompactTransferAir::new(&statement(), None).unwrap();
-        let domain = PolynomialDomain::new(
+        // An offset outside the base field has no base-field numerator coset.
+        let extension = PolynomialDomain::new(
             262_144,
             GoldilocksFp4V1::new([2, 3, 5, 7]).unwrap(),
             524_288,
             64 * 1024 * 1024,
         )
         .unwrap();
+        assert!(air.prepare_polynomial_evaluator(extension).is_err());
+        // The production numerator coset.
+        let domain = PolynomialDomain::new(
+            262_144,
+            GoldilocksFp4V1::embed_base(FASTPQ_FINAL_V1.omega_coset),
+            524_288,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
         let cost = air.polynomial_preparation_cost(domain).unwrap();
-        assert!(cost.payload_bytes > FIXED_COLUMN_COUNT * domain.rows() * GoldilocksFp4V1::BYTES);
-        assert!(cost.work_units > 0 && cost.point_work_units > 0);
+        assert!(cost.payload_bytes > FIXED_COLUMN_COUNT * domain.rows() * size_of::<u64>());
+        assert!(cost.work_units > 0 && cost.point_work_units > 0 && cost.scratch_cells > 0);
         let prepared = air.prepare_polynomial_evaluator(domain).unwrap();
         let mut evaluator = prepared.evaluator().unwrap();
         let current = core::array::from_fn::<_, COLUMN_COUNT, _>(|column| {
-            GoldilocksFp4V1::new([3 + column as u64, 5, 7, 11]).unwrap()
+            (0x9e37_79b9_7f4a_7c15_u64.wrapping_mul(column as u64 + 3)) % GOLDILOCKS_MODULUS
         });
-        let next = current.map(|value| value.add(GoldilocksFp4V1::new([13, 17, 19, 23]).unwrap()));
+        let next = current.map(|value| (value ^ 0x5bd1_e995) % GOLDILOCKS_MODULUS);
+        // The independent uncached evaluator at the same point, in the base
+        // field and through the extension: the cached values embed into both.
+        let reference = |index: usize| {
+            let point = domain.base_point(index).unwrap();
+            let base = air.evaluate_at(point, &current, &next).unwrap();
+            let extension = air
+                .evaluate_at(
+                    domain.point(index).unwrap(),
+                    &current.map(GoldilocksFp4V1::embed_base),
+                    &next.map(GoldilocksFp4V1::embed_base),
+                )
+                .unwrap();
+            assert_eq!(
+                extension,
+                base.iter()
+                    .copied()
+                    .map(GoldilocksFp4V1::embed_base)
+                    .collect::<Vec<_>>()
+            );
+            base
+        };
         for index in [0, 1, 2047, 2048, 262_143] {
-            let mut output = vec![GoldilocksFp4V1::ZERO; CONSTRAINT_COUNT];
+            let mut output = vec![0; CONSTRAINT_COUNT];
             evaluator
                 .evaluate_into(index, &current, &next, &mut output)
                 .unwrap();
-            assert_eq!(
-                &output[..],
-                air.evaluate_at(domain.point(index).unwrap(), &current, &next)
-                    .unwrap()
-            );
+            assert_eq!(output, reference(index));
         }
-        // Reuse the real production range scheduler and immutable cache at
+        // Reuse the production range scheduler and immutable cache at
         // phase-cycle, trace rotation and final-domain boundaries. The expected
         // weighted rows come from the independent uncached AIR point evaluator.
         let indices = [0, 1, 3, 4, 2047, 2048, 65_535, 65_536, 262_142, 262_143];
         let alpha = core::array::from_fn::<_, CONSTRAINT_COUNT, _>(|slot| {
             GoldilocksFp4V1::new([slot as u64 + 1, 3, 5, 7]).unwrap()
         });
-        let mix = |values: &[GoldilocksFp4V1]| {
+        let mix = |values: &[u64]| {
             values
                 .iter()
                 .zip(&alpha)
                 .fold(GoldilocksFp4V1::ZERO, |sum, (&value, &weight)| {
-                    sum.add(value.mul(weight))
+                    sum.add(weight.mul_base(value))
                 })
         };
-        let expected = indices.map(|index| {
-            mix(&air
-                .evaluate_at(domain.point(index).unwrap(), &current, &next)
-                .unwrap())
-        });
+        let expected = indices.map(|index| mix(&reference(index)));
         for threads in [1, 2, 6] {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
@@ -1058,7 +1096,7 @@ pub(super) mod tests {
             .unwrap();
             assert_eq!(&*output, &expected);
         }
-        let mut output = vec![GoldilocksFp4V1::ONE; CONSTRAINT_COUNT];
+        let mut output = vec![1; CONSTRAINT_COUNT];
         assert!(
             evaluator
                 .evaluate_into(domain.rows(), &current, &next, &mut output)
@@ -1075,185 +1113,13 @@ pub(super) mod tests {
                 .is_err()
         );
         let mut malformed = current;
-        malformed[341] =
-            GoldilocksFp4V1::from_coefficients_unchecked_for_test([0, 0, 0, GOLDILOCKS_MODULUS]);
+        malformed[341] = GOLDILOCKS_MODULUS;
         assert!(
             evaluator
                 .evaluate_into(0, &malformed, &next, &mut output)
                 .is_err()
         );
-        assert!(output.iter().all(|&value| value == GoldilocksFp4V1::ONE));
-    }
-
-    /// Deterministic masked trace of the physical fixture with explicit arithmetic limits.
-    fn prepared_masked_fixture(
-        witness: PhysicalSmtWitness,
-    ) -> (
-        super::super::masked_quotient::PreparedMaskedTrace,
-        super::super::masked_quotient::MaskedQuotientLimits,
-    ) {
-        use super::super::{
-            coefficient_masking::MaskingShape,
-            masked_quotient::{MaskedQuotientLimits, PreparedMaskedTrace},
-        };
-        type F = GoldilocksFp4V1;
-        let mut trace: Vec<SecretPolynomial<F>> = (0..COLUMN_COUNT)
-            .map(|_| SecretPolynomial::zeroed(PHYSICAL_ROW_COUNT).unwrap())
-            .collect();
-        for (index, row) in witness.rows().iter().enumerate() {
-            for (column, value) in trace.iter_mut().zip(smt_row_cells(row)) {
-                column[index] = F::embed_base(value);
-            }
-        }
-        drop(witness);
-        // Explicit deterministic arithmetic test coefficients, never production hiding coins.
-        let masks: Vec<_> = (0..COLUMN_COUNT)
-            .map(|column| [F::new([31 + column as u64, 37, 41, 43]).unwrap()])
-            .collect();
-        let shape = MaskingShape {
-            trace_coefficients: PHYSICAL_ROW_COUNT,
-            trace_degree_bound: PHYSICAL_ROW_COUNT,
-            mask_coefficients: 1,
-            mask_degree_bound: 1,
-        };
-        let limits = MaskedQuotientLimits {
-            max_payload_bytes: usize::try_from(8_u64 * 1024 * 1024 * 1024).unwrap(),
-            max_work_units: usize::MAX,
-            max_interpolation_rows: 524_288,
-            max_mask_coefficients: 1,
-            max_masked_coefficients: PHYSICAL_ROW_COUNT + 1,
-        };
-        let trace_refs: Vec<_> = trace.iter().map(|values| &**values).collect();
-        let mask_refs: Vec<_> = masks.iter().map(|values| &values[..]).collect();
-        let prepared = PreparedMaskedTrace::prepare(
-            &trace_refs,
-            &mask_refs,
-            &vec![shape; COLUMN_COUNT],
-            limits,
-        )
-        .unwrap();
-        drop(trace_refs);
-        drop(trace);
-        (prepared, limits)
-    }
-
-    /// Every geometry, payload, work and alpha-shape bound rejects before building.
-    fn assert_masked_plan_bounds(
-        air: &CompactTransferAir,
-        prepared: &super::super::masked_quotient::PreparedMaskedTrace,
-        offset: GoldilocksFp4V1,
-        limits: super::super::masked_quotient::MaskedQuotientLimits,
-    ) {
-        use super::super::masked_quotient::{MaskedQuotientLimits, MaskedQuotientPlan};
-        type F = GoldilocksFp4V1;
-        assert!(
-            prepared
-                .degree_bounds()
-                .iter()
-                .all(|&degree| degree == PHYSICAL_ROW_COUNT + 1)
-        );
-        assert_eq!(prepared.column(0).unwrap().len(), PHYSICAL_ROW_COUNT + 1);
-        assert!(prepared.column(COLUMN_COUNT).is_err());
-        assert!(MaskedQuotientPlan::new(air, prepared, 131_072, offset, 131_072, limits).is_err());
-        assert!(MaskedQuotientPlan::new(air, prepared, 262_144, F::ONE, 131_072, limits).is_err());
-        assert!(MaskedQuotientPlan::new(air, prepared, 262_144, offset, 1, limits).is_err());
-        let plan =
-            MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
-        let bytes = plan.payload_bytes();
-        let work = plan.work_units();
-        assert!(
-            MaskedQuotientPlan::new(
-                air,
-                prepared,
-                262_144,
-                offset,
-                131_072,
-                MaskedQuotientLimits {
-                    max_payload_bytes: bytes - 1,
-                    ..limits
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            MaskedQuotientPlan::new(
-                air,
-                prepared,
-                262_144,
-                offset,
-                131_072,
-                MaskedQuotientLimits {
-                    max_work_units: work - 1,
-                    ..limits
-                }
-            )
-            .is_err()
-        );
-        assert!(plan.build(&vec![F::ONE; 922]).is_err());
-        let plan =
-            MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
-        let mut alpha = vec![F::ONE; CONSTRAINT_COUNT];
-        alpha[922] = F::from_coefficients_unchecked_for_test([0, 0, GOLDILOCKS_MODULUS, 0]);
-        assert!(plan.build(&alpha).is_err());
-    }
-
-    #[test]
-    #[ignore = "explicit full 65536x342 masked Fp4 numerator/quotient diagnostic; several GiB, no PCS qualification"]
-    fn complete_masked_numerator_divides_exactly_and_matches_actual_air() {
-        use super::super::masked_quotient::MaskedQuotientPlan;
-        type F = GoldilocksFp4V1;
-        let (statement, witness) = physical_fixture();
-        let air = CompactTransferAir::new(&statement, None).unwrap();
-        let (prepared, limits) = prepared_masked_fixture(witness);
-        let offset = F::new([2, 3, 5, 7]).unwrap();
-        assert_masked_plan_bounds(&air, &prepared, offset, limits);
-        let alpha: Vec<_> = (0..CONSTRAINT_COUNT)
-            .map(|i| F::new([i as u64 + 1, 47, 53, 59]).unwrap())
-            .collect();
-        let result = MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits)
-            .unwrap()
-            .build(&alpha)
-            .unwrap();
-        assert_eq!(result.numerator().len(), 262_144);
-        assert_eq!(result.quotient().coefficients().len(), 131_072);
-        assert!(
-            result.numerator()[result.degrees().combined_numerator()..]
-                .iter()
-                .all(|&c| c == F::ZERO)
-        );
-        let horner = |coefficients: &[F], point: F| {
-            coefficients
-                .iter()
-                .rev()
-                .fold(F::ZERO, |sum, &value| sum.mul(point).add(value))
-        };
-        let omega = FixedTraceDomain::new(&FASTPQ_FINAL_V1, PHYSICAL_ROW_COUNT)
-            .unwrap()
-            .generator;
-        for index in [0, 2048, 262_143] {
-            let point = result.domain().point(index).unwrap();
-            let current: Vec<_> = (0..COLUMN_COUNT)
-                .map(|column| horner(prepared.column(column).unwrap(), point))
-                .collect();
-            let next: Vec<_> = (0..COLUMN_COUNT)
-                .map(|column| horner(prepared.column(column).unwrap(), point.mul_base(omega)))
-                .collect();
-            let expected = air
-                .evaluate_at(point, &current, &next)
-                .unwrap()
-                .iter()
-                .zip(&alpha)
-                .fold(F::ZERO, |sum, (&value, &weight)| sum.add(value.mul(weight)));
-            let numerator = horner(result.numerator(), point);
-            assert_eq!(numerator, expected);
-            assert_eq!(
-                numerator,
-                point
-                    .power(PHYSICAL_ROW_COUNT as u64)
-                    .sub(F::ONE)
-                    .mul(horner(result.quotient().coefficients(), point))
-            );
-        }
+        assert!(output.iter().all(|&value| value == 1));
     }
 
     #[test]

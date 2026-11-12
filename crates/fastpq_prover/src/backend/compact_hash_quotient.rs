@@ -21,10 +21,9 @@
 
 use std::{cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
-use super::GoldilocksFp4V1;
 use super::air_degree::{PolynomialDegree, evaluate_node_degrees};
 #[cfg(test)]
-use super::{GOLDILOCKS_MODULUS, add_mod, mul_mod, sub_mod};
+use super::{GOLDILOCKS_MODULUS, GoldilocksFp4V1, add_mod, mul_mod, sub_mod};
 use fastpq_isi::StarkParameterSet;
 
 use super::{
@@ -201,10 +200,13 @@ impl CompactHashQuotient {
     }
 
     /// Prepare the exact short public phase/mask cycle for a checked numerator coset.
+    ///
+    /// The coset offset must lie in the base field. Every point, selector and
+    /// mask is then a base-field value, and the numerator is evaluated there.
     pub(super) fn polynomial_evaluator(
         &self,
         domain: super::polynomial_transform::PolynomialDomain,
-    ) -> Result<(Vec<[GoldilocksFp4V1; PERIOD]>, PolynomialHashEvaluator<'_>)> {
+    ) -> Result<(Vec<[u64; PERIOD]>, PolynomialHashEvaluator<'_>)> {
         use super::{field_pow, polynomial_transform::reserved};
         let stride = domain.numerator_rotation(self.trace_rows)?;
         let expected = field_pow(
@@ -232,7 +234,7 @@ impl CompactHashQuotient {
         let mut phases = reserved(cycle)?;
         let mut masks = reserved(mask_cells)?;
         for index in 0..cycle {
-            let row = self.selectors.evaluate(domain.point(index)?)?;
+            let row = self.selectors.evaluate(domain.base_point(index)?)?;
             masks.extend(self.compiled.mask_values(&row));
             phases.push(row.try_into().map_err(|_| Error::InvalidTraceShape {
                 details: "numerator public phase cycle has an unexpected width".to_owned(),
@@ -319,20 +321,18 @@ impl CompactHashQuotient {
     }
 }
 
-/// Immutable full-Fp4 numerator masks shared by bounded arithmetic workers.
+/// Immutable base-field numerator masks shared by bounded arithmetic workers.
 pub(super) struct PolynomialHashEvaluator<'a> {
     ledger: &'a CompactHashQuotient,
     domain: super::polynomial_transform::PolynomialDomain,
     cycle: usize,
     // These masks depend only on the declared public domain and fixed selectors.
-    masks: Vec<GoldilocksFp4V1>,
+    masks: Vec<u64>,
 }
 
 impl PolynomialHashEvaluator<'_> {
     /// Allocate exactly one guarded graph workspace, without copying public masks.
-    pub(super) fn scratch(
-        &self,
-    ) -> Result<super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>> {
+    pub(super) fn scratch(&self) -> Result<super::secret_polynomial::SecretPolynomial<u64>> {
         super::secret_polynomial::SecretPolynomial::zeroed(self.ledger.compiled.nodes.len())
     }
 
@@ -340,10 +340,10 @@ impl PolynomialHashEvaluator<'_> {
     pub(super) fn evaluate(
         &self,
         index: usize,
-        current: &CompactRow<GoldilocksFp4V1>,
-        next: &CompactRow<GoldilocksFp4V1>,
-        scratch: &mut super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>,
-    ) -> Result<HashNumerators<GoldilocksFp4V1>> {
+        current: &CompactRow<u64>,
+        next: &CompactRow<u64>,
+        scratch: &mut super::secret_polynomial::SecretPolynomial<u64>,
+    ) -> Result<HashNumerators<u64>> {
         if scratch.len() != self.ledger.compiled.nodes.len() {
             return Err(Error::InvalidTraceShape {
                 details: "polynomial hash scratch differs from the compiled graph".to_owned(),
@@ -362,7 +362,7 @@ impl PolynomialHashEvaluator<'_> {
             &self.masks[start..start + width],
             &inputs,
             scratch,
-            GoldilocksFp4V1::mul,
+            u64::scale_base,
         ))
     }
 }
@@ -773,29 +773,58 @@ mod tests {
             polynomial_transform::PolynomialDomain, secret_polynomial::SecretPolynomial,
         };
         let ledger = CompactHashQuotient::new(&FASTPQ_FINAL_V1, PERIOD).unwrap();
-        let domain = PolynomialDomain::new(
+        // An offset outside the base field has no base-field numerator coset.
+        let extension = PolynomialDomain::new(
             2 * PERIOD,
             GoldilocksFp4V1::new([2, 3, 5, 7]).unwrap(),
             2 * PERIOD,
             1 << 20,
         )
         .unwrap();
-        let (_, cache) = ledger.polynomial_evaluator(domain).unwrap();
+        assert!(ledger.polynomial_evaluator(extension).is_err());
+        let domain = PolynomialDomain::new(
+            2 * PERIOD,
+            GoldilocksFp4V1::embed_base(FASTPQ_FINAL_V1.omega_coset),
+            2 * PERIOD,
+            1 << 20,
+        )
+        .unwrap();
+        let (phases, cache) = ledger.polynomial_evaluator(domain).unwrap();
+        assert_eq!(phases.len(), domain.rows());
         let mut first = cache.scratch().unwrap();
         let mut second = cache.scratch().unwrap();
         assert_eq!(first.len(), ledger.metrics().nodes);
         assert_ne!(first.as_ptr(), second.as_ptr());
         let pointer = cache.masks.as_ptr();
-        let current = hash_row_from_cells(&core::array::from_fn(|column| {
-            GoldilocksFp4V1::new([column as u64 + 1, 3, 5, 7]).unwrap()
-        }));
-        let next = hash_row_from_cells(&core::array::from_fn(|column| {
-            GoldilocksFp4V1::new([11, column as u64 + 13, 17, 19]).unwrap()
-        }));
+        let current = seeded_row(3);
+        let next = seeded_row(11);
+        let embed = |row: &CompactRow| {
+            hash_row_from_cells(&hash_row_cells(row).map(GoldilocksFp4V1::embed_base))
+        };
         for index in [0, 1, PERIOD - 1, PERIOD, 2 * PERIOD - 1, 0] {
-            let expected = ledger
-                .evaluate(domain.point(index).unwrap(), &current, &next)
+            // The uncached evaluator at the same point, in the base field and
+            // through the extension: the cached base values embed into both.
+            let point = domain.base_point(index).unwrap();
+            assert_eq!(
+                domain.point(index).unwrap(),
+                GoldilocksFp4V1::embed_base(point)
+            );
+            let expected = ledger.evaluate(point, &current, &next).unwrap();
+            let extension = ledger
+                .evaluate(
+                    domain.point(index).unwrap(),
+                    &embed(&current),
+                    &embed(&next),
+                )
                 .unwrap();
+            assert_eq!(
+                extension.local,
+                expected.local.map(GoldilocksFp4V1::embed_base)
+            );
+            assert_eq!(
+                extension.transitions,
+                expected.transitions.map(GoldilocksFp4V1::embed_base)
+            );
             assert_eq!(
                 cache.evaluate(index, &current, &next, &mut first).unwrap(),
                 expected

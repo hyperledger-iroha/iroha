@@ -3,14 +3,15 @@
 //! This owner streams canonical leaves and the exact natural-order Merkle tree,
 //! retaining internal Merkle nodes until transcript-selected openings regenerate
 //! their leaves and authenticate the existing minimal frontier. The terminal
-//! retains all 128 values. No full oracle or leaf-digest array is stored.
+//! retains all 128 values. Each stripe is hashed and merged as one ordered run;
+//! no full oracle or complete leaf-digest array is stored.
 //! The producer consumes this owner for roots and openings.
 //! TODO: Cryptographically qualify the complete construction; this owner computes
 //! commitments, while the independent engine verifies the complete proof.
 
 use super::{
     deep_binding::{BindingError, Context, Oracle},
-    deep_coefficient_replay::{CoefficientReplay, CoefficientReplayPlan, CoefficientStripe},
+    deep_coefficient_replay::{CoefficientReplay, CoefficientReplayPlan},
     deep_geometry::{FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, QUERY_COUNT},
     deep_node_cache::{CommittedNodes, CompletedNodes, NodeCachePlan},
     deep_striped_merkle::{StreamLimits, StripedMerklePlan},
@@ -26,6 +27,8 @@ pub(super) struct CoefficientCommitmentPlan<'a> {
     oracle: Oracle,
     queries: &'a [usize],
     tree: StripedMerklePlan,
+    /// Leaves of one stripe of the tree: one run of the leaf executor.
+    tree_rows: usize,
     fields: usize,
     retained: usize,
     pub(super) payload_bytes: usize,
@@ -93,12 +96,18 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         limit(payload_bytes, limits.max_payload_bytes)?;
         let leaf_hashes = tree.leaf_hashes;
         let parent_hashes = tree.parent_hashes;
+        let tree_rows = if terminal {
+            1
+        } else {
+            rows / arity / replay.stripes()
+        };
         Ok(Self {
             digest_execution: limits.digest_execution,
             replay,
             oracle,
             queries,
             tree,
+            tree_rows,
             fields,
             retained,
             payload_bytes,
@@ -145,86 +154,80 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         } else {
             self.tree.start()?
         };
-        let mut values = SecretPolynomial::zeroed(self.fields)?;
-        let capacity = if self.oracle == Oracle::Terminal {
+        let leaf_bytes = self.fields * F::BYTES;
+        // One stripe of leaf digests, reused for that stripe's lower parents.
+        // The terminal is one leaf holding every value.
+        let stripe_leaves = if self.oracle == Oracle::Terminal {
             1
         } else {
-            super::deep_leaf_batch::CAPACITY
+            self.tree_rows
         };
-        let mut bytes = SecretPolynomial::zeroed(capacity * self.fields * F::BYTES)?;
-        // Every oracle uses the explicitly selected bulk-leaf executor. The
-        // terminal retains its one-leaf duplicated-parent Merkle geometry.
-        let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(capacity)?;
+        let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(stripe_leaves)?;
         let mut selected = SecretPolynomial::zeroed(self.retained)?;
         let parent = |level: usize, index: usize, left, right| {
             binding
                 .hash_parent_at(self.oracle, level, index, left, right)
                 .map_err(binding_error)
         };
-        let batch_parent = |level, indices: &[usize], left: &[[u8; 32]], right: &mut [[u8; 32]]| {
-            super::deep_parent_batch::hash_in_place(
-                binding,
-                self.oracle,
-                level,
-                indices,
-                left,
-                right,
-                self.digest_execution,
-            )
-        };
+        let run_parent =
+            |level, first_index, index_step, left: &[[u8; 32]], right: &mut [[u8; 32]]| {
+                super::deep_parent_batch::hash_run_in_place(
+                    binding,
+                    self.oracle,
+                    level,
+                    first_index,
+                    index_step,
+                    left,
+                    right,
+                    self.digest_execution,
+                )
+            };
         if self.oracle == Oracle::Terminal {
             gather_terminal(replay, &mut selected)?;
-            pack(&selected, &mut bytes)?;
-            super::deep_leaf_batch::hash(
+            let terminal: &[F] = &selected;
+            super::deep_leaf_batch::hash_run(
                 binding,
                 self.oracle,
-                &[0],
-                &bytes,
-                self.fields * F::BYTES,
+                leaf_bytes,
+                |_| 0,
+                |_, payload| pack(terminal, payload),
                 &mut leaves,
                 self.digest_execution,
             )?;
-            tree.push_batch(&[0], &mut leaves, batch_parent, parent)?;
+            tree.push_run(&mut leaves, run_parent, parent)?;
         } else {
-            let packer = RowPacker {
-                oracle: self.oracle,
-                fields: self.fields,
-                queries: self.queries,
-            };
+            let stripes = replay.plan().stripes();
             replay.visit_all(|stripe| {
                 let rows = if self.oracle == Oracle::QuotientAndMask {
                     stripe.rows()
                 } else {
                     stripe.fiber_rows()
                 };
-                for start in (0..rows).step_by(capacity) {
-                    let count = (rows - start).min(capacity);
-                    let mut indices = [0; super::deep_leaf_batch::CAPACITY];
-                    packer.pack(
-                        &stripe,
-                        start,
-                        &mut indices[..count],
-                        &mut bytes,
-                        &mut values,
-                        &mut selected,
-                    )?;
-                    super::deep_leaf_batch::hash(
-                        binding,
-                        self.oracle,
-                        &indices[..count],
-                        &bytes[..count * self.fields * F::BYTES],
-                        self.fields * F::BYTES,
-                        &mut leaves[..count],
-                        self.digest_execution,
-                    )?;
-                    tree.push_batch(
-                        &indices[..count],
-                        &mut leaves[..count],
-                        batch_parent,
-                        parent,
-                    )?;
+                if rows != stripe_leaves {
+                    return Err(invalid(
+                        "DEEP coefficient stripe differs from its tree plan",
+                    ));
                 }
-                Ok(())
+                // Every job packs and hashes its own leaves of this stripe.
+                super::deep_leaf_batch::hash_run(
+                    binding,
+                    self.oracle,
+                    leaf_bytes,
+                    |row| stripe.global_index(row),
+                    |row, payload| stripe.pack_leaf(row, payload),
+                    &mut leaves,
+                    self.digest_execution,
+                )?;
+                for (&index, values) in self
+                    .queries
+                    .iter()
+                    .zip(selected.chunks_exact_mut(self.fields))
+                {
+                    if index % stripes == stripe.stripe_index() {
+                        stripe.leaf(index / stripes, values)?;
+                    }
+                }
+                tree.push_run(&mut leaves, run_parent, parent)
             })?;
         }
         let result = tree.finish(parent)?;
@@ -246,51 +249,6 @@ fn gather_terminal(replay: &mut CoefficientReplay<'_>, selected: &mut [F]) -> Re
         }
         Ok(())
     })
-}
-
-/// Leaf layout of one nonterminal oracle, copied out of its consumed plan.
-struct RowPacker<'q> {
-    oracle: Oracle,
-    fields: usize,
-    queries: &'q [usize],
-}
-impl RowPacker<'_> {
-    /// Pack one bounded batch of consecutive stripe rows starting at `start`.
-    ///
-    /// Writes each row's tree index into `indices`, its canonical leaf into the
-    /// matching `bytes` prefix and every queried row's fields into `selected`.
-    fn pack(
-        &self,
-        stripe: &CoefficientStripe<'_>,
-        start: usize,
-        indices: &mut [usize],
-        bytes: &mut [u8],
-        values: &mut [F],
-        selected: &mut [F],
-    ) -> Result<()> {
-        let leaf_bytes = self.fields * F::BYTES;
-        for (offset, packed) in bytes[..indices.len() * leaf_bytes]
-            .chunks_exact_mut(leaf_bytes)
-            .enumerate()
-        {
-            let row = start + offset;
-            let index = stripe.global_index(row);
-            indices[offset] = index;
-            if self.oracle == Oracle::QuotientAndMask {
-                for (column, value) in values.iter_mut().enumerate() {
-                    *value = stripe.value(column, row)?;
-                }
-            } else {
-                stripe.fiber(row, values)?;
-            }
-            pack(values, packed)?;
-            if let Ok(position) = self.queries.binary_search(&index) {
-                selected[position * self.fields..(position + 1) * self.fields]
-                    .copy_from_slice(values);
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Public commitment/frontier, with retained field values under clearing ownership.
@@ -336,21 +294,11 @@ pub(super) fn open_cached(
     }
     let fields = leaf_bytes / F::BYTES;
     let opened = cache.open(queries, execution, |indices, output| {
-        let mut values = SecretPolynomial::zeroed(fields)?;
         replay.visit_selected_stripes(indices, |stripe| {
             for (&index, target) in indices.iter().zip(output.chunks_exact_mut(leaf_bytes)) {
-                if index % plan.stripes() != stripe.stripe_index() {
-                    continue;
+                if index % plan.stripes() == stripe.stripe_index() {
+                    stripe.pack_leaf(index / plan.stripes(), target)?;
                 }
-                let row = index / plan.stripes();
-                if oracle == Oracle::QuotientAndMask {
-                    for (column, value) in values.iter_mut().enumerate() {
-                        *value = stripe.value(column, row)?;
-                    }
-                } else {
-                    stripe.fiber(row, &mut values)?;
-                }
-                pack(&values, target)?;
             }
             Ok(())
         })

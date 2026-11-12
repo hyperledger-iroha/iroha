@@ -85,12 +85,80 @@ fn accelerator_results_require_exact_cardinality_before_acceptance() {
         assert!(!poseidon_digest_acceleration_enabled());
     }
     set_poseidon_digest_acceleration_enabled(true);
-    let output = vec![[3; 32], [4; 32]];
+    let output = cpu_digest_bytes(&batch);
     assert_eq!(
         batch.accept_gpu_digests(Some(output.clone())),
         Some(output.into_iter().map(Hash::prehashed).collect()),
     );
     assert!(poseidon_digest_acceleration_enabled());
+}
+
+/// The CPU digests of a batch as the raw bytes an accelerator returns, before
+/// they are wrapped as prehashed values.
+fn cpu_digest_bytes(batch: &PoseidonDigestBatch) -> Vec<[u8; 32]> {
+    batch
+        .slices
+        .iter()
+        .map(|slice| {
+            let offset = slice.offset();
+            halo2_poseidon::hash_u64_words_bytes(&batch.words[offset..offset + slice.len()])
+        })
+        .collect()
+}
+
+#[test]
+fn accelerator_results_are_audited_against_the_cpu_before_acceptance() {
+    let _guard = DigestAccelerationTestGuard::new();
+    // More digests than the audit samples, so some positions are unsampled.
+    let count = 4 * GPU_DIGEST_AUDIT_SAMPLES;
+    let transcripts: Vec<_> = (0..count)
+        .map(|seed| transcript(u8::try_from(seed).expect("small fixture seed")))
+        .collect();
+    let batch = batch(&transcripts);
+    let correct = cpu_digest_bytes(&batch);
+    set_poseidon_digest_acceleration_enabled(true);
+    assert_eq!(
+        batch.accept_gpu_digests(Some(correct.clone())),
+        Some(batch.hash_cpu()),
+    );
+    assert!(poseidon_digest_acceleration_enabled());
+    // The first, the last and every evenly spread position is recomputed: one
+    // changed byte there rejects the whole batch and quarantines acceleration.
+    let sampled: Vec<_> = (0..GPU_DIGEST_AUDIT_SAMPLES)
+        .map(|sample| sample * (count - 1) / (GPU_DIGEST_AUDIT_SAMPLES - 1))
+        .collect();
+    assert_eq!((sampled[0], sampled[sampled.len() - 1]), (0, count - 1));
+    for &position in &sampled {
+        let mut faulty = correct.clone();
+        faulty[position][17] ^= 1;
+        set_poseidon_digest_acceleration_enabled(true);
+        assert!(batch.accept_gpu_digests(Some(faulty)).is_none());
+        assert!(!poseidon_digest_acceleration_enabled());
+    }
+    // A device computing another function fails at every position.
+    set_poseidon_digest_acceleration_enabled(true);
+    assert!(
+        batch
+            .accept_gpu_digests(Some(vec![[3; 32]; count]))
+            .is_none()
+    );
+    assert!(!poseidon_digest_acceleration_enabled());
+    // The audit is a spread, not a full recomputation: a fault confined to an
+    // unsampled position is outside what it detects.
+    let unsampled = (0..count)
+        .find(|position| !sampled.contains(position))
+        .expect("more digests than samples");
+    let mut confined = correct;
+    confined[unsampled][17] ^= 1;
+    set_poseidon_digest_acceleration_enabled(true);
+    assert!(batch.accept_gpu_digests(Some(confined)).is_some());
+    // A pending result that fails the audit is replaced by the whole CPU batch.
+    set_poseidon_digest_acceleration_enabled(true);
+    assert_eq!(
+        batch.resolve_pending_or_cpu(&batch, || Some(vec![[3; 32]; count])),
+        batch.hash_cpu(),
+    );
+    assert!(!poseidon_digest_acceleration_enabled());
 }
 
 #[test]
@@ -121,9 +189,9 @@ fn pending_result_failure_recomputes_the_complete_cpu_batch() {
     assert_eq!(
         original.resolve_pending_or_cpu(&current, || {
             called.set(true);
-            Some(vec![[3; 32], [4; 32]])
+            Some(cpu_digest_bytes(&current))
         }),
-        vec![Hash::prehashed([3; 32]), Hash::prehashed([4; 32])],
+        expected,
     );
     assert!(called.get());
     assert!(poseidon_digest_acceleration_enabled());

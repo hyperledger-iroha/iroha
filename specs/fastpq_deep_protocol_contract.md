@@ -264,15 +264,24 @@ obligations; dropping them is a different protocol.
 composition in coefficient space with exact division before evaluating its LDE.
 It computes the AIR numerator on the shared 4N interpolation domain and exactly
 divides by `X^N-1`; no zero-mask adapter or pointwise 8M AIR replay is used.
+That domain is a coset with a base-field offset, so the masked trace, the public
+columns and every fixed polynomial take base-field values on it. All 923 slots
+are evaluated in the base field and only their weighting by the alphas is in
+`K`; the values are the same field elements either way. Each of the four
+numerator stripes is evaluated by 32 contiguous jobs, a fixed count that does
+not depend on the worker pool, and each job owns one charged workspace.
 Private coefficient/evaluation buffers use the existing erased-storage owner.
 Base trace replay retains the source, coefficients, masks and one N-row stripe;
 it visits 128 stripes per complete row pass. The numerator uses only its four
 nested stripes. Q0/Q1/R and all FRI layers use coefficient replay too. The first
 commitment passes retain internal Merkle nodes under the same immutable attempt
-context. Once the transcript chooses queries, replay regenerates only stripes
-containing queried leaves or leaf-level siblings, including every coordinate of
-FRI fibers. Each opening reconstructs the original root with the existing
-canonical multiproof before exposing values. Entropy, challenges, leaf/parent
+context. Once the transcript chooses queries, the row oracle evaluates the
+queried rows and their leaf-level siblings at their own domain points, directly
+from the retained coefficients and masks: at most 154 rows, with no stripe. The
+coefficient oracles regenerate only stripes containing queried leaves or
+leaf-level siblings, including every coordinate of FRI fibers. Each opening
+reconstructs the original root with the existing canonical multiproof before
+exposing values. Entropy, challenges, leaf/parent
 framing and proof encoding remain unchanged. No complete 20,199,768,064-byte base
 LDE or full leaf-digest array is retained.
 
@@ -303,15 +312,22 @@ tree stack and transcript hashing use CPU. Parent batching preserves every
 natural level/index and reuses caller-owned clearing digest slots.
 Required-device availability is checked with public input before private-tree
 work, entropy and transforms, and actual dispatch checks quarantine again.
-There is no implicit CPU fallback for required-device failures. Leaves are
-prepared in fixed batches of at most 1024, independent of worker count; the
-shared plan charges canonical bodies, frames, ordered parallel job results and
-executor buffers before allocation. No hardware
-or whole-prover performance qualification follows from this dispatch wiring.
+There is no implicit CPU fallback for required-device failures. A commitment
+hashes one stripe of leaves, and that stripe's parents on each lower tree
+level, as one ordered run each. CPU execution splits a run into fixed-size
+sequential jobs (256 leaves or 1,024 parents) that pack and hash their own
+inputs, two at a time through the paired kernel where it is built in;
+required-device execution stages the same run in batches of at most 1,024.
+Neither depends on the worker count, and every digest lands at its run offset. The shared plan charges canonical bodies, frames,
+ordered parallel job results, executor buffers and one stripe of leaf digests
+before allocation. CPU transforms read their stage roots from cached tables of
+public root powers; the plan charges that cache's 4 MiB bound once per attempt.
+No hardware or whole-prover performance qualification follows from this
+dispatch wiring.
 
 ## Bounded wire verification
 
-The sole child frame is `fastpq_prover::deep_compact::MaskedCompositionProofV1` in
+The sole child frame is `fastpq_prover::deep_compact::Sha3MaskedCompositionProofV1` in
 [`deep_proof`](../crates/fastpq_prover/src/backend/deep_proof.rs). It carries row and
 joined Q0/Q1/R roots, six FRI/terminal roots, complete OOD answers, queried rows
 and Q0/Q1/R triples, minimal sibling frontiers, five sets of complete strided FRI

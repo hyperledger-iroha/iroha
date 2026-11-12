@@ -196,6 +196,15 @@ pub(super) fn verify_envelope(
         })?;
     let binding = require_canonical_binding(binding)?;
     validate_axt_transfer_claim_binding(&binding)?;
+    // The expected metadata below copies the parameter from this binding, so
+    // the artifact comparison alone would accept any label the prover chose.
+    // The producer admits only the fixed profile; the verifier does the same.
+    if binding.parameter != DEFAULT_PARAMETER {
+        return Err(Error::ParameterMismatch {
+            expected: DEFAULT_PARAMETER.to_owned(),
+            actual: binding.parameter.clone(),
+        });
+    }
     if binding.source_dsid != envelope.dsid.as_u64() {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof envelope source_dsid does not match dsid".into(),
@@ -203,6 +212,13 @@ pub(super) fn verify_envelope(
     }
     let artifact = decode(&envelope.proof)?;
     let inputs = artifact.statement.public_inputs;
+    // The producer refuses a batch whose public dsid differs from the binding's
+    // source; without this check an unanchored statement could name another one.
+    if inputs.dsid != super::dsid_bytes(binding.source_dsid) {
+        return Err(Error::InvalidAxtBinding {
+            details: "FastPQ public dsid does not match AXT binding".into(),
+        });
+    }
     if let Some((anchor, _, _)) = finalized {
         require_finalized_public_inputs_v1(
             &PublicInputs {
@@ -251,6 +267,7 @@ pub(super) fn verify_envelope(
     Ok(AxtVerifiedProof {
         statement_digest: axt_statement_digest(envelope, &binding, &artifact.statement)?,
         proof_digest: Hash::new(&envelope.proof),
+        slot: inputs.slot,
         old_root: inputs.old_root,
         new_root: inputs.new_root,
         tx_set_hash: inputs.tx_set_hash,

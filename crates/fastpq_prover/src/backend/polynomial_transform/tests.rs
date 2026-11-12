@@ -195,3 +195,40 @@ fn malformed_coordinates_extent_high_terms_and_policy_fail_before_transform() {
     assert!(PolynomialDomain::new(8, f(3), 8, 8 * 2 * F::BYTES - 1).is_err());
     assert!(reserved::<F>(usize::MAX).is_err());
 }
+
+#[test]
+fn base_coset_points_and_evaluation_are_one_lane_of_the_extension_transform() {
+    let offset = fastpq_isi::FASTPQ_FINAL_V1.omega_coset;
+    let base = domain(64, F::embed_base(offset));
+    assert_eq!(base.base_offset(), Some(offset));
+    let coefficients: Vec<u64> = (0..23).map(|index| 1_000_003 * index + 17).collect();
+    let values = base.evaluate_base(&coefficients).unwrap();
+    assert_eq!(values.len(), 64);
+    let embedded: Vec<F> = coefficients.iter().copied().map(F::embed_base).collect();
+    let lanes = base.evaluate(&embedded, embedded.len()).unwrap();
+    for (index, &value) in values.iter().enumerate() {
+        // Every point is a base-field element and the value there is the
+        // constant lane of the four-lane transform; the other lanes are zero.
+        let point = base.base_point(index).unwrap();
+        assert_eq!(base.point(index).unwrap(), F::embed_base(point));
+        assert_eq!(lanes.value(index).unwrap(), F::embed_base(value));
+        assert_eq!(
+            horner(&embedded, F::embed_base(point)),
+            F::embed_base(value)
+        );
+    }
+    assert!(base.base_point(64).is_err());
+    // Empty, overlong and noncanonical coefficients are refused.
+    assert!(base.evaluate_base(&[]).is_err());
+    assert!(base.evaluate_base(&[1; 65]).is_err());
+    assert!(base.evaluate_base(&[1, GOLDILOCKS_MODULUS]).is_err());
+    // A coset with any extension coordinate in its offset has no base points.
+    for coordinate in 1..4 {
+        let mut words = [3, 0, 0, 0];
+        words[coordinate] = 5;
+        let extension = domain(64, F::new(words).unwrap());
+        assert_eq!(extension.base_offset(), None);
+        assert!(extension.base_point(0).is_err());
+        assert!(extension.evaluate_base(&coefficients).is_err());
+    }
+}

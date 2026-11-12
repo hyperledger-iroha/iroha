@@ -6,10 +6,10 @@
 //! column is a linear combination of fixed 512-period selectors, with degree at
 //! most N-N/512 for N=65536. No off-domain point is interpreted as a row phase.
 //!
-//! TODO: Bind this ordered layout and its reconstruction into the new protocol's
-//! commitment, mixing, degree/opening argument and transcript before admission.
-//! This private candidate does not change the existing 342-column proof format,
-//! query schedule, production limits, or security qualification.
+//! The fixed profile commits the 301 remaining columns: its statement context
+//! binds this layout identifier, and both the verifier's out-of-domain check
+//! and the producer's numerator rebuild the 41 columns through this owner.
+//! TODO: Independently qualify the degree and opening argument of the layout.
 
 use fastpq_isi::StarkParameterSet;
 

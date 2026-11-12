@@ -526,15 +526,7 @@
           "role": "fuzz"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
-          "role": "source"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
-          "role": "source"
-        },
-        {
-          "path": "crates/fastpq_prover/src/backend/phased_trace.rs",
           "role": "source"
         },
         {
@@ -3060,10 +3052,6 @@
           "role": "source"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/phased_trace.rs",
-          "role": "source"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/tests.rs",
           "role": "test"
         },
@@ -3659,10 +3647,6 @@
           "role": "source"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
-          "role": "source"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/fixed_schedule.rs",
           "role": "source"
         },
@@ -4184,10 +4168,6 @@
           "role": "source"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/coefficient_masking/tests.rs",
-          "role": "test"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/compact_hash_quotient.rs",
           "role": "source"
         },
@@ -4244,10 +4224,6 @@
           "role": "test"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/extension_trace.rs",
-          "role": "source"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
           "role": "source"
         },
@@ -4300,10 +4276,6 @@
           "role": "test"
         },
         {
-          "path": "crates/fastpq_prover/src/cyclotomic.rs",
-          "role": "source"
-        },
-        {
           "path": "crates/fastpq_prover/src/fft.rs",
           "role": "source"
         },
@@ -4341,14 +4313,6 @@
         {
           "path": "crates/fastpq_prover/src/backend/air_quotient.rs",
           "role": "source"
-        },
-        {
-          "path": "crates/fastpq_prover/src/backend/coefficient_masking.rs",
-          "role": "source"
-        },
-        {
-          "path": "crates/fastpq_prover/src/backend/coefficient_masking/tests.rs",
-          "role": "test"
         },
         {
           "path": "crates/fastpq_prover/src/backend/compact_axt_air.rs",
@@ -4415,10 +4379,6 @@
           "role": "test"
         },
         {
-          "path": "crates/fastpq_prover/src/backend/deep_prover_plan/tests.rs",
-          "role": "test"
-        },
-        {
           "path": "crates/fastpq_prover/src/backend/fixed_domain.rs",
           "role": "source"
         },
@@ -4433,10 +4393,6 @@
         {
           "path": "crates/fastpq_prover/src/backend/fri_fold/tests.rs",
           "role": "test"
-        },
-        {
-          "path": "crates/fastpq_prover/src/backend/masked_quotient.rs",
-          "role": "source"
         },
         {
           "path": "crates/fastpq_prover/src/backend/merkle_cache.rs",

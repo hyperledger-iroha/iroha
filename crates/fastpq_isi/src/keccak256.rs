@@ -121,14 +121,35 @@ impl Sponge {
             position: 0,
         }
     }
-    fn update(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state[self.position / 8] ^= u64::from(byte) << ((self.position % 8) * 8);
-            self.position += 1;
+    fn update(&mut self, mut bytes: &[u8]) {
+        // Single bytes up to the next lane boundary, then whole little-endian
+        // lanes (the FIPS 202 byte order within a lane), then the short tail.
+        while !self.position.is_multiple_of(8) {
+            let Some((&byte, rest)) = bytes.split_first() else {
+                return;
+            };
+            self.absorb_byte(byte);
+            bytes = rest;
+        }
+        let (lanes, tail) = bytes.as_chunks::<8>();
+        for lane in lanes {
+            self.state[self.position / 8] ^= u64::from_le_bytes(*lane);
+            self.position += 8;
             if self.position == KECCAK_RATE_256_V1 {
                 permute(&mut self.state);
                 self.position = 0;
             }
+        }
+        for &byte in tail {
+            self.absorb_byte(byte);
+        }
+    }
+    fn absorb_byte(&mut self, byte: u8) {
+        self.state[self.position / 8] ^= u64::from(byte) << ((self.position % 8) * 8);
+        self.position += 1;
+        if self.position == KECCAK_RATE_256_V1 {
+            permute(&mut self.state);
+            self.position = 0;
         }
     }
     fn finalize(mut self, suffix: u8) -> Reader {
@@ -150,14 +171,34 @@ struct Reader {
 }
 impl Reader {
     fn read(&mut self, output: &mut [u8]) {
-        for byte in output {
+        // Mirror of `Sponge::update`: single bytes to a lane boundary, whole
+        // little-endian lanes, then the short tail.
+        let unaligned = (8 - self.position % 8) % 8;
+        let (head, rest) = output.split_at_mut(unaligned.min(output.len()));
+        for byte in head {
+            *byte = self.squeeze_byte();
+        }
+        let (lanes, tail) = rest.as_chunks_mut::<8>();
+        for lane in lanes {
             if self.position == KECCAK_RATE_256_V1 {
                 permute(&mut self.state);
                 self.position = 0;
             }
-            *byte = ((self.state[self.position / 8] >> ((self.position % 8) * 8)) & 0xff) as u8;
-            self.position += 1;
+            *lane = self.state[self.position / 8].to_le_bytes();
+            self.position += 8;
         }
+        for byte in tail {
+            *byte = self.squeeze_byte();
+        }
+    }
+    fn squeeze_byte(&mut self) -> u8 {
+        if self.position == KECCAK_RATE_256_V1 {
+            permute(&mut self.state);
+            self.position = 0;
+        }
+        let byte = self.state[self.position / 8].to_le_bytes()[self.position % 8];
+        self.position += 1;
+        byte
     }
 }
 

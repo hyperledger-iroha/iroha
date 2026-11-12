@@ -12,7 +12,7 @@ pub enum ExecutionFeeExemption {
     /// The ordinary fee applies whether the body succeeds or fails.
     Charged,
     /// No fee applies, whether the body succeeds or fails: the initial genesis bootstrap and
-    /// the protocol and successful-claim exemptions.
+    /// the successful-claim exemption.
     Exempt,
     /// No fee applies when the body succeeds. When it fails, the ordinary Nexus fee is charged
     /// within the signed fee intent, when that intent covers it and the payer can pay it;

@@ -9097,26 +9097,20 @@ fn assert_direct_fee_exempt_draft(
     .expect("the recommended empty intent must pass strict quoting");
     assert_eq!(strict, draft.quote);
 }
+/// Vault allocation registration has no fee exemption. Quoting, queue admission and
+/// execution charge it like any other transaction, its proof priced with the verification
+/// gas schedule, so a proof that fails verification is paid for.
 #[test]
-fn protocol_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
+fn fee_sponsor_vault_allocation_is_charged_like_any_transaction() {
     let (world, nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
-    let fee_asset = nexus.fees.fee_asset_id.clone();
-    payload.fee_payment = FeePaymentIntent::authority(
-        vec![FeeChargeLimit::new(
-            FeeChargeKind::Nexus,
-            fee_asset.clone(),
-            Quantity::from(9_u32),
-        )],
-        None,
-    );
-    payload.instructions = vec![InstructionBox::from(
+    let allocation = InstructionBox::from(
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation {
             program_id: FeeSponsorProgramId::new(
                 payload.authority.clone(),
-                "quote_exempt".parse().expect("program name"),
+                "quote_charged".parse().expect("program name"),
             ),
             program_revision: 1,
-            asset_definition_id: fee_asset,
+            asset_definition_id: nexus.fees.fee_asset_id.clone(),
             verified_allocation: Quantity::from(1_u32),
             source_dataspace_id: DataSpaceId::UNIVERSAL,
             source_height: 1,
@@ -9129,9 +9123,65 @@ fn protocol_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
                 expiry_slot: None,
             },
         },
-    )]
-    .into();
-    assert_direct_fee_exempt_draft(&(world), &nexus, &pipeline, payload);
+    );
+    payload.instructions = vec![allocation.clone()].into();
+    {
+        let world = world.block();
+        // The fixture is a Global root, where public exemptions apply at all.
+        assert!(root_fees::permits_public_exemption(&world).unwrap());
+        assert!(!fee_exempt_payload(&world, &nexus.fees, &payload, 0, None, 1).unwrap());
+        let draft = quote_nexus_fee_admission_draft(
+            &world,
+            &nexus,
+            &pipeline,
+            &crate::gas::DEFAULT_ZK_GAS,
+            &payload,
+            0,
+            None, /* World-only pre-genesis fee fixture */
+            1,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+        .expect("draft quote");
+        assert_eq!(
+            draft
+                .quote
+                .charges
+                .iter()
+                .map(|charge| charge.kind)
+                .collect::<Vec<_>>(),
+            vec![FeeChargeKind::Nexus, FeeChargeKind::PipelineGas]
+        );
+        // Its proof is priced with the verification schedule the quote is given, at the
+        // fixture's three units per gas.
+        let gas = crate::gas::meter_instruction(&allocation, &crate::gas::DEFAULT_ZK_GAS)
+            .expect("metered allocation");
+        assert!(gas > crate::gas::DEFAULT_ZK_GAS.proof_base);
+        assert_eq!(
+            draft
+                .quote
+                .charges
+                .iter()
+                .find(|charge| charge.kind == FeeChargeKind::PipelineGas)
+                .expect("the fixture charges pipeline gas")
+                .max_bound,
+            Quantity::from(u128::from(gas) * 3)
+        );
+    }
+    let signed = TransactionBuilder::new(
+        executor_test_network_id(b"fee-quote"),
+        ALICE_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([allocation])
+    .sign(ALICE_KEYPAIR.private_key());
+    assert!(!fee_exempt_transaction(&world.view(), &nexus.fees, &signed, 0, None, 2).unwrap());
+    let state = state_for_testing(world);
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+    let tx = block.transaction();
+    let (exemption, sccp_class) =
+        transaction_fee_exemption(&tx, &signed).expect("classified fee exemption");
+    assert_eq!(exemption, ExecutionFeeExemption::Charged);
+    assert!(sccp_class.is_none());
 }
 include!("executor_fee_quote_tests.rs");
 #[test]

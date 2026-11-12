@@ -185,6 +185,19 @@ lease per `(program, revision, asset, dataspace)` route, and rejects any live
 aggregate whose unspent remainder would exceed that vault. Allocation submission
 requires the program's existing permission and canonical native proof; no retired
 node-local fee relay worker supplies monetary authority.
+Registration has no fee exemption. Like any business rejection, a refused
+registration pays for its actual work, including its transaction bytes and the
+gas of verifying its proof. That gas is the committed ZK verification
+schedule's proof base and six public inputs, plus one gas per eight proof-blob
+bytes, the SCCP light-client rate. The schedule's own per-proof-byte rate is set
+for small SNARK proofs; at that rate an ordinary FASTPQ proof alone would exceed
+the shipped 1,680,000 block gas limit. Every ledger rule (lease binding, live route, scheduled activation and capacity) is
+applied before the proof is verified, so those refusals perform no verification.
+Resubmitting the stored payload in the block that stored it is a no-op without
+verification; in a later block it is refused as a rebound lease. The verified statement's slot and transaction set must be the source
+height and claim digest. Its roots are the proved transfer's own touched-balance
+roots, not ledger state, so the proof does not by itself authenticate the
+funding transfer.
 Withdrawals must leave every unexpired lease remainder intact, and final close
 waits until executed receipt usage has been merge-settled.
 

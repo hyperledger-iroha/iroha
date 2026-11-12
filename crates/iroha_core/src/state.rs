@@ -21625,6 +21625,28 @@ fn account_scope_index_keys(
         })
         .collect()
 }
+/// Stored verified sponsor-vault allocation rows, in canonical key order.
+///
+/// Every row key starts with [`VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX`]
+/// and state paths order as strings, so these rows are one contiguous range that
+/// begins at the prefix. Walking that range visits exactly the rows a filtered walk
+/// of all contract state would visit, in the same order, without touching any other
+/// key. Allocation registration runs these walks, so their cost must not grow with
+/// unrelated contract state.
+pub(crate) fn verified_fee_sponsor_vault_allocation_rows(
+    world: &impl WorldReadOnly,
+) -> impl Iterator<Item = (&StatePath, &Vec<u8>)> {
+    world
+        .smart_contract_state()
+        .range::<str>((
+            core::ops::Bound::Included(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX),
+            core::ops::Bound::Unbounded,
+        ))
+        .take_while(|(key, _)| {
+            key.as_ref()
+                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+        })
+}
 /// Return the earliest height at which `target_revision` can safely become active.
 ///
 /// Sponsor-vault spend leases remain live through their expiry height. An older
@@ -21641,13 +21663,7 @@ pub(crate) fn fee_sponsor_revision_safe_activation_height(
     requested_height: u64,
 ) -> Result<u64, String> {
     let mut safe_height = requested_height.max(current_height);
-    for (key, payload) in world.smart_contract_state().iter() {
-        if !key
-            .to_string()
-            .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
-        {
-            continue;
-        }
+    for (_, payload) in verified_fee_sponsor_vault_allocation_rows(world) {
         let json: Json = norito::decode_from_bytes(payload).map_err(|error| {
             format!("verified fee sponsor vault allocation state decode failed: {error}")
         })?;

@@ -318,6 +318,14 @@ fn verify_bound(
     proof_bytes: usize,
     binding: &Context,
 ) -> Result<VerifiedDeepProof> {
+    // The transcript below indexes every commitment before the opening
+    // preflight runs. Decoding already fixes these counts; repeating them here
+    // keeps this function total for any frame value, not only decoded ones.
+    if proof.fri_roots.len() != FRI_LENGTHS.len() || proof.rounds.len() != FRI_ARITIES.len() {
+        return Err(shape(
+            "DEEP proof has another FRI commitment or round count",
+        ));
+    }
     let geometry = DeepGeometry::new()?;
     let mut transcript = Transcript::new(binding.clone());
     if transcript.challenge().map_err(binding_error)? != Message::Dummy {
