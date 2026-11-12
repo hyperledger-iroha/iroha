@@ -750,6 +750,8 @@ fn release_original_rotation_payment(
     exchange.runtime.block_on(exchange.roots[2].restart_all())?;
     let restarted = exchange.observe(transaction, approvals, AmxOutcomeV1::Commit, [true; 2])?;
     assert_same_original_receipts(&recovered, &restarted)?;
+    // Every bank must hold every Global epoch handoff before heights can be final.
+    evidence::wait_bank_handoffs(exchange)?;
     let final_heights = exchange.quiescent_heights()?;
     ensure!(
         final_heights[0] == ROTATION_HISTORY_BOUND,

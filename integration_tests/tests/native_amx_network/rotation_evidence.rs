@@ -5,11 +5,82 @@ use crate::amx_harness::{self as amx, proofs::Observer};
 use iroha::workflow::{WorkflowJournalV1, contract::MAX_WORKFLOW_JOURNAL_BYTES_V1};
 use iroha_data_model::sumeragi_finality::{VerifiedSumeragiBlock, authenticate_signed_genesis_v1};
 use iroha_data_model::{
-    isi::sumeragi_amx::{PrepareAmxV1, SettleAmxV1},
+    isi::sumeragi_amx::{PrepareAmxV1, RelayGlobalAmxHandoffV1, SettleAmxV1},
     sumeragi_amx::{AmxDebitApprovalV1, AmxRecordV1, AmxTransactionV1},
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_version::codec::DecodeVersioned as _;
+
+/// Global epoch boundaries the workload crosses before its first successor payment.
+const GLOBAL_EPOCH_BOUNDARIES: u64 = (ROTATION_HISTORY_BOUND - 1) / EPOCH;
+
+/// Wait until every bank root has applied one Global epoch handoff per boundary.
+///
+/// The Global relay delivers each boundary to every registered data space, including a
+/// bank whose own obligation settled before the rotation. A restarted relay first rescans
+/// its whole source history, so these deliveries can trail Global quiescence by minutes on
+/// a loaded host; stable heights alone cannot show them. Each handoff is counted only from
+/// an authenticated block whose execution output proves it succeeded. The bound covers one
+/// complete relay rescan.
+pub(super) fn wait_bank_handoffs(exchange: &amx::Exchange) -> Result<()> {
+    let expected = usize::try_from(GLOBAL_EPOCH_BOUNDARIES)?;
+    exchange.runtime.block_on(async {
+        let deadline = tokio::time::Instant::now() + 2 * WAIT;
+        for root in &exchange.roots[1..] {
+            let client = root.client(&amx::genesis_key(root.index));
+            let mut verifier = root.verifier()?;
+            let mut applied = 0_usize;
+            loop {
+                let tip = crate::status_poll::read_until(deadline, || async {
+                    client.client().status().get().await.map_err(Into::into)
+                })
+                .await?
+                .blocks;
+                for at in verifier.authenticated_height().unwrap_or(0) + 1..=tip {
+                    let proof = amx::finality_proof(client.client(), at, root.scope).await?;
+                    let block = verifier.verify(&proof)?;
+                    for (index, entry) in block.block().network_entrypoints().enumerate() {
+                        let TransactionEntrypoint::External(signed) = entry else {
+                            continue;
+                        };
+                        let Executable::Instructions(instructions) = signed.instructions() else {
+                            continue;
+                        };
+                        if !instructions.iter().any(|instruction| {
+                            instruction
+                                .as_any()
+                                .downcast_ref::<RelayGlobalAmxHandoffV1>()
+                                .is_some()
+                        }) {
+                            continue;
+                        }
+                        let evidence = amx::proofs::evidence(block.block(), index.try_into()?)?;
+                        block
+                            .verify_transaction_execution(&root.network.network_id(), &evidence)?;
+                        if evidence.output.result().is_ok() {
+                            applied += 1;
+                        }
+                    }
+                }
+                if applied >= expected {
+                    break;
+                }
+                ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "bank root {} applied {applied} of {expected} Global epoch handoffs",
+                    root.index
+                );
+                tokio::time::sleep(POLL).await;
+            }
+            ensure!(
+                applied == expected,
+                "bank root {} applied {applied} Global epoch handoffs, expected exactly {expected}",
+                root.index
+            );
+        }
+        Ok(())
+    })
+}
 
 pub(super) async fn global_at(root: &amx::Root, height: u64) -> Result<VerifiedSumeragiBlock> {
     ensure!((2..=ROTATION_HISTORY_BOUND).contains(&height));
