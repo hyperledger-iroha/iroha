@@ -83,8 +83,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         reason: "Selected native AMX service semantics and exact original decision/settlement identities, not a State root",
         literals: &[
             r"iroha.runtime.native_amx_capture.v1",
-            r"iroha:runtime:native-amx-capture:v1:original-decision-settlement-and-deadline-cohorts",
             r"iroha:runtime:native-amx-capture-id:v1\0",
+            r"iroha:runtime:native-amx-capture:v1:original-decision-settlement-and-deadline-cohorts",
             r"iroha:runtime:native-amx-opening:v1\0",
         ],
     },

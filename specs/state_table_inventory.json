@@ -1686,8 +1686,8 @@
       ]},
       {"use":"record","reason":"Selected native AMX service semantics and exact original decision/settlement identities, not a State root","literals":[
         "iroha.runtime.native_amx_capture.v1",
-        "iroha:runtime:native-amx-capture:v1:original-decision-settlement-and-deadline-cohorts",
         "iroha:runtime:native-amx-capture-id:v1\\0",
+        "iroha:runtime:native-amx-capture:v1:original-decision-settlement-and-deadline-cohorts",
         "iroha:runtime:native-amx-opening:v1\\0"
       ]},
       {"use":"record","reason":"Selected native escrow service semantics and immutable original custody identity, not a State root","literals":[
