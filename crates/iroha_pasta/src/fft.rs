@@ -397,6 +397,46 @@ impl<F: PastaField> FftDomain<F> {
         Ok(())
     }
 
+    /// Interpolates every column back to coefficients, in place: [`Self::ifft`]
+    /// of each, as one batch on the caller's pool.
+    ///
+    /// # Errors
+    ///
+    /// [`FftError::WrongLength`] for any column that is not `n` long, before
+    /// any column is touched.
+    pub fn ifft_many(&self, columns: &mut [&mut [F]]) -> Result<(), FftError> {
+        self.ifft_many_cancellable(columns, None)
+    }
+
+    /// Runs [`Self::ifft_many`] with an explicit per-operation cancellation signal.
+    /// All Rayon tasks join before returning. After cancellation the buffers are
+    /// incomplete and must be discarded or reinitialized by their owner.
+    ///
+    /// # Errors
+    /// As [`Self::ifft_many`], or [`FftError::Cancelled`].
+    pub fn ifft_many_cancellable(
+        &self,
+        columns: &mut [&mut [F]],
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
+        for column in columns.iter() {
+            self.check(column)?;
+        }
+        let scale = Some((self.n_inv, F::ONE));
+        if let [column] = columns {
+            dif::<_, true>(column, &self.inverse, None, cancellation);
+            bit_reverse_scale::<_, true>(column, self.k, scale, cancellation);
+        } else {
+            claim_each(columns.iter_mut(), |column| {
+                dif::<_, true>(column, &self.inverse, None, cancellation);
+                bit_reverse_scale::<_, true>(column, self.k, scale, cancellation);
+            });
+        }
+        CancellationToken::checkpoint(cancellation)?;
+        Ok(())
+    }
+
     /// Evaluates the polynomial with coefficients `a` at `shift * omega^i`,
     /// in place. The multiplication of coefficient `i` by `shift^i` is fused
     /// into the first pass.
@@ -1215,6 +1255,59 @@ mod tests {
                     );
                     assert!(left[..] == expected[..3], "left of a join, k={k}");
                     assert!(right[..] == expected[..3], "right of a join, k={k}");
+                });
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    /// A batch of inverse transforms writes, at every width and on every pool
+    /// size, what one inverse transform per column writes, and refuses a wrong
+    /// length before it changes any column.
+    #[test]
+    fn inverse_batches_match_single_inverse_transforms() {
+        fn check<F: PastaField>() {
+            for (workers, k) in [(1usize, 13u32), (3, 13), (3, 16), (8, 13)] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    let domain = FftDomain::<F>::new(k).unwrap();
+                    let widest = 2 * workers + 1;
+                    let source: Vec<Vec<F>> = (0..widest as u64)
+                        .map(|index| random_vec(domain.n(), 53 * u64::from(k) + index))
+                        .collect();
+                    let expected: Vec<Vec<F>> = source
+                        .iter()
+                        .map(|column| {
+                            let mut single = column.clone();
+                            domain.ifft(&mut single).unwrap();
+                            single
+                        })
+                        .collect();
+                    for width in [0, 1, 2, workers.max(2), workers + 1, widest] {
+                        let mut batch = source[..width].to_vec();
+                        let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+                        domain.ifft_many(&mut columns).unwrap();
+                        assert!(
+                            batch[..] == expected[..width],
+                            "k={k} workers={workers} width={width}"
+                        );
+                    }
+                    let mut batch = source[..3].to_vec();
+                    batch[1].pop();
+                    let before = batch.clone();
+                    let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+                    assert_eq!(
+                        domain.ifft_many(&mut columns),
+                        Err(FftError::WrongLength {
+                            expected: domain.n(),
+                            actual: domain.n() - 1
+                        })
+                    );
+                    assert!(batch == before, "a refused batch changed a column");
                 });
             }
         }
