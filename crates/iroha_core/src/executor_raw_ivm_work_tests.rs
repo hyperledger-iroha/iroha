@@ -6,7 +6,6 @@ mod raw_ivm_work {
     use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
 
     const GAS: u64 = 50_000_000;
-    const CYCLES: u64 = 1_000;
 
     fn fixture() -> State {
         state_after_genesis(World::with(
@@ -40,11 +39,7 @@ mod raw_ivm_work {
     // Literal descriptors bind each pointer to canonical, hashed TLV bytes; no
     // test register injection or unindexed literal access reaches the executor.
     fn program(literals: &[Vec<u8>], instructions: &[u32]) -> Vec<u8> {
-        let mut bytes = ivm::ProgramMetadata {
-            max_cycles: CYCLES,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut bytes = ivm::ProgramMetadata::default().encode();
         if !literals.is_empty() {
             let data_offset = 16 + literals.len() * 8;
             let data_len: usize = literals.iter().map(Vec::len).sum();
@@ -96,7 +91,6 @@ mod raw_ivm_work {
     fn run_vm(program: &[u8], gas: u64) -> (Result<(), ivm::VMError>, u64, CoreHost) {
         let mut vm = ivm::IVM::new(gas);
         vm.load_program(program).unwrap();
-        vm.set_max_cycles(CYCLES);
         vm.set_gas_limit(gas);
         let mut host = CoreHost::with_accounts(ALICE_ID.clone(), Arc::new(vec![ALICE_ID.clone()]));
         host.set_generic_execution();
@@ -682,26 +676,23 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
     }
 
     #[test]
-    fn signed_quarantine_cycle_limit_uses_actual_work_and_exact_boolean_classification() {
+    fn signed_quarantine_gas_cap_narrows_the_root_limit_with_exact_boolean_classification() {
         let program = account_write_program(false);
         let (independent_result, expected_gas, _) = run_vm(&program, GAS);
         independent_result.unwrap();
+        assert!(expected_gas > 1);
         let mut cache = IvmCache::new();
-        let mut measured_cycles = None;
         for case in 0..7 {
-            let (marker, cap, success, finite) = match case {
-                0 => (Some(Json::new(true)), CYCLES, true, true),
-                1 => (Some(Json::new(true)), measured_cycles.unwrap(), true, true),
-                2 => (
-                    Some(Json::new(true)),
-                    measured_cycles.unwrap() - 1,
-                    false,
-                    true,
-                ),
-                3 => (Some(Json::new(true)), 0, true, false),
-                4 => (Some(Json::new(false)), 1, true, false),
-                5 => (Some(Json::new("true")), 1, true, false),
-                _ => (None, 1, true, false),
+            // `min(signed limit, cap)` governs a quarantine root; 0 means no cap, and only an
+            // exact authenticated boolean `true` classifies a transaction as quarantined.
+            let (marker, cap, success) = match case {
+                0 => (Some(Json::new(true)), expected_gas, true),
+                1 => (Some(Json::new(true)), expected_gas - 1, false),
+                2 => (Some(Json::new(true)), GAS.saturating_mul(2), true),
+                3 => (Some(Json::new(true)), 0, true),
+                4 => (Some(Json::new(false)), 1, true),
+                5 => (Some(Json::new("true")), 1, true),
+                _ => (None, 1, true),
             };
             let state = fixture();
             let mut metadata = iroha_model_base::metadata::Metadata::default();
@@ -722,37 +713,26 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            tx.pipeline.quarantine_tx_max_cycles = cap;
+            tx.pipeline.quarantine_tx_max_gas = cap;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, &source, &mut cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection);
-            let cycles = tx.completed_execution_cycles_for_tests();
-            assert_eq!(cycles.is_some(), finite);
             assert!(
                 !tx.execution_effect_limit_exceeded(),
                 "actual VM work is not fee-exempt instruction preflight"
             );
-            if case == 0 {
-                measured_cycles = cycles;
-                assert!(cycles.unwrap() > 1);
-            }
             if success {
                 result.unwrap();
                 assert_eq!(tx.last_tx_gas_used, expected_gas);
-                if finite {
-                    assert_eq!(cycles, measured_cycles);
-                }
                 tx.apply();
             } else {
                 assert!(
-                    matches!(result, Err(ValidationFail::NotPermitted(ref reason))
-                    if reason == &format!("quarantine cycle budget exceeded: {cap}"))
+                    matches!(&result, Err(ValidationFail::IvmFault(fault))
+                        if fault.kind == iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas),
+                    "{result:?}"
                 );
-                assert_eq!(cycles, Some(cap));
-                // Only the final, zero-gas HALT is refused. All metered work
-                // completed, even though its queued effects cannot be applied.
-                assert_eq!(tx.last_tx_gas_used, expected_gas);
-                assert!(!tx.execution_effects_allow_apply());
+                // The capped root retains the work it consumed, never more than the cap.
+                assert!(tx.last_tx_gas_used > 0 && tx.last_tx_gas_used <= cap);
                 assert!(
                     tx.world
                         .account(&ALICE_ID)
@@ -760,7 +740,7 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
                         .metadata()
                         .get("raw_work_written")
                         .is_none(),
-                    "a queued write cannot apply after HALT was refused"
+                    "an exhausted root applies no queued write"
                 );
                 drop(tx);
             }

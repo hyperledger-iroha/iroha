@@ -1921,7 +1921,7 @@ prepare_python_guard_root() {
   install -m 600 "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
   write_test_rust_toolchain "${root}"
   printf '%s\n' "sealed checkout native extension fixture" >"${root}/python/iroha_python/src/iroha_python/_crypto.abi3.so"
-  for relative in scripts/check_privacy_python_witness_boundary.py python/iroha_python/iroha_python_rs/src/lib.rs python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs python/iroha_python/src/iroha_python/tx.py python/iroha_python/src/iroha_python/privacy_wallet_worker.py python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/__init__.py; do
+  for relative in scripts/check_privacy_python_witness_boundary.py scripts/zk_rust_lexical_index.py python/iroha_python/iroha_python_rs/src/lib.rs python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs python/iroha_python/src/iroha_python/tx.py python/iroha_python/src/iroha_python/privacy_wallet_worker.py python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/__init__.py; do
     mkdir -p "${root}/$(dirname "${relative}")"
     cp "${SOURCE_ROOT}/${relative}" "${root}/${relative}"
   done

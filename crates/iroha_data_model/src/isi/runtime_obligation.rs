@@ -37,7 +37,7 @@ isi! {
  /// End the obligation `owner` holds and release its completion closure.
  ///
  /// The owner ends its own obligation. The account that controls the lifecycle of the contract
- /// that owns an obligation ends it, because the contract itself cannot. Anyone ends an
+ /// that owns an obligation may also end it. Anyone ends an
  /// obligation that is no longer live: it has expired or performed every terminal effect.
  #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
  #[norito(deny_unknown_fields)]

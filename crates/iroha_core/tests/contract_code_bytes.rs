@@ -27,7 +27,7 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 4,
+        max_cycles: 0,
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -72,7 +72,7 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         code.extend_from_slice(&instruction.to_le_bytes());
     }

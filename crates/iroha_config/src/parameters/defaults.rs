@@ -2378,6 +2378,28 @@ pub mod sorafs {
 }
 /// Torii API defaults (HTTP + query service).
 pub mod torii {
+    /// Local immutable checkpoint-package serving limits; these do not set chain policy.
+    pub mod runtime_checkpoint {
+        use iroha_primitives::nonzero;
+        use std::num::{NonZeroU64, NonZeroUsize};
+
+        /// Maximum bounded inventory size, including proof frames.
+        pub const MAX_ARTIFACTS: NonZeroUsize = nonzero!(1_048_576usize);
+        /// Maximum complete exported package (64 GiB).
+        pub const MAX_TOTAL_BYTES: NonZeroU64 = nonzero!(68_719_476_736u64);
+        /// Maximum single artifact (16 GiB), read in bounded chunks.
+        pub const MAX_ARTIFACT_BYTES: NonZeroU64 = nonzero!(17_179_869_184u64);
+        /// Default response/read chunk (1 MiB).
+        pub const CHUNK_BYTES: NonZeroUsize = nonzero!(1_048_576usize);
+        /// Fixed upper transport chunk bound (4 MiB).
+        pub const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+        /// Finite original source inventory and working-buffer pool (256 MiB).
+        pub const SOURCE_MEMORY_BYTES: NonZeroUsize = nonzero!(268_435_456usize);
+        /// Deadline of one remote checkpoint request (30 seconds).
+        pub const REQUEST_TIMEOUT_MS: u64 = 30_000;
+        /// Absolute deadline of a complete checkpoint reception (30 minutes).
+        pub const TRANSFER_TIMEOUT_MS: u64 = 1_800_000;
+    }
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},

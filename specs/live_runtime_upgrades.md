@@ -799,8 +799,13 @@ not a date: it happens once everything its first selection needs is implemented 
    `iroha.runtime.contract_lifecycle.v1` addition provides authenticated contract registration and
    completion under the named ABI V1 profile `iroha.ivm.runtime_lifecycle.v1`; it requires the
    lifecycle registry and retains ordinary admission for new captures. Its integrated execution,
-   cache, compiler and deployment tests still need current-candidate qualification. Still open: registering
-   game-unit exports with captured closures and narrower authenticated dynamic-call manifests.
+   cache, compiler and deployment tests still need current-candidate qualification. The independent
+   native game capture service now locks a source intent, reserves destination capacity against its
+   certified proof, and retains both roots' original completion graphs through export and import.
+   Only the certified import acknowledgement releases an exported source capture. Certified
+   pre-export cancellation releases the original reservation; permanent identities and tombstones
+   prevent replay. Its two-root, substitution, restriction, resource-refusal and restore regressions
+   require current-candidate qualification. Still open: narrower authenticated dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
@@ -835,9 +840,18 @@ not a date: it happens once everything its first selection needs is implemented 
    without retention; repeated startup verifies the same retained original and rebuilds only its
    interrupted staging identity. Rolling writes, orphan reconciliation and retention wait for
    successful startup. Writer resource failures move once with their actual cause and original
-   release source. Still open: current-candidate replay, staging and pending-spool crash qualification,
-   bootstrap from a transferred checkpoint without the block bodies below it, the deletion guard,
-   and the rehearsal.
+   release source. Portable export and sparse Kura bootstrap now carry original certified prefix
+   rows, exact parent DA bundles, full genesis and actual H+1; restored complete State authenticates
+   against H+1 before native replay. Omitted bodies remain unavailable to native receipt queries.
+   The selected retirement service now records conservative published-definition history and
+   last-required heights, emits native ordinary-write receipts after governance disables an
+   implementation and the effective floor passes its last use, and prevents later reactivation.
+   Coverage verification requires exact native receipts from the parent and every registered
+   private root; missing child authority or receipts block coverage. This does not authorize
+   source removal. Still open: current-candidate replay, staging and pending-spool crash
+   qualification; portable transfer, sparse restart and catch-up qualification; peer delivery;
+   retirement qualification, code-identity alias/source ownership coverage, independently governed
+   child-root upgrades, and the deletion guard and oldest-floor rehearsal.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the

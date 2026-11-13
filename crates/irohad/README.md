@@ -48,6 +48,25 @@ cargo build -p irohad_lib --release --no-default-features --lib
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
 
+### Runtime checkpoint transport
+
+`--receive-runtime-checkpoint-from <Torii-origin-or-package-URL>
+--runtime-checkpoint-output <fresh-directory>` receives one immutable package and
+runs the ordinary strict restore and H+1 replay on a temporary copy. Genesis and
+network identity remain pinned by the local node configuration. The transferred
+snapshot verification key authenticates artifact bytes; complete State authority
+still comes from original certified history. The command does not start a node or
+change the input configuration or its stores.
+
+Requests use the configured node key for exact-network operator signatures. When
+the remote endpoint also requires an API token, supply
+`--runtime-checkpoint-api-token-file <absolute-private-file>`; the bounded secret
+is read through the existing runtime credential custody reader and is never saved
+in output. Artifact and memory bounds, `request_timeout_ms`, and the absolute
+`transfer_timeout_ms` come from `[torii.runtime_checkpoint]`. The source serves
+the fixed `/v1/runtime/checkpoint/{package,artifact,range,finish}` routes. The
+receive command is exclusive with export, replay-only and other startup actions.
+
 ### Finite SoraFS repair rehearsal
 
 The finite SoraFS repair diagnostic uses
@@ -664,6 +683,16 @@ Run these with a new binary before it replaces an old one:
   `empty` (the store holds no blocks, so nothing was replayed). It exits nonzero
   unless it replayed blocks and every one matched, and never writes to the
   store, the snapshot directory or the tiered-state directory.
+- `--check-replay --export-runtime-checkpoint <H> --runtime-checkpoint-output <new-directory>`
+  exports an already retained checkpoint after matching the stopped store's native replay.
+  The new private directory contains the unchanged signed checkpoint, a sparse Kura store with
+  certified prefix proofs and actual H+1, and a final `checkpoint-transfer.json` inventory.
+  Configure the joining node's snapshot and Kura paths to the package's `snapshots/` and `kura/`
+  children, set `snapshot.verification_public_key` to the reported public snapshot key, and use
+  Strict startup with the independently pinned genesis. Startup still authenticates the complete
+  State and executes H+1. Earlier omitted bodies remain unavailable to body and transaction
+  queries. See the [source contract](../../specs/runtime_upgrades.md#portable-checkpoint-transfer)
+  for the current qualification status.
 
 `lifecycle.exit_on_stdin_close = true` makes the daemon shut down cleanly when
 its standard input reaches end-of-file; a local supervisor sets it and holds the

@@ -1,0 +1,41 @@
+[package]
+name = "kagemusha-spartan-device-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+iroha_core_zk = { path = "../../../../crates/iroha_core_zk", default-features = false, features = ["kagemusha-simulator"] }
+connect_norito_bridge = { path = "../../../../crates/connect_norito_bridge" }
+iroha_data_model = { path = "../../../../crates/iroha_data_model", default-features = false, features = ["transparent_api", "test-fixtures"] }
+norito = { path = "../../../../crates/norito", default-features = false, features = ["node-codec"] }
+zk-spartan = { path = "../..", features = ["device-fixture"] }
+jni = { version = "0.22.4", default-features = false }
+
+base64 = "0.22"
+sha2 = "0.10"
+
+[patch.crates-io]
+bytes = { path = "../../../../vendor/bytes" }
+http-body-util = { path = "../../../../vendor/http-body-util" }
+axum-core = { path = "../../../../vendor/axum-core" }
+concread = { path = "../../../../vendor/concread" }
+num-bigint = { path = "../../../../vendor/num-bigint-0.5.1" }
+find_cuda_helper = { path = "../../../../vendor/find_cuda_helper" }
+cust_raw = { path = "../../../../vendor/cust_raw" }
+aes = { path = "../../../../vendor/aes" }
+ark-ff = { path = "../../../../vendor/ark-ff-0.5.0" }
+ark-bls12-381 = { path = "../../../../vendor/ark-bls12-381-0.5.0" }
+halo2curves = { path = "../../../../vendor/halo2curves-0.10.0" }
+metal = { path = "../../../../vendor/metal-0.33.0" }
+accesskit_unix = { path = "../../../../vendor/accesskit_unix-0.24.1" }
+accesskit_atspi_common = { path = "../../../../vendor/accesskit_atspi_common-0.21.1" }
+atspi-common = { path = "../../../../vendor/atspi-common-0.14.0" }
+atspi-proxies = { path = "../../../../vendor/atspi-proxies-0.14.0" }
+zbus-lockstep = { path = "../../../../vendor/zbus-lockstep-0.7.0" }
+zbus-lockstep-macros = { path = "../../../../vendor/zbus-lockstep-macros-0.7.0" }

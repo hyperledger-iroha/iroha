@@ -19,7 +19,7 @@ fn interpreter_statement(
     right_register: u8,
     left: u64,
     right: u64,
-    offset: i8,
+    offset: i16,
     backward: bool,
 ) -> BranchStepStatement {
     let word = ivm::encoding::wide::encode_branch(opcode, left_register, right_register, offset);

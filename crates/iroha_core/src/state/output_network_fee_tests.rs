@@ -591,11 +591,7 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
     };
     let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 1_000,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     for _ in 0..100 {
         program.extend_from_slice(
             &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 5, 1)
@@ -662,11 +658,7 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
         ExecutionDeferral::VerifierArtifactsUnavailable,
     ] {
         let (state, asset) = priced_fixture(None);
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 100,
-            ..Default::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(
             &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 5, 1)
                 .to_le_bytes(),

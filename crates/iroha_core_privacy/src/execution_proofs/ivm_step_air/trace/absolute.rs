@@ -1,4 +1,4 @@
-//! Exact signed ABS magnitude, overflow and gas-first opcode-boundary traps.
+//! Exact signed ABS magnitude, overflow numeric fault and gas-first opcode-boundary traps.
 //!
 //! Separate cells retain every existing arithmetic bank and its degree bound.
 //! A full 64-bit source-bit equality check identifies `i64::MIN`; neither the
@@ -41,7 +41,7 @@ pub(super) fn append_residues(
     gas_digits: &[F],
     active: F,
     out_of_gas: F,
-    assertion_failed: F,
+    numeric_fault: F,
 ) {
     let initial = out.len();
     out.extend(bank[4..36].iter().copied().map(word::radix4));
@@ -82,7 +82,7 @@ pub(super) fn append_residues(
         active
             .mul(F::ONE.sub(bank[NO_GAS]))
             .mul(bank[MINIMUM])
-            .sub(assertion_failed),
+            .sub(numeric_fault),
     );
     debug_assert_eq!(out.len() - initial, CONSTRAINTS);
 }

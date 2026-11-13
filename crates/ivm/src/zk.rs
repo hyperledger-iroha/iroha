@@ -8,11 +8,10 @@
 //! after every operation. Memory events do not carry complete leaves or an
 //! authenticated tree size and are not independently verifiable proofs.
 
-/// Default maximum trace length used for padding.
+/// Default ZK trace bound installed when a host enables ZK mode on raw code.
 ///
-/// The original implementation limited zero-knowledge execution to 2^16
-/// cycles. As the proving backend and hardware improved we can handle larger
-/// traces, so the limit is now 2^17 cycles by default.
+/// A ZK program's header always carries its own nonzero `max_cycles` trace bound; this default
+/// applies only to `IVM::set_zk_mode` on code loaded without one (tooling and tests).
 pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
 use iroha_crypto::{HashOf, MerkleTree};
 use rayon::prelude::*;
@@ -508,4 +507,3 @@ pub fn check_diagnostic_trace(
         Ok(())
     })
 }
-

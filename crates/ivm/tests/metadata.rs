@@ -141,11 +141,11 @@ fn parse_accepts_valid_default_header() {
     let bytes = meta.encode();
     let parsed = ProgramMetadata::parse(&bytes).expect("parse valid header");
     assert_eq!(parsed.code_offset, bytes.len());
-    assert_eq!(parsed.header_len, 49);
+    assert_eq!(parsed.header_len, 48);
     assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 1);
     assert_eq!(parsed.metadata.mode, 0);
-    assert_eq!(parsed.metadata.vector_length, 0);
+    assert_eq!(parsed.metadata.max_cycles, 0);
     // Default ABI version is 1 for the first release. Parser carries the value as-is.
     assert_eq!(
         parsed.metadata.abi_version,
@@ -199,7 +199,10 @@ fn parse_rejects_retired_minor_zero_without_cntr() {
         m.version_minor = 0;
     });
     let current_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    assert_eq!(&bytes[17..49], current_abi_hash.as_slice());
+    assert_eq!(
+        &bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE],
+        current_abi_hash.as_slice()
+    );
     assert!(match (
         &(ProgramMetadata::parse(&bytes).unwrap_err()),
         &(VMError::UnsupportedProgramVersion { major: 1, minor: 0 })
@@ -226,8 +229,10 @@ fn parse_rejects_retired_pointer_layout_abi_hash_at_current_header() {
     let mut bytes = ProgramMetadata::default_for(1, 1, 1).encode();
     let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     let pre_reset = hex::decode(PRE_RESET_ABI_HASH_HEX).expect("valid pre-reset ABI hash vector");
-    bytes[17..49].copy_from_slice(&pre_reset);
-    let actual: [u8; 32] = bytes[17..49].try_into().expect("fixed ABI hash field");
+    bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE].copy_from_slice(&pre_reset);
+    let actual: [u8; 32] = bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE]
+        .try_into()
+        .expect("fixed ABI hash field");
     assert!(matches!(
         ProgramMetadata::parse(&bytes),
         Err(VMError::ArtifactAbiHashMismatch {
@@ -237,21 +242,31 @@ fn parse_rejects_retired_pointer_layout_abi_hash_at_current_header() {
     ));
 }
 #[test]
-fn parse_accepts_vector_len_without_mode_bits() {
-    // The header keeps its vector-length byte; it needs no mode bit.
-    let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.mode = 0;
-        m.vector_length = 8;
+fn parse_requires_a_cycle_bound_exactly_for_zk_headers() {
+    let missing = encode_with(ProgramMetadata::default(), |m| {
+        m.mode = ivm::ivm_mode::ZK;
     });
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse ok without mode bits");
-    assert_eq!(parsed.metadata.mode, 0);
-    assert_eq!(parsed.metadata.vector_length, 8);
+    assert!(matches!(
+        ProgramMetadata::parse(&missing),
+        Err(VMError::MissingMaxCycles)
+    ));
+    let unexpected = encode_with(ProgramMetadata::default(), |m| {
+        m.max_cycles = 8;
+    });
+    assert!(matches!(
+        ProgramMetadata::parse(&unexpected),
+        Err(VMError::MaxCyclesWithoutZk { max_cycles: 8 })
+    ));
+    let zk = encode_with(ProgramMetadata::default(), |m| {
+        m.mode = ivm::ivm_mode::ZK;
+        m.max_cycles = 8;
+    });
+    assert_eq!(ProgramMetadata::parse(&zk).unwrap().metadata.max_cycles, 8);
 }
 #[test]
 fn parse_rejects_retired_vector_bit() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.mode = 0x02;
-        m.vector_length = 8;
     });
     assert!(match (
         &(ProgramMetadata::parse(&bytes).unwrap_err()),
@@ -265,29 +280,6 @@ fn parse_rejects_retired_vector_bit() {
                 bits: expected_field_0,
             },
         ) => actual_field_0 == expected_field_0,
-        _ => false,
-    });
-}
-#[test]
-fn parse_rejects_vector_len_above_abi_max() {
-    let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.vector_length = ivm::VECTOR_LENGTH_MAX + 1;
-    });
-    let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert!(match (
-        &(err),
-        &(VMError::ProgramVectorLengthTooLarge {
-            max_allowed: ivm::VECTOR_LENGTH_MAX,
-        })
-    ) {
-        (
-            VMError::ProgramVectorLengthTooLarge {
-                max_allowed: actual_field_1,
-            },
-            VMError::ProgramVectorLengthTooLarge {
-                max_allowed: expected_field_1,
-            },
-        ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
         _ => false,
     });
 }

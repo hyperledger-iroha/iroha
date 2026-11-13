@@ -1,10 +1,11 @@
 // Included at Kura module scope. Preparation/re-audit only; never a scrape path.
 
-const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 4] = [
+const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 5] = [
     "blocks",
     "retired/blocks",
     "retired/lane_geometry",
     fastpq_artifact_store::DIRECTORY,
+    checkpoint_prefix::DIRECTORY,
 ];
 
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.

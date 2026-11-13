@@ -388,7 +388,6 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         assert!(path.as_ref().contains('/'));
         let invalid = build_authenticated_test_contract_program_with_states(
             &[],
-            0,
             false,
             vec![ivm::EmbeddedStateDescriptor {
                 name: path.to_string(),
@@ -524,7 +523,6 @@ fn stream_token_custody_namespace_scan_rejects_a_declared_opaque_map() {
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
     let program = build_authenticated_test_contract_program_with_states(
         &[],
-        0,
         false,
         [root.clone(), user.clone()]
             .into_iter()

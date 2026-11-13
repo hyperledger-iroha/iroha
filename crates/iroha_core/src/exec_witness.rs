@@ -770,6 +770,19 @@ pub(crate) fn record_write_amx_record(
     });
     Ok(())
 }
+/// Record already encoded native transfer evidence after all fallible preflight succeeds.
+/// The caller supplies the selected protocol's reserved key and canonical original value.
+pub(crate) fn record_write_native_game(key: Vec<u8>, value: Vec<u8>) {
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+}
+/// Record selected permanent retirement evidence after every fallible native check succeeds.
+pub(crate) fn record_write_runtime_retirement(key: Vec<u8>, value: Vec<u8>) {
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+}
 /// Commit an irreversible native game export in the same transaction witness as its State removal.
 pub(crate) fn record_write_game_unit_export(
     record: &iroha_data_model::game_partition::GameUnitExportV1,

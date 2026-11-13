@@ -5943,7 +5943,12 @@ pub(crate) mod valid {
             let committed_time_ms =
                 crate::smartcontracts::isi::sccp::hold::committed_time_ms(state_block)
                     .map_err(|error| Self::execution_context_error(error.to_string()))?;
-            Self::validate_sccp_exempt_cap_against(block, &parent, committed_time_ms)
+            Self::validate_sccp_exempt_cap_against(
+                block,
+                &parent,
+                committed_time_ms,
+                state_block.governance_due_applied(),
+            )
         }
         /// Check the per-block SCCP exemption caps of `block` against the `parent` World.
         #[expect(
@@ -5954,6 +5959,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             parent: &(impl crate::smartcontracts::isi::sccp::eligibility::EligibilityRead + ?Sized),
             committed_time_ms: Option<u64>,
+            governance_due_applied: bool,
         ) -> Result<(), BlockValidationError> {
             use crate::smartcontracts::isi::sccp::admission;
             if parent.parameters().is_none() {
@@ -5966,6 +5972,7 @@ pub(crate) mod valid {
                         parent,
                         entrypoint,
                         committed_time_ms,
+                        |_| Ok(governance_due_applied),
                     )
                 })
                 .collect::<Vec<_>>();

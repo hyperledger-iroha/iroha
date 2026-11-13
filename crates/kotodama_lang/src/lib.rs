@@ -3,10 +3,12 @@
 //! Bytecode Target
 //! ---------------
 //! Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target RISC‑V as
-//! a standalone architecture. The compiler now emits IVM's native wide (8-bit opcode) encodings
-//! exclusively. Earlier RISC‑V–like encodings (e.g., classic `0x33/0x13` ALU forms) are rejected by
-//! the VM loader and interpreter; they now exist only in regression tests that verify the trap
-//! behaviour. Observable behavior and outputs are defined by IVM.
+//! a standalone architecture. The compiler emits only the canonical IVM encoding: one 32-bit word
+//! per instruction with an 8-bit opcode, 32 registers (`r0` reads as zero), signed 14-bit
+//! immediates, displacements and branch word offsets, a signed 19-bit `JAL` and 24-bit
+//! `JMP`/`JALS` word offset, and one `SCALL` opcode carrying a 24-bit syscall number. Encoders
+//! reject out-of-range operands instead of truncating them. Observable behavior and outputs are
+//! defined by IVM.
 //!
 //! This module provides the building blocks for a compiler that translates
 //! Kotodama source programs into IVM bytecode.

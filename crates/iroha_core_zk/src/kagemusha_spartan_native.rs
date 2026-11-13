@@ -11,9 +11,10 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletMarkerV1, KagemushaWalletMonotonicReadingV1, KagemushaWalletStateCommitmentV1,
     KagemushaWalletValidationErrorV1,
 };
+/// Experimental proof engine types used by the native runtime boundary.
+pub use zk_spartan::native;
 use zk_spartan::native::{
-    self, AuthenticatedParameters, CompletionRecord, Engine, HardwareAdvanceReceipt,
-    RecoveryCapsule,
+    AuthenticatedParameters, CompletionRecord, Engine, HardwareAdvanceReceipt, RecoveryCapsule,
 };
 
 use crate::kagemusha_wallet_advance_v1::{
@@ -26,6 +27,8 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+
+mod account;
 
 type TimePair = (
     KagemushaWalletAnchoredTimeV1,
@@ -131,6 +134,11 @@ impl<P: KagemushaWalletPlatformV1> NativeTimeSource<P> {
     }
 }
 impl<P: KagemushaWalletPlatformV1> native::TimeSource for NativeTimeSource<P> {
+    fn available_memory_bytes(&self) -> native::Result<u64> {
+        self.platform
+            .available_memory()
+            .ok_or(native::Error::Unavailable("native available memory"))
+    }
     fn prepared(&self, wallet: &[u8; 32], operation_id: &[u8; 32]) -> native::Result<TimePair> {
         self.choices
             .lock()
@@ -175,6 +183,7 @@ fn invalid_frame(_: native::Error) -> KagemushaWalletValidationErrorV1 {
 }
 fn provider_error(error: native::Error) -> ProviderError {
     match error {
+        native::Error::NotEnoughMemory { .. } => ProviderError::NoMemory,
         native::Error::Unavailable(_) | native::Error::ResourceLimit => {
             ProviderError::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
         }
@@ -361,5 +370,205 @@ impl<E: Engine> KagemushaWalletTransitionOwnerV1<RecoveryCapsule, CompletionReco
             });
         }
         Ok(completed.completion().clone())
+    }
+}
+
+/// Future experimental owner of the same exclusive journal and actual hardware
+/// platform. Its parameter trust comes from consuming the installed Native
+/// runtime; no foreign input can select a root or ledger reader.
+pub struct FutureRuntime<F: KagemushaWalletFsV1, P, S> {
+    provider: FutureProvider<F, Arc<P>>,
+    parameters: Arc<AuthenticatedParameters>,
+    engine: native::NativeEngine,
+    time: Arc<NativeTimeSource<P>>,
+    account: Option<account::AccountAdmission>,
+    // Keep the sole original source alive throughout the provider's lifetime.
+    _originals: S,
+}
+impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRuntime<F, P, S> {
+    /// Construct a future owner from independently authenticated parameters and
+    /// the actual exclusive native provider. This Rust boundary is for native
+    /// installations and isolated device fixtures; foreign C/JNI callers cannot
+    /// supply scheme roots, genesis readers or replacement providers.
+    #[must_use]
+    pub fn from_installed(
+        provider: crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
+        parameters: AuthenticatedParameters,
+        originals: S,
+    ) -> Self {
+        let (provider, platform) = provider.into_shared_platform();
+        let time = Arc::new(NativeTimeSource::new(platform));
+        let engine = native::NativeEngine::with_time_source(time.clone());
+        let provider = into_future_frames(provider, &parameters);
+        Self {
+            provider,
+            parameters: Arc::new(parameters),
+            engine,
+            time,
+            account: None,
+            _originals: originals,
+        }
+    }
+    /// Exact authenticated parameter identity of this installed runtime.
+    #[must_use]
+    pub fn parameter_id(&self) -> &[u8; 32] {
+        self.parameters.id()
+    }
+
+    /// Verify complete Payment bytes under the installed program and both curve
+    /// accumulators. This does not credit a receiver or select any journal head.
+    ///
+    /// # Errors
+    /// Rejects malformed originals, signatures, program scope or any proof check.
+    pub fn verify_payment(&self, bytes: &[u8]) -> native::Result<native::VerifiedIncomingPayment> {
+        self.engine.verify_payment(bytes, &self.parameters)
+    }
+
+    /// Capture real Native choices for a Send from its protected anchored-time
+    /// original. The preparation subsequently binds this digest to its prior state.
+    ///
+    /// # Errors
+    /// Returns an unavailable clock, foreign anchor or exhausted local capacity.
+    pub fn capture_send_time(
+        &self,
+        wallet: [u8; 32],
+        operation: [u8; 32],
+        anchor: KagemushaWalletAnchoredTimeV1,
+    ) -> native::Result<KagemushaWalletMonotonicReadingV1> {
+        self.time.capture(wallet, operation, anchor)
+    }
+
+    /// Reconcile exact current custody, verify its complete recursive head and
+    /// freeze a fully checked operation. A legacy funded head cannot decode as a
+    /// future head and cannot be replaced by an enrollment-origin substitute.
+    ///
+    /// # Errors
+    /// Refuses unknown/pending/terminal custody, foreign heads or invalid operations.
+    pub fn prepare(
+        &mut self,
+        slot: &crate::kagemusha_wallet_advance_v1::KagemushaWalletSlotIdV1,
+        witness_original: &[u8],
+        exact_head: &[u8],
+    ) -> Result<native::PreparedOperation, ProviderError> {
+        use crate::kagemusha_wallet_advance_v1::KagemushaWalletSlotStatusV1 as Status;
+        let witness =
+            native::ExactOperationWitness::decode(witness_original).map_err(provider_error)?;
+        self.require_account(slot, Some(witness.credential()))?;
+        let owner = TransitionOwner::new(&self.engine, &self.parameters);
+        let status = self.provider.reconcile(slot, &owner)?;
+        let head = match status {
+            Status::Enrollment(record) => {
+                if !exact_head.is_empty() {
+                    return Err(ProviderError::Invalid {
+                        field: "future enrollment head",
+                    });
+                }
+                let native::ExactOperationWitness::Bootstrap(input) = &witness else {
+                    return Err(ProviderError::Invalid {
+                        field: "future Bootstrap required",
+                    });
+                };
+                self.engine
+                    .enrollment_origin(input, *record.marker_digest(), &self.parameters)
+                    .map_err(provider_error)?
+            }
+            Status::Released(record) => {
+                let head = self
+                    .engine
+                    .verify_head(exact_head, witness.credential(), &self.parameters)
+                    .map_err(provider_error)?;
+                self.engine
+                    .bind_released_custody(head, record.marker())
+                    .map_err(provider_error)?
+            }
+            _ => {
+                return Err(ProviderError::Invalid {
+                    field: "future current released custody",
+                });
+            }
+        };
+        self.engine
+            .prepare(&witness, &head, &self.parameters)
+            .map_err(provider_error)
+    }
+
+    /// Advance one exact retained capsule through the canonical A0–A12 provider.
+    /// Send callers first complete the SDK's hardware biometric/device-credential
+    /// confirmation over this prepared operation. The signer remains unreachable
+    /// before the durable Selected marker.
+    ///
+    /// # Errors
+    /// Preserves the canonical provider's exact NotPerformed/Pending/Released semantics.
+    pub fn advance(
+        &mut self,
+        slot: &crate::kagemusha_wallet_advance_v1::KagemushaWalletSlotIdV1,
+        prepared: native::PreparedOperation,
+    ) -> Result<
+        crate::kagemusha_wallet_advance_v1::KagemushaWalletAdvanceOutcomeV1<CompletionRecord>,
+        ProviderError,
+    > {
+        use crate::kagemusha_wallet_advance_v1::{
+            KagemushaWalletAdvanceRequestV1, KagemushaWalletExpectedHeadV1,
+            KagemushaWalletSlotStatusV1 as Status,
+        };
+        let owner = TransitionOwner::new(&self.engine, &self.parameters);
+        let capsule = prepared.capsule().clone();
+        self.require_account(slot, Some(prepared.credential()))?;
+        let expected = if let Some(marker_digest) = capsule.enrollment_marker() {
+            KagemushaWalletExpectedHeadV1::Enrollment { marker_digest }
+        } else {
+            KagemushaWalletExpectedHeadV1::Released {
+                sequence: capsule
+                    .sequence()
+                    .checked_sub(1)
+                    .ok_or(ProviderError::Invalid {
+                        field: "future predecessor sequence",
+                    })?,
+                head: KagemushaWalletStateCommitmentV1 {
+                    value: *capsule.predecessor(),
+                },
+                capsule_digest: *capsule.predecessor_capsule_digest(),
+            }
+        };
+        let request = KagemushaWalletAdvanceRequestV1 {
+            expected,
+            operation_id: *capsule.operation_id(),
+            new_head: KagemushaWalletStateCommitmentV1 {
+                value: *capsule.successor(),
+            },
+            proof_digest: *capsule.proof_digest(),
+            capsule,
+            growth_bytes: 0,
+        };
+        self.provider.advance(slot, &owner, &request)
+    }
+
+    /// Resume an already retained exact capsule without selecting new inputs or
+    /// obtaining another approval. After selection, expiry cannot refund a Send.
+    ///
+    /// # Errors
+    /// Refuses malformed recovery or incomplete cryptographic authority.
+    pub fn resume(&self, capsule: &RecoveryCapsule) -> native::Result<native::PreparedOperation> {
+        self.require_account_wallet(capsule.wallet())
+            .map_err(|_| native::Error::Unavailable("future account authorization required"))?;
+        self.engine.resume(capsule, &self.parameters)
+    }
+
+    /// Read the exact retained output by operation identity without re-signing.
+    ///
+    /// # Errors
+    /// Preserves unavailable, pending and delivery-data-loss outcomes.
+    pub fn lookup(
+        &mut self,
+        slot: &crate::kagemusha_wallet_advance_v1::KagemushaWalletSlotIdV1,
+        operation: &[u8; 32],
+    ) -> Result<
+        crate::kagemusha_wallet_advance_v1::KagemushaWalletLookupV1<CompletionRecord>,
+        ProviderError,
+    > {
+        self.require_account(slot, None)?;
+        let owner = TransitionOwner::new(&self.engine, &self.parameters);
+        self.provider.reconcile(slot, &owner)?;
+        self.provider.lookup(slot, operation)
     }
 }

@@ -23,6 +23,9 @@ impl From<state::NativeOpenErrorV1> for Failure {
     }
 }
 pub(super) trait Admission: Send {
+    fn spartan(&mut self, _action: super::spartan::Action<'_>) -> Result<Response> {
+        Err(Failure::code(ARTIFACTS_UNAVAILABLE))
+    }
     fn enrollment(&mut self, _action: super::enrollment::Action<'_>) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
@@ -39,6 +42,7 @@ enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
 }
 pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     phase: Option<Phase<P, S>>,
+    future: Option<Box<dyn super::spartan::FutureSession>>,
     binding: Option<super::installed::BoundOriginals>,
     enrollment_session: Option<super::installed::Session>,
     enrolled_originals: Option<[Vec<u8>; 4]>,
@@ -46,6 +50,44 @@ pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSour
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
 {
+    fn spartan(&mut self, action: super::spartan::Action<'_>) -> Result<Response> {
+        if let super::spartan::Action::Install {
+            bundle,
+            manifest,
+            signature,
+        } = action
+        {
+            if let Some(future) = self.future.as_deref_mut() {
+                return future.call(action);
+            }
+            let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
+            let Phase::Ready(runtime) = phase else {
+                self.phase = Some(phase);
+                return Err(Failure::code(CONFLICT));
+            };
+            return match runtime.into_spartan(bundle, manifest, *signature) {
+                Ok(runtime) => {
+                    let bytes = runtime.parameter_id().to_vec();
+                    self.future = Some(Box::new(super::spartan::Session::new(
+                        runtime, bundle, manifest, signature,
+                    )));
+                    Ok(Response {
+                        kind: 81,
+                        bytes,
+                        ..Response::default()
+                    })
+                }
+                Err((runtime, error)) => {
+                    self.phase = Some(Phase::Ready(Box::new(runtime)));
+                    Err(error.into())
+                }
+            };
+        }
+        self.future
+            .as_deref_mut()
+            .ok_or(Failure::code(ARTIFACTS_UNAVAILABLE))?
+            .call(action)
+    }
     fn enrollment(&mut self, action: super::enrollment::Action<'_>) -> Result<Response> {
         use super::enrollment::Action;
         if let Action::RenewSession(originals) = action {
@@ -279,7 +321,7 @@ fn validate(originals: [&[u8]; 4]) -> Result<()> {
     }
     Ok(())
 }
-fn runtime(id: u64) -> Result<Arc<RuntimeOwner>> {
+pub(super) fn runtime(id: u64) -> Result<Arc<RuntimeOwner>> {
     let owner = registry()
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
@@ -593,6 +635,7 @@ where
         closing: Arc::new(closing::CloseState::default()),
         admission: Mutex::new(Some(Box::new(Runtime {
             phase: Some(Phase::Ready(runtime)),
+            future: None,
             binding,
             enrollment_session: None,
             enrolled_originals: None,

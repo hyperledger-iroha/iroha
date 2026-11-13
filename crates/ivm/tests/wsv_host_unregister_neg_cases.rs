@@ -62,14 +62,14 @@ fn unregister_account_with_existing_nft_fails() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     // Register the recipient account
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     // Mint NFT owned by bob
@@ -82,14 +82,14 @@ fn unregister_account_with_existing_nft_fails() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_nft.len() as u64 + 8);
-    let prog_nft = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET as u8]);
+    let prog_nft = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET]);
     vm.load_program(&prog_nft).unwrap();
     vm.run().expect("mint nft");
     // Attempt to unregister bob -> should fail because bob owns an NFT
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
+    let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT]);
     vm.load_program(&prog_uacc).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }
@@ -114,13 +114,13 @@ fn unregister_domain_with_only_accounts_fails() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     // Under the universal-account model, the canonical account id is domainless.
@@ -137,7 +137,7 @@ fn unregister_domain_with_only_accounts_fails() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN as u8]);
+    let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN]);
     vm.load_program(&prog_udom).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }

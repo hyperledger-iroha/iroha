@@ -59,7 +59,7 @@ fn arithmetic(fixture: &mut ScalarFixture, value: u64) {
 }
 
 #[test]
-fn native_absolute_full_words_zero_aliases_and_unused_operand_match() {
+fn native_absolute_full_words_zero_aliases_and_reserved_operand_match() {
     for value in [
         0,
         1,
@@ -71,25 +71,26 @@ fn native_absolute_full_words_zero_aliases_and_unused_operand_match() {
     ] {
         for rd in [0, 2, 4] {
             checked(
-                enc::encode_rr(wide::arithmetic::ABS, rd, 2, 255),
-                &[(2, value, false), (4, 19, true), (255, u64::MAX, true)],
+                enc::encode_rr(wide::arithmetic::ABS, rd, 2, 0),
+                &[(2, value, false), (4, 19, true), (31, u64::MAX, true)],
             );
         }
     }
-    for rs2 in 0..=u8::MAX {
-        checked(
-            enc::encode_rr(wide::arithmetic::ABS, 4, 2, rs2),
-            &[
-                (2, i64::cast_unsigned(-17i64), false),
-                (4, 91, true),
-                (255, 17, true),
-            ],
+    // ABS has no rs2 field: admission rejects every nonzero reserved operand.
+    for rs2 in 1..32 {
+        assert!(
+            ivm::prepare_contract(super::super::super::tests::contract_artifact(
+                &[enc::encode_rr(wide::arithmetic::ABS, 4, 2, rs2)],
+                1_000,
+                ivm::ivm_mode::ZK,
+            ))
+            .is_err()
         );
     }
     for rd in [0, 4] {
         checked(
-            enc::encode_rr(wide::arithmetic::ABS, rd, 0, 255),
-            &[(4, 91, true), (255, u64::MAX, true)],
+            enc::encode_rr(wide::arithmetic::ABS, rd, 0, 0),
+            &[(4, 91, true), (31, u64::MAX, true)],
         );
     }
 }
@@ -105,7 +106,7 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
             (i64::cast_unsigned(i64::MIN), true, false),
             (17, false, false),
         ] {
-            let instruction = enc::encode_rr(wide::arithmetic::ABS, rd, 2, 255);
+            let instruction = enc::encode_rr(wide::arithmetic::ABS, rd, 2, 0);
             let (_, recorder, outcome) = shifts::capture(
                 &[instruction],
                 &[(2, value, tag), (4, 91, true)],
@@ -117,7 +118,12 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
             } else if tag {
                 assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
             } else {
-                assert!(matches!(outcome, Err(ivm::VMError::AssertionFailed)));
+                assert!(matches!(
+                    outcome,
+                    Err(ivm::VMError::NumericFault(
+                        ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
+                    ))
+                ));
             }
             let record = &recorder.records()[0];
             assert_eq!(recorder.records().len(), 1);
@@ -131,7 +137,7 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
             assert_eq!(record.before.gas_remaining, u64::from(funded));
             assert!(!record.after.halted);
         }
-        let instruction = enc::encode_rr(wide::arithmetic::ABS, rd, 2, 255);
+        let instruction = enc::encode_rr(wide::arithmetic::ABS, rd, 2, 0);
         let (program, fixture) = checked(instruction, &[(2, 17, false), (4, 91, true)]);
         let mut secret = fixture.clone();
         secret.0.packets.fields[SCALAR_LEFT][BEFORE_TAG] = F::ONE;
@@ -162,7 +168,7 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
 #[test]
 fn absolute_rejects_coherent_wrong_magnitude_original_source_and_tariff() {
     for value in [17, i64::cast_unsigned(-17i64), 0xffff_ffff_0000_0001] {
-        let instruction = enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255);
+        let instruction = enc::encode_rr(wide::arithmetic::ABS, 4, 2, 0);
         let (program, fixture) = checked(instruction, &[(2, value, false), (4, 91, true)]);
         let correct = u64::cast_signed(value).checked_abs().unwrap() as u64;
         for wrong in [correct + 1, correct.wrapping_neg()] {
@@ -193,8 +199,8 @@ fn absolute_rejects_coherent_wrong_magnitude_original_source_and_tariff() {
 fn absolute_binds_every_original_workspace_and_used_port_cell() {
     // rd=rs1 binds the prior destination through the same original read.
     let (program, fixture) = checked(
-        enc::encode_rr(wide::arithmetic::ABS, 2, 2, 255),
-        &[(2, i64::cast_unsigned(-17i64), false), (255, 17, true)],
+        enc::encode_rr(wide::arithmetic::ABS, 2, 2, 0),
+        &[(2, i64::cast_unsigned(-17i64), false), (31, 17, true)],
     );
     for index in 0..super::super::super::WIDTH {
         let mut forged = fixture.clone();

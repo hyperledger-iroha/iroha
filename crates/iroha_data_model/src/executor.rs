@@ -9,7 +9,8 @@ pub use self::model::*;
 pub use self::model::{
     ArtifactAbiHashMismatchInfo, ContractRejection, DecodedCodeSizeLimitInfo,
     DecodedInstructionLimitInfo, Executor, ExecutorDataModel, IvmAdmissionError,
-    ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo, UnsupportedVersionInfo, ValidationFail,
+    ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
+    UnsupportedVersionInfo, ValidationFail,
 };
 use crate::transaction::executable::IvmBytecode;
 use iroha_data_model_derive::model;

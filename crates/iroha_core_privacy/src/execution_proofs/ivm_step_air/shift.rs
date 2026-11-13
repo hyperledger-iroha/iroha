@@ -79,7 +79,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-shift-fri-beta-v1",
     query_seed: b"ivm-shift-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-shift-step-air-v1:public-single-step:sll-srl-sra:rotl-rotr:rotl-imm-rotr-imm:unsigned-imm8:amount-mask=63:radix4-barrel-stages=1,4,16:quadratic-stage-selectors:input-boolean:arithmetic-sign-fill:degree4:pre-read:post-write:r0:aliases:public-tags:pc+4:cycles+1:shift-gas=1:rotate-gas=2:no-machine-admission";
+const PROFILE: &[u8] = b"ivm-shift-step-air-v1:public-single-step:sll-srl-sra:rotl-rotr:rotl-imm-rotr-imm:amount6:amount-mask=63:radix4-barrel-stages=1,4,16:quadratic-stage-selectors:input-boolean:arithmetic-sign-fill:degree4:pre-read:post-write:r0:aliases:public-tags:pc+4:cycles+1:shift-gas=1:rotate-gas=2:no-machine-admission";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShiftKind {
@@ -122,13 +122,13 @@ impl ShiftKind {
     }
 }
 
-/// The two admitted immediate rotations zero-extend the raw eight-bit field.
+/// The two admitted immediate rotations carry a canonical six-bit amount.
 fn immediate_amount(word: u32) -> Option<u64> {
     matches!(
         wide::opcode(word),
         wide::arithmetic::ROTL_IMM | wide::arithmetic::ROTR_IMM
     )
-    .then(|| u64::from(i8::cast_unsigned(wide::imm8(word))))
+    .then(|| u64::from(wide::rotate_amount(word)))
 }
 
 #[derive(Clone, Copy, Debug)]

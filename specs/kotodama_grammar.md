@@ -450,8 +450,8 @@ together. Pointer TLVs prefer INPUT and spill into owned HEAP; argument/result
 tables and raw `List` and sum storage use owned HEAP. Raw decode-syscall quoting uses
 only bounded record/schema envelope lengths and reserves the full HEAP before
 authenticating either payload. The argument-record protocol cap is inclusive
-at 1 MiB, while the selected artifact/node cycle ceiling still limits what an
-invocation can afford. Struct
+at 1 MiB, while the caller's gas budget still limits what an invocation can
+afford. Struct
 parameters use exact JSON objects, tuples use
 exact arrays, `Option<T>` uses exactly `{"some": value}` or `{"none": true}`,
 and `Result<T,E>` uses exactly `{"ok": value}` or `{"err": value}`. Decoding
@@ -1880,16 +1880,17 @@ The compiler rejects inputs exceeding any V1 hard limit:
 | Signed argument record | 1 MiB |
 | Complete nested-return TLV | 1 MiB (1,048,537-byte record + 39-byte envelope) |
 | Typed module graph | 512 sources / 16 MiB total |
-| Default artifact cycle ceiling | 1,000,000 |
+| Default ZK trace bound | 1,000,000 cycles |
 
-The chain's committed admission ceiling is authoritative. The
+Gas, supplied by the caller, is the only execution budget: an ordinary artifact
+carries a zero cycle bound in its execution header. A ZK artifact embeds its
+positive trace bound there instead, so the canonical artifact hash covers it, and
+the chain's committed admission ceiling is authoritative for that bound. The
 `ivm_max_cycles_upper_bound` field of the committed
 `pipeline_validity_policy_v1` parameter is a mandatory positive integer
 (default `1_000_000`); an authorized `SetParameter` changes it from the next
 block, a zero value is rejected, and neither a node configuration file nor an
-environment variable can set or disable it. The selected positive
-cycle ceiling is embedded in the execution header and therefore covered by the
-canonical artifact hash.
+environment variable can set or disable it.
 
 ## Tooling and build configuration
 
@@ -1900,12 +1901,13 @@ configuration, locked package resolution, and project-wide commands through
 ```text
 koto check seiyaku.ko
 musubi check --manifest-path Musubi.toml
-koto build seiyaku.ko --max-cycles 1000000
+koto build seiyaku.ko
 koto build obligation.ko --host-profile iroha.ivm.runtime_lifecycle.v1
 musubi build --manifest-path Musubi.toml
 koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
 koto build --zk proof_seiyaku.ko
+koto build --zk --zk-trace-cycles 250000 proof_seiyaku.ko
 koto test seiyaku.test.ko
 koto test run --gas-report --junit report.xml seiyaku.test.ko
 koto test list --format json seiyaku.test.ko
@@ -2257,8 +2259,8 @@ or offline browser compiler.
 
 ABI version, execution-mode bits, and compiler features are not source
 declarations or user-selectable language metadata. Build configuration
-may request a permitted execution capability such as ZK and may select a
-positive cycle ceiling no greater than node admission policy. Source-level
+may request a permitted execution capability such as ZK and, for a ZK build,
+select a positive trace bound no greater than node admission policy. Source-level
 `meta` blocks are errors. The manifest's hash-covered `features_bitmap` is
 derived from the execution header and mirrors only the ZK capability, the
 sole ABI v1 execution-mode bit; it never advertises host SIMD, Metal, or CUDA

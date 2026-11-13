@@ -118,7 +118,7 @@ fn mean_rejects_forged_workspace_reads_result_gas_cycles_and_outcomes() {
         }
         for outcome in [
             SegmentOutcome::Continue,
-            SegmentOutcome::AssertionFailed,
+            SegmentOutcome::NumericFault,
             SegmentOutcome::OutOfGas,
         ] {
             if outcome == segment.outcome {
@@ -126,7 +126,7 @@ fn mean_rejects_forged_workspace_reads_result_gas_cycles_and_outcomes() {
             }
             let mut fixed = segment.fixed_row(0);
             fixed[OUT_OF_GAS] = F(u64::from(outcome == SegmentOutcome::OutOfGas));
-            fixed[ASSERTION_FAILED] = F(u64::from(outcome == SegmentOutcome::AssertionFailed));
+            fixed[NUMERIC_FAULT] = F(u64::from(outcome == SegmentOutcome::NumericFault));
             assert!(
                 residues(&segment, &rows[0], &rows[1], &fixed)
                     .unwrap()
@@ -204,7 +204,7 @@ fn mean_native_cycle_policy_allows_last_crossing_and_refuses_next_attempt() {
         enc::encode_rr(wide::arithmetic::MEAN, 8, 6, 7),
         enc::encode_ri(wide::arithmetic::ADDI, 9, 9, 1),
     ];
-    let prepared = contract_with_cycle_policy(&body, 2, 0);
+    let prepared = contract_with_cycle_policy(&body, 2, ivm::ivm_mode::ZK);
     let root_words = crate::ivm_test_support::unit_callable(0)
         .result_word_count()
         .unwrap() as u64;
@@ -280,7 +280,7 @@ fn mean_native_gas_failure_keeps_cycles_and_cannot_follow_a_limit_crossing() {
     let root_gas = root_words * (ivm_abi::call::CALL_WORD_BYTES_V1 as u64 + 1);
     for limit in [1, 2, 3] {
         for gas in [0, 1, 2, 3] {
-            let prepared = contract_with_cycle_policy(&body, limit, 0);
+            let prepared = contract_with_cycle_policy(&body, limit, ivm::ivm_mode::ZK);
             let mut vm = IVM::new(gas + root_gas);
             vm.load_prepared(&prepared).unwrap();
             vm.set_register(6, i64::cast_unsigned(i64::MIN));
@@ -348,7 +348,7 @@ fn absolute_mean_inactive_workspace_cells_reject_all_single_cell_changes() {
         wide::arithmetic::ABS,
     ] {
         let (segment, records) = attempted(
-            &[enc::encode_rr(opcode, 8, 6, 7)],
+            &[register_word(opcode, 8, 6, 7)],
             1,
             &[(6, 17), (7, 2)],
             100,
@@ -428,8 +428,8 @@ fn mean_maximum_profile_fits_unchanged_caps_and_degree_four() {
     for tail_gas in [0, 1, 2] {
         let (segment, records) = maximum_segment(tail_gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_356);
-        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.base_width_v1(), 908);
+        assert_eq!(segment.profile_constraint_count_v1(), 2_025);
         assert_eq!(segment.profile_fixed_width_v1(), 10);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
@@ -448,8 +448,8 @@ fn mean_maximum_profile_fits_unchanged_caps_and_degree_four() {
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_153_152);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+        assert_eq!(bound, 3_149_632);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xb1 + u8::from_le_bytes(
@@ -473,7 +473,7 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
         let (segment, records) = maximum_segment(tail_gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_153_152);
+        assert!(proof.len() <= 3_149_632);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         for field in 0..4 {
             let mut after = segment.after;
@@ -499,7 +499,7 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
                 segment.steps,
                 &segment.before,
                 &segment.after,
-                SegmentOutcome::AssertionFailed,
+                SegmentOutcome::NumericFault,
             )
             .unwrap();
             assert_ne!(changed.digest().unwrap(), segment.digest().unwrap());

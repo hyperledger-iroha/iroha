@@ -1,6 +1,6 @@
 //! No-write native role-11 Check predicate over the executing State transaction.
 //!
-//! The submitted floor is checked against State and its committed Kura frame here (the certified
+//! The submitted floor is checked against State and its authenticated historical identity (the certified
 //! block id of its header and result, never the node-local `CommitQC`). An observer must still
 //! independently pin that floor before signing and authenticate the eventual successful Check,
 //! original operation execution and private receipt before any token is released.
@@ -8,7 +8,7 @@
 use super::*;
 use crate::query::stream_token_authority::eligibility::{check_live_custody, checked_phase};
 use crate::query::stream_token_custody::NativeControl;
-use crate::sumeragi::certified_chain::committed_block;
+use crate::sumeragi::certified_chain::committed_identity;
 use iroha_data_model::sorafs::stream_token_authority::{
     STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1, StreamTokenCheckV1, StreamTokenFinalityFloorV1,
     validate_stream_token_check_claim_v1,
@@ -42,9 +42,9 @@ fn check_floor(
     if tx.block_hashes().get(offset).map(|hash| *hash.as_ref()) != Some(floor.block_hash) {
         return Err(Error::Finality);
     }
-    // Consensus-visible data only: the floor's committed header and result preimage, never the
-    // node-local `CommitQC` (certificates are per node).
-    let committed = committed_block(tx, floor.height).map_err(|_| Error::Finality)?;
+    // Consensus-visible identity only: original header and result, including a separately
+    // verified portable predecessor; never the node-local `CommitQC` or a fabricated body.
+    let committed = committed_identity(tx, floor.height).map_err(|_| Error::Finality)?;
     if *committed.block_hash().as_ref() != floor.block_hash || committed.id() != floor.context_id {
         return Err(Error::Finality);
     }

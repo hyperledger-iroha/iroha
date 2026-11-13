@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { decodeTypedToriiErrorEnvelope } from "./toriiErrorEnvelope.js";
 
 function isSecureProtocol(protocol) {
   const normalized = typeof protocol === "string" ? protocol.toLowerCase() : "";
@@ -65,12 +66,24 @@ function applyCredentialOverride(
   }
 }
 
+/**
+ * A non-success Norito RPC response. `body` is the lossy text rendering of the
+ * error body; when that body is Torii's canonical error envelope, `code`,
+ * `errorMessage` and `details` carry its code, exact message and decoded
+ * details (otherwise `null`).
+ */
 export class NoritoRpcError extends Error {
-  constructor(status, body) {
-    super(`Norito RPC request failed with status ${status}`);
+  constructor(status, body, envelope = null) {
+    super(
+      `Norito RPC request failed with status ${status}` +
+        (envelope === null ? "" : `: ${envelope.code} — ${envelope.message}`),
+    );
     this.name = "NoritoRpcError";
     this.status = status;
     this.body = body;
+    this.code = envelope === null ? null : envelope.code;
+    this.errorMessage = envelope === null ? null : envelope.message;
+    this.details = envelope?.details ?? null;
   }
 }
 
@@ -326,8 +339,8 @@ export class NoritoRpcClient {
       options.signal,
     );
     if (response.status < 200 || response.status >= 300) {
-      const text = await safeReadText(response);
-      throw new NoritoRpcError(response.status, text);
+      const { text, envelope } = await readErrorBody(response);
+      throw new NoritoRpcError(response.status, text, envelope);
     }
     const buffer = await response.arrayBuffer();
     return new Uint8Array(buffer);
@@ -461,6 +474,37 @@ async function safeReadText(response) {
   } catch (error) {
     return `Unable to read response body: ${String(error)}`;
   }
+}
+
+function isNoritoMediaType(contentType) {
+  return (
+    typeof contentType === "string" &&
+    contentType.split(";", 1)[0].trim().toLowerCase() === "application/x-norito"
+  );
+}
+
+// Torii renders a failure as its canonical error envelope in the negotiated
+// encoding. A Norito error body is binary, so its exact bytes are classified
+// before the lossy text rendering kept as `body`; other bodies keep the text read.
+async function readErrorBody(response) {
+  const contentType = response.headers?.get?.("content-type") ?? null;
+  if (!isNoritoMediaType(contentType) || typeof response.arrayBuffer !== "function") {
+    return { text: await safeReadText(response), envelope: null };
+  }
+  let bytes;
+  try {
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    return { text: `Unable to read response body: ${String(error)}`, envelope: null };
+  }
+  const decoded = decodeTypedToriiErrorEnvelope(contentType, bytes);
+  return {
+    text: new TextDecoder().decode(bytes),
+    envelope:
+      decoded === null
+        ? null
+        : { code: decoded.code, message: decoded.message, details: decoded.details },
+  };
 }
 
 function combineAbortSignals(a, b) {

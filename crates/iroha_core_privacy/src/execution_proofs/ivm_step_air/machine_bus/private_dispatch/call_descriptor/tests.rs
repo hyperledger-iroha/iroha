@@ -113,11 +113,7 @@ fn program(jals: bool, backwards: bool, frame: u32) -> (Program, usize) {
     let call = if jals {
         enc::encode_offset24(wide::control::JALS, offset)
     } else {
-        enc::encode_jump(
-            wide::control::JAL,
-            1,
-            i16::try_from(offset).expect("bounded fixture value"),
-        )
+        enc::encode_jump(wide::control::JAL, 1, offset)
     };
     let halt = enc::encode_halt();
     let body = if backwards {

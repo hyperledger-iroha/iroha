@@ -45,6 +45,17 @@ fn test_zk_mode_padding_and_abort() {
     );
 }
 #[test]
+fn ordinary_execution_is_bounded_by_gas_not_cycles() {
+    // Outside ZK mode there is no cycle bound: an endless loop ends when gas runs out.
+    let prog: [u8; 4] =
+        encoding::wide::encode_offset24(ivm::instruction::wide::control::JMP, 0).to_le_bytes();
+    let mut vm = IVM::new(1_000);
+    vm.load_program(&assemble(&prog)).unwrap();
+    assert!(matches!(vm.run(), Err(VMError::OutOfGas)));
+    // Each JMP costs two gas.
+    assert_eq!(vm.get_cycle_count(), 500);
+}
+#[test]
 fn test_exceed_max_cycles_error() {
     // Infinite loop using JMP with zero offset
     let prog: [u8; 4] =

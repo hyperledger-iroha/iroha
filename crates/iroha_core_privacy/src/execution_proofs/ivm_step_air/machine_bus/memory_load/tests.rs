@@ -5,6 +5,8 @@ use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::meas
 use ivm::{IVM, Memory, ProgramMetadata, encoding::wide as enc, ivm_mode};
 use packet::{AFTER, AFTER_TAG, BEFORE, BEFORE_TAG, ENABLED, Event, Space};
 
+/// Architectural register file size of the fixture register arrays.
+const REGISTERS: usize = ivm::parallel::REGISTER_COUNT;
 const LOW: u64 = 0x0123_4567_89ab_cdef;
 const HIGH: u64 = 0xfedc_ba98_7654_3210;
 
@@ -51,7 +53,7 @@ impl Fixture {
             mask,
             values,
             core::array::from_fn(|i| if i == 0 { 0 } else { 0x55 + i as u64 }),
-            [false; 256],
+            [false; REGISTERS],
         )
     }
 
@@ -59,8 +61,8 @@ impl Fixture {
         phase: ReadPhase,
         mask: u16,
         values: [u64; 2],
-        mut registers: [u64; 256],
-        mut tags: [bool; 256],
+        mut registers: [u64; REGISTERS],
+        mut tags: [bool; REGISTERS],
     ) -> Self {
         let row = witness(mask, phase);
         let selected = phase.selected_bits();
@@ -282,7 +284,13 @@ fn value_then_tag_order_zero_register_and_control_limb_carries_are_exact() {
 fn native_value_then_tag_order_rejects_atomic_projection_and_stale_tags() {
     for (mask, old_tag) in [(0, true), (0xff, false)] {
         let p = scalar(Memory::STACK_START, 1);
-        let f = Fixture::with_registers(p, mask, [LOW, HIGH], [0x55; 256], [old_tag; 256]);
+        let f = Fixture::with_registers(
+            p,
+            mask,
+            [LOW, HIGH],
+            [0x55; REGISTERS],
+            [old_tag; REGISTERS],
+        );
         assert!(f.accepts());
         // The value write keeps the old tag; only the following write replaces it.
         assert_eq!(f.writes[0][AFTER_TAG], F(u64::from(old_tag)));
@@ -463,7 +471,7 @@ fn load_ports_match_native_base_alias_halves_and_read_ranges() {
 
 #[test]
 fn native_fully_private_stack_load_commits_value_and_tag() {
-    for half in [0_i8, 8] {
+    for half in [0_i16, 8] {
         let load = enc::encode_load(wide::memory::LOAD64, 5, 3, half);
         let mut vm = native(
             &[
@@ -560,10 +568,11 @@ fn load_transition_has_eighteen_auxiliary_fields_and_dynamic_degree_four() {
         );
     }
     // Only auxiliary arithmetic; packet/log/control copying is not free trace
-    // geometry. No integrated profile or proof-size admission is claimed.
+    // geometry. No integrated profile or proof-size admission is claimed. The
+    // bound is the 32-register scalar segment's remaining proof-byte headroom.
     let auxiliary_opening_bytes = WIDTH * (136 * 2 * 8 + 2 * 32);
     assert_eq!(auxiliary_opening_bytes, 40_320);
-    assert!(auxiliary_opening_bytes <= 41_152);
+    assert!(auxiliary_opening_bytes <= 1_044_672);
 }
 
 #[test]

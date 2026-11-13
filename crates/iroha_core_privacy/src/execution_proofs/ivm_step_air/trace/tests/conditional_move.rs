@@ -14,7 +14,7 @@ fn move_mix() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
             enc::encode_branch(wide::control::BNE, 22, 0, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
             enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 20, 8),
-            enc::encode_rr(wide::arithmetic::NOT, 24, 255, 255),
+            enc::encode_rr(wide::arithmetic::NOT, 24, 31, 0),
         ],
         9,
         &[
@@ -52,7 +52,7 @@ fn cmov_matches_interpreter_full_word_conditions_and_all_aliases() {
                 (8, 0, 7),
                 (8, 6, 0),
                 (0, 0, 0),
-                (255, 254, 253),
+                (31, 30, 29),
                 (1, 6, 7),
             ] {
                 let (segment, records) = recorded(
@@ -62,9 +62,9 @@ fn cmov_matches_interpreter_full_word_conditions_and_all_aliases() {
                         (6, value),
                         (7, condition),
                         (8, 55),
-                        (254, value),
-                        (253, condition),
-                        (255, 55),
+                        (30, value),
+                        (29, condition),
+                        (31, 55),
                     ],
                     1_000,
                 );
@@ -87,18 +87,18 @@ fn cmov_matches_interpreter_full_word_conditions_and_all_aliases() {
 #[test]
 fn cmovi_matches_interpreter_signed_immediates_retention_and_condition_alias() {
     for condition in [0, 1, 1 << 32, 0xffff_ffff_0000_0001, u64::MAX] {
-        for immediate in [i8::MIN, -1, 0, 1, i8::MAX] {
-            for (rd, cond) in [(8, 7), (7, 7), (0, 7), (8, 0), (0, 0), (255, 253), (1, 7)] {
+        for immediate in [wide::IMM14_MIN, -1, 0, 1, wide::IMM14_MAX] {
+            for (rd, cond) in [(8, 7), (7, 7), (0, 7), (8, 0), (0, 0), (31, 29), (1, 7)] {
                 let (segment, records) = recorded(
                     &[enc::encode_ri(wide::arithmetic::CMOVI, rd, cond, immediate)],
                     1,
                     &[
                         (7, condition),
                         (8, 55),
-                        (253, condition),
-                        (255, 91),
-                        (128, 92),
-                        (127, 93),
+                        (29, condition),
+                        (31, 91),
+                        (28, 92),
+                        (27, 93),
                     ],
                     1_000,
                 );
@@ -167,7 +167,7 @@ fn moves_bind_selected_values_retained_values_and_untouched_registers() {
         for condition in [0, 1] {
             let (segment, records) =
                 recorded(&[word], 1, &[(6, 91), (7, condition), (8, 55)], 1_000);
-            for (register, mask) in [(8, 1), (8, 1 << 32), (6, 1), (7, 1), (255, 1)] {
+            for (register, mask) in [(8, 1), (8, 1 << 32), (6, 1), (7, 1), (31, 1)] {
                 let mut forged = records.clone();
                 forged[0].after.registers[register] ^= mask;
                 let changed = ScalarSegment::new(
@@ -314,8 +314,8 @@ fn mixed_moves_preserve_degree_four_and_native_profile_geometry() {
     assert_eq!(segment.after.registers[20], i64::cast_unsigned(-128_i64));
     assert_eq!(segment.after.registers[21], 58);
     assert_eq!(segment.after.registers[7], i64::cast_unsigned(-128_i64));
-    assert_eq!(segment.base_width_v1(), 1_356);
-    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+    assert_eq!(segment.base_width_v1(), 908);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_025);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xe8; 32],
@@ -339,7 +339,7 @@ fn mixed_moves_preserve_degree_four_and_native_profile_geometry() {
     .unwrap();
     assert_eq!(
         maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-        4_153_152
+        3_149_632
     );
 }
 

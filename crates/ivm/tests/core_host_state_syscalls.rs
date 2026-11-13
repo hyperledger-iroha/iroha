@@ -198,7 +198,7 @@ fn core_host_debug_log_accepts_json() {
     let tlv = make_tlv(PointerType::Json, br#"{"msg":"hello"}"#);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_DEBUG_LOG as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_DEBUG_LOG]);
     vm.load_program(&prog).expect("load program");
     vm.run_with_host(&mut host)
         .expect("debug log should succeed");

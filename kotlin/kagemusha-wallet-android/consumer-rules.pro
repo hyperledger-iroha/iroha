@@ -45,3 +45,7 @@
 
 # Native constructs the dedicated bounded suffix reply by exact JNI name and descriptor.
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletSuffixUnloadReplyV1 { *; }
+
+# Experimental backend JNI has its own bounded result domain.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.NativeSpartanBridge { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaSpartanReplyV1 { *; }

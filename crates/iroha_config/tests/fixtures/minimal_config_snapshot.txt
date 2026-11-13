@@ -1184,7 +1184,7 @@ Root {
         ivm_max_decoded_instructions: 1048576,
         ivm_max_decoded_bytes: 4194304,
         quarantine_max_txs_per_block: 0,
-        quarantine_tx_max_cycles: 0,
+        quarantine_tx_max_gas: 0,
         query_default_cursor_mode: Ephemeral,
         query_max_fetch_size: 500,
         query_stored_min_gas_units: 0,

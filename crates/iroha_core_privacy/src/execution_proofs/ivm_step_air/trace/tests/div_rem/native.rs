@@ -8,7 +8,7 @@ fn maximum_segment(out_of_gas: bool) -> (ScalarSegment, Vec<DiagnosticStepRecord
         .to_vec();
     body.extend([
         enc::encode_rr(wide::arithmetic::MULH, 9, 6, 7),
-        enc::encode_rr(wide::arithmetic::CLZ, 20, 6, 255),
+        enc::encode_rr(wide::arithmetic::CLZ, 20, 6, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 2, 2, -1),
         enc::encode_ri(wide::arithmetic::XORI, 21, 6, -128),
         enc::encode_branch(wide::control::BNE, 2, 0, -8),
@@ -30,7 +30,7 @@ fn maximum_segment(out_of_gas: bool) -> (ScalarSegment, Vec<DiagnosticStepRecord
             (2, 7),
             (6, i64::cast_unsigned(i64::MIN)),
             (7, 7),
-            (255, u64::MAX),
+            (31, u64::MAX),
         ],
         cost + if out_of_gas { 9 } else { 10 },
     );
@@ -42,7 +42,7 @@ fn maximum_segment(out_of_gas: bool) -> (ScalarSegment, Vec<DiagnosticStepRecord
         if out_of_gas {
             SegmentOutcome::OutOfGas
         } else {
-            SegmentOutcome::AssertionFailed
+            SegmentOutcome::NumericFault
         }
     );
     (segment, records)
@@ -53,14 +53,14 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
     for out_of_gas in [false, true] {
         let (segment, records) = maximum_segment(out_of_gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_356);
-        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.base_width_v1(), 908);
+        assert_eq!(segment.profile_constraint_count_v1(), 2_025);
         assert_eq!(segment.profile_fixed_width_v1(), 10);
         let fixed = segment.profile_fixed_columns_v1().unwrap();
         for (row, &gas_flag) in fixed[OUT_OF_GAS].iter().enumerate().take(TRACE_SIZE) {
             assert_eq!(gas_flag, F(u64::from(out_of_gas && row == MAX_STEPS - 1)));
             assert_eq!(
-                fixed[ASSERTION_FAILED][row],
+                fixed[NUMERIC_FAULT][row],
                 F(u64::from(!out_of_gas && row == MAX_STEPS - 1))
             );
         }
@@ -81,8 +81,8 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_153_152);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+        assert_eq!(bound, 3_149_632);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xdc + u8::from(out_of_gas); 32],
@@ -102,10 +102,10 @@ fn native_stark_proves_maximum_division_segment_and_binds_exact_trap_reason_gas_
         let (segment, records) = maximum_segment(out_of_gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_153_152);
+        assert!(proof.len() <= 3_149_632);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         let other = if out_of_gas {
-            SegmentOutcome::AssertionFailed
+            SegmentOutcome::NumericFault
         } else {
             SegmentOutcome::OutOfGas
         };

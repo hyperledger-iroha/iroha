@@ -140,11 +140,7 @@ pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
     tlv.extend_from_slice(Hash::new(&payload).as_ref());
     let data_offset = 24;
     let padding = (4 - (data_offset + tlv.len()) % 4) % 4;
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 1_000,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(b"LTLB");
     for value in [1, padding, tlv.len()] {
         program.extend_from_slice(&u32::try_from(value).unwrap().to_le_bytes());

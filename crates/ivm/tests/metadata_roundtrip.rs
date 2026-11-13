@@ -6,7 +6,7 @@ fn metadata_encode_parse_roundtrip() {
             version_major: 1,
             version_minor: 1,
             mode: 0x00,
-            max_cycles: 12345,
+            max_cycles: 0,
             abi_version: 1,
         },
         ProgramMetadata {
@@ -26,7 +26,6 @@ fn metadata_encode_parse_roundtrip() {
         assert_eq!(parsed.metadata.version_major, m.version_major);
         assert_eq!(parsed.metadata.version_minor, m.version_minor);
         assert_eq!(parsed.metadata.mode, m.mode);
-        assert_eq!(parsed.metadata.vector_length, m.vector_length);
         assert_eq!(parsed.metadata.max_cycles, m.max_cycles);
         assert_eq!(parsed.metadata.abi_version, m.abi_version);
         // Parse again from a buffer with padding; parser should ignore trailing bytes
@@ -53,12 +52,10 @@ fn metadata_parse_rejects_bad_magic_and_short() {
         ProgramMetadata::parse(&bad),
         Err(VMError::InvalidMetadata)
     ));
-    // Corrupt vector_length above the ABI maximum and ensure parser rejects it.
-    m[7] ^= 0xFF; // vector_length flipped
+    // A non-ZK header cannot declare a trace bound.
+    m[ivm::HEADER_BUDGET_OFFSET] = 1;
     assert!(matches!(
         ProgramMetadata::parse(&m),
-        Err(VMError::ProgramVectorLengthTooLarge {
-            max_allowed: ivm::VECTOR_LENGTH_MAX,
-        })
+        Err(VMError::MaxCyclesWithoutZk { max_cycles: 1 })
     ));
 }

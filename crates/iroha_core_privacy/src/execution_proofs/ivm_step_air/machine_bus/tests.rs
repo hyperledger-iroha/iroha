@@ -33,7 +33,7 @@ fn fixture() -> PublicPacketBus {
     let mut clear = read.clone();
     clear.write = true;
     clear.after_private = 0;
-    let mut register = event(Space::Register, 255, 0, u128::from(u64::MAX));
+    let mut register = event(Space::Register, 31, 0, u128::from(u64::MAX));
     register.after_private = 1;
     PublicPacketBus::new(vec![
         Some(write),
@@ -114,6 +114,7 @@ fn typed_cells_holes_private_masks_and_full_width_values_are_consistent() {
 fn coherently_claimed_nonzero_first_state_bad_reads_and_invalid_typed_bits_fail() {
     let mut cases = vec![
         event(Space::Memory, 4, 1, 2),
+        event(Space::Register, 32, 0, 1),
         event(Space::Register, 256, 0, 1),
         event(Space::Register, 3, 0, 1_u128 << 64),
         event(Space::Initialization, 4, 0, 1 << 16),

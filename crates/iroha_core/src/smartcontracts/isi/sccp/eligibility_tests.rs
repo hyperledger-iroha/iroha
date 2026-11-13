@@ -242,7 +242,7 @@ fn reconciliation_self_claim_eligibility_uses_original_rate_and_refund_reserve()
         let mut stx = block.transaction();
         assert!(reconciliation::end_one(&mut stx, ETH, 1).unwrap());
         assert_eq!(
-            fees::exempt_class(&*stx.world, transaction.payload(), None),
+            fees::exempt_class(&*stx.world, transaction.payload(), None, 0),
             Some(SccpExemptClassV1::SelfClaim),
             "the closed rate has positive payout despite permanent quarantine"
         );
@@ -260,7 +260,7 @@ fn reconciliation_self_claim_eligibility_uses_original_rate_and_refund_reserve()
     // indexed sum without scanning or copying the pending-refund history.
     reconciliation_store::add_pending_refund(&mut stx, (ETH, 1), 100 * ONE_XOR).unwrap();
     assert_eq!(
-        fees::exempt_class(&*stx.world, transaction.payload(), None),
+        fees::exempt_class(&*stx.world, transaction.payload(), None, 0),
         None,
         "a zero payout is not an exempt self-claim"
     );
@@ -483,7 +483,8 @@ fn every_inbound_shape_and_authority_is_classified_quoted_counted_and_executed_a
                 world,
                 payload,
                 crate::smartcontracts::isi::sccp::hold::committed_time_ms(&view)
-                    .expect("original parent time")
+                    .expect("original parent time"),
+                0
             ),
             expected.class(),
             "{name}: eligibility"
@@ -493,7 +494,8 @@ fn every_inbound_shape_and_authority_is_classified_quoted_counted_and_executed_a
                 world,
                 payload,
                 crate::smartcontracts::isi::sccp::hold::committed_time_ms(&view)
-                    .expect("original parent time")
+                    .expect("original parent time"),
+                0
             ),
             expected.class().is_some(),
             "{name}: exemption on success"
@@ -538,6 +540,7 @@ fn every_inbound_shape_and_authority_is_classified_quoted_counted_and_executed_a
             &TransactionEntrypoint::External(transaction),
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(&view)
                 .expect("original parent time"),
+            0,
         ) {
             counted.push(class);
         }
@@ -763,9 +766,9 @@ fn self_claim_pause_eligibility_uses_parent_time_not_fee_observation_horizon() {
         (None, None),
         (Some(now + 1), Some(SccpExemptClassV1::SelfClaim)),
     ] {
-        assert_eq!(fees::exempt_class(world, payload, parent_time), expected);
+        assert_eq!(fees::exempt_class(world, payload, parent_time, 0), expected);
         assert_eq!(
-            admission::exempt_class_of_entrypoint(world, &entry, parent_time),
+            admission::exempt_class_of_entrypoint(world, &entry, parent_time, 0),
             expected
         );
         for fee_observation_ms in [0, now, now + 1, u64::MAX] {
@@ -796,13 +799,13 @@ fn self_claim_pause_eligibility_uses_parent_time_not_fee_observation_horizon() {
         )],
     );
     assert_eq!(
-        fees::exempt_class(world, proof.payload(), Some(now)),
+        fees::exempt_class(world, proof.payload(), Some(now), 0),
         Some(SccpExemptClassV1::SelfClaim),
         "hold preserves proof admission eligibility; verification is still required"
     );
     let keeper = signed(&ed25519(KEEPER), vec![advance(false)]);
     assert_eq!(
-        fees::exempt_class(world, keeper.payload(), Some(now)),
+        fees::exempt_class(world, keeper.payload(), Some(now), 0),
         Some(SccpExemptClassV1::KeeperAdvance { network: ETH })
     );
 }
@@ -836,7 +839,8 @@ fn charged_parent_self_claim_is_not_reclassified_by_expired_executing_world() {
         fees::exempt_class(
             &*stx.world,
             transaction.payload(),
-            Some(stx.block_unix_timestamp_ms())
+            Some(stx.block_unix_timestamp_ms()),
+            0
         ),
         Some(SccpExemptClassV1::SelfClaim),
         "the executing time has reached expiry"
@@ -888,7 +892,7 @@ fn original_eligibility_preimages_survive_siblings_rollback_and_replacement() {
         );
         assert!(source.pause(ETH).is_none());
         assert_eq!(
-            fees::exempt_class_from(source, transaction.payload(), None),
+            fees::exempt_class_from(source, transaction.payload(), None, |_| Ok(false)),
             expected
         );
     };
@@ -927,7 +931,10 @@ fn original_eligibility_preimages_survive_siblings_rollback_and_replacement() {
         )
         .unwrap();
         tx.sccp_fast_pauses.insert(ETH, pause);
-        assert_eq!(fees::exempt_class(&*tx, transaction.payload(), None), None);
+        assert_eq!(
+            fees::exempt_class(&*tx, transaction.payload(), None, 0),
+            None
+        );
         check(&TransactionParent(&tx));
         if apply {
             tx.apply();
@@ -937,12 +944,12 @@ fn original_eligibility_preimages_survive_siblings_rollback_and_replacement() {
         check(&BlockParent(&block));
     }
     assert_eq!(
-        fees::exempt_class(&block, transaction.payload(), None),
+        fees::exempt_class(&block, transaction.payload(), None, 0),
         None
     );
     block.commit();
     assert_eq!(
-        fees::exempt_class(&parent.state.world_view(), transaction.payload(), None),
+        fees::exempt_class(&parent.state.world_view(), transaction.payload(), None, 0),
         None,
         "the still-published successor is held"
     );
@@ -962,7 +969,7 @@ fn original_eligibility_preimages_survive_siblings_rollback_and_replacement() {
     check(&BlockParent(&replacement));
     drop(replacement);
     assert_eq!(
-        fees::exempt_class(&parent.state.world_view(), transaction.payload(), None),
+        fees::exempt_class(&parent.state.world_view(), transaction.payload(), None, 0),
         None,
         "dropping replacement preserves the original committed successor"
     );

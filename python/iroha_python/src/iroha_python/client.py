@@ -134,6 +134,7 @@ from iroha_torii_client.collection import (
     Domain,
     HistoryCollection,
 )
+from iroha_torii_client.errors import error_for_response
 from iroha_torii_client.governance_proposals import (
     GovernanceCanonicalObject,
     GovernanceContractLifecycleAction,
@@ -11798,7 +11799,11 @@ _ToriiClientRuntimeAuthMixin: type[Any] = create_torii_client_runtime_auth_mixin
 def _fetch_authenticated_privacy_capabilities_archive_v1(
     client: "ToriiClient", canonical_auth: ToriiCanonicalRequestAuth
 ) -> bytes:
-    """Fixed transport entry used by native admission; never accepts archived bytes."""
+    """Fixed transport entry used by native admission; never accepts archived bytes.
+
+    A non-200 carrying Torii's canonical error envelope raises the typed
+    ``ToriiError`` with the envelope's code and message.
+    """
     if type(client) is not ToriiClient:
         raise TypeError("Exact12 admission requires the configured SDK ToriiClient")
     context = "Exact12 privacy capability manifest"
@@ -11829,6 +11834,26 @@ def _fetch_authenticated_privacy_capabilities_archive_v1(
         if response.headers.get("Content-Encoding") not in (None, "identity"):
             raise ValueError("Exact12 capability response Content-Encoding must be identity")
         if response.status_code != 200:
+            # Torii answers this Norito negotiation with a binary error envelope:
+            # its bounded bytes type the failure; any other body keeps this error.
+            try:
+                error_body: Optional[bytes] = _read_bounded_response_body(
+                    response, 256 * 1024, f"{context} error"
+                )
+            except (TypeError, ValueError, requests.RequestException):
+                error_body = None
+            envelope = (
+                None
+                if error_body is None
+                else decode_typed_error_envelope_v1(
+                    response.headers.get("Content-Type"), error_body
+                )
+            )
+            if envelope is not None:
+                raise error_for_response(
+                    response, expected=(200,), context=context, body=error_body,
+                    envelope=envelope,
+                )
             raise ValueError("Exact12 capability response status must be 200")
         body = _read_bounded_response_body(response, 256 * 1024, context)
         declared_length = response.headers.get("Content-Length")
@@ -11867,15 +11892,18 @@ class _StakingPreparationHTTPError(requests.HTTPError):
     """Failed preparation response retaining its bounded original body.
 
     A body that is Torii's canonical error envelope (Norito or JSON) also
-    exposes its code and message: a plan that committed state refuses is HTTP
-    409 with code ``staking_preparation_refused`` and the exact reason
-    execution would reject with. Any other body leaves both ``None``. The
-    ``x-iroha-reject-code`` header is kept whenever Torii sends one.
+    exposes its code, message and decoded details: a plan that committed state
+    refuses is HTTP 409 with code ``staking_preparation_refused`` and the exact
+    reason execution would reject with, and a throttled or unavailable Torii
+    names its retry delay in ``details["retry_after_seconds"]``. Any other body
+    leaves all three ``None``. The reject code is the ``x-iroha-reject-code``
+    header whenever Torii sends one, and otherwise ``details["reject_code"]``.
     """
 
     staking_preparation_body: bytes
     staking_preparation_code: Optional[str]
     staking_preparation_message: Optional[str]
+    staking_preparation_details: Optional[Dict[str, Any]]
     staking_preparation_reject_code: Optional[str]
 
     @classmethod
@@ -11883,15 +11911,16 @@ class _StakingPreparationHTTPError(requests.HTTPError):
         """Classify one bounded non-200 body without reading the stream again."""
 
         envelope = decode_typed_error_envelope_v1(response.headers.get("Content-Type"), body)
-        code, message = (None, None) if envelope is None else envelope
+        code, message, details = (None, None, None) if envelope is None else envelope
         detail = "" if envelope is None else f": {code}: {message}"
         error = cls(f"staking preparation HTTP {response.status_code}{detail}", response=response)
         error.staking_preparation_body = body
         error.staking_preparation_code = code
         error.staking_preparation_message = message
-        error.staking_preparation_reject_code = (
-            response.headers.get("x-iroha-reject-code") or ""
-        ).strip() or None
+        error.staking_preparation_details = details
+        header_reject_code = (response.headers.get("x-iroha-reject-code") or "").strip() or None
+        detail_reject_code = None if details is None else details.get("reject_code")
+        error.staking_preparation_reject_code = header_reject_code or detail_reject_code
         return error
 
 
@@ -12251,6 +12280,8 @@ class ToriiClient(
         """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`.
 
         Raises :class:`DataModelMismatchError` when the node data model version mismatches.
+        A failure carrying Torii's canonical error envelope raises a ``ToriiError``
+        whose ``code`` and ``message`` are the envelope's.
         """
 
         self._ensure_data_model_validation()
@@ -12263,7 +12294,11 @@ class ToriiClient(
                 "Accept": "application/x-norito, application/json",
             },
         )
-        self._expect_status(response, {200, 201, 202, 204})
+        self._expect_status(
+            response,
+            {200, 201, 202, 204},
+            decode_error_envelope=decode_typed_error_envelope_v1,
+        )
         receipt = type(self)._maybe_transaction_receipt(response)
         if receipt is not None:
             return receipt
@@ -12369,7 +12404,11 @@ class ToriiClient(
             allow_retry=False,
             allow_redirects=False,
         )
-        self._expect_status(transaction_response, {200})
+        self._expect_status(
+            transaction_response,
+            {200},
+            decode_error_envelope=decode_typed_error_envelope_v1,
+        )
         transaction_response_bytes = self._native_query_response_bytes(
             transaction_response,
             "committed transaction query",
@@ -14597,7 +14636,12 @@ class ToriiClient(
         cursor: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> bytes:
-        """Return Norito-encoded `PorChallengeStatusV1` records for the given filters."""
+        """Return Norito-encoded `PorChallengeStatusV1` records for the given filters.
+
+        A failure carrying Torii's canonical error envelope raises a ``ToriiError``
+        whose ``code`` and ``message`` are the envelope's; the export and weekly
+        report reads below behave the same way.
+        """
 
         params = _build_sorafs_por_status_params(
             manifest_hex, provider_hex, epoch, status, limit, max_bytes, cursor
@@ -14609,7 +14653,9 @@ class ToriiClient(
             headers={"Accept": "application/x-norito"},
             timeout=timeout,
         )
-        self._expect_status(response, (200,))
+        self._expect_status(
+            response, (200,), decode_error_envelope=decode_typed_error_envelope_v1
+        )
         return response.content
 
     def export_sorafs_por_status(
@@ -14634,7 +14680,9 @@ class ToriiClient(
             headers={"Accept": "application/x-norito"},
             timeout=timeout,
         )
-        self._expect_status(response, (200,))
+        self._expect_status(
+            response, (200,), decode_error_envelope=decode_typed_error_envelope_v1
+        )
         return response.content
 
     def get_sorafs_por_weekly_report(
@@ -14652,7 +14700,9 @@ class ToriiClient(
             headers={"Accept": "application/x-norito"},
             timeout=timeout,
         )
-        self._expect_status(response, (200,))
+        self._expect_status(
+            response, (200,), decode_error_envelope=decode_typed_error_envelope_v1
+        )
         return response.content
 
     def get_sorafs_por_ingestion_status(

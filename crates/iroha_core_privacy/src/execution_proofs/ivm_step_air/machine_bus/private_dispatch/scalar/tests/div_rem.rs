@@ -331,7 +331,14 @@ fn private_division_native_arithmetic_and_gas_traps_cannot_claim_completion() {
                 if opcode_gas < 10 {
                     assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
                 } else {
-                    assert!(matches!(outcome, Err(ivm::VMError::AssertionFailed)));
+                    let fault = if right == 0 {
+                        ivm::numeric::NumericFaultV1::DivisionByZero
+                    } else {
+                        ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
+                    };
+                    assert!(
+                        matches!(outcome, Err(ivm::VMError::NumericFault(actual)) if actual == fault)
+                    );
                 }
                 let record = &recorder.records()[0];
                 assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));

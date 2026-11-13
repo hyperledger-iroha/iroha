@@ -89,9 +89,10 @@ pub(crate) fn reject_secret_state_value(expr: &TypedExpr) -> Result<(), Semantic
 /// Check secret arguments before a builtin's ordinary signature validation.
 ///
 /// The accepted declassifiers deliberately require all scalar operands to be
-/// secret.  Besides matching the VM's equal-tag rule, this prevents an
-/// accidentally public salt or blinding factor from making a commitment easy
-/// to brute force. The V1 source commitment surface is Secret-only.
+/// secret. The VM joins privacy tags instead of rejecting mixed operands, so
+/// this compiler rule is what prevents an accidentally public salt or blinding
+/// factor from making a commitment easy to brute force. The V1 source
+/// commitment surface is Secret-only.
 pub(crate) fn validate_builtin_call(
     builtin: Builtin,
     args: &[TypedExpr],

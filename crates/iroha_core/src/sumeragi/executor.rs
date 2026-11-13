@@ -457,6 +457,18 @@ impl Drop for StateExecutor {
 }
 
 impl StateExecutor {
+    /// Drop and join this fixture's actual worker before reconstructing startup replay.
+    /// The inert handle carries no sender and cannot retain or replace an execution owner.
+    #[cfg(test)]
+    pub(super) fn retire_worker_for_testing(&mut self) {
+        let retired = Self {
+            execution_budget: self.execution_budget.clone(),
+            requests: None,
+            thread: None,
+        };
+        drop(std::mem::replace(self, retired));
+    }
+
     /// Move the one already-published original witness to complete-effect work.
     /// The caller must retain actual native execution authority; this performs no
     /// proof dispatch and accepts no advertised roots or replacement witness.
@@ -1934,17 +1946,39 @@ impl<'s> Worker<'s> {
             preparation::validation_failure(BlockValidationError::StateView(error))
                 .expect("every State reader refusal has an explicit classification")
         })?;
-        let parent_creation_time = match original_view.latest_block() {
-            Ok(Some(parent)) => parent.header().creation_time(),
-            Ok(None) => {
-                return Err(PublicationError::Retryable(
-                    "the applied parent block is not available".into(),
-                ));
-            }
-            Err(error) => {
-                return Err(parent_history_error(error.map_rejection(
-                    iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory,
-                )));
+        let parent_creation_time = if original_view.kura().checkpoint_prefix_height()
+            == Some(original_view.height() as u64)
+        {
+            // Complete-State restoration authenticated this exact header and clock through
+            // the portable successor. Its opaque publication tip lends the clock only;
+            // omitted parent bodies never become native receipts.
+            let native = original_view
+                .native_execution_tip()
+                .filter(|native| {
+                    native.height() == original_view.height() as u64
+                        && Some(native.iroha_hash()) == original_view.latest_block_hash()
+                        && native.root_scope() == self.context.root_scope
+                })
+                .ok_or_else(|| {
+                    PublicationError::RecoveryRequired(
+                        "the original checkpoint parent differs from its published native identity"
+                            .into(),
+                    )
+                })?;
+            Duration::from_millis(native.creation_time_ms())
+        } else {
+            match original_view.latest_block() {
+                Ok(Some(parent)) => parent.header().creation_time(),
+                Ok(None) => {
+                    return Err(PublicationError::Retryable(
+                        "the applied parent block is not available".into(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(parent_history_error(error.map_rejection(
+                        iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory,
+                    )));
+                }
             }
         };
         let Some(scheduled) = ScheduledAuthority::from_view(&original_view, height) else {

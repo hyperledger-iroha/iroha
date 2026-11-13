@@ -407,6 +407,8 @@ pub enum Error {
     MkDir(#[source] std::io::Error, PathBuf),
     /// Original observed canonical codec or input reservation outcome, including local admission refusal.
     CodecAttempt(#[from] norito::core::DecodeAttemptError),
+    /// Portable checkpoint verification deferred with its original local refusal owner.
+    CheckpointPrefixDeferred(#[source] Box<crate::execution_attempt::ExecutionDeferred>),
     /// The original native source pool or physical allocator refused the raw frame backing.
     NativeFrameAllocation(#[source] iroha_allocation::ChargedBufferError),
     /// The physical allocator refused the original retained raw-frame charge.

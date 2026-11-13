@@ -1,16 +1,17 @@
 //! Unregistered native-STARK AIR chips for public IVM scalar steps.
 //!
 //! The ALU chip is a bounded, public-input relation substrate. It proves the exact
-//! wrapping 64-bit arithmetic and bitwise results, sign-extended immediates,
-//! public privacy tags, and public control and base-gas transitions for every
-//! register shape, including aliases and hardwired `r0`.
-//! Secret-tagged operands are rejected because the operands are public inputs.
+//! wrapping 64-bit arithmetic and bitwise results, sign-extended 14-bit
+//! immediates, the joined destination privacy tag, and public control and
+//! base-gas transitions for every register shape, including aliases and
+//! hardwired `r0`. Secret-tagged operands are rejected because the operands are
+//! public inputs.
 //! It does not prove fetch, the other registers, memory, host effects, or a
 //! complete invocation. The sibling branch chip proves all six conditional
 //! branch predicates and their public PC, operand, gas, and cycle transitions.
 //! The shift chip proves masked shifts/rotations and all operand/write aliases.
 //! The internal scalar-segment adapter composes the same arithmetic banks with
-//! canonical artifact fetch, all 256 registers, public tags, u64 gas/cycles and
+//! canonical artifact fetch, all 32 registers, public tags, u64 gas/cycles and
 //! explicit boundaries for at most 64 steps. It remains a segment substrate;
 //! memory, private/host/state relations and invocation completion are absent.
 //! The sibling typed packet bus constrains staged cell consistency and a
@@ -64,7 +65,7 @@ fn semantic_opcode(opcode: u8) -> u8 {
     }
 }
 
-/// The interpreter sign-extends all four eight-bit immediates to a full word.
+/// The interpreter sign-extends all four 14-bit immediates to a full word.
 fn immediate_operand(word: u32) -> Option<u64> {
     matches!(
         wide::opcode(word),
@@ -73,7 +74,7 @@ fn immediate_operand(word: u32) -> Option<u64> {
             | wide::arithmetic::ORI
             | wide::arithmetic::XORI
     )
-    .then(|| i64::cast_unsigned(i64::from(wide::imm8(word))))
+    .then(|| i64::cast_unsigned(i64::from(wide::imm14(word))))
 }
 
 const TRACE_LOG2: u8 = 13;
@@ -82,7 +83,7 @@ const COUNTERS: usize = 6;
 const LIMBS: usize = 12;
 const TAGS: usize = 3;
 const POST_LIMBS: usize = 4;
-const SHAPE_SELECTORS: usize = 8;
+const SHAPE_SELECTORS: usize = 9;
 const LIMB_OFFSET: usize = COUNTERS;
 const TAG_OFFSET: usize = LIMB_OFFSET + LIMBS;
 const POST_OFFSET: usize = TAG_OFFSET + TAGS;
@@ -118,7 +119,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-alu-fri-beta-v1",
     query_seed: b"ivm-alu-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-alu-all-shapes-air-v1:public-single-step:add-sub-and-or-xor:addi-andi-ori-xori:signed-imm8:pre-read:post-write:r0:aliases:64-bit-wrap:shared-boolean-sources:radix4-results:degree4:tag-match:pc+4:cycles+1:base-gas=1:no-machine-admission";
+const PROFILE: &[u8] = b"ivm-alu-all-shapes-air-v1:public-single-step:add-sub-and-or-xor:addi-andi-ori-xori:signed-imm14:pre-read:post-write:r0:aliases:64-bit-wrap:shared-boolean-sources:radix4-results:degree4:tag-join=rs1-or-register-rs2:pc+4:cycles+1:base-gas=1:no-machine-admission";
 
 #[derive(Clone, Copy)]
 struct AluStepStatement {
@@ -200,6 +201,9 @@ impl AluStepStatement {
             opcode == wide::arithmetic::AND,
             opcode == wide::arithmetic::OR,
             opcode == wide::arithmetic::XOR,
+            // Two-register forms join both source tags into a live destination;
+            // immediate forms inherit only the left register's tag.
+            register_right && wide::rd(self.word) != 0,
         ]
         .into_iter()
         .enumerate()
@@ -282,12 +286,22 @@ fn residues(row: &[F], fixed: &[F]) -> Result<Vec<F>, ProofManagedNoteStarkError
     for index in 0..TAGS {
         out.push(bit(row[TAG_OFFSET + index]));
     }
-    out.push(row[TAG_OFFSET].sub(row[TAG_OFFSET + 1]));
     let rd_is_zero = fixed[SELECTOR_OFFSET];
     let rs1_is_zero = fixed[SELECTOR_OFFSET + 1];
     let rs2_is_zero = fixed[SELECTOR_OFFSET + 2];
     let sources_equal = fixed[SELECTOR_OFFSET + 3];
-    out.push(row[TAG_OFFSET + 2].sub(F::ONE.sub(rd_is_zero).mul(row[TAG_OFFSET])));
+    let joins_right = fixed[SELECTOR_OFFSET + 8];
+    // Destination tag = tag(rs1) OR tag(rs2) for register forms, tag(rs1) for
+    // immediates; `r0` keeps its public tag. Boolean tags make this exact.
+    out.push(
+        row[TAG_OFFSET + 2]
+            .sub(F::ONE.sub(rd_is_zero).mul(row[TAG_OFFSET]))
+            .sub(
+                joins_right.mul(row[TAG_OFFSET + 1].sub(row[TAG_OFFSET].mul(row[TAG_OFFSET + 1]))),
+            ),
+    );
+    // Aliased sources read one register: equal tags, like their equal limbs.
+    out.push(sources_equal.mul(row[TAG_OFFSET].sub(row[TAG_OFFSET + 1])));
     out.push(rs1_is_zero.mul(row[TAG_OFFSET]));
     out.push(rs2_is_zero.mul(row[TAG_OFFSET + 1]));
     out.push(rd_is_zero.mul(row[TAG_OFFSET + 2]));

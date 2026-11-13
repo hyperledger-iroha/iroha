@@ -5523,7 +5523,7 @@ pub mod isi {
             &state_transaction.execution_budget(),
         )
         .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
-        crate::smartcontracts::ivm::validate_cycle_ceiling(
+        crate::smartcontracts::ivm::validate_zk_trace_bound(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
@@ -7929,7 +7929,7 @@ pub mod isi {
             &state_transaction.execution_budget(),
         )
         .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
-        crate::smartcontracts::ivm::validate_cycle_ceiling(
+        crate::smartcontracts::ivm::validate_zk_trace_bound(
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
@@ -17855,6 +17855,17 @@ pub mod isi {
                         ));
                     }
                 }
+                // Owner-signed dataspace retirement is consumed by its native handler and never
+                // stored; its protected cumulative record is never caller-writable.
+                if let Some(outcome) =
+                    crate::state::dataspace_retirement::execute_reserved_parameter(
+                        custom,
+                        authority,
+                        state_transaction,
+                    )
+                {
+                    return outcome;
+                }
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 // The admitted parameter successor below validates ZK/fraud/pipeline
                 // structure and pending confidential transitions. Decoding here
@@ -17874,6 +17885,10 @@ pub mod isi {
                                 policy.fixed.iter().map(|lane| lane.dataspace).chain(
                                     policy.autoscale.iter().map(|autoscale| autoscale.dataspace),
                                 ),
+                            )?;
+                            crate::state::dataspace_retirement::ensure_native_policy_preserves_retirements(
+                                &state_transaction.world,
+                                &policy,
                             )?;
                             crate::sumeragi::lanes::step::validate_policy(&policy)
                         })
@@ -26397,7 +26412,7 @@ AccountEvent::PermissionRemoved(change))
 
             // Keep retired fixture versions from changing the whole-State census.
             let _retirement_pin = crossbeam_epoch::pin();
-            let (code, manifest) = contract_artifact_with_max_cycles(1000);
+            let (code, manifest) = minimal_contract_artifact();
             let key = ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
             let mut world = World::default();
             world.contract_code.insert(key, code.clone());
@@ -26475,14 +26490,21 @@ AccountEvent::PermissionRemoved(change))
             assert_eq!(budget.reserved_bytes(), retry_baseline);
         }
 
-        fn contract_artifact_with_max_cycles(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
-            let meta = ivm::ProgramMetadata {
-                version_major: 1,
-                version_minor: 1,
-                mode: 0,
-                max_cycles,
-                abi_version: 1,
-            };
+        /// A ZK-mode test contract declaring the trace bound `max_cycles`.
+        fn zk_contract_artifact(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
+            contract_artifact_with_header(
+                ivm::ProgramMetadata {
+                    mode: ivm::ivm_mode::ZK,
+                    max_cycles,
+                    ..ivm::ProgramMetadata::default()
+                },
+                ivm::CONTRACT_FEATURE_BIT_ZK,
+            )
+        }
+        fn contract_artifact_with_header(
+            meta: ivm::ProgramMetadata,
+            features_bitmap: u64,
+        ) -> (Vec<u8>, ContractManifest) {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 events: Vec::new(),
                 enum_types: Vec::new(),
@@ -26496,7 +26518,7 @@ AccountEvent::PermissionRemoved(change))
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
                 abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                features_bitmap: 0,
+                features_bitmap,
                 access_set_hints: None,
                 kotoba: Vec::new(),
                 entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -26530,7 +26552,7 @@ AccountEvent::PermissionRemoved(change))
                 ),
                 ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
                 ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+                ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
             ] {
                 code.extend_from_slice(&instruction.to_le_bytes());
             }
@@ -26542,7 +26564,7 @@ AccountEvent::PermissionRemoved(change))
             (artifact, verified.manifest)
         }
         fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
-            contract_artifact_with_max_cycles(4)
+            contract_artifact_with_header(ivm::ProgramMetadata::default(), 0)
         }
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
             let (artifact, _) = kotodama_lang::compiler::Compiler::new()
@@ -35146,7 +35168,8 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .expect_execute(&ALICE_ID, &mut stx, "seed upload authority");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             stx.pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).unwrap();
-            let (artifact, manifest) = contract_artifact_with_max_cycles(2);
+            // The live ceiling bounds the trace of a ZK artifact.
+            let (artifact, manifest) = zk_contract_artifact(2);
             let code_hash = manifest.code_hash.expect("artifact code hash");
             let total_size = u64::try_from(artifact.len()).expect("artifact length fits u64");
             assert!(

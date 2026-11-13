@@ -36,13 +36,7 @@ fn assert_manifest_signature_error(error: &InstructionExecutionError, field: &st
     );
 }
 fn contract_artifact() -> Vec<u8> {
-    let metadata = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles: 4,
-        abi_version: 1,
-    };
+    let metadata = ivm::ProgramMetadata::default();
     let interface = ivm::EmbeddedContractInterfaceV1 {
         events: Vec::new(),
         enum_types: Vec::new(),
@@ -86,7 +80,7 @@ fn contract_artifact() -> Vec<u8> {
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
@@ -113,16 +107,14 @@ fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     let mut mode = original.to_vec();
     mode[6] = ivm::ivm_mode::ZK;
     mutations.push(("mode", mode));
-    let mut vector_length = original.to_vec();
-    vector_length[7] = 1;
-    mutations.push(("vector_length", vector_length));
     let mut max_cycles = original.to_vec();
-    max_cycles[8..16].copy_from_slice(&2_u64.to_le_bytes());
+    max_cycles[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+        .copy_from_slice(&2_u64.to_le_bytes());
     mutations.push(("max_cycles", max_cycles));
     let mut abi_version = original.to_vec();
-    abi_version[16] = 0;
+    abi_version[ivm::HEADER_ABI_VERSION_OFFSET] = 0;
     mutations.push(("abi_version", abi_version));
-    for index in 17..ivm::HEADER_SIZE {
+    for index in ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE {
         let mut abi_hash = original.to_vec();
         abi_hash[index] ^= 0xff;
         mutations.push(("abi_hash", abi_hash));
@@ -197,7 +189,7 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     let mutations = execution_header_mutations(&original);
     assert_eq!(
         mutations.len(),
-        ivm::METADATA_MAGIC.len() + 6 + ivm::HEADER_SIZE - 17,
+        ivm::METADATA_MAGIC.len() + 5 + ivm::HEADER_SIZE - ivm::HEADER_ABI_HASH_OFFSET,
         "cover every fixed-header field and every physical ABI-digest byte"
     );
     for (field, mutated) in mutations {

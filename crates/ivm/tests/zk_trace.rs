@@ -55,5 +55,4 @@ fn disabling_zk_trace_keeps_zk_semantics_without_formal_logs() {
     assert!(vm.step_log().is_empty());
     assert!(vm.memory_log().is_empty());
     assert!(common::diagnostic_snapshot(&vm).register_event_count() == 0);
-    assert!(vm.constraints().is_empty());
 }

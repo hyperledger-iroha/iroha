@@ -6553,7 +6553,7 @@
     {
       "id": "work_budget.fuel",
       "group": "work_budget",
-      "what": "Gas one smart-contract execution may consume.",
+      "what": "Governance gas quantity of one smart-contract execution. Gas is the only execution budget and the caller owns it (signed gas limit within the block's remaining gas); since C10 no artifact cycle bound is compared with this value.",
       "unit": "gas",
       "value": 55000000,
       "source": "committed",
@@ -6567,38 +6567,16 @@
       },
       "committed_as": "Parameters.smart_contract.fuel (SmartContractParameter::Fuel)",
       "inclusive": true,
-      "enforcement": [
-        {
-          "stage": "vm",
-          "path": "crates/iroha_core/src/smartcontracts/ivm.rs",
-          "contains": "if cycles > fuel {"
-        },
-        {
-          "stage": "follower",
-          "path": "crates/iroha_core/src/tx.rs",
-          "contains": "params.smart_contract().fuel(),"
-        },
-        {
-          "stage": "proposer",
-          "path": "crates/iroha_core/src/state.rs",
-          "contains": "NonZeroU64::new(ceiling.get().min(fuel.get()))"
-        }
-      ],
       "tests": [
-        {
-          "path": "crates/iroha_core/src/tx.rs",
-          "name": "validate_ivm_max_cycles_equal_to_fuel_is_admitted"
-        },
-        {
-          "path": "crates/iroha_core/src/tx.rs",
-          "name": "validate_ivm_max_cycles_exceeds_fuel_rejected"
-        },
         {
           "path": "crates/iroha_data_model/tests/resource_contract_v1.rs",
           "name": "committed_defaults_are_the_values_the_contract_records"
         }
       ],
-      "test_note": "The two admission tests take a contract whose declared cycle ceiling equals the committed fuel and one above it. No test runs a contract until its gas is exactly the fuel; I.4 owns the unified charge."
+      "unenforced": {
+        "owner": "I.4",
+        "summary": "C10 removed the comparison of an artifact's max_cycles with smart_contract.fuel: max_cycles is only a ZK trace bound and gas is the sole budget. No execution reads this committed value; I.4 decides whether it becomes a per-invocation gas cap of the unified charge or is retired."
+      }
     },
     {
       "id": "work_budget.block_gas_limit_default",
@@ -6650,7 +6628,7 @@
     {
       "id": "work_budget.default_trigger_gas_limit",
       "group": "work_budget",
-      "what": "Gas budget of one trigger batch when the block gas budget is unlimited (zero) or the trigger declares no cap: the batch shares this budget as a whole.",
+      "what": "Gas budget of one trigger execution or trigger batch when the block gas budget is unlimited (zero); otherwise a trigger draws from the block's remaining gas. No artifact header field narrows it: gas is the only execution budget.",
       "unit": "gas",
       "value": 50000000,
       "source": "constant",
@@ -6671,8 +6649,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "if gas_limit == u64::MAX { gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;",
-          "count": 3
+          "contains": "if remaining_block_budget == u64::MAX { DEFAULT_TRIGGER_GAS_LIMIT } else { remaining_block_budget }"
         }
       ],
       "test_gap": {
@@ -7051,7 +7028,7 @@
     {
       "id": "work_budget.config_ivm_max_cycles_upper_bound",
       "group": "work_budget",
-      "what": "Largest max_cycles a program may declare; a program above it is refused before execution.",
+      "what": "Largest ZK trace bound (max_cycles) a ZK-mode program may declare; a ZK program above it is refused before execution. A non-ZK program declares no trace bound and has no cycle check.",
       "unit": "cycles",
       "value": 1000000,
       "source": "committed",
@@ -7086,7 +7063,7 @@
         },
         {
           "path": "crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs",
-          "name": "trigger_registration_rejects_zero_and_over_ceiling_ivm_headers"
+          "name": "trigger_registration_rejects_non_zk_bound_and_over_ceiling_zk_headers"
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/pipeline_policy.rs",
@@ -9036,16 +9013,16 @@
       ]
     },
     {
-      "id": "work_budget.config_quarantine_tx_max_cycles",
+      "id": "work_budget.config_quarantine_tx_max_gas",
       "group": "work_budget",
-      "what": "Cycle allowance of one quarantine-lane transaction across its batch segments (0 = unlimited).",
-      "unit": "cycles",
+      "what": "Gas cap of one quarantine-lane transaction: it runs under min(signed gas limit, cap), the one allowance its batch segments and nested contract runs draw from (0 = no cap).",
+      "unit": "gas",
       "value": 0,
       "source": "committed",
       "class": "consensus",
       "owner": {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "QUARANTINE_TX_MAX_CYCLES",
+        "symbol": "QUARANTINE_TX_MAX_GAS",
         "kind": "const",
         "anchor": [
           "pub mod pipeline {"
@@ -9053,27 +9030,31 @@
         "expr": "0"
       },
       "zero_means": "unlimited",
-      "committed_as": "pipeline_validity_policy_v1 (PipelineValidityPolicyV1.quarantine_tx_max_cycles), set by an authorized SetParameter in genesis or later and effective from the next block; the owner is the protocol default of a chain that commits none",
+      "committed_as": "pipeline_validity_policy_v1 (PipelineValidityPolicyV1.quarantine_tx_max_gas), set by an authorized SetParameter in genesis or later and effective from the next block; the owner is the protocol default of a chain that commits none",
       "catalog": {
         "id": "execution_policy_digest_v1",
-        "field": "pipeline.quarantine_tx_max_cycles"
+        "field": "pipeline.quarantine_tx_max_gas"
       },
       "enforcement": [
         {
           "stage": "follower",
-          "path": "crates/iroha_core/src/executor_execution_effects.rs",
-          "contains": ".then(|| core::num::NonZeroU64::new(self.pipeline.quarantine_tx_max_cycles))"
+          "path": "crates/iroha_core/src/executor.rs",
+          "contains": "let cap = state_transaction.pipeline.quarantine_tx_max_gas;"
         },
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/state/output_network.rs",
-          "contains": "|| policy.max_cycles != self.state.pipeline.quarantine_tx_max_cycles"
+          "contains": "|| policy.max_gas != self.state.pipeline.quarantine_tx_max_gas"
         }
       ],
       "tests": [
         {
           "path": "crates/iroha_core/src/executor_raw_ivm_work_tests.rs",
-          "name": "signed_quarantine_cycle_limit_uses_actual_work_and_exact_boolean_classification"
+          "name": "signed_quarantine_gas_cap_narrows_the_root_limit_with_exact_boolean_classification"
+        },
+        {
+          "path": "crates/iroha_core/src/executor_effect_budget_tests.rs",
+          "name": "signed_mixed_batch_contract_runs_share_one_quarantine_gas_cap"
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/pipeline_policy.rs",
@@ -13740,7 +13721,7 @@
         "pipeline.ivm_max_decoded_instructions": "decoded_scratch.config_ivm_max_decoded_instructions",
         "pipeline.ivm_max_decoded_bytes": "decoded_scratch.config_ivm_max_decoded_bytes",
         "pipeline.quarantine_max_txs_per_block": "work_budget.config_quarantine_max_txs_per_block",
-        "pipeline.quarantine_tx_max_cycles": "work_budget.config_quarantine_tx_max_cycles",
+        "pipeline.quarantine_tx_max_gas": "work_budget.config_quarantine_tx_max_gas",
         "pipeline.query_max_fetch_size": "work_budget.config_query_max_fetch_size",
         "pipeline.query_stored_min_gas_units": "work_budget.config_query_stored_min_gas_units",
         "pipeline.amx_per_dataspace_budget_ms": "work_budget.config_amx_per_dataspace_budget_ms",
@@ -15159,14 +15140,16 @@
       },
       {
         "path": "crates/ivm_abi/src/metadata.rs",
-        "reason": "Program-header field ranges and the debug-section decode allocation: metadata shape bounds inside guest_memory.max_program_image_bytes; the debug section is never executed.",
+        "reason": "Program-header layout (the fixed header size and the offset of its ZK trace-bound field) and the debug-section decode allocation: metadata shape bounds inside guest_memory.max_program_image_bytes; the debug section is never executed.",
         "symbols": [
-          "VECTOR_LENGTH_MAX",
+          "HEADER_SIZE",
+          "HEADER_BUDGET_OFFSET",
           "CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1",
           "MAX_EMBEDDED_STATE_TYPE_DEPTH_V1"
         ],
         "exprs": {
-          "VECTOR_LENGTH_MAX": "64",
+          "HEADER_SIZE": "48",
+          "HEADER_BUDGET_OFFSET": "7",
           "CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1": "16 * 1024 * 1024",
           "MAX_EMBEDDED_STATE_TYPE_DEPTH_V1": "256"
         }
@@ -16232,14 +16215,12 @@
       },
       {
         "path": "crates/ivm/src/game_unit_step.rs",
-        "reason": "Per-invocation ceilings of the fixed movement kernel of the game-partition prototype (specs/sumeragi.md, independent-root game-unit transport). step_unit loads one artifact of eight instructions without a loop into a fresh VM with GAS_LIMIT gas; CYCLE_LIMIT is the max_cycles of the artifact's own metadata, so it is part of the kernel hash: InstallGamePartitionV1 accepts only that hash, and AdvanceGameUnitV1 runs only while the partition still pins it. Exhausting either fails the VM (OutOfGas, ExceededMaxCycles) and the advance before any write. Every input takes one of three paths, which the kernel's boundary-input test runs within both ceilings, so no transaction can approach them: they are geometry of one fixed artifact, not a budget a transaction spends. A unit has at most GAME_PARTITION_MAX_WORK advances, each one instruction inside transaction.max_instructions; the spec keeps block-level metering of this direct adapter work open.",
+        "reason": "Per-invocation gas ceiling of the fixed movement kernel of the game-partition prototype (specs/sumeragi.md, independent-root game-unit transport). step_unit loads one non-ZK artifact of eight instructions without a loop into a fresh VM with GAS_LIMIT gas; the artifact declares no cycle bound (gas is the only budget) and its hash is the kernel identity: InstallGamePartitionV1 accepts only that hash, and AdvanceGameUnitV1 runs only while the partition still pins it. Exhausting the gas fails the VM (OutOfGas) and the advance before any write. Every input takes one of three paths, which the kernel's boundary-input test runs within the ceiling, so no transaction can approach it: it is geometry of one fixed artifact, not a budget a transaction spends. A unit has at most GAME_PARTITION_MAX_WORK advances, each one instruction inside transaction.max_instructions; the spec keeps block-level metering of this direct adapter work open.",
         "symbols": [
-          "GAS_LIMIT",
-          "CYCLE_LIMIT"
+          "GAS_LIMIT"
         ],
         "exprs": {
-          "GAS_LIMIT": "128",
-          "CYCLE_LIMIT": "16"
+          "GAS_LIMIT": "128"
         }
       },
       {
@@ -16386,7 +16367,7 @@
         ]
       },
       {
-        "reason": "Not limits: lists of reserved identifiers and prefixes, the largest register index, the largest first input register of one opcode and two minimum capacities. Their names contain a limit word.",
+        "reason": "Not limits: lists of reserved identifiers and prefixes, the instruction-encoding field ranges (signed 14-bit immediate, 19-bit JAL and 24-bit JMP/JALS offsets, 24-bit syscall number, 6-bit rotate amount), the largest register index, the largest first input register of one opcode and two minimum capacities. Their names contain a limit word.",
         "files": [
           {
             "path": "crates/ivm_abi/src/access_hints.rs",
@@ -16403,11 +16384,19 @@
             "path": "crates/ivm_abi/src/instruction.rs",
             "symbols": [
               "MAX",
-              "POSEIDON6_MAX_INPUT_BASE"
+              "IMM14_MAX",
+              "JAL_OFFSET_MAX",
+              "OFFSET24_MAX",
+              "SYSCALL_NUMBER_MAX",
+              "ROTATE_AMOUNT_MAX"
             ],
             "exprs": {
               "MAX": "0x1F",
-              "POSEIDON6_MAX_INPUT_BASE": "u8::MAX - (POSEIDON6_INPUTS as u8 - 1)"
+              "IMM14_MAX": "(1 << 13) - 1",
+              "JAL_OFFSET_MAX": "(1 << 18) - 1",
+              "OFFSET24_MAX": "(1 << 23) - 1",
+              "SYSCALL_NUMBER_MAX": "0x00ff_ffff",
+              "ROTATE_AMOUNT_MAX": "63"
             }
           },
           {

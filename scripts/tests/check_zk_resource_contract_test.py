@@ -1146,8 +1146,6 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
     }
     # The bounds the verifier found backed by a pin alone now name a boundary test or a gap.
     for identifier, name in (
-        ("work_budget.fuel", "validate_ivm_max_cycles_exceeds_fuel_rejected"),
-        ("work_budget.fuel", "validate_ivm_max_cycles_equal_to_fuel_is_admitted"),
         ("guest_memory.committed_heap_limit_bytes", "per_instance_heap_ceiling_cannot_be_bypassed_by_growth"),
         ("proof.config_pipa_r_max_proof_bytes", "guardrails_enforce_pipa_r_max_proof_bytes_for_open_verify_envelopes"),
         ("proof.config_ballot_history_cap", "direct_zk_ballot_rejects_a_full_corpus_without_pruning"),
@@ -1240,15 +1238,19 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
     assert_fails(edited(unused_pin), "no bound names this test")
 
     def gap_beside_a_boundary_test(contract: dict) -> None:
-        bound(contract, "work_budget.fuel")["test_gap"] = {"owner": "I.4", "summary": "x"}
+        bound(contract, "work_budget.config_ivm_max_cycles_upper_bound")["test_gap"] = {
+            "owner": "I.4",
+            "summary": "x",
+        }
 
     assert_fails(
         edited(gap_beside_a_boundary_test),
-        "work_budget.fuel: a bound with a test of its boundary records no `test_gap`",
+        "work_budget.config_ivm_max_cycles_upper_bound: a bound with a test of its boundary "
+        "records no `test_gap`",
     )
 
     def pin_reason_beside_a_boundary_test(contract: dict) -> None:
-        bound(contract, "work_budget.fuel")["value_pin"] = "x"
+        bound(contract, "work_budget.config_ivm_max_cycles_upper_bound")["value_pin"] = "x"
 
     assert_fails(edited(pin_reason_beside_a_boundary_test), "`value_pin` is for a bound whose every test is a pin")
 
@@ -1312,10 +1314,15 @@ def test_a_value_bound_into_state_but_compared_nowhere_is_recorded_unenforced() 
         "proof.config_confidential_max_public_inputs",
         "proof.config_confidential_registry_max_vk_entries",
         "proof.config_confidential_registry_max_params_entries",
+        # C10 made gas the only execution budget: the governance fuel is compared nowhere
+        # until the unified charge decides its role.
+        "work_budget.fuel",
     }
+    owners = {"work_budget.fuel": "I.4"}
     for identifier in unenforced:
         item = bound(CONTRACT, identifier)
-        assert "enforcement" not in item and item["unenforced"]["owner"] == "F.4"
+        assert "enforcement" not in item
+        assert item["unenforced"]["owner"] == owners.get(identifier, "F.4")
     # Native private admission is selected from authenticated committed policy.
     proof = bound(CONTRACT, "proof.private_settlement_admission_max_proof_bytes")
     assert proof["value"] == 8 * MIB and len(proof["enforcement"]) == 2
@@ -1958,7 +1965,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         "pipeline.ivm_max_decoded_bytes",
         "pipeline.overlay_max_instructions",
         "pipeline.overlay_max_bytes",
-        "pipeline.quarantine_tx_max_cycles",
+        "pipeline.quarantine_tx_max_gas",
         "pipeline.quarantine_max_txs_per_block",
     ):
         assert field in pipeline
@@ -2999,7 +3006,9 @@ def test_text_that_cites_a_bound_cites_one_that_exists() -> None:
     ), found
 
     def miscited(contract: dict) -> None:
-        bound(contract, "work_budget.fuel")["test_note"] += " See work_budget.gas_limit_total."
+        bound(contract, "proof.config_pipa_r_max_proof_bytes")["test_note"] += (
+            " See work_budget.gas_limit_total."
+        )
 
     assert_fails(edited(miscited), "bounds/test_note: the text cites `work_budget.gas_limit_total`")
 

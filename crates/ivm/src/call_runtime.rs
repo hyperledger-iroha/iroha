@@ -693,15 +693,24 @@ mod tests {
         let result = vm.registers.get(12);
         vm.registers.set(10, result);
         vm.registers.set(11, 1);
-        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::ControlFlowViolation)
+        ));
         vm.store_u64(result, 2).unwrap();
         assert!(matches!(vm.finish_call(), Err(VMError::DecodeError)));
         vm.store_u64(result, 1).unwrap();
         vm.registers.set(10, result + 8);
-        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::ControlFlowViolation)
+        ));
         vm.registers.set(10, result);
         vm.registers.set(11, 0);
-        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
+        assert!(matches!(
+            vm.finish_call(),
+            Err(VMError::ControlFlowViolation)
+        ));
         vm.registers.set(11, 1);
         vm.finish_call().unwrap();
         assert!(matches!(vm.public_call_result_word(0), Ok(1)));

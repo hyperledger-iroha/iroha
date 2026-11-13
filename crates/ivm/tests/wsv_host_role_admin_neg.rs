@@ -72,13 +72,13 @@ fn delete_role_with_assignees_fails() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     let ad = make_tlv(
@@ -100,7 +100,7 @@ fn delete_role_with_assignees_fails() {
         .preload_input(domain_offset, &dom)
         .expect("preload owning domain");
     vm.set_register(14, Memory::INPUT_START + domain_offset);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
+    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
     // Create role and grant to alice
@@ -113,7 +113,7 @@ fn delete_role_with_assignees_fails() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + role.len() as u64 + 8);
-    let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE as u8]);
+    let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE]);
     vm.load_program(&prog_crole).unwrap();
     vm.run().expect("create role");
     let tlv_alice = make_account_tlv(&alice);
@@ -126,13 +126,13 @@ fn delete_role_with_assignees_fails() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE as u8]);
+    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE]);
     vm.load_program(&prog_grole).unwrap();
     vm.run().expect("grant role");
     // Attempt to delete role while assigned -> fail
     vm.memory.preload_input(0, &rname).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_drole = assemble_syscalls(&[syscalls::SYSCALL_DELETE_ROLE as u8]);
+    let prog_drole = assemble_syscalls(&[syscalls::SYSCALL_DELETE_ROLE]);
     vm.load_program(&prog_drole).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }
@@ -164,13 +164,13 @@ fn grant_nonexistent_role_fails() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     // Grant a role that does not exist
@@ -184,7 +184,7 @@ fn grant_nonexistent_role_fails() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE as u8]);
+    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE]);
     vm.load_program(&prog_grole).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }

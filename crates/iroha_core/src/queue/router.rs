@@ -10933,7 +10933,7 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 1,
+            max_cycles: 0,
             abi_version: 1,
         };
         let mut bytecode = meta.encode();

@@ -89,9 +89,9 @@ fn callable_frame_bytes(code: &[u32], entry_pc: u64) -> u32 {
             if wide::opcode(word) == wide::arithmetic::ADDI
                 && wide::rd(word) == 31
                 && wide::rs1(word) == 31
-                && wide::imm8(word) < 0 =>
+                && wide::imm14(word) < 0 =>
         {
-            u32::from(wide::imm8(word).unsigned_abs())
+            u32::from(wide::imm14(word).unsigned_abs())
         }
         _ => 0,
     }
@@ -155,7 +155,7 @@ fn callable_descriptors(
     for (index, word) in code.iter().copied().enumerate() {
         let offset = match wide::opcode(word) {
             wide::control::JALS => i64::from(wide::imm24(word)),
-            wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
+            wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::jal_offset(word)),
             _ => continue,
         };
         if let Some(target) = (index as u64 * 4).checked_add_signed(offset * 4) {
@@ -180,7 +180,12 @@ fn contract_artifact_with_mode_and_code(
         version_major: 1,
         version_minor: 1,
         mode,
-        max_cycles: 0,
+        // The header carries a trace bound exactly when it selects ZK mode.
+        max_cycles: if mode & ivm::ivm_mode::ZK != 0 {
+            1_000
+        } else {
+            0
+        },
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -737,12 +742,25 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
 }
 #[test]
 fn verified_code_hash_binds_execution_header() {
-    let original = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
+    let original = contract_artifact_with_mode_and_code(
+        1,
+        ivm::ivm_mode::ZK,
+        ivm::CONTRACT_FEATURE_BIT_ZK,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[ivm::encoding::wide::encode_ri(
+            ivm::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        )],
+    );
     let original_verified =
         ivm::verify_contract_artifact(&original).expect("verify original artifact");
     let original_hash = original_verified.code_hash;
     let mut changed_cycles = original.clone();
-    changed_cycles[8..16].copy_from_slice(&1_u64.to_le_bytes());
+    changed_cycles[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+        .copy_from_slice(&1_u64.to_le_bytes());
     let changed_cycles_verified = ivm::verify_contract_artifact(&changed_cycles)
         .expect("verify artifact with changed max_cycles");
     assert_ne!(changed_cycles_verified.code_hash, original_hash);
@@ -752,12 +770,6 @@ fn verified_code_hash_binds_execution_header() {
             .same_signed_content(&original_verified.manifest),
         "manifest signatures must bind max_cycles"
     );
-    let mut changed_vector_length = original;
-    changed_vector_length[7] = 1;
-    let changed_vector_hash = ivm::verify_contract_artifact(&changed_vector_length)
-        .expect("verify artifact with changed vector length")
-        .code_hash;
-    assert_ne!(changed_vector_hash, original_hash);
 }
 #[test]
 fn signed_manifest_rejects_every_execution_header_mutation() {
@@ -843,16 +855,14 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
     let mut mode = original.clone();
     mode[6] = ivm::ivm_mode::ZK;
     mutations.push(("mode", mode));
-    let mut vector_length = original.clone();
-    vector_length[7] = 1;
-    mutations.push(("vector_length", vector_length));
     let mut max_cycles = original.clone();
-    max_cycles[8..16].copy_from_slice(&1_u64.to_le_bytes());
+    max_cycles[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+        .copy_from_slice(&1_u64.to_le_bytes());
     mutations.push(("max_cycles", max_cycles));
     let mut abi_version = original.clone();
-    abi_version[16] = 0;
+    abi_version[ivm::HEADER_ABI_VERSION_OFFSET] = 0;
     mutations.push(("abi_version", abi_version));
-    for index in 17..ivm::HEADER_SIZE {
+    for index in ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE {
         let mut abi_hash = original.clone();
         abi_hash[index] ^= 0xff;
         mutations.push(("abi_hash", abi_hash));
@@ -1157,7 +1167,6 @@ fn verify_rejects_private_input_syscall_without_zk_mode() {
 }
 #[test]
 fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode() {
-    use ivm::instruction::wide;
     let private_input = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT);
     let mut code = unit_caller_with_helper(true, &[private_input]);
     let plain_pc = (code.len() * 4) as u64;
@@ -1188,7 +1197,6 @@ fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode(
 }
 #[test]
 fn verify_derives_transitive_view_effects_from_bytecode() {
-    use ivm::instruction::wide;
     let state_write = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET);
     for (encoding, long_call) in [("JAL", false), ("JALS", true)] {
         let code = unit_caller_with_helper(long_call, &[state_write]);
@@ -1246,7 +1254,7 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
     let error = vm
         .run()
         .expect_err("a poisoned canonical return must trap before the write");
-    assert!(matches!(error, ivm::VMError::AssertionFailed));
+    assert!(matches!(error, ivm::VMError::ControlFlowViolation));
     assert_eq!(vm.pc(), entry_pc + 4, "the hidden write was not reached");
 }
 #[test]
@@ -1278,21 +1286,24 @@ fn strict_outer_return_cannot_redirect_to_an_in_code_halt() {
     assert!(matches!(
         vm.run()
             .expect_err("outer return must remain bound to the end of code"),
-        ivm::VMError::AssertionFailed
+        ivm::VMError::ControlFlowViolation
     ));
     assert_eq!(vm.pc(), entry_pc + 4);
 }
 #[test]
 fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
-    use ivm::instruction::wide;
     let mut code = unit_caller_with_helper(
         true,
-        &[ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET)],
+        &[ivm::encoding::wide::encode_scall(
+            ivm::syscalls::SYSCALL_STATE_GET,
+        )],
     );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
     let mutate_pc = (code.len() * 4) as u64;
-    code.push(ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET));
+    code.push(ivm::encoding::wide::encode_scall(
+        ivm::syscalls::SYSCALL_STATE_SET,
+    ));
     code.extend_from_slice(&common::unit_return_words());
     let mut mutate = entrypoint("mutate", EntryPointKind::Kotoage, mutate_pc);
     mutate.write_keys = vec!["state:*".to_owned()];
@@ -1398,10 +1409,11 @@ fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
 }
 #[test]
 fn verify_view_can_call_a_read_only_helper_when_the_artifact_has_no_writes() {
-    use ivm::instruction::wide;
     let code = unit_caller_with_helper(
         true,
-        &[ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET)],
+        &[ivm::encoding::wide::encode_scall(
+            ivm::syscalls::SYSCALL_STATE_GET,
+        )],
     );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
@@ -1434,7 +1446,6 @@ fn verify_view_effect_analysis_follows_both_branch_arms() {
 }
 #[test]
 fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
-    use ivm::instruction::wide;
     let encodings = [
         (
             "high-bit SCALL",
@@ -1464,7 +1475,6 @@ fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
 }
 #[test]
 fn verify_view_effect_analysis_ignores_unreachable_write_code() {
-    use ivm::instruction::wide;
     let state_write = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET);
     let bytes = contract_artifact_with_code(
         1,

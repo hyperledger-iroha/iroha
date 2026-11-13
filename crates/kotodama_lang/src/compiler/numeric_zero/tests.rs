@@ -160,11 +160,8 @@ fn syscalls(output: &CompileOutput) -> Vec<u32> {
         .iter()
         .filter_map(|bytes| {
             let word = u32::from_le_bytes(*bytes);
-            match instruction::wide::opcode(word) {
-                instruction::wide::system::SCALL => Some(word & 0xff),
-                instruction::wide::system::SYSTEM => Some(word & 0x00ff_ffff),
-                _ => None,
-            }
+            (instruction::wide::opcode(word) == instruction::wide::system::SCALL)
+                .then(|| instruction::wide::syscall_number(word))
         })
         .collect()
 }

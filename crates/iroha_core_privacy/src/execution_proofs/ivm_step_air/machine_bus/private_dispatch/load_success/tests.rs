@@ -49,7 +49,7 @@ fn word_event(index: u32, clock: u32, before: u64, after: u64, write: bool) -> [
         write,
     )
 }
-fn program(base: u8, destination: u8, imm: i8) -> Program {
+fn program(base: u8, destination: u8, imm: i16) -> Program {
     Program::new(dispatch_tests::contract(
         &[
             enc::encode_load(wide::memory::LOAD64, destination, base, imm),
@@ -78,7 +78,7 @@ impl Fixture {
         let mut dispatch = dispatch_tests::Fixture::new(program, pc_slot, false, 0);
         dispatch.schedule = schedule.dispatch();
         let instruction = program.words[pc_slot];
-        let base = address.wrapping_sub(i64::cast_unsigned(i64::from(wide::imm8(instruction))));
+        let base = address.wrapping_sub(i64::cast_unsigned(i64::from(wide::imm14(instruction))));
         let destination = wide::rd(instruction);
         let old_tag = old_tag && destination != 0 && destination != wide::rs1(instruction);
         let old_value = if destination == 0 {
@@ -97,7 +97,7 @@ impl Fixture {
         dispatch_tests::carries(
             &mut dispatch.row[super::super::CARRIES + 8..super::super::CARRIES + 12],
             base,
-            i64::cast_unsigned(i64::from(wide::imm8(instruction))),
+            i64::cast_unsigned(i64::from(wide::imm14(instruction))),
             false,
         );
         dispatch.packets.fields[4] = dispatch_tests::event(
@@ -825,7 +825,7 @@ impl Fixture {
         let memory = originals.producer(32);
         let instruction = record.instruction.unwrap();
         let address = before.registers[wide::rs1(instruction)]
-            .wrapping_add_signed(i64::from(wide::imm8(instruction)));
+            .wrapping_add_signed(i64::from(wide::imm14(instruction)));
         assert_eq!(memory[INDEX], F(address >> 4));
         let cell = address & !15;
         let privacy = u16::from_le_bytes(
@@ -944,7 +944,7 @@ fn assert_native_load_record(
         packet::half(original.producer(4), BEFORE, 0)
     );
     assert!(!record.before.tags[base]);
-    for register in 0..256 {
+    for register in 0..ivm::parallel::REGISTER_COUNT {
         if register == destination && register != 0 {
             let packet = original.producer(33);
             assert_eq!(

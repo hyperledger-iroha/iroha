@@ -1124,7 +1124,7 @@ pub(super) const PACKET_SLOTS: usize = 16_384;
     #[test]
     fn fallible_calls_report_propagated_helpers_and_skip_adapters() {
         let body = "\
-let tag = self.zk_match_tags(rs1, rs2)?;
+let tag = self.zk_join_tags(rs1, rs2)?;
 let value = self
     .memory
     .load_u64(address)?;
@@ -1141,7 +1141,7 @@ self.finish_call()?;
                 "checked_div_i64",
                 "finish_call",
                 "memory.load_u64",
-                "zk_match_tags"
+                "zk_join_tags"
             ]
         );
     }
@@ -1161,7 +1161,7 @@ impl IVM {
             match wide_op {
                 instruction::wide::arithmetic::ADD => {
                     // VMError::OutOfMemory in prose is not a trap.
-                    let tag = self.zk_match_tags(a, b)?;
+                    let tag = self.zk_join_tags(a, b)?;
                     self.zk_apply_tag(rd, tag);
                     continue;
                 }
@@ -1190,7 +1190,7 @@ impl IVM {
     }
 }
 ";
-        let helpers = ["zk_match_tags", "zk_apply_tag"];
+        let helpers = ["zk_join_tags", "zk_apply_tag"];
         let dispatch = interpreter_dispatch(text, &helpers);
         let set = |values: &[&str]| -> BTreeSet<String> {
             values.iter().map(|value| (*value).to_owned()).collect()
@@ -1208,10 +1208,10 @@ impl IVM {
         assert_eq!(dispatch.arms.len(), 4);
         assert_eq!(dispatch.arms[0].names, ["ADD"]);
         assert!(dispatch.arms[0].direct_traps.is_empty());
-        assert_eq!(dispatch.arms[0].fallible_helpers, set(&["zk_match_tags"]));
+        assert_eq!(dispatch.arms[0].fallible_helpers, set(&["zk_join_tags"]));
         assert_eq!(
             dispatch.arms[0].tag_surface,
-            set(&["zk_apply_tag", "zk_match_tags"])
+            set(&["zk_apply_tag", "zk_join_tags"])
         );
         assert!(dispatch.arms[0].calls.contains("zk_apply_tag"));
         assert_eq!(dispatch.arms[1].tag_surface, set(&["tag"]));
@@ -1458,7 +1458,7 @@ Err(self.stored.clone())
 
     #[test]
     fn tag_surface_names_accessors_and_listed_helpers() {
-        let helpers = ["zk_match_tags", "ensure_public_memory"];
+        let helpers = ["zk_join_tags", "ensure_public_memory"];
         let body = "\
 if self.registers.tag(rs) { return Err(VMError::PrivacyViolation); }
 self.registers.set_tag(rd, false);

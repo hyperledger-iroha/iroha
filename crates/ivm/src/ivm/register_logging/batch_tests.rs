@@ -4,11 +4,11 @@ use super::*;
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
     argument_record::prepare_argument_record_with_gas_limit,
-    encoding::wide::{encode_halt, encode_ri, encode_sys, encode_scall},
+    encoding::wide::{encode_halt, encode_ri, encode_scall},
     execution_memory::ExecutionMemoryLease,
     execution_packets::{INSTRUCTION_WINDOWS, NativeInvocation, instruction_clocks},
     host::{DefaultHost, IVMHost},
-    instruction::wide::{arithmetic, system},
+    instruction::wide::arithmetic,
     pointer_abi::PointerType,
     syscalls,
 };
@@ -31,7 +31,7 @@ const ROW: usize = size_of::<zk::RegEvent>();
 fn artifact(source: &str, cycles: u64) -> PreparedContract {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        max_cycles: cycles,
+        zk_trace_cycles: std::num::NonZeroU64::new(cycles).expect("ZK trace bound"),
         ..CompilerOptions::default()
     })
     .compile_source(source)
@@ -223,12 +223,14 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
 // register-row/shell boundary, using its canonical public layout exactly.
 fn initial_cycle_delta_bytes() -> usize {
     let mut deltas = zk::DeltaTraceLog::new(None);
-    deltas.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
+    deltas
+        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
     deltas.allocated_bytes().unwrap()
 }
 
 #[test]
-fn ordinary_instruction_shortage_precedes_gas_cycles_registers_and_shared_allowance() {
+fn ordinary_instruction_shortage_precedes_gas_cycles_and_registers() {
     let original = AllocationBudget::new(LIMIT);
     let word = encode_ri(arithmetic::ADDI, 7, 7, 1);
     let mut vm = generic(&original, &[word, encode_halt()], 2);
@@ -240,15 +242,13 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_registers_and_shared_allowa
     let deltas = initial_cycle_delta_bytes();
     original.set_limit_bytes(baseline + shell + steps + deltas + 4 * ROW - 1);
     let start = vm.pc;
-    let allowance = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(2).unwrap());
     assert!(
-        matches!(vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &allowance), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 4 * ROW)
+        matches!(vm.run_with_host(&mut DefaultHost::default()), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 4 * ROW)
     );
     assert_eq!(
         (vm.pc, vm.cycles, vm.remaining_gas(), vm.register(7)),
         (start, 0, GAS, 41)
     );
-    assert_eq!(allowance.consumed(), 0);
     assert!(
         vm.proof_register_log_handle()
             .unwrap()
@@ -257,8 +257,7 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_registers_and_shared_allowa
             .is_empty()
     );
     original.set_limit_bytes(LIMIT);
-    vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &allowance)
-        .unwrap();
+    vm.run_with_host(&mut DefaultHost::default()).unwrap();
     assert_eq!(vm.register(7), 42);
     assert_eq!(
         vm.proof_register_log_handle()
@@ -333,7 +332,7 @@ impl IVMHost for AllRegisters {
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
         self.calls += 1;
-        for index in 1..256 {
+        for index in 1..crate::parallel::REGISTER_COUNT {
             vm.set_register(index, index as u64 + 100);
             vm.registers.set_tag(index, false);
         }
@@ -561,64 +560,58 @@ fn syscall_shell_refusal_precedes_reserved_output_and_staged_entry_effects() {
 }
 
 #[test]
-fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycle_allowance() {
-    for word in [
-        encode_scall(syscalls::SYSCALL_ABORT),
-        encode_scall(syscalls::SYSCALL_ABORT),
-    ] {
-        let original = AllocationBudget::new(LIMIT);
-        let mut vm = generic(&original, &[word, encode_halt()], 2);
-        vm.set_register(10, 71);
-        vm.registers.set_tag(10, true);
-        let previous = vm.proof_register_log_handle().unwrap();
-        let before = (
+fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
+    let word = encode_scall(syscalls::SYSCALL_ABORT);
+    let original = AllocationBudget::new(LIMIT);
+    let mut vm = generic(&original, &[word, encode_halt()], 2);
+    vm.set_register(10, 71);
+    vm.registers.set_tag(10, true);
+    let previous = vm.proof_register_log_handle().unwrap();
+    let before = (
+        vm.pc,
+        vm.remaining_gas(),
+        vm.registers.snapshot(),
+        vm.registers.snapshot_tags(),
+    );
+    let baseline = original.reserved_bytes();
+    let shell = zk::SharedRegLog::allocation_layout().size();
+    let rows = event_counts::instruction(word, false, false).unwrap() * ROW;
+    let steps = 4 * size_of::<zk::StepEntry>();
+    let deltas = initial_cycle_delta_bytes();
+    original.set_limit_bytes(baseline + shell + steps + deltas + rows + shell - 1);
+    let mut host = AllRegisters {
+        reject_prepare: false,
+        calls: 0,
+    };
+    assert!(
+        matches!(vm.run_with_host(&mut host),
+        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        if requested_bytes == shell)
+    );
+    assert_eq!(
+        (
             vm.pc,
             vm.remaining_gas(),
             vm.registers.snapshot(),
-            vm.registers.snapshot_tags(),
-        );
-        let baseline = original.reserved_bytes();
-        let shell = zk::SharedRegLog::allocation_layout().size();
-        let rows = event_counts::instruction(word, false, false).unwrap() * ROW;
-        let steps = 4 * size_of::<zk::StepEntry>();
-        let deltas = initial_cycle_delta_bytes();
-        original.set_limit_bytes(baseline + shell + steps + deltas + rows + shell - 1);
-        let allowance = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(2).unwrap());
-        let mut host = AllRegisters {
-            reject_prepare: false,
-            calls: 0,
-        };
-        assert!(
-            matches!(vm.run_with_host_and_cycle_budget(&mut host, &allowance),
-            Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
-            if requested_bytes == shell)
-        );
-        assert_eq!(
-            (
-                vm.pc,
-                vm.remaining_gas(),
-                vm.registers.snapshot(),
-                vm.registers.snapshot_tags()
-            ),
-            before
-        );
-        assert_eq!(vm.cycles, 0);
-        assert_eq!(allowance.consumed(), 0);
-        assert_eq!(host.calls, 0);
-        assert!(
-            vm.proof_register_log_handle()
-                .unwrap()
-                .lock()
-                .as_slice()
-                .is_empty()
-        );
-        assert_eq!(
-            original.reserved_bytes(),
-            baseline + shell + steps + deltas + rows
-        );
-        drop((vm, previous));
-        assert_eq!(original.reserved_bytes(), 0);
-    }
+            vm.registers.snapshot_tags()
+        ),
+        before
+    );
+    assert_eq!(vm.cycles, 0);
+    assert_eq!(host.calls, 0);
+    assert!(
+        vm.proof_register_log_handle()
+            .unwrap()
+            .lock()
+            .as_slice()
+            .is_empty()
+    );
+    assert_eq!(
+        original.reserved_bytes(),
+        baseline + shell + steps + deltas + rows
+    );
+    drop((vm, previous));
+    assert_eq!(original.reserved_bytes(), 0);
 }
 
 #[test]
@@ -695,7 +688,7 @@ impl IVMHost for ShrinkingShellHost {
         ));
         assert!(vm.host_trace_log_detached);
         self.calls += 1;
-        for index in 1..256 {
+        for index in 1..crate::parallel::REGISTER_COUNT {
             vm.set_register(index, index as u64 + 100);
             vm.registers.set_tag(index, false);
         }
@@ -783,7 +776,7 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
                     ..
                 })
             ));
-            for index in 1..256 {
+            for index in 1..crate::parallel::REGISTER_COUNT {
                 assert_eq!(vm.registers.snapshot()[index], index as u64 + 100);
                 assert!(!vm.registers.tag(index));
             }

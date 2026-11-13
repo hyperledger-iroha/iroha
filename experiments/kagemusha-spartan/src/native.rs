@@ -11,11 +11,17 @@ use ff::PrimeField;
 use iroha_pasta::Fp;
 use num_bigint::BigUint;
 
-use crate::{bootstrap, credential::Credential, p256, request::CompletedRequest};
+pub use crate::credential::Credential;
+use crate::{bootstrap, p256, request::CompletedRequest};
 
 #[path = "engine.rs"]
 pub(crate) mod engine;
+#[cfg(test)]
+pub(crate) use engine::test_full_chain_native;
 pub use engine::{NativeEngine, ParameterManifest};
+#[cfg(feature = "device-fixture")]
+#[path = "native_device_fixture.rs"]
+pub mod device_fixture;
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;
@@ -95,6 +101,7 @@ impl ProgramBundle {
 pub enum Error {
     Malformed(&'static str),
     ResourceLimit,
+    NotEnoughMemory { required: u64, available: u64 },
     AuthorityMismatch(&'static str),
     Rejected(String),
     Unavailable(&'static str),
@@ -104,6 +111,13 @@ impl std::fmt::Display for Error {
         match self {
             Self::Malformed(s) => write!(f, "malformed {s}"),
             Self::ResourceLimit => f.write_str("future backend resource limit"),
+            Self::NotEnoughMemory {
+                required,
+                available,
+            } => write!(
+                f,
+                "future prover memory admission estimates {required} bytes; {available} available"
+            ),
             Self::AuthorityMismatch(s) => write!(f, "authority mismatch: {s}"),
             Self::Rejected(s) => write!(f, "proof rejected: {s}"),
             Self::Unavailable(s) => write!(f, "future backend unavailable: {s}"),
@@ -113,10 +127,34 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Native-only result of total fixed-profile parsing and actual verification.
+/// A false verdict may authorize only the Receive relation's Burn outcome.
+pub(crate) struct IncomingCandidate {
+    profile: [Fp; 64],
+    proof_digest: Fp,
+    valid: bool,
+    originals: crate::payment_wire::Originals,
+    pair: crate::full::UniformPair,
+    pair_bytes: Vec<u8>,
+}
+impl IncomingCandidate {
+    pub(crate) fn profile(&self) -> &[Fp; 64] {
+        &self.profile
+    }
+    pub(crate) fn proof_digest(&self) -> Fp {
+        self.proof_digest
+    }
+    pub(crate) fn valid(&self) -> bool {
+        self.valid
+    }
+}
+
 /// Native custody's protected same-boot anchor and a fresh platform observation.
 /// Implementations read these from local custody and the OS; peer wire data must
 /// never supply this interface.
 pub trait TimeSource: Send + Sync {
+    /// Current memory available to the app, obtained from the same actual OS platform.
+    fn available_memory_bytes(&self) -> Result<u64>;
     /// Observation captured by Native when it froze this operation's choices.
     fn prepared(
         &self,
@@ -165,12 +203,21 @@ pub enum ExactOperationWitness {
     Send(Box<crate::send::Witness>),
     Receive {
         step: Box<crate::receive::Witness>,
-        /// Exact bounded canonical wire bytes; every proof and both final
-        /// accumulators are verified before admission can return a preparation.
+        /// Exact bounded fixed-profile wire bytes. Native derives the complete
+        /// verification verdict; the Receive relation constrains valid credit or
+        /// Burn, retaining malformed cryptographic words without rewriting them.
         incoming_payment: Arc<[u8]>,
     },
 }
 impl ExactOperationWitness {
+    pub fn credential(&self) -> &Credential {
+        match self {
+            Self::Bootstrap(w) => &w.input.credential,
+            Self::Load { step, .. } => &step.credential,
+            Self::Send(w) => &w.credential,
+            Self::Receive { step, .. } => &step.credential,
+        }
+    }
     /// Decode bounded canonical private witness data, without granting authority.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         witness_codec::decode_witness(bytes)
@@ -238,6 +285,9 @@ impl VerifiedIncomingPayment {
     pub fn digest(&self) -> Fp {
         self.digest
     }
+    pub fn digest_bytes(&self) -> [u8; 32] {
+        self.digest.to_repr()
+    }
     pub fn profile(&self) -> &[Fp; 64] {
         &self.profile
     }
@@ -271,6 +321,52 @@ pub struct PreparedOperation {
     predecessor: VerifiedWalletHead,
 }
 impl PreparedOperation {
+    pub fn capsule_digest(&self) -> &[u8; 32] {
+        self.receipt_body[274..306]
+            .try_into()
+            .expect("fixed selected capsule digest")
+    }
+    pub fn credential(&self) -> &Credential {
+        self.witness.credential()
+    }
+    /// Fixed 291-byte financial review projection, version 1. All terms come
+    /// from this sealed checked operation and bind its exact frozen capsule.
+    pub fn review_bytes(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(291);
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.push(self.capsule.kind());
+        out.extend_from_slice(self.capsule.scheme());
+        out.extend_from_slice(self.capsule.wallet());
+        out.extend_from_slice(self.capsule.operation_id());
+        out.extend_from_slice(&RecoveryCapsule::frame_digest(&self.capsule.encode()?));
+        let (amount, fee, receiver, account) = match self.witness.as_ref() {
+            ExactOperationWitness::Send(w) => (
+                &w.request.body[242..258],
+                &w.request.body[290..306],
+                &w.request.body[130..162],
+                &w.request.body[162..194],
+            ),
+            ExactOperationWitness::Receive { step: w, .. } => (
+                &w.request.body[242..258],
+                &w.request.body[290..306],
+                &w.request.body[130..162],
+                &w.request.body[162..194],
+            ),
+            _ => (
+                &[0u8; 16][..],
+                &[0u8; 16][..],
+                &[0u8; 32][..],
+                &[0u8; 32][..],
+            ),
+        };
+        out.extend_from_slice(amount);
+        out.extend_from_slice(fee);
+        out.extend_from_slice(receiver);
+        out.extend_from_slice(account);
+        out.extend_from_slice(self.capsule.predecessor());
+        out.extend_from_slice(self.capsule.successor());
+        Ok(out)
+    }
     pub fn capsule(&self) -> &RecoveryCapsule {
         &self.capsule
     }
@@ -573,6 +669,14 @@ pub struct CompletionRecord {
     frame: CompletionFrame,
 }
 impl CompletionRecord {
+    /// Exact retained public output: 0 complete head, 1 Payment, 2 this record.
+    /// Decoding output does not itself grant proof authority.
+    pub fn output_part(&self, part: u32) -> Result<Vec<u8>> {
+        if part == 2 {
+            return self.encode();
+        }
+        engine::retained_output_part(&self.frame.output, part)
+    }
     pub fn operation_id(&self) -> &[u8; 32] {
         &self.frame.operation_id
     }

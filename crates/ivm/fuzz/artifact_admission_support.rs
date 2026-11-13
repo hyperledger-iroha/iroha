@@ -109,7 +109,6 @@ fn metadata_tuple(metadata: &ProgramMetadata) -> (u8, u8, u8, u8, u64, u8) {
         metadata.version_major,
         metadata.version_minor,
         metadata.mode,
-        metadata.vector_length,
         metadata.max_cycles,
         metadata.abi_version,
     )

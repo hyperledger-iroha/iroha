@@ -849,6 +849,43 @@ impl CertifiedTestChain {
         if through < self.height() {
             return Err("durable original history is behind the observed fixture State".into());
         }
+        if through == self.height() {
+            return Ok(());
+        }
+        // Dropping PendingTestExecution cannot discard a prepared publication. Model actual
+        // owner loss by joining that worker, then recreate startup's worker from the same
+        // authenticated State and durable frames. Never relabel Forward custody as replay.
+        self.executor.retire_worker_for_testing();
+        self.blocks.staging().clear();
+        let (events, receiver) = tokio::sync::broadcast::channel(4096);
+        let native_context_archive = Arc::new(
+            crate::query::native_context_archive::NativeContextArchive::open(
+                self.state.kura(),
+                self.state.ivm_execution_budget(),
+                self.state.kura().native_context_archive_max_bytes(),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        self.executor = StateExecutor::spawn(ExecutorContext {
+            time_source: self.execution_time_source.clone(),
+            state: Arc::clone(&self.state),
+            native_context_archive,
+            queue: None,
+            staging: self.blocks.staging().clone(),
+            events,
+            genesis_account: self.genesis_account.clone(),
+            consensus_mode: self.validated_genesis.consensus_metadata().mode.into(),
+            root_scope: self.root_scope(),
+            applied: (self.tip.0, self.tip.1),
+            crypto: Some(Arc::clone(&self.crypto)),
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                self.tip.0,
+                self.state.view().latest_block_hash(),
+            )),
+            lane_blocks: Arc::clone(&self.lane_blocks),
+        })
+        .map_err(|error| error.to_string())?;
+        self.events = receiver;
         for height in self.height() + 1..=through {
             let (body, qc) = self
                 .committed_body(height)

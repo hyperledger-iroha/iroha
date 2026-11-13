@@ -169,11 +169,11 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
     use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
     let id: TriggerId = "generic_effect_callback".parse().unwrap();
     let instruction: InstructionBox = ExecuteTrigger::new(id.clone()).into();
-    // Both executions have the same committed policy. The selected signed root may
-    // spend one VM cycle; the five-opcode callback keeps its own trigger scope.
+    // Both executions have the same committed policy. The selected signed root has a
+    // one-gas quarantine cap; the five-opcode callback keeps its own trigger gas scope.
     let state = fixture_with_policy(65_536, None, None, |policy| {
         policy.quarantine_max_txs_per_block = 1;
-        policy.quarantine_tx_max_cycles = 1;
+        policy.quarantine_tx_max_gas = 1;
         policy.overlay_max_instructions = 1;
         policy.overlay_max_bytes = u64::try_from(instruction.encode().len()).unwrap();
     });
@@ -196,11 +196,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         tlv
     })
     .collect();
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 1_000,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let padding = (4 - (data_offset + data_len) % 4) % 4;
@@ -316,11 +312,12 @@ fn actual_generic_ivm_callback_artifact_is_outside_the_signed_root_budget() {
 }
 
 #[test]
-fn actual_quarantined_network_root_does_not_charge_callback_vm_cycles() {
+fn actual_quarantined_network_root_does_not_charge_callback_vm_gas() {
     let (ordinary, ordinary_gas) = actual_generic_ivm_callback_output(false);
     let (quarantined, quarantined_gas) = actual_generic_ivm_callback_output(true);
     // The real callback must pass three LDLITs before its SET_ACCOUNT_DETAIL
-    // syscall. A shared one-cycle root allowance would refuse before that effect.
+    // syscall. Charging it to the root's one-gas quarantine cap would refuse before
+    // that effect.
     // Compare the entire actual row, including callback trace and completions.
     assert_eq!(quarantined, ordinary);
     assert_eq!(quarantined_gas, ordinary_gas);

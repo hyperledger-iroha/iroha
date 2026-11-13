@@ -14,7 +14,8 @@ use std::{any::Any, cell::Cell};
 fn meta_with_mode(mode: u8) -> ProgramMetadata {
     ProgramMetadata {
         mode,
-        max_cycles: 2,
+        // Only a ZK header carries a trace bound.
+        max_cycles: if mode & ivm::ivm_mode::ZK != 0 { 2 } else { 0 },
         ..ProgramMetadata::default()
     }
 }
@@ -158,36 +159,55 @@ fn load_private_address_fails() {
     assert!(matches!(res, Err(VMError::PrivacyViolation)));
 }
 #[test]
-fn wide_shift_mismatched_tags_fails() {
+fn wide_shift_with_mixed_tags_produces_a_private_result() {
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&raw_zk_program(&[encoding::wide::encode_rr(
-        instruction::wide::arithmetic::SLL,
-        3,
-        1,
-        2,
-    )]))
+    vm.load_program(&raw_zk_program(&[
+        encoding::wide::encode_rr(instruction::wide::arithmetic::SLL, 3, 1, 2),
+        encoding::wide::encode_halt(),
+    ]))
     .expect("load private shift fixture");
     vm.set_register(1, 1);
     vm.set_register(2, 2);
     vm.registers.set_tag(1, true);
     vm.registers.set_tag(2, false);
-    let err = vm.run();
-    assert!(matches!(err, Err(VMError::PrivacyViolation)));
+    vm.run().expect("mixed-tag shifts join their tags");
+    assert_eq!(vm.register(3), 4);
+    assert!(vm.registers.tag(3));
 }
 #[test]
-fn wide_add_mismatched_tags_fails() {
-    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
-    let add = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
-    program.extend_from_slice(&add.to_le_bytes());
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, 10);
-    vm.set_register(2, 20);
-    vm.registers.set_tag(1, true);
-    vm.registers.set_tag(2, false);
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
+fn wide_binary_operations_join_operand_tags() {
+    use instruction::wide::arithmetic as a;
+    for opcode in [
+        a::ADD,
+        a::SUB,
+        a::MUL,
+        a::SLT,
+        a::SEQ,
+        a::MIN,
+        a::MAX,
+        a::MEAN,
+        a::GCD,
+    ] {
+        for (left_private, right_private) in [(true, false), (false, true), (false, false)] {
+            let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
+            let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
+            program.extend_from_slice(&word.to_le_bytes());
+            program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+            let mut vm = IVM::new(10_000);
+            vm.load_program(&program).unwrap();
+            vm.set_register(1, 10);
+            vm.set_register(2, 20);
+            vm.registers.set_tag(1, left_private);
+            vm.registers.set_tag(2, right_private);
+            vm.run()
+                .unwrap_or_else(|error| panic!("opcode {opcode:#04x}: {error}"));
+            assert_eq!(
+                vm.registers.tag(3),
+                left_private || right_private,
+                "opcode {opcode:#04x} must join operand tags"
+            );
+        }
+    }
 }
 #[test]
 fn wide_add_propagates_secret_tag() {
@@ -321,11 +341,7 @@ fn private_input_syscall_marks_result_private() {
 }
 #[test]
 fn private_input_syscall_requires_zk_execution_mode() {
-    let mut program = ProgramMetadata {
-        max_cycles: 32,
-        ..ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&scall(syscalls::SYSCALL_GET_PRIVATE_INPUT).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(10_000);

@@ -245,11 +245,8 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     assemble(&bytes)
 }
-fn syscall_prog(syscall: u8) -> Vec<u8> {
-    assemble_words(&[
-        encoding::wide::encode_scall(u32::from(syscall)),
-        HALT_WORD,
-    ])
+fn syscall_prog(syscall: u32) -> Vec<u8> {
+    assemble_words(&[encoding::wide::encode_scall(syscall), HALT_WORD])
 }
 /// Issue GET_MERKLE_COMPACT via SCALL and decode into a CompactProofBundle.
 pub fn syscall_memory_compact_bundle(
@@ -263,7 +260,7 @@ pub fn syscall_memory_compact_bundle(
     vm.set_register(11, out_ptr);
     vm.set_register(12, depth_cap.unwrap_or(0) as u64);
     vm.set_register(13, root_out);
-    let prog = syscall_prog(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
+    let prog = syscall_prog(syscalls::SYSCALL_GET_MERKLE_COMPACT);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("syscall");
     // Parse header and decode typed compact proof
@@ -294,7 +291,12 @@ pub const MODE_ZK: u8 = ivm::ivm_mode::ZK;
 pub fn assemble_with_mode(code: &[u8], mode: u8) -> Vec<u8> {
     let meta = ProgramMetadata {
         mode,
-        max_cycles: 0,
+        // A ZK header must carry a trace bound; ordinary programs carry none.
+        max_cycles: if mode & MODE_ZK != 0 {
+            ivm::zk::MAX_CYCLES
+        } else {
+            0
+        },
         abi_version: 1,
         ..ProgramMetadata::default()
     };
@@ -341,11 +343,7 @@ where
 {
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let num = num.into();
-        let word = u8::try_from(num).map_or_else(
-            |_| encoding::wide::encode_scall(num),
-            |compact| encoding::wide::encode_scall(u32::from(compact)),
-        );
+        let word = encoding::wide::encode_scall(num.into());
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);
@@ -362,11 +360,7 @@ where
 {
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let num = num.into();
-        let word = u8::try_from(num).map_or_else(
-            |_| encoding::wide::encode_scall(num),
-            |compact| encoding::wide::encode_scall(u32::from(compact)),
-        );
+        let word = encoding::wide::encode_scall(num.into());
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);
@@ -374,8 +368,9 @@ where
 }
 pub fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
     let mut header = assemble_with_mode(code, MODE_ZK);
-    // overwrite max_cycles in header (bytes 8..16)
-    header[8..16].copy_from_slice(&max_cycles.to_le_bytes());
+    // Overwrite the ZK trace bound in the header.
+    header[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+        .copy_from_slice(&max_cycles.to_le_bytes());
     header
 }
 pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {

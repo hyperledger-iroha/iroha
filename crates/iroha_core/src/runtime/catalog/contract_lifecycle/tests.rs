@@ -160,7 +160,14 @@ fn contract_lifecycle_activates_exact_profile_after_kernel_storage_on_every_comp
         else {
             panic!("implementation");
         };
-        assert_eq!(implementation.host_profile, Some(composed.host));
+        assert_eq!(implementation.host_profile, None);
+        assert!(matches!(
+            &implementation.code,
+            ImplementationCodeV1::Native { .. }
+        ));
+        DefinitionDescriptorV1::Implementation(implementation.clone())
+            .validate()
+            .expect("native kernel handler is independently well formed");
         for declared in [
             &implementation.reads,
             &implementation.writes,

@@ -104,12 +104,16 @@ const PREVIOUS_COMMITTEE: &str = "world.validator_committee.revert";
 fn observe_committee<W: WorldReadOnly>(
     progress: &mut Option<validator_committee::CommittedProgress<'_, W>>,
     field: &'static str,
-    certified: &crate::sumeragi::certified_chain::CertifiedBlock,
+    certified: &native_execution_tip::RestoredCertifiedBlock<'_>,
 ) -> Result<(), native_execution_tip::TipRestoreError> {
     match progress {
-        Some(progress) if certified.height() <= progress.height() => progress
-            .observe(certified)
-            .map_err(|error| committee_refusal(field, error)),
+        Some(progress) if certified.height() <= progress.height() => match certified {
+            native_execution_tip::RestoredCertifiedBlock::Native(block) => progress.observe(block),
+            native_execution_tip::RestoredCertifiedBlock::Portable(block) => {
+                progress.observe_portable(block)
+            }
+        }
+        .map_err(|error| committee_refusal(field, error)),
         _ => Ok(()),
     }
 }
@@ -1744,8 +1748,8 @@ impl KuraSeed {
                 &block_hashes,
                 &self.kura,
                 &mut |certified| {
-                    observe_committee(&mut current_progress, CURRENT_COMMITTEE, certified)?;
-                    observe_committee(&mut previous_progress, PREVIOUS_COMMITTEE, certified)
+                    observe_committee(&mut current_progress, CURRENT_COMMITTEE, &certified)?;
+                    observe_committee(&mut previous_progress, PREVIOUS_COMMITTEE, &certified)
                 },
             )
             .map_err(StateRestoreError::from)?;

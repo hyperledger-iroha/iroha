@@ -261,6 +261,69 @@ pub fn private_dataspace_record_proof(
     Ok(Some(proof))
 }
 
+/// Join exact application evidence to its original certified ordinary write.
+/// A current transfer row only locates the carrier; equality with the archived original is required.
+pub(crate) fn native_ordinary_write_proof(
+    view: &impl StateReadOnly,
+    height: u64,
+    key: Vec<u8>,
+    expected: &[u8],
+) -> Result<
+    Option<(
+        iroha_data_model::sumeragi_amx::AmxCertifiedBlockV1,
+        iroha_data_model::sumeragi_amx::AmxWriteProofV1,
+    )>,
+    String,
+> {
+    use iroha_data_model::sumeragi_amx::{AmxCertifiedBlockV1, AmxWriteProofV1};
+    let source = original_source(view, height)?;
+    let Some(written) = source
+        .witness
+        .get()
+        .writes
+        .iter()
+        .rev()
+        .find(|write| write.key == key)
+    else {
+        return Ok(None);
+    };
+    if written.value != expected {
+        return Err("native evidence differs from its original certified write".into());
+    }
+    let decoded = source
+        .finality
+        .decode_checked(source.scope)
+        .map_err(|error| error.to_string())?;
+    let carrier = norito::core::with_decode_limits_scope(
+        norito::canonical_decode_limits(source.finality.block_wire.len()),
+        || decode_framed_signed_block(&source.finality.block_wire),
+    )
+    .map_err(|error| error.to_string())?;
+    let certificate = carrier
+        .commit_certificate()
+        .ok_or("native carrier has no certificate")?;
+    let (path, value) = AmxWriteProofV1::from_writes(
+        source
+            .witness
+            .get()
+            .writes
+            .iter()
+            .map(|write| (write.key.as_slice(), write.value.as_slice())),
+        &key,
+    )
+    .map_err(|error| error.to_string())?;
+    if value != expected
+        || path.root(&key, &value).map_err(|error| error.to_string())?
+            != decoded.execution().ordinary_writes_root
+    {
+        return Err("native path differs from certified original writes".into());
+    }
+    Ok(Some((
+        AmxCertifiedBlockV1::from_certificate(certificate),
+        path,
+    )))
+}
+
 /// Authenticate one native game export against its original retained certified writes.
 /// Current World supplies discovery only; no current projection substitutes for the archive.
 ///

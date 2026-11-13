@@ -6,7 +6,7 @@ fn compact_proof_decodes_and_verifies() {
     use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
     use sha2::{Digest, Sha256};
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT]);
     vm.load_program(&prog).expect("load");
     // Write 8 bytes into the second 32-byte chunk.
     let addr = ivm::Memory::HEAP_START + 32;
@@ -65,7 +65,7 @@ fn compact_proof_dir_flip_fails() {
     use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleTree};
     use sha2::{Digest, Sha256};
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT]);
     vm.load_program(&prog).unwrap();
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).unwrap();
@@ -120,7 +120,7 @@ fn compact_proof_dir_flip_fails() {
 #[test]
 fn compact_depth_cap_uses_the_full_protocol_register() {
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT]);
     vm.load_program(&prog).expect("load program");
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).expect("store");

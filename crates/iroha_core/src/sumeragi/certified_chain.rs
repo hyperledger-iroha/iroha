@@ -124,10 +124,14 @@ pub(crate) use query_reader::{
     QueryCertifiedChain, native_finality_authority_bytes, native_finality_source_control_bytes,
 };
 mod current_cut;
+mod portable_resume;
 mod query_projection;
 pub(crate) use amx_initialization::AmxChainInitialization;
 pub use current_cut::{CurrentCertifiedCut, CurrentCutSourceLimits, read_current_certified_cut};
 pub(crate) use native_acquisition::NativeCarrierAcquisition;
+pub(crate) use portable_resume::portable_checkpoint_for_state;
+mod identity;
+pub(crate) use identity::committed_identity;
 pub(crate) use prefix_checkpoints::{FinalityPrefixCheckpoints, PrefixCheckpoint};
 use query_projection::{
     CertificateSource, CheckedFrameRef, ParentProjection, PrefixRef, ProjectedCertificateSource,
@@ -1557,9 +1561,17 @@ fn check_projected_result_scope(
     frame: &CheckedFrameRef<'_>,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
-    if root_scope != SumeragiRootScope::Global && frame.active_result {
+    check_result_scope_identity(frame.parent.height, frame.active_result, root_scope)
+}
+
+fn check_result_scope_identity(
+    height: u64,
+    active_result: bool,
+    root_scope: SumeragiRootScope,
+) -> Result<(), ChainReadError> {
+    if root_scope != SumeragiRootScope::Global && active_result {
         return Err(ChainReadError::Malformed {
-            height: frame.parent.height,
+            height,
             reason: CertifiedResultError::ActiveOutsideGlobal.to_string(),
         });
     }
@@ -1819,23 +1831,6 @@ impl PrefixVerifierContext {
         })
     }
 
-    /// Authenticate an offered original against this independently executed block.
-    /// All local-certificate and consensus-carried parent participation paths use
-    /// this same complete relation; availability remains independently verified
-    /// by the full certificate readers and the original Native execution tip.
-    fn verify_commit_qc_original(
-        &self,
-        committed: &CommittedBlock,
-        authority: AuthorityRef<'_>,
-        commit_qc: &Qc,
-    ) -> Result<(), ChainReadError> {
-        self.verify_commit_qc_source(
-            &CheckedFrameRef::from_original(committed),
-            authority,
-            commit_qc,
-        )
-    }
-
     fn verify_commit_qc_source(
         &self,
         frame: &CheckedFrameRef<'_>,
@@ -1848,17 +1843,38 @@ impl PrefixVerifierContext {
             height,
             reason: "genesis alone has no parent service CommitQC".into(),
         })?;
+        self.verify_commit_qc_identity(
+            height,
+            header,
+            frame.parent.core_hash,
+            frame.parent.result,
+            authority,
+            commit_qc,
+        )
+    }
+
+    // Shared original QC predicate. Callers first authenticate their sealed source and scope;
+    // this lends no body/result projection constructor and never supplies its own authority.
+    fn verify_commit_qc_identity(
+        &self,
+        height: u64,
+        header: &BlockHeader,
+        core_hash: Hash32,
+        result: Hash32,
+        authority: AuthorityRef<'_>,
+        commit_qc: &Qc,
+    ) -> Result<(), ChainReadError> {
         if header.epoch != authority.epoch
             || commit_qc.epoch != authority.epoch
             || height < authority.material.authorization.first_height
             || height > authority.material.authorization.last_height
             || commit_qc.kind != VoteKind::Commit
             || commit_qc.height != height
-            || commit_qc.block_hash != frame.parent.core_hash
+            || commit_qc.block_hash != core_hash
         {
             return Err(ChainReadError::HeaderMismatch { height });
         }
-        if commit_qc.result != frame.parent.result {
+        if commit_qc.result != result {
             return Err(ChainReadError::ResultMismatch { height });
         }
         if header.instance != self.instance || commit_qc.instance != self.instance {
@@ -2013,9 +2029,22 @@ fn verify_projected_boundary_source(
     parent: &ParentProjection,
     authority: AuthorityRef<'_>,
 ) -> Result<(), ChainReadError> {
-    let height = certified.parent.height;
+    verify_boundary_context(
+        certified.parent.height,
+        certified.schedule,
+        parent,
+        authority,
+    )
+}
+
+fn verify_boundary_context(
+    height: u64,
+    schedule: &schedule::ScheduleOutcome,
+    parent: &ParentProjection,
+    authority: AuthorityRef<'_>,
+) -> Result<(), ChainReadError> {
     let malformed = |reason: String| ChainReadError::Committee { height, reason };
-    if let Some(boundary) = &certified.schedule.boundary {
+    if let Some(boundary) = &schedule.boundary {
         if boundary.selection_anchor != parent.iroha_hash {
             return Err(malformed(
                 "boundary selection anchor differs from certified parent".into(),
@@ -3399,7 +3428,10 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         {
             *cursor = Some(match self.shared_prefix_below(height) {
                 Some(shared) => shared,
-                None => self.genesis_prefix()?,
+                None => match self.portable_native_prefix(height)? {
+                    Some(portable) => portable,
+                    None => self.genesis_prefix()?,
+                },
             });
         }
         Ok(())
@@ -3425,6 +3457,10 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let ChainSource::State(view) = &self.source else {
             return None;
         };
+        let portable_floor = view
+            .kura()
+            .checkpoint_prefix_height()
+            .unwrap_or(GENESIS_HEIGHT);
         let shared = SHARED_PREFIXES
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -3433,7 +3469,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .filter(|cursor| {
                 cursor.instance == self.instance
                     && cursor.root_scope == self.root_scope
-                    && cursor.tip_height() > GENESIS_HEIGHT
+                    && cursor.tip_height() > portable_floor
                     && cursor.tip_height() < height
                     && usize::try_from(cursor.tip_height())
                         .ok()
@@ -3561,6 +3597,15 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             )?;
             progress()?;
             return Ok(verified);
+        }
+        // A portable checkpoint first joins its genuine full H+1 carrier. Re-reading that
+        // exact decision still checks the offered original certificate and availability.
+        if prefix.tip.height == height {
+            let certificate = self
+                .verification_context()
+                .prepare_retained_native_certificate(prefix, &committed)?;
+            progress()?;
+            return Ok(certificate.into_certified(committed));
         }
         progress()?;
         let verified = self

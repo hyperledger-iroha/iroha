@@ -3261,3 +3261,60 @@ fn sumeragi_evidence_model_hex_fields_match_json_codec() {
         assert!(norito::json::from_value::<LaneEvidenceScope>(scope).is_err());
     }
 }
+
+#[test]
+fn runtime_checkpoint_routes_publish_exact_bounded_operator_contracts() {
+    use iroha_torii_shared::route_catalog::{
+        AuthenticationPolicy, RouteEffect, runtime_governance as routes,
+    };
+    let authored = canonical_document();
+    for (route, method, success) in [
+        (routes::RUNTIME_CHECKPOINT_PACKAGE, "get", "200"),
+        (routes::RUNTIME_CHECKPOINT_ARTIFACT, "post", "200"),
+        (routes::RUNTIME_CHECKPOINT_RANGE, "post", "200"),
+        (routes::RUNTIME_CHECKPOINT_FINISH, "post", "204"),
+    ] {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert!(route.requires_private_no_store());
+        for document in [&authored, compiled_spec()] {
+            let operation = &document["paths"][route.path()][method];
+            assert!(operation.is_object());
+            assert_eq!(operation[ROUTE_AUTH_EXTENSION], route_auth_metadata(route));
+            assert_eq!(
+                operation["responses"][success]["headers"]["Cache-Control"]["schema"]["const"]
+                    .as_str(),
+                Some("private, no-store")
+            );
+            if method == "post" {
+                assert!(
+                    operation["requestBody"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("1024")
+                );
+            }
+        }
+    }
+    let document = compiled_spec();
+    let request = &document["components"]["schemas"]["RuntimeCheckpointRangeRequestV1"];
+    assert_eq!(request["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(
+        request["properties"]["length"]["maximum"].as_u64(),
+        Some(4 * 1024 * 1024)
+    );
+    assert_eq!(
+        request["properties"]["inventory_sha256"]["minItems"].as_u64(),
+        Some(32)
+    );
+    let range = &document["paths"][routes::RUNTIME_CHECKPOINT_RANGE.path()]["post"]["responses"]["200"]
+        ["content"];
+    assert_eq!(range.as_object().unwrap().len(), 1);
+    assert_eq!(
+        range["application/octet-stream"]["schema"]["maxLength"].as_u64(),
+        Some(4 * 1024 * 1024)
+    );
+}

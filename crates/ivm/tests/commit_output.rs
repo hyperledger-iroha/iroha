@@ -1,7 +1,7 @@
 //! OUTPUT region and COMMIT_OUTPUT syscall coverage.
 use crate::common;
 use common::assemble;
-use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
+use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, syscalls};
 use std::{
     any::Any,
     sync::{Arc, Mutex},

@@ -27145,7 +27145,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     };
     let state = authenticate_trigger_fixture(blank_state());
     let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
-    let_row! { mut program = ivm::ProgramMetadata { max_cycles: 100, ..ivm::ProgramMetadata::default() } .encode() };
+    let_row! { mut program = ivm::ProgramMetadata::default() .encode() };
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let generic_code_hash = ivm::contract_code_hash(&program);
     let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };

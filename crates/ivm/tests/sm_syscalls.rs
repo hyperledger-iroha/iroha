@@ -2,7 +2,7 @@
 use hex::decode;
 use iroha_crypto::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest};
 use ivm::{
-    CoreHost, Memory, PointerType, VMError, encoding, instruction,
+    CoreHost, Memory, PointerType, VMError, encoding,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 const TEST_CALLER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";

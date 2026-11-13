@@ -363,8 +363,7 @@ fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
         "seiyaku MixedRuntime { view fn run(int left, decimal right) authorize(anyone) -> decimal { return decimal::from_int(left) + right; } }",
     );
     let metadata = ProgramMetadata::parse(&runtime).expect("parse explicit-conversion artifact");
-    let conversion =
-        encoding::wide::encode_scall(syscalls::SYSCALL_DECIMAL_FROM_INT).to_le_bytes();
+    let conversion = encoding::wide::encode_scall(syscalls::SYSCALL_DECIMAL_FROM_INT).to_le_bytes();
     assert!(
         runtime[metadata.code_offset..]
             .windows(conversion.len())
@@ -1306,7 +1305,7 @@ fn borrowed_numeric_operands_keep_values_faults_and_real_typed_call_tables() {
             .iter()
             .filter(|step| {
                 step.instruction.is_some_and(|word| {
-                    ivm::instruction::wide::opcode(word) == ivm::instruction::wide::system::SYSTEM
+                    ivm::instruction::wide::opcode(word) == ivm::instruction::wide::system::SCALL
                         && [
                             syscalls::SYSCALL_INT_ADD,
                             syscalls::SYSCALL_INT_SUB,

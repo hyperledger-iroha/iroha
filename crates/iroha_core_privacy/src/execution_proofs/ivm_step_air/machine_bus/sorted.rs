@@ -2,7 +2,10 @@
 
 use super::*;
 
-pub(super) const CONSTRAINTS: usize = 667;
+pub(super) const CONSTRAINTS: usize = 670;
+/// Register cells are indexed by the five-bit architectural register number.
+const REGISTER_INDEX_BITS: usize = 5;
+const _: () = assert!(1 << REGISTER_INDEX_BITS == ivm::parallel::REGISTER_COUNT);
 
 fn source_word(sources: Sources<'_>, operand: usize) -> F {
     word::pack(sources.bits(operand), 1)
@@ -113,7 +116,8 @@ fn append_packet_shape(
         out.push(initialized.add(owner).mul(b[offset]));
     }
     out.push(kinds[0].add(register).mul(b[GENERATION]));
-    for digit in &sources.bits(0)[8..32] {
+    // Only the 32 architectural registers exist; higher index bits are zero.
+    for digit in &sources.bits(0)[REGISTER_INDEX_BITS..32] {
         out.push(phase[2].mul(register).mul(*digit));
     }
 }

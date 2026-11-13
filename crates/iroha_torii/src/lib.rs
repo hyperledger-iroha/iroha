@@ -1244,6 +1244,7 @@ mod router;
 pub(crate) mod routing;
 mod runtime;
 mod runtime_boundaries;
+mod runtime_checkpoint;
 #[cfg(feature = "app_api")]
 mod sns;
 #[cfg(feature = "app_api")]
@@ -2585,6 +2586,7 @@ struct AppState {
     runtime_attestation_signer: Option<KeyPair>,
     /// The checkpoints this node holds, which a startup-floor statement needs.
     runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
+    runtime_checkpoint_package: runtime_checkpoint::SharedPackage,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -35944,6 +35946,7 @@ pub struct Torii {
     vpn_operator_signer: Option<KeyPair>,
     runtime_attestation_signer: Option<KeyPair>,
     runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
+    runtime_checkpoint_package: runtime_checkpoint::SharedPackage,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -36160,6 +36163,7 @@ pub struct ToriiRuntimeDeps {
     vpn_operator_signer: Option<KeyPair>,
     runtime_attestation_signer: Option<KeyPair>,
     runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
+    runtime_checkpoint_package: runtime_checkpoint::SharedPackage,
 }
 impl ToriiRuntimeDeps {
     /// Construct dependencies from the owning executable identity and telemetry.
@@ -36257,6 +36261,7 @@ impl ToriiRuntimeDeps {
             vpn_operator_signer: None,
             runtime_attestation_signer: None,
             runtime_checkpoints: None,
+            runtime_checkpoint_package: None,
         }
     }
 
@@ -36765,6 +36770,18 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_runtime_attestation_signer(mut self, signer: KeyPair) -> Self {
         self.runtime_attestation_signer = Some(signer);
+        self
+    }
+    /// Attach one immutable pre-exported checkpoint package, independently pinned at startup.
+    /// HTTP callers can read only its fixed inventory; ordinary restore still authenticates State.
+    #[must_use]
+    pub fn with_runtime_checkpoint_package(
+        mut self,
+        package: Arc<
+            parking_lot::Mutex<iroha_core::snapshot::transfer::transport::ExportedCheckpoint>,
+        >,
+    ) -> Self {
+        self.runtime_checkpoint_package = Some(package);
         self
     }
     /// Attach the node's snapshot store, from which it states which checkpoints it holds before
@@ -38129,6 +38146,8 @@ impl Torii {
             PRIVATE_DATASPACE_RECORD_PROOF => public_get(private_dataspaces::record_proof);
             GAME_PARTITION_STATE => public_get(game_partitions::snapshot);
             GAME_PARTITION_EXPORT_PROOF => public_get(game_partitions::export_proof);
+            GAME_PARTITION_TRANSFER_STATE => public_get(game_partitions::transfer_snapshot);
+            GAME_PARTITION_TRANSFER_PROOF => public_get(game_partitions::transfer_proof);
             ACCOUNT_SIGNING_KEY => public_get(account_signing_keys::read);
             SNS_DATASPACE_LEASE => public_get(sns_lease::handler);
             PRIVATE_ROOT_REGISTRATION => private_root_owner_get(private_root_export::registration);
@@ -39495,6 +39514,10 @@ impl Torii {
             RUNTIME_CONTAINMENTS => operator_get(handler_runtime_containments_list, app_state);
             RUNTIME_MIGRATION_DRAFT => operator_post(handler_runtime_draft_migration, app_state);
             RUNTIME_BOUNDARIES => operator_get(handler_runtime_boundaries, app_state);
+            RUNTIME_CHECKPOINT_PACKAGE => operator_get(runtime_checkpoint::descriptor, app_state);
+            RUNTIME_CHECKPOINT_ARTIFACT => limited_operator_post(runtime_checkpoint::artifact, app_state, runtime_checkpoint::REQUEST_BYTES);
+            RUNTIME_CHECKPOINT_RANGE => limited_operator_post(runtime_checkpoint::range, app_state, runtime_checkpoint::REQUEST_BYTES);
+            RUNTIME_CHECKPOINT_FINISH => limited_operator_post(runtime_checkpoint::finish, app_state, runtime_checkpoint::REQUEST_BYTES);
             RUNTIME_BOUNDARY_ANCHOR_ATTEST => operator_post(handler_runtime_attest_anchor, app_state);
             RUNTIME_BOUNDARY_FLOOR_ATTEST => operator_post(handler_runtime_attest_floor, app_state);
         );
@@ -39953,6 +39976,7 @@ impl Torii {
         let vpn_operator_signer = runtime_deps.vpn_operator_signer;
         let runtime_attestation_signer = runtime_deps.runtime_attestation_signer;
         let runtime_checkpoints = runtime_deps.runtime_checkpoints;
+        let runtime_checkpoint_package = runtime_deps.runtime_checkpoint_package;
         let app_query_limits = routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
@@ -41325,6 +41349,7 @@ ingress,
             vpn_operator_signer,
             runtime_attestation_signer,
             runtime_checkpoints,
+            runtime_checkpoint_package,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
             #[cfg(feature = "app_api")]
@@ -42264,6 +42289,7 @@ ingress,
             vpn_operator_signer: self.vpn_operator_signer.clone(),
             runtime_attestation_signer: self.runtime_attestation_signer.clone(),
             runtime_checkpoints: self.runtime_checkpoints.clone(),
+            runtime_checkpoint_package: self.runtime_checkpoint_package.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             #[cfg(feature = "app_api")]

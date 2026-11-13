@@ -11,8 +11,8 @@ fn expected_header_policy() -> String {
     table.push_str(&format!(
         "| mode (known bits) | 0x{zk:02x} (ZK=0x{zk:02x}) |\n"
     ));
+    table.push_str("| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
     table.push_str("| abi_version | 1 |\n");
-    table.push_str("| vector_length | 0..=64 (reserved; no instruction reads it) |\n");
     format!("{BEGIN}\n{table}{END}")
 }
 fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {

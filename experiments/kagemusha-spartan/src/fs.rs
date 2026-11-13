@@ -307,21 +307,23 @@ impl SpikeRng {
         let mut state = blake3::Hasher::new();
         state.update(b"kagemusha-zks-spike/rng");
         state.update(seed);
-        Self(state.finalize_xof())
+        let reader = state.finalize_xof();
+        state.zeroize();
+        Self(reader)
     }
 
     /// Uniform field element.
     pub fn scalar<F: Scalar>(&mut self) -> F {
-        let mut wide = [0_u8; 64];
-        self.0.fill(&mut wide);
+        let mut wide = Zeroizing::new([0_u8; 64]);
+        self.0.fill(wide.as_mut());
         F::from_uniform_bytes(&wide)
     }
 
     /// Uniform integer below `2^bits`, `bits <= 128`.
     pub fn below<F: Scalar>(&mut self, bits: u32) -> F {
-        let mut bytes = [0_u8; 16];
-        self.0.fill(&mut bytes);
-        let value = u128::from_le_bytes(bytes);
+        let mut bytes = Zeroizing::new([0_u8; 16]);
+        self.0.fill(bytes.as_mut());
+        let value = u128::from_le_bytes(*bytes);
         let value = if bits >= 128 {
             value
         } else {

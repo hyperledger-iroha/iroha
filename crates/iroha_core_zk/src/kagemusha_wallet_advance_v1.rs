@@ -284,6 +284,9 @@ pub enum KagemushaWalletProviderErrorV1 {
     /// Not enough storage before any publication.
     #[error("insufficient custody storage")]
     NoSpace,
+    /// Proving cannot fit the currently available app memory; no new head is selected.
+    #[error("insufficient native proving memory")]
+    NoMemory,
     /// The filesystem lacks create-new rename; there is no weaker fallback.
     #[error("custody filesystem lacks create-new rename")]
     NoReplaceUnsupported,

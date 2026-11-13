@@ -42,7 +42,7 @@ fn run_vrf_verify_batch(req: VrfVerifyBatchRequest) -> (u64, u64, u64) {
     }
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     (vm.register(10), vm.register(11), vm.register(12))
@@ -125,7 +125,7 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(11), 0, "status ok");
@@ -188,7 +188,7 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     assert_ne!(vm.register(11), 0, "status must be error");
@@ -267,7 +267,7 @@ fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
     vm.set_host(DefaultHost::new().with_network_id(host_network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(11), 8, "status must be ERR_NETWORK (8)");

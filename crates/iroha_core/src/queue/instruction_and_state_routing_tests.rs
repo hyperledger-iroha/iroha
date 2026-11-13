@@ -1,14 +1,7 @@
 // Instruction fixtures and committed-state routing regression tests.
 use ivm::ProgramMetadata;
 fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {
-    let mut program = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles: 1,
-        abi_version: 1,
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     ProgramMetadata::parse(&program).expect("parse minimal program");
     let code_hash = ivm::contract_code_hash(&program);
@@ -111,14 +104,10 @@ fn accepted_ivm_tx_by(
     account_id: AccountId,
     key_pair: &KeyPair,
     time_source: &TimeSource,
-    max_cycles: u64,
+    gas_limit: u64,
 ) -> AcceptedTransaction<'static> {
     let network_id = queue_test_network_id();
-    let program = minimal_ivm_program_with_max_cycles(1, max_cycles);
-    let gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(
-        std::num::NonZeroU64::new(max_cycles)
-            .expect("queue IVM fixture requires a positive cycle limit"),
-    );
+    let program = minimal_ivm_program(1);
     let tx = TransactionBuilder::new_with_time_source(
         network_id,
         account_id,
@@ -154,13 +143,10 @@ fn accepted_ivm_tx_by(
     .expect("Failed to accept IVM transaction.")
 }
 #[cfg(feature = "telemetry")]
-fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
+fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles,
         abi_version,
+        ..ProgramMetadata::default()
     }
     .encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());

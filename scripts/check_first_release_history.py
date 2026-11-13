@@ -163,10 +163,10 @@ ABI_HASH_FORMS = (
     "ivm_hex_rows",
     "ivm_base64",
 )
-# An IVM program starts with magic, version, mode, vector length, cycle bound and ABI version;
-# the ABI hash is the last field of that fixed header.
+# An IVM program starts with magic, version, mode, ZK trace bound and ABI version; the ABI
+# hash is the last field of that fixed 48-byte header.
 IVM_MAGIC = b"IVM\0"
-IVM_ABI_HASH_SPAN = (17, 49)
+IVM_ABI_HASH_SPAN = (16, 48)
 HEX_WRAPPING = re.compile(rb'[\s"]+')
 IVM_MAGIC_HEX = IVM_MAGIC.hex()
 HEX_TEXT = re.compile(r"(?:[0-9a-f]{2})+\Z")

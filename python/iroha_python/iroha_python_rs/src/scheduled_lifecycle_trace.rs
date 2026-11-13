@@ -202,6 +202,10 @@ fn remove(
     state_matches(before, selected, registered, retry, repeats, progress)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The lifecycle check compares each independently observed occurrence field."
+)]
 pub(super) fn check_occurrence(
     output: &ExecutionOutputV1,
     selected: &Trigger,

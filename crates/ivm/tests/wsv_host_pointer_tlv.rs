@@ -85,7 +85,7 @@ fn balance_syscall_with_tlv_pointers() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START); // account ptr
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8); // asset ptr
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE]);
     vm.load_program(&prog).unwrap();
     // Bob lacks permission -> PermissionDenied
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
@@ -159,7 +159,7 @@ fn transfer_syscall_with_tlv_pointers() {
     // Every definition modeled by the fixture host has Global policy, so the
     // transfer names the global bucket with a null scope.
     vm.set_register(14, 0);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     let mut wsv2 = MockWorldStateView::with_balances(&[
@@ -209,7 +209,7 @@ fn mint_syscall_with_tlv_pointers() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
@@ -334,7 +334,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
         .preload_input(0, &batch_tlv)
         .expect("preload batch tlv");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY]);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer batch apply should succeed");
     let host = vm

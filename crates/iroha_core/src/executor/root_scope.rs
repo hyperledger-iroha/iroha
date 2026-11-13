@@ -211,7 +211,11 @@ pub fn ensure_instruction_scope(
 ) -> Result<(), ValidationFail> {
     let scope = execution_root_scope(state)?;
     let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope else {
-        return Ok(());
+        // Global roots refuse only work scoped to a dataspace retired from parent execution.
+        return crate::state::dataspace_retirement::ensure_instruction_outside_retired_dataspaces(
+            instruction,
+            state,
+        );
     };
     if state.current_dataspace_id != Some(dataspace_id)
         || state.world.current_dataspace_id != Some(dataspace_id)

@@ -391,8 +391,29 @@ impl<'w, W: WorldReadOnly> CommittedProgress<'w, W> {
         &mut self,
         certified: &crate::sumeragi::certified_chain::CertifiedBlock,
     ) -> Result<(), Attempt<String>> {
+        self.observe_commitment(&certified.block().header(), certified.commitment())
+    }
+
+    /// Check the same historical progress from a body-independent, genesis-rooted
+    /// successor proof. Only the sealed verifier output can enter this path.
+    pub(crate) fn observe_portable(
+        &mut self,
+        certified: &iroha_data_model::sumeragi_finality::PortableCertifiedBlockV1,
+    ) -> Result<(), Attempt<String>> {
+        self.observe_commitment(
+            certified.header(),
+            certified.certified_result().commitment(),
+        )
+    }
+
+    fn observe_commitment(
+        &mut self,
+        header: &iroha_data_model::block::BlockHeader,
+        commitment: &iroha_data_model::sumeragi_finality::ExecutionResultCommitment,
+    ) -> Result<(), Attempt<String>> {
+        let block_height = header.height().get();
         use iroha_data_model::parameter::system::ConsensusMode;
-        if certified.height() != self.next || self.next > self.height {
+        if block_height != self.next || self.next > self.height {
             return Err("committee progress observed a block outside its exact cut".into());
         }
         self.next = self
@@ -400,10 +421,10 @@ impl<'w, W: WorldReadOnly> CommittedProgress<'w, W> {
             .checked_add(1)
             .ok_or("committed height overflows")?;
         let (world, network, height) = (self.world, self.network, self.height);
-        if let Some(pulse) = &certified.commitment().beacon {
+        if let Some(pulse) = &commitment.beacon {
             let slot = (
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&network),
-                certified.height(),
+                block_height,
             );
             if world.global_beacon_pulses().get(&pulse.pulse_id) != Some(pulse)
                 || world.global_beacon_pulse_slots().get(&slot) != Some(&pulse.pulse_id)
@@ -421,7 +442,7 @@ impl<'w, W: WorldReadOnly> CommittedProgress<'w, W> {
                     .map_err(|error| error.to_string())?,
             );
         }
-        let schedule = &certified.commitment().schedule;
+        let schedule = &commitment.schedule;
         let current = &schedule.current;
         self.graph = Some(
             self.graph
@@ -449,9 +470,8 @@ impl<'w, W: WorldReadOnly> CommittedProgress<'w, W> {
                 .get(&preparation.target_epoch)
                 .ok_or("committee snapshot omits an incumbent-certified preparation")?;
             if &transition.preparation != preparation
-                || preparation.selection_height != certified.height()
-                || certified.block().header().prev_block_hash()
-                    != Some(preparation.selection_anchor)
+                || preparation.selection_height != block_height
+                || header.prev_block_hash() != Some(preparation.selection_anchor)
                 || !self.observed.insert(preparation.target_epoch)
             {
                 return Err(
@@ -621,14 +641,31 @@ pub fn current_authority(
     state: &impl StateReadOnly,
 ) -> Result<(ValidatorGenerationV1, ValidatorEpochAuthorizationV1), Attempt<String>> {
     let height = u64::try_from(state.height()).map_err(|_| "committed height overflows")?;
-    let block =
-        crate::sumeragi::certified_chain::committed_block(state, height).map_err(|error| {
-            if cfg!(all(test, sumeragi_core_mutation = "HC48")) {
-                return Attempt::Rejected(error.to_string());
-            }
-            error.map_rejection(|error| error.to_string())
-        })?;
-    let outcome = &block.commitment().schedule;
+    enum Incumbent {
+        Native(crate::sumeragi::certified_chain::CommittedBlock),
+        Portable(iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1),
+    }
+    let source = if state.kura().checkpoint_prefix_height() == Some(height) {
+        let sealed = crate::sumeragi::certified_chain::portable_checkpoint_for_state(state)
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
+            .ok_or("installed portable checkpoint disappeared")?;
+        Incumbent::Portable(sealed)
+    } else {
+        let block =
+            crate::sumeragi::certified_chain::committed_block(state, height).map_err(|error| {
+                if cfg!(all(test, sumeragi_core_mutation = "HC48")) {
+                    return Attempt::Rejected(error.to_string());
+                }
+                error.map_rejection(|error| error.to_string())
+            })?;
+        Incumbent::Native(block)
+    };
+    let outcome = match &source {
+        Incumbent::Native(block) => &block.commitment().schedule,
+        Incumbent::Portable(sealed) => {
+            &sealed.checkpoint().certified_result().commitment().schedule
+        }
+    };
     outcome.validate().map_err(|error| error.to_string())?;
     let context = outcome
         .boundary

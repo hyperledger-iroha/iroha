@@ -1,7 +1,7 @@
 //! Neither a configuration file nor a process environment variable can set an
 //! execution limit of the pipeline.
 //!
-//! The IVM cycle ceiling and the other execution limits (overlay size, decoded
+//! The IVM ZK trace-bound ceiling and the other execution limits (overlay size, decoded
 //! program bounds, the quarantine lane, query limits, the AMX budget model and
 //! the access-set derivation mode) are committed chain policy
 //! (`pipeline_validity_policy_v1`). The node schema holds local resources and
@@ -22,7 +22,7 @@ const CHAIN_POLICY_KEYS: [(&str, &str); 16] = [
     ("ivm_max_decoded_instructions", "7"),
     ("ivm_max_decoded_bytes", "7"),
     ("quarantine_max_txs_per_block", "7"),
-    ("quarantine_tx_max_cycles", "7"),
+    ("quarantine_tx_max_gas", "7"),
     ("query_max_fetch_size", "7"),
     ("query_stored_min_gas_units", "7"),
     ("amx_per_dataspace_budget_ms", "7"),
@@ -76,8 +76,8 @@ fn assert_protocol_defaults(config: &ActualConfig) {
         defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK
     );
     assert_eq!(
-        pipeline.quarantine_tx_max_cycles,
-        defaults::pipeline::QUARANTINE_TX_MAX_CYCLES
+        pipeline.quarantine_tx_max_gas,
+        defaults::pipeline::QUARANTINE_TX_MAX_GAS
     );
     assert_eq!(
         pipeline.query_max_fetch_size,

@@ -1195,13 +1195,7 @@ pub(crate) fn parliament_due(
 ) -> Result<bool, PassError> {
     let attempts = world.parliament_anonymous_attempts();
     let boards = world.parliament_anonymous_boards();
-    let clock_due = boards.iter().any(|(_, board)| {
-        board.casting_clock.is_none()
-            && board
-                .opening
-                .is_some_and(|opening| opening.height.checked_add(1) == Some(height))
-    });
-    if clock_due
+    if clock_due(boards, height)
         || !draw_items(attempts, height, &pulse_available).is_empty()
         || height_progress_ticket(
             attempts,
@@ -1218,6 +1212,74 @@ pub(crate) fn parliament_due(
     }
     Ok(!opening_items(attempts, boards, timestamp_ms)?.is_empty()
         && open_casting_windows(boards) < casting_window_limit(world)?)
+}
+
+/// Whether a casting window opened in the parent of the block at `height` awaits its clock.
+fn clock_due(
+    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    height: u64,
+) -> bool {
+    boards.iter().any(|(_, board)| {
+        board.casting_clock.is_none()
+            && board
+                .opening
+                .is_some_and(|opening| opening.height.checked_add(1) == Some(height))
+    })
+}
+
+/// The least block time at which [`parliament_due`] holds for the block at `height` after
+/// the parent time `parent_time_ms`, or `None` while only a committed pulse or a transaction
+/// can make Parliament work due: Parliament's next-governance-progress time (design §9),
+/// which the keeper staggers by rank (`specs/sccp.md` §4.7.4).
+///
+/// Work due at any time, a casting clock or a draw whose pulse is available, answers
+/// `Some(0)`. Every other term is a deadline the predicate meets from then on: the
+/// height-progress ticket at the parent time plus the committed block cadence, the earliest
+/// live lifecycle item, the earliest closing time, and while fewer than `K` casting windows
+/// are open the earliest opening time. The predicate therefore holds at the answer and at
+/// every later time, and at no earlier time, for the same committed parent.
+///
+/// # Errors
+/// As [`parliament_due`].
+pub(crate) fn parliament_next_due_ms(
+    world: &(impl WorldReadOnly + ?Sized),
+    height: u64,
+    parent_time_ms: Option<u64>,
+    pulse_available: impl Fn(u64) -> bool,
+) -> Result<Option<u64>, PassError> {
+    let attempts = world.parliament_anonymous_attempts();
+    let boards = world.parliament_anonymous_boards();
+    if clock_due(boards, height) || !draw_items(attempts, height, &pulse_available).is_empty() {
+        return Ok(Some(0));
+    }
+    let cadence_ms = world.parameters().sumeragi().block_cadence_ms.get();
+    // SPEC: §13.4 HC810 — the keeper's deadline includes the height-progress ticket.
+    let mut next = height_progress_ticket(attempts, height, u64::MAX, parent_time_ms, cadence_ms)
+        .and(parent_time_ms)
+        .and_then(|parent_ms| parent_ms.checked_add(cadence_ms))
+        .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC810")));
+    let mut consider = |due_ms: u64| {
+        next = Some(next.map_or(due_ms, |next| next.min(due_ms)));
+    };
+    for (_, attempt) in attempts.iter() {
+        if let Some(item) = attempt.lifecycle_items()?.first() {
+            consider(item.due_ms);
+        }
+    }
+    for item in closure_items(boards, u64::MAX) {
+        if let GovernancePassItemV1::Close { due_ms, .. } = item {
+            consider(due_ms);
+        }
+    }
+    let openings = opening_items(attempts, boards, u64::MAX)?;
+    if !openings.is_empty() && open_casting_windows(boards) < casting_window_limit(world)? {
+        for item in openings {
+            if let GovernancePassItemV1::Open { due_ms, .. } = item {
+                consider(due_ms);
+            }
+        }
+    }
+    Ok(next)
 }
 
 #[cfg(test)]

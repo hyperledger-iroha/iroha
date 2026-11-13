@@ -67,6 +67,8 @@ const SLOT: usize = LAST + 1;
 const TOTAL: usize = SLOT + 1;
 const FIXED_WIDTH: usize = TOTAL + 1;
 const CONSTRAINTS: usize = packet::WIDTH + sorted::CONSTRAINTS + permutation::CONSTRAINTS;
+// Each history row streams as exactly one bounded residue batch.
+const _: () = assert!(CONSTRAINTS == super::residues::CAPACITY);
 const CONTEXT: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::execution_v1(b"ivm-machine-packet-bus-v1");
 const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
@@ -87,7 +89,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-machine-bus-fri-beta-v1",
     query_seed: b"ivm-machine-bus-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-machine-packet-bus-v1:unregistered-public-component:one-trace:rows=8192..131072:8-stages:16384-packets:26-full-tuple-fields:4-one-hot-spaces:u32-index:u16-generation:u8-vm:60bit-key:u32-clock:128bit-cell:16-private-bits:register64-tagbit0:init16:owner64:zero-initial-state:strict-key-time:read-preservation:post-base-fp4-products:all-zero-factor-risk-accounted:degree4:no-initializer-request-frame-invocation-authority";
+const PROFILE: &[u8] = b"ivm-machine-packet-bus-v1:unregistered-public-component:one-trace:rows=8192..131072:8-stages:16384-packets:26-full-tuple-fields:4-one-hot-spaces:u32-index:u16-generation:u8-vm:60bit-key:u32-clock:128bit-cell:16-private-bits:register64-tagbit0:register-index<32:init16:owner64:zero-initial-state:strict-key-time:read-preservation:post-base-fp4-products:all-zero-factor-risk-accounted:degree4:no-initializer-request-frame-invocation-authority";
 
 /// Expected public component input; construction supplies no execution authority.
 #[derive(Clone)]

@@ -49,10 +49,12 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
             0
         }
     );
+    // Two-register forms join both source tags into the destination.
+    let joined = p[SCALAR_LEFT][BEFORE_TAG] == F::ONE || p[SCALAR_RIGHT][BEFORE_TAG] == F::ONE;
     assert_eq!(
         p[SCALAR_DESTINATION][AFTER_TAG],
         if has_destination(instruction) {
-            p[SCALAR_LEFT][BEFORE_TAG]
+            F(u64::from(joined))
         } else {
             F::ZERO
         }

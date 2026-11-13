@@ -73,7 +73,7 @@ pub(in crate::execution_proofs::ivm_step_air::machine_bus::native_invocation) fn
         },
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_rr(wide::control::JALR, 0, 1, 0),
+        enc::encode_ri(wide::control::JALR, 0, 1, 0),
     ] {
         bytes.extend(instruction.to_le_bytes());
     }

@@ -97,13 +97,14 @@ precedence, gas exhaustion, privacy checks, and proof traces in exact program or
 
 Each opcode has one fixed ABI-v1 gas price, and only the terminating HALT is free. Cryptographic
 and staged syscall work is charged before bounded parsing or expensive host work. Hardware
-selection and block scheduling are never consensus-metered. A host derives an invocation's gas
-limit from its cycle limit with the fixed conversion `gas::GAS_PER_CYCLE`, which is bound into the
-gas-schedule hash and does not depend on the opcode price table.
+selection and block scheduling are never consensus-metered. Gas is the only execution budget: the
+caller supplies it (transaction limit within the remaining block budget) and a nested invocation
+draws from its parent's remaining gas. No header field converts into gas.
 
-max_cycles bounds execution and determines ZK trace padding when enabled. Branches always charge
-their fixed instruction and cycle costs; execution history and predictor state cannot affect the
-result.
+The header `max_cycles` field is the ZK trace bound only: a ZK run traps `ExceededMaxCycles` when
+its cycles reach it and pads a successful trace to exactly that length (one gas per padded cycle).
+Ordinary execution has no cycle bound. Branches always charge their fixed instruction cost;
+execution history and predictor state cannot affect the result.
 
 ## Zero-knowledge mode
 

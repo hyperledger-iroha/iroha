@@ -50,6 +50,8 @@ pub(crate) mod checkpoint_store;
 pub mod checkpoints;
 mod errors;
 mod startup_recovery;
+/// Transfer retained checkpoint bytes with body-independent certified history.
+pub mod transfer;
 pub use startup_recovery::StartupRecovery;
 pub(crate) use startup_recovery::{StartupRecoveryPublisher, channel as startup_recovery_channel};
 
@@ -5339,6 +5341,47 @@ fn ensure_snapshot_commit_evidence(
             "snapshot height/hash differs from its original native execution".into(),
         ));
     }
+    if state.kura().checkpoint_prefix_height() == Some(checkpoint.height) {
+        let portable = state
+            .kura()
+            .walk_checkpoint_prefix(
+                &identity.chain_id,
+                identity.network_id,
+                &checkpoint.block_hashes,
+                &mut |_| Ok(()),
+            )
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
+                    failure(original.to_string())
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    TryWriteError::CommitEvidenceResourceDeferred {
+                        height: checkpoint.height,
+                        reason,
+                    }
+                }
+            })?
+            .ok_or_else(|| failure("original portable checkpoint disappeared".into()))?;
+        let original = portable.checkpoint();
+        if (
+            original.header().hash(),
+            original.core_hash(),
+            original.result(),
+            original.root_scope(),
+        ) != (
+            tip.iroha_hash(),
+            tip.core_hash(),
+            tip.result(),
+            tip.root_scope(),
+        ) {
+            return Err(failure(
+                "portable certificate differs from captured execution".into(),
+            ));
+        }
+        // A local snapshot signature remains byte custody; complete State authentication and
+        // actual H+1 replay are still mandatory before a joining node becomes ready.
+        return Ok(());
+    }
     let attempt_failure = |error: crate::execution_attempt::ExecutionAttemptError<
         crate::sumeragi::certified_chain::ChainReadError,
     >| match error {
@@ -5821,7 +5864,7 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, path: &Path) -> TryReadError
     }
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use iroha_model_base::topology::LaneId;
 
     /// Exhaustive conversion preserves the original read classification and encoding text.
@@ -5964,6 +6007,7 @@ mod tests {
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");
     include!("snapshot/read_buffer_custody_tests.rs");
+    include!("snapshot/transfer_tests.rs");
 }
 
 #[cfg(test)]

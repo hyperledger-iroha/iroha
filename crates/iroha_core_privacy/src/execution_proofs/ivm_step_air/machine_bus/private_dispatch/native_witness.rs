@@ -56,7 +56,7 @@ pub(in super::super) fn append_subset_residues(
         out.push(returning.mul(packets.fields[RETURN_PARENT][BEFORE + limb]));
     }
     // Ordinary interpreter tag rules are unchanged. This component admits only
-    // public operands; equal private tags accepted by broader scalar diagnostic
+    // public operands; private tags joined by the broader scalar diagnostic
     // equations cannot widen the native invocation's declared coverage.
     for port in [SCALAR_LEFT, SCALAR_RIGHT] {
         out.push(public_scalar.mul(packets.fields[port][BEFORE_TAG]));
@@ -129,7 +129,7 @@ pub(in super::super) fn fill(
     let cycles = word(CYCLE_WRITE, BEFORE);
     let base = if memory { word(MEMORY_BASE, BEFORE) } else { 0 };
     let immediate = if memory {
-        i64::cast_unsigned(i64::from(wide::imm8(instruction)))
+        i64::cast_unsigned(i64::from(wide::imm14(instruction)))
     } else {
         0
     };

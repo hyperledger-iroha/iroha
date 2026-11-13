@@ -68,11 +68,7 @@ fn syscall_words(output: &CompileOutput, number: u32) -> usize {
     let offset = ProgramMetadata::parse(&output.artifact)
         .unwrap()
         .code_offset;
-    let word = if let Ok(number) = u8::try_from(number) {
-        encoding::wide::encode_scall(u32::from(number))
-    } else {
-        encoding::wide::encode_scall(number)
-    };
+    let word = encoding::wide::encode_scall(number);
     output.artifact[offset..]
         .as_chunks::<4>()
         .0
@@ -390,7 +386,7 @@ fn shared_nominal_abort_cross_function_jump_keeps_complete_caller_and_target_ran
             }
             let offset = match instruction::wide::opcode(*word) {
                 instruction::wide::control::JAL if instruction::wide::rd(*word) == 0 => {
-                    i64::from(instruction::wide::imm16(*word))
+                    i64::from(instruction::wide::jal_offset(*word))
                 }
                 instruction::wide::control::JMP => i64::from(instruction::wide::imm24(*word)),
                 _ => return false,

@@ -20,7 +20,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
                 COUNT_OPS[index % COUNT_OPS.len()],
                 8 + u8::try_from(index % 3).expect("bounded fixture value"),
                 6,
-                255,
+                0,
             )
         })
         .collect::<Vec<_>>();
@@ -31,7 +31,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let (segment, records) = recorded(
         &body,
         MAX_STEPS,
-        &[(6, 0x0001_2345_6789_ab00), (255, u64::MAX)],
+        &[(6, 0x0001_2345_6789_ab00), (31, u64::MAX)],
         100_000,
     );
     assert_eq!(segment.steps, MAX_STEPS);
@@ -56,9 +56,9 @@ fn bit_count_ops_match_interpreter_all_singleton_bits_and_full_width_boundaries(
     for value in values {
         for opcode in COUNT_OPS {
             let (segment, records) = recorded(
-                &[enc::encode_rr(opcode, 8, 6, 255)],
+                &[enc::encode_rr(opcode, 8, 6, 0)],
                 1,
-                &[(6, value), (8, 91), (255, !value)],
+                &[(6, value), (8, 91), (31, !value)],
                 1_000,
             );
             assert_eq!(segment.after.registers[8], expected(opcode, value));
@@ -74,22 +74,21 @@ fn bit_count_ops_match_interpreter_all_singleton_bits_and_full_width_boundaries(
 }
 
 #[test]
-fn bit_count_ops_match_interpreter_aliases_r0_and_ignore_encoded_rs2() {
+fn bit_count_ops_match_interpreter_aliases_and_r0_and_reject_encoded_rs2() {
     for opcode in COUNT_OPS {
+        // Unary words reserve bits 13..0; a nonzero rs2 field is never admitted.
+        for unused in [6, 31] {
+            assert!(
+                try_contract_with_cycle_policy(&[enc::encode_rr(opcode, 8, 6, unused)], 0, 0)
+                    .is_err()
+            );
+        }
         for value in [0, u64::MAX, 1 << 63, 1 << 32, 1] {
-            for (rd, source, unused) in [
-                (8, 6, 255),
-                (6, 6, 6),
-                (0, 6, 255),
-                (8, 0, 6),
-                (0, 0, 0),
-                (1, 6, 0),
-                (255, 6, 255),
-            ] {
+            for (rd, source) in [(8, 6), (6, 6), (0, 6), (8, 0), (0, 0), (1, 6), (31, 6)] {
                 let (segment, records) = recorded(
-                    &[enc::encode_rr(opcode, rd, source, unused)],
+                    &[enc::encode_rr(opcode, rd, source, 0)],
                     1,
-                    &[(6, value), (8, 91), (255, !value)],
+                    &[(6, value), (8, 91), (31, !value)],
                     1_000,
                 );
                 let mut wanted = segment.before.registers;
@@ -133,7 +132,7 @@ fn count_prefixes_share_boolean_source_bits_and_have_canonical_padding() {
         }
     }
     let (segment, records) = recorded(
-        &[enc::encode_rr(wide::arithmetic::POPCNT, 8, 6, 255)],
+        &[enc::encode_rr(wide::arithmetic::POPCNT, 8, 6, 0)],
         1,
         &[(6, u64::MAX)],
         1_000,
@@ -153,12 +152,8 @@ fn count_prefixes_share_boolean_source_bits_and_have_canonical_padding() {
 fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results() {
     for opcode in COUNT_OPS {
         let value = 0x100_u64;
-        let (segment, records) = recorded(
-            &[enc::encode_rr(opcode, 8, 6, 255)],
-            1,
-            &[(6, value)],
-            1_000,
-        );
+        let (segment, records) =
+            recorded(&[enc::encode_rr(opcode, 8, 6, 0)], 1, &[(6, value)], 1_000);
         for result in [expected(opcode, value) + 1, 65, 1 << 32] {
             let mut forged = records.clone();
             forged[0].after.registers[8] = result;
@@ -205,8 +200,7 @@ fn coherent_wrong_counts_prefixes_and_orientation_cannot_change_public_results()
 #[test]
 fn coherent_count_banks_cannot_substitute_a_different_source_word() {
     for opcode in COUNT_OPS {
-        let (segment, records) =
-            recorded(&[enc::encode_rr(opcode, 8, 6, 255)], 1, &[(6, 0)], 1_000);
+        let (segment, records) = recorded(&[enc::encode_rr(opcode, 8, 6, 0)], 1, &[(6, 0)], 1_000);
         let source = 0x8000_0000_0000_0001;
         let false_count = expected(opcode, source);
         assert_ne!(false_count, segment.after.registers[8]);
@@ -221,7 +215,7 @@ fn coherent_count_banks_cannot_substitute_a_different_source_word() {
         )
         .unwrap();
         let mut rows = changed.witness_rows(&forged).unwrap();
-        replace_auxiliary_sources(&mut rows[0], enc::encode_rr(opcode, 8, 6, 255), source, 0);
+        replace_auxiliary_sources(&mut rows[0], enc::encode_rr(opcode, 8, 6, 0), source, 0);
         rows[0][RESULT] = F(false_count);
         assert!(rejects(&changed, &rows));
     }
@@ -238,7 +232,7 @@ fn bit_count_modes_constrain_every_interior_column_and_nonselected_prefixes() {
         let word = if opcode == wide::arithmetic::ADDI {
             enc::encode_ri(opcode, 8, 6, 0)
         } else {
-            enc::encode_rr(opcode, 8, 6, 255)
+            enc::encode_rr(opcode, 8, 6, 0)
         };
         let (segment, records) = recorded(
             &[
@@ -247,7 +241,7 @@ fn bit_count_modes_constrain_every_interior_column_and_nonselected_prefixes() {
                 enc::encode_ri(wide::arithmetic::ADDI, 25, 25, 0),
             ],
             3,
-            &[(6, 0x100), (255, u64::MAX)],
+            &[(6, 0x100), (31, u64::MAX)],
             1_000,
         );
         let rows = segment.witness_rows(&records).unwrap();
@@ -272,8 +266,8 @@ fn bit_count_modes_constrain_every_interior_column_and_nonselected_prefixes() {
 fn count_family_maximum_words_and_steps_fit_unchanged_security_and_envelope() {
     let (segment, records) = maximum_segment();
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-    assert_eq!(segment.base_width_v1(), 1_356);
-    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+    assert_eq!(segment.base_width_v1(), 908);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_025);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     assert_eq!(protocol.parameters.query_count, 136);
@@ -291,8 +285,8 @@ fn count_family_maximum_words_and_steps_fit_unchanged_security_and_envelope() {
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_153_152);
-    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+    assert_eq!(bound, 3_149_632);
+    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xf9; 32],
@@ -310,7 +304,7 @@ fn native_stark_proves_maximum_count_segment_and_binds_result_and_orientation() 
     let (segment, records) = maximum_segment();
     let proof =
         prove_proof_managed_note_stark_v1(&segment, &segment.columns(&records).unwrap()).unwrap();
-    assert!(proof.len() <= 4_153_152);
+    assert!(proof.len() <= 3_149_632);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for register in [8, 9, 10] {
         let mut after = segment.after;
@@ -328,7 +322,7 @@ fn native_stark_proves_maximum_count_segment_and_binds_result_and_orientation() 
     let mut artifact = segment.contract.artifact().to_vec();
     let offset = segment.contract.code_offset() + 4;
     artifact[offset..offset + 4]
-        .copy_from_slice(&enc::encode_rr(wide::arithmetic::CTZ, 9, 6, 255).to_le_bytes());
+        .copy_from_slice(&enc::encode_rr(wide::arithmetic::CTZ, 9, 6, 0).to_le_bytes());
     let changed = ScalarSegment::new(
         ivm::prepare_contract(Arc::from(artifact)).unwrap(),
         segment.steps,

@@ -2046,6 +2046,21 @@ typedef struct {
     size_t asset_length;
 } connect_norito_kagemusha_wallet_open_request_v1;
 /* Kind15: fresh account challenge32; kind16: admitted wallet handle in sequence_low. */
+/** Experimental Spartan owner. Installation consumes the same authenticated runtime,
+ * never foreign root/genesis authority. 81 installed, 82 reviewed (291-byte projection),
+ * 83 verified Payment projection (514 bytes), 84 discarded volatile preparation.
+ * execute/output: 0 unknown, 1 exact retained output, 2 pending, 3 not performed,
+ * 4 archived, 5 delivery-data loss. Existing free/close ownership applies. */
+/** Account begin: status15 challenge32. Authorize: status85 parameter32 + native slot32. */
+int32_t connect_norito_kagemusha_spartan_begin_account_v1(uint64_t handle, const connect_norito_kagemusha_wallet_open_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_authorize_account_v1(uint64_t handle, const uint8_t* signature, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_install_v1(uint64_t handle, const uint8_t* bundle, size_t bundle_length, const uint8_t* manifest, size_t manifest_length, const uint8_t* signature, size_t signature_length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_prepare_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* witness, size_t witness_length, const uint8_t* head, size_t head_length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_execute_v1(uint64_t handle, uint64_t token, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_output_v1(uint64_t handle, const uint8_t* slot32, const uint8_t* operation32, uint32_t part, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_verify_payment_v1(uint64_t handle, const uint8_t* payment, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_spartan_discard_v1(uint64_t handle, uint64_t token, connect_norito_kagemusha_wallet_result_v1* out);
+
 int32_t connect_norito_kagemusha_wallet_open_begin_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_open_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_open_finish_v1(uint64_t runtime, const uint8_t* signature, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_open_cancel_v1(uint64_t runtime);

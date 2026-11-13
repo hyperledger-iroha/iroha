@@ -4,6 +4,23 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Routes that negotiate `application/x-norito` responses decode Torii's canonical binary error
+  envelope: SoraFS PoR status/export/weekly report, the SoraFS billing statement, transaction
+  submission, the validation-fee proof page, Exact12 capabilities, Kagemusha wallet originals and
+  the executed block wire (Node), the browser block wire and block proof, and `NoritoRpcClient`. A
+  `ToriiHttpError` now carries the envelope's `code` and exact `errorMessage` instead of none (or,
+  on Kagemusha reads, a strict UTF-8 `TypeError`); `NoritoRpcError` gains `code` and
+  `errorMessage`. Bodies that are not a canonical envelope keep their previous error.
+- The shared error-envelope decoders also accept envelopes whose `details` carry Torii's
+  admission, throttling and validation metadata (reject code, queue snapshot, retry delay, AXT and
+  fee details, textual diagnostics), byte-exact in Norito and JSON. Norito queue rejections and
+  HTTP 429/503 responses therefore expose their `errorMessage` and `details` (for example
+  `details.retry_after_seconds`), and `details.reject_code` fills `rejectCode` without the header.
+  The new `ToriiHttpError.envelopeCode` keeps the envelope's own code, which `code` reports only
+  when no reject code is present; `NoritoRpcError` gains `details`. Unsigned detail integers are
+  numbers, or bigints beyond `Number.MAX_SAFE_INTEGER`. Envelopes whose details carry a structured
+  observation (an IVM fault, an absence, a finality or AMX failure, an alias setup report) stay
+  opaque.
 - The Node client exposes typed public SCCP v1 capabilities, registry and recent-message
   reads; the browser client also supports capabilities. These omit credentials, validate current native JSON without reshaping it, retain lossless
   integers, and bound response bytes and message pages. Metadata does not authenticate certificates.

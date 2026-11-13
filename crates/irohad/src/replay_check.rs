@@ -32,8 +32,12 @@ mod suffix_inventory;
 pub use suffix_inventory::KagemushaSuffixRowInventoryV1;
 mod sorafs_authority_inspect;
 pub use sorafs_authority_inspect::run_sorafs_authority_inspection;
+mod ironwood_replay_export;
+pub use ironwood_replay_export::run_ironwood_replay_export;
 mod world_payout_export;
 pub use world_payout_export::run_world_payout_export;
+mod runtime_checkpoint_receive;
+pub(crate) use runtime_checkpoint_receive::run_runtime_checkpoint_receive;
 
 /// `start.source` of a replay that re-executed signed genesis first.
 pub const START_GENESIS: &str = "genesis";
@@ -261,6 +265,53 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
     check_replay_then(config, |_| Ok(()))
 }
 
+/// Export a retained checkpoint from the exact matched offline replay into a fresh store pair.
+///
+/// # Errors
+/// Replay, retained checkpoint validation, original prefix acquisition or private output fails.
+/// No validator key signs the package; joining nodes must authenticate its complete State.
+pub fn run_runtime_checkpoint_export(
+    config: &Config,
+    height: u64,
+    output: &Path,
+    config_path: Option<&Path>,
+) -> ReportResult<(), MainError> {
+    let output = sorafs_authority_inspect::output_destination(config, output, config_path)
+        .map_err(failure)?;
+    let mut exported = None;
+    let report = check_replay_with_owner(config, |_matched, state| {
+        let output = sorafs_authority_inspect::output_destination(config, &output, config_path)
+            .map_err(failure)?;
+        let verification_key = config
+            .snapshot
+            .verification_public_key
+            .as_ref()
+            .unwrap_or_else(|| config.common.key_pair.public_key());
+        exported = Some(
+            iroha_core::snapshot::transfer::export_checkpoint(
+                Arc::clone(state),
+                &config.snapshot,
+                &config.kura,
+                verification_key,
+                height,
+                &output,
+            )
+            .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?,
+        );
+        Ok(())
+    })?;
+    if !report.is_ok() {
+        return Err(failure(report.failure_summary()));
+    }
+    let manifest =
+        exported.ok_or_else(|| failure("checkpoint export requires nonempty matched replay"))?;
+    println!(
+        "{}",
+        norito::json::to_json(&manifest).map_err(|error| failure(error.to_string()))?
+    );
+    Ok(())
+}
+
 /// Keep the authenticated temporary State alive for a finite nonpublishing continuation.
 /// The ordinary replay report and restore/replay corridor are unchanged.
 fn check_replay_then(
@@ -282,6 +333,13 @@ struct MatchedReplay<'a> {
 fn check_replay_with_matched(
     config: &Config,
     on_matched: impl FnOnce(MatchedReplay<'_>) -> ReportResult<(), MainError>,
+) -> ReportResult<ReplayCheckReportV1, MainError> {
+    check_replay_with_owner(config, |matched, _state| on_matched(matched))
+}
+
+fn check_replay_with_owner(
+    config: &Config,
+    on_matched: impl FnOnce(MatchedReplay<'_>, &Arc<State>) -> ReportResult<(), MainError>,
 ) -> ReportResult<ReplayCheckReportV1, MainError> {
     let store_root = config.kura.store_dir.resolve_relative_path();
     match std::fs::symlink_metadata(&store_root) {
@@ -437,12 +495,15 @@ fn check_replay_with_matched(
     }
     if report.is_ok() && report.replayed_to == tip_height {
         report.kagemusha_suffix_rows = Some(suffix_inventory::capture(&state, tip_height)?);
-        on_matched(MatchedReplay {
-            state: &state,
-            report: &core_report,
-            tip_height,
-            genesis_hash: genesis.hash(),
-        })?;
+        on_matched(
+            MatchedReplay {
+                state: &state,
+                report: &core_report,
+                tip_height,
+                genesis_hash: genesis.hash(),
+            },
+            &state,
+        )?;
     }
     Ok(report)
 }
@@ -542,11 +603,14 @@ struct ActivationRehearsalReportV1 {
 ///
 /// # Errors
 /// Refuses incomplete historical replay, an invalid pool file, or a selection other than the exact
-/// repaired one, and fails when the change set does not activate.
+/// repaired one, and fails when the change set does not activate. An optional sponsor input must
+/// be bounded and must produce its exact native before/after results after nonempty matched replay.
 pub fn run_check_activation_rehearsal(
     config: &Config,
     pool_path: &std::path::Path,
+    sponsor_path: Option<&std::path::Path>,
 ) -> ReportResult<(), MainError> {
+    let sponsor = sponsor_path.map(read_sponsor_stage_input).transpose()?;
     const MAX_POOL_BYTES: u64 = 64 * 1024;
     let metadata = std::fs::metadata(pool_path)
         .map_err(|error| failure(format!("cannot read the pool file: {error}")))?;
@@ -559,10 +623,24 @@ pub fn run_check_activation_rehearsal(
         norito::json::from_slice(&bytes)
             .map_err(|error| failure(format!("invalid pool file: {error}")))?;
     let mut rehearsal = None;
-    let replay = check_replay_then(config, |state| {
-        rehearsal = Some(state.rehearse_taira_activation(pool).map_err(failure)?);
+    let replay = check_replay_with_matched(config, |matched| {
+        if sponsor.is_some() {
+            require_sponsor_stage_replay(&ReplayCheckReportV1::from_core(
+                matched.tip_height,
+                matched.report,
+            ))?;
+        }
+        rehearsal = Some(
+            matched
+                .state
+                .rehearse_taira_activation_with_sponsor_stage(pool, sponsor.as_deref())
+                .map_err(failure)?,
+        );
         Ok(())
     })?;
+    if sponsor.is_some() {
+        require_sponsor_stage_replay(&replay)?;
+    }
     let report = ActivationRehearsalReportV1 { replay, rehearsal };
     println!(
         "{}",
@@ -579,6 +657,115 @@ pub fn run_check_activation_rehearsal(
         Err(failure(
             "the activation rehearsal did not activate; inspect the report",
         ))
+    }
+}
+
+fn read_sponsor_stage_input(path: &Path) -> ReportResult<Vec<u8>, MainError> {
+    use std::io::Read as _;
+    const MAX_BYTES: u64 = 65_536;
+    let file = std::fs::File::open(path)
+        .map_err(|error| failure(format!("cannot open sponsor input: {error}")))?;
+    if !file
+        .metadata()
+        .map_err(|error| failure(error.to_string()))?
+        .is_file()
+    {
+        return Err(failure("sponsor input must name a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| failure(error.to_string()))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+        return Err(failure("sponsor input exceeds the finite input bound"));
+    }
+    Ok(bytes)
+}
+
+fn require_sponsor_stage_replay(replay: &ReplayCheckReportV1) -> ReportResult<(), MainError> {
+    if !replay.is_ok()
+        || replay.start.height >= replay.tip_height
+        || replay.replayed_to != replay.tip_height
+    {
+        return Err(failure(
+            "sponsor stage diagnostic needs a nonempty matched replay through the original tip",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod sponsor_stage_tests {
+    use super::*;
+
+    #[test]
+    fn sponsor_input_retains_exact_bounded_file_and_refuses_other_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("stage.json");
+        assert!(read_sponsor_stage_input(&input).is_err());
+        assert!(read_sponsor_stage_input(root.path()).is_err());
+        for size in [0, 1, 65_536, 65_537] {
+            let original = vec![b'x'; size];
+            std::fs::write(&input, &original).unwrap();
+            let result = read_sponsor_stage_input(&input);
+            if size == 0 || size > 65_536 {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap(), original);
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn sponsor_comparison_requires_nonempty_matched_replay_through_the_tip() {
+        let valid = ReplayCheckReportV1::from_core(
+            9,
+            &ReplayCheckReport {
+                start: ReplayCheckStart::Snapshot(8),
+                replayed_to: 9,
+                outcome: ReplayCheckOutcome::Matched,
+            },
+        );
+        require_sponsor_stage_replay(&valid).unwrap();
+        let mut changed = valid.clone();
+        changed.start.height = 9;
+        assert!(require_sponsor_stage_replay(&changed).is_err());
+        changed = valid.clone();
+        changed.replayed_to = 8;
+        assert!(require_sponsor_stage_replay(&changed).is_err());
+        changed = valid;
+        changed.outcome = OUTCOME_DIVERGED.into();
+        assert!(require_sponsor_stage_replay(&changed).is_err());
+        assert!(require_sponsor_stage_replay(&ReplayCheckReportV1::unstarted(0, None)).is_err());
+    }
+
+    #[test]
+    fn activation_entrypoint_never_runs_sponsor_stage_without_authenticated_replay() {
+        use iroha_data_model::{
+            asset::{AssetBalanceScope, AssetDefinitionId},
+            privacy::{PrivacyIronwoodPoolBootstrapV1, PrivacyPoolIdV1},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let config = tests::store_config(root.path());
+        let pool = PrivacyIronwoodPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new([0x41; 32]),
+            "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse::<AssetDefinitionId>()
+                .unwrap(),
+            AssetBalanceScope::Global,
+            iroha_test_samples::ALICE_ID.clone(),
+        )
+        .unwrap();
+        let pool_path = root.path().join("pool.json");
+        std::fs::write(&pool_path, norito::json::to_vec(&pool).unwrap()).unwrap();
+        let stage = root.path().join("stage.json");
+        std::fs::write(&stage, b"{}").unwrap();
+        let before = tests::tree(root.path());
+        let error = run_check_activation_rehearsal(&config, &pool_path, Some(&stage)).unwrap_err();
+        assert!(format!("{error:?}").contains("nonempty matched replay"));
+        assert_eq!(tests::tree(root.path()), before);
+        assert!(!root.path().join("kura").exists());
     }
 }
 

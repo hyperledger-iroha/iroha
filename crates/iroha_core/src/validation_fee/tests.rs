@@ -140,7 +140,7 @@ fn minimal_bound_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 4,
+        max_cycles: 0,
         abi_version: 1,
     };
     let wrapper_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {

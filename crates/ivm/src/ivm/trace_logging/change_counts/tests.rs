@@ -3,10 +3,10 @@
 use super::*;
 use crate::{
     IVM, ProgramMetadata,
-    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_sys, encode_scall},
+    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
     execution_step_recorder::{DiagnosticStepOutcome, DiagnosticStepRecorder},
     host::DefaultHost,
-    instruction::wide::{arithmetic as a, control as c, memory as m, system as s},
+    instruction::wide::{arithmetic as a, control as c, memory as m},
 };
 use iroha_allocation::AllocationBudget;
 
@@ -43,7 +43,10 @@ fn every_admitted_opcode_has_a_bounded_public_destination_span() {
             "{opcode:#04x}"
         );
         match result {
-            Ok(changes) => assert!(changes <= 255, "{opcode:#04x}: {changes}"),
+            Ok(changes) => assert!(
+                changes < crate::parallel::REGISTER_COUNT,
+                "{opcode:#04x}: {changes}"
+            ),
             // The rejection names the opcode byte, never the operand bits (0x0506 here).
             Err(error) => assert!(
                 matches!(error, VMError::InvalidOpcode(reported) if reported == opcode),
@@ -55,9 +58,9 @@ fn every_admitted_opcode_has_a_bounded_public_destination_span() {
 
 #[test]
 fn aliases_zero_and_ignored_operand_bytes_cannot_invent_extra_destinations() {
-    for destination in [0, 5, 6, 255] {
+    for destination in [0, 5, 6, 31] {
         for opcode in [a::ADD, a::CMOV, a::NOT, a::CLZ, m::LOAD64, m::LDI64] {
-            for ignored in [0, 5, 255] {
+            for ignored in [0, 5, 31] {
                 assert_eq!(
                     instruction(encode_rr(opcode, destination, 5, ignored)).unwrap(),
                     usize::from(destination != 0)
@@ -69,9 +72,11 @@ fn aliases_zero_and_ignored_operand_bytes_cannot_invent_extra_destinations() {
 
 #[test]
 fn actual_scalar_conditional_and_tag_only_changes_fit_the_same_public_bound() {
-    for destination in [0, 5, 255] {
+    for destination in [0, 5, 31] {
         for opcode in [a::ADD, a::ADDI, a::MULHSU, a::CLZ, a::CMOV] {
-            let word = encode_rr(opcode, destination, 5, 6);
+            // Register-unary CLZ keeps its reserved rs2 field zero.
+            let right = if opcode == a::CLZ { 0 } else { 6 };
+            let word = encode_rr(opcode, destination, 5, right);
             for value in [0, 19] {
                 let actual = observed(word, |vm| {
                     vm.registers.set(5, value);
@@ -95,12 +100,12 @@ fn actual_scalar_conditional_and_tag_only_changes_fit_the_same_public_bound() {
 }
 
 #[test]
-fn both_syscall_encodings_fund_the_entire_architectural_net_change_set() {
+fn syscall_encoding_funds_the_entire_architectural_net_change_set() {
     for &number in crate::syscalls::abi_syscall_list() {
-        assert_eq!(instruction(encode_scall(number)).unwrap(), 255);
-        if let Ok(number) = u8::try_from(number) {
-            assert_eq!(instruction(encode_scall(u32::from(number))).unwrap(), 255);
-        }
+        assert_eq!(
+            instruction(encode_scall(number)).unwrap(),
+            crate::parallel::REGISTER_COUNT - 1
+        );
     }
 }
 

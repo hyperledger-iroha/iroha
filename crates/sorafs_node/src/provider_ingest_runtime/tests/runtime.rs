@@ -1604,6 +1604,8 @@ async fn single_replica_without_remote_sources_releases_source_claim_for_retry()
 }
 #[tokio::test]
 async fn deferring_an_unstaged_source_never_spends_the_retry_budget() {
+    use crate::ProviderIngestRetryOutcomeV1;
+
     let row = fixture_row(0x37);
     let (runtime, _, _, _) = test_runtime(
         row.clone(),
@@ -1636,7 +1638,7 @@ async fn deferring_an_unstaged_source_never_spends_the_retry_budget() {
         else {
             panic!("a deferred source must stay active");
         };
-        assert_eq!(attempts, 1);
+        assert_eq!(attempts, 0);
         assert_eq!(next_attempt_at_ms, now + 1 + 30_000);
         now = next_attempt_at_ms;
     }
@@ -1655,7 +1657,7 @@ async fn deferring_an_unstaged_source_never_spends_the_retry_budget() {
                 ProviderIngestFailureClassV1::SourceRejected,
             )
             .unwrap(),
-        ProviderIngestRetryOutcomeV1::RetryScheduled { attempts: 2, .. }
+        ProviderIngestRetryOutcomeV1::RetryScheduled { attempts: 1, .. }
     ));
 }
 #[tokio::test]

@@ -89,14 +89,14 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     // Register the recipient account
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     // Register asset def rose#wonder
@@ -116,7 +116,7 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
         .preload_input(domain_offset, &dom)
         .expect("preload owning domain");
     vm.set_register(14, Memory::INPUT_START + domain_offset);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
+    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
     // Mint 7 units of rose to bob
@@ -134,7 +134,7 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
+    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
     // The canonical asset definition id is opaque, but registration recorded
@@ -143,14 +143,14 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN as u8]);
+    let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN]);
     vm.load_program(&prog_udom).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     // Attempt to unregister asset def -> should fail (balances exist)
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_uad = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ASSET as u8]);
+    let prog_uad = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ASSET]);
     vm.load_program(&prog_uad).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     // Burn 7 units from bob to clear balances
@@ -168,7 +168,7 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-    let prog_burn = assemble_syscalls(&[syscalls::SYSCALL_BURN_ASSET as u8]);
+    let prog_burn = assemble_syscalls(&[syscalls::SYSCALL_BURN_ASSET]);
     vm.load_program(&prog_burn).unwrap();
     vm.run().expect("burn asset");
     // Now unregister asset def -> success
@@ -181,7 +181,7 @@ fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
+    let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT]);
     vm.load_program(&prog_uacc).unwrap();
     vm.run().expect("unregister account");
     // With its owned definition gone, nothing pins the domain any more.

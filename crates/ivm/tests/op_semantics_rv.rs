@@ -8,13 +8,13 @@ fn halt(code: &mut Vec<u8>) {
 fn rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     encoding::wide::encode_rr(op, rd, rs1, rs2)
 }
-fn ri(op: u8, rd: u8, rs1: u8, imm: i8) -> u32 {
+fn ri(op: u8, rd: u8, rs1: u8, imm: i16) -> u32 {
     encoding::wide::encode_ri(op, rd, rs1, imm)
 }
-fn load64(rd: u8, base: u8, imm: i8) -> u32 {
+fn load64(rd: u8, base: u8, imm: i16) -> u32 {
     encoding::wide::encode_load(instruction::wide::memory::LOAD64, rd, base, imm)
 }
-fn store64(base: u8, rs: u8, imm: i8) -> u32 {
+fn store64(base: u8, rs: u8, imm: i16) -> u32 {
     encoding::wide::encode_store(instruction::wide::memory::STORE64, base, rs, imm)
 }
 #[test]

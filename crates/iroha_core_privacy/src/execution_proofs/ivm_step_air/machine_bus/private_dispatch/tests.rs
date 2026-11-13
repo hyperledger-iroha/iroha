@@ -36,7 +36,7 @@ fn zeroed_rows_keep_phases_and_cloned_mutations_independent() {
     assert!(zeroed_rows::<2, 0>().iter().all(|row| row.is_empty()));
 }
 
-fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
+pub(super) fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
     contract_artifact_with_frame(body, max_cycles, mode, 0)
 }
 
@@ -63,7 +63,9 @@ fn contract_artifact_with_frame_at(
     let mut roots = std::collections::BTreeSet::from([entry_pc]);
     for (index, &instruction) in body.iter().enumerate() {
         let offset = match wide::opcode(instruction) {
-            wide::control::JAL if wide::rd(instruction) == 1 => i64::from(wide::imm16(instruction)),
+            wide::control::JAL if wide::rd(instruction) == 1 => {
+                i64::from(wide::jal_offset(instruction))
+            }
             wide::control::JALS => i64::from(wide::imm24(instruction)),
             _ => continue,
         };
@@ -270,7 +272,7 @@ impl Fixture {
             0
         };
         let imm = if memory {
-            i64::cast_unsigned(i64::from(wide::imm8(w)))
+            i64::cast_unsigned(i64::from(wide::imm14(w)))
         } else {
             0
         };
@@ -327,7 +329,7 @@ impl Fixture {
         }
         let mut after_pc = if child || role == Role::Jump {
             let delta = if wide::opcode(w) == wide::control::JAL {
-                i64::from(wide::imm16(w))
+                i64::from(wide::jal_offset(w))
             } else {
                 i64::from(wide::imm24(w))
             };
@@ -419,8 +421,12 @@ impl Fixture {
                 (
                     Space::Register,
                     0,
-                    u32::try_from(if store { wide::rd(w) } else { wide::rs1(w) })
-                        .expect("bounded fixture value"),
+                    u32::try_from(if store {
+                        wide::store_base(w)
+                    } else {
+                        wide::rs1(w)
+                    })
+                    .expect("bounded fixture value"),
                 ),
                 base,
                 base,
@@ -452,7 +458,7 @@ impl Fixture {
                 (
                     Space::Register,
                     0,
-                    u32::try_from(wide::rs1(w)).expect("bounded fixture value"),
+                    u32::try_from(wide::store_value(w)).expect("bounded fixture value"),
                 ),
                 u64::MAX - 3,
                 u64::MAX - 3,
@@ -702,7 +708,7 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
                 enc::encode_store(wide::memory::STORE64, 2, 3, -8),
                 enc::encode_ri(wide::control::JALR, 0, 1, 0),
             ],
-            1_000,
+            0,
             0
         ))
         .is_none()
@@ -904,7 +910,7 @@ fn actual_artifact_admission_keeps_helper_roots_disjoint_and_rejects_shared_fall
         .map(|entry| entry.entry_pc)
         .collect();
     assert_eq!(callable_roots, [0, 16]);
-    assert_eq!(wide::imm16(valid.words[0]), 4);
+    assert_eq!(wide::jal_offset(valid.words[0]), 4);
     assert_eq!(wide::imm24(valid.words[1]), 3);
     let shared = contract_artifact(
         &[

@@ -22,6 +22,7 @@ type Attempt<T> = Result<T, ExecutionAttemptError<schedule::ScheduleError>>;
 #[derive(Default)]
 pub struct SuccessorContextPreparation {
     parent: Option<Parent>,
+    portable_parent: Option<iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1>,
     genesis_authentication: Option<OriginalGenesisRead>,
     genesis: Option<Carrier>,
     authenticated: Option<(Hash32, SumeragiRootScope)>,
@@ -178,6 +179,22 @@ impl SuccessorContextPreparation {
         let original = self.original.as_ref().expect("original State cut captured");
         original.require_view(state)?;
         let height = original.tip.height();
+        if original.kura.checkpoint_prefix_height() == Some(height) {
+            if self.parent.is_some() {
+                return Err(unavailable(height));
+            }
+            if self.portable_parent.is_none() {
+                self.portable_parent = Some(
+                    super::portable_resume::portable_checkpoint_for_state(state)
+                        .map_err(source)?
+                        .ok_or_else(|| unavailable(height))?,
+                );
+            }
+            return Ok(());
+        }
+        if self.portable_parent.is_some() {
+            return Err(unavailable(height));
+        }
         if self.parent.is_none() {
             self.parent = Some(Parent {
                 frame: AdmittedFrameRead::default(),
@@ -286,6 +303,21 @@ impl SuccessorContextPreparation {
             .as_ref()
             .ok_or_else(|| unavailable(header.height().get() - 1))?;
         original.require_view(state)?;
+        if let Some(retained) = &self.portable_parent {
+            // The original sealed result survives every refusal. Reverify the immutable
+            // installed source on each lend; no current State observation inherits authority.
+            let fresh = super::portable_resume::portable_checkpoint_for_state(state)
+                .map_err(source)?
+                .ok_or_else(|| unavailable(original.tip.height()))?;
+            if fresh.checkpoint().header() != retained.checkpoint().header()
+                || fresh.checkpoint().certified_result() != retained.checkpoint().certified_result()
+                || fresh.successor_header() != retained.successor_header()
+                || fresh.successor_result() != retained.successor_result()
+            {
+                return Err(unavailable(original.tip.height()));
+            }
+            return schedule::compare_portable_successor_context(state, header, expected, &fresh);
+        }
         let parent = self
             .parent
             .as_ref()

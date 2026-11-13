@@ -56,7 +56,7 @@ impl Callables {
         for (index, &instruction) in words.iter().enumerate() {
             let offset = match wide::opcode(instruction) {
                 wide::control::JAL if wide::rd(instruction) == 1 => {
-                    i64::from(wide::imm16(instruction))
+                    i64::from(wide::jal_offset(instruction))
                 }
                 wide::control::JALS => i64::from(wide::imm24(instruction)),
                 _ => continue,

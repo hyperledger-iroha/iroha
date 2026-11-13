@@ -362,6 +362,7 @@ mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
 mod da_hydration;
+pub(crate) mod dataspace_retirement;
 mod exec_witness_capture;
 mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_anonymous_tables;
@@ -1269,6 +1270,7 @@ macro_rules! with_world_overlay_fields {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -4351,6 +4353,11 @@ pub struct WorldData {
     /// Native game transfers and their original completion captures, installed by its service.
     pub(crate) runtime_game_transfers:
         Storage<iroha_crypto::Hash, iroha_data_model::runtime::native_game::NativeGameTransferV1>,
+    /// Permanent definition history and exclusion receipts, installed by its selected service.
+    pub(crate) runtime_retirements: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
+    >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures:
         Storage<EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>,
@@ -5427,6 +5434,12 @@ pub struct WorldBlockFields<'world> {
         'world,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Permanent definition history and exclusion receipts, installed by its selected service.
+    pub(crate) runtime_retirements: StorageField<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageField<
@@ -6674,6 +6687,7 @@ impl WorldBlock<'_> {
             runtime_deferred_consents,
             runtime_amx_captures,
             runtime_game_transfers,
+            runtime_retirements,
             runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
@@ -7261,6 +7275,12 @@ pub struct WorldTransaction<'block, 'world> {
         'block,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Permanent definition history and exclusion receipts, installed by its selected service.
+    pub(crate) runtime_retirements: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageTransaction<
@@ -9585,6 +9605,12 @@ pub struct WorldView<'world> {
         'world,
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Permanent definition history and exclusion receipts, installed by its selected service.
+    pub(crate) runtime_retirements: StorageView<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
     >,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures: StorageView<
@@ -14809,6 +14835,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Transaction-local operator-status updates, published only by [`Self::apply`].
     public_lane_staking_status_overlay: crate::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
+    /// `governance_due_applied` of this block's block-start pass (`specs/sccp.md` §4.7.2):
+    /// whether a keepalive of this block is justified by Parliament's work (K2, K3).
+    pub(crate) governance_due_applied: bool,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: &'block mut crate::zk::DedupCache,
     /// Pipeline execution preferences snapshot for this transaction.
@@ -21861,6 +21890,10 @@ macro_rules! world_ro_accessors {
             storage runtime_game_transfers:
                 iroha_crypto::Hash
                     => iroha_data_model::runtime::native_game::NativeGameTransferV1;
+            /// Permanent definition history and exclusion receipts (read-only).
+            storage runtime_retirements:
+                iroha_data_model::runtime::definition::DefinitionId
+                    => iroha_data_model::runtime::retirement::RuntimeRetirementStateV1;
             /// Original native escrow completion captures (read-only).
             storage runtime_escrow_captures:
                 EscrowId
@@ -25790,6 +25823,7 @@ impl WorldTransaction<'_, '_> {
             runtime_deferred_consents: _,
             runtime_amx_captures: _,
             runtime_game_transfers: _,
+            runtime_retirements: _,
             runtime_escrow_captures: _,
             runtime_migrations: _,
             runtime_boundaries: _,
@@ -26259,6 +26293,7 @@ impl WorldTransaction<'_, '_> {
         self.runtime_deferred_consents.apply();
         self.runtime_amx_captures.apply();
         self.runtime_game_transfers.apply();
+        self.runtime_retirements.apply();
         self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();
         self.runtime_boundaries.apply();
@@ -28881,8 +28916,8 @@ impl State {
                 iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-            quarantine_tx_max_cycles:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_gas:
+                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_GAS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
             query_max_fetch_size:
                 iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
@@ -32484,21 +32519,18 @@ impl State {
             &self.world.parameters.view(),
         )
     }
-    /// Snapshot the effective cycle ceiling for newly admitted IVM programs.
+    /// Snapshot the largest ZK trace bound a newly admitted ZK-mode IVM program may declare.
     ///
-    /// Both the committed pipeline validity policy and the governance-controlled
-    /// smart-contract fuel parameter are consensus-visible admission limits, so
-    /// producers must embed the lower value in generated program headers.
+    /// The committed pipeline validity policy decides the ceiling, as in every view and block.
+    /// `max_cycles` is the trace bound of ZK artifacts alone (a non-ZK header carries zero) and
+    /// gas is the only execution budget, so governance fuel does not narrow it.
     #[must_use]
     pub fn ivm_admission_cycle_limit(&self) -> NonZeroU64 {
-        let parameters = self.world.parameters.view();
-        let fuel = parameters.smart_contract().fuel();
-        // The committed pipeline validity policy decides the ceiling, as in
-        // every view and block.
-        let ceiling =
-            crate::pipeline_validity_policy::effective_pipeline(self.pipeline.clone(), &parameters)
-                .ivm_max_cycles_upper_bound;
-        NonZeroU64::new(ceiling.get().min(fuel.get())).expect("both IVM cycle limits are non-zero")
+        crate::pipeline_validity_policy::effective_pipeline(
+            self.pipeline.clone(),
+            &self.world.parameters.view(),
+        )
+        .ivm_max_cycles_upper_bound
     }
     /// Snapshot the current governance configuration.
     ///
@@ -38068,6 +38100,8 @@ pub(crate) fn consensus_owned_custom_parameter_ids()
         DaIngestAdmissionPolicyV1::parameter_id(),
         NexusRuntimeCatalogV1::parameter_id(),
         NexusCatalogTransitionV1::parameter_id(),
+        iroha_data_model::nexus::DataSpaceRetirementRequestV1::parameter_id(),
+        iroha_data_model::nexus::DataSpaceRetirementsV1::parameter_id(),
         LaneLifecycleParameterV1::parameter_id(),
         ValidatorCommitteeOperationV1::parameter_id(),
         HijiriParametersV1::parameter_id(),
@@ -38117,6 +38151,8 @@ pub(crate) fn is_consensus_owned_custom_parameter(
             DaIngestAdmissionPolicyV1::PARAMETER_ID_STR,
             NexusRuntimeCatalogV1::PARAMETER_ID_STR,
             NexusCatalogTransitionV1::PARAMETER_ID_STR,
+            iroha_data_model::nexus::DataSpaceRetirementRequestV1::PARAMETER_ID_STR,
+            iroha_data_model::nexus::DataSpaceRetirementsV1::PARAMETER_ID_STR,
             LaneLifecycleParameterV1::PARAMETER_ID_STR,
             "validator_committee_operation_v1",
             HijiriParametersV1::PARAMETER_ID_STR,
@@ -38189,6 +38225,8 @@ mod consensus_owned_parameter_tests {
             "ivm_gas_units_per_gas",
             "iroha:da_ingest_admission_policy_v1",
             "nexus_runtime_catalog_v1",
+            "nexus_dataspace_retirement_v1",
+            "nexus_dataspace_retirements_v1",
             "parliament_candidate_testing_v1",
         ] {
             let id: CustomParameterId = name.parse().expect("parameter identifier");
@@ -40220,6 +40258,7 @@ impl<'state> StateBlock<'state> {
             public_lane_staking_status_overlay:
                 crate::status::begin_public_lane_staking_status_overlay(),
             _curr_block: fields._curr_block,
+            governance_due_applied: fields.governance_due_applied,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: &mut fields.zk_dedup,
             pipeline: fields.pipeline.clone(),
@@ -43335,6 +43374,11 @@ impl StateTransaction<'_, '_> {
                 actual: actual_incarnation_root,
             });
         }
+        dataspace_retirement::ensure_lane_lifecycle_preserves_retirements(
+            &self.world,
+            &payload.plan,
+        )
+        .map_err(runtime_catalog_invalid)?;
         let block_height = self.block_height();
         ensure_lane_lifecycle_compliance_ready(
             &self.nexus,
@@ -45195,9 +45239,8 @@ impl StateTransaction<'_, '_> {
             metadata,
             artifact,
         )?;
-        let eff_cycles =
-            crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
-        let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+        crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
+        // Gas is the only execution budget: a trigger draws from the block's remaining gas.
         let remaining_block_budget = if self.gas_limit_per_block == 0 {
             u64::MAX
         } else {
@@ -45206,10 +45249,7 @@ impl StateTransaction<'_, '_> {
                     .saturating_add(self.last_tx_gas_used),
             )
         };
-        let mut gas_limit = gas_cap.min(remaining_block_budget);
-        if gas_limit == u64::MAX {
-            gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-        }
+        let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
         let heap_limit = self.world.parameters.get().smart_contract().memory().get();
         let ivm_cache = self.ivm_cache;
         let (artifacts, trigger_gas_used) = IvmCache::with_locked(ivm_cache, |cache| {
@@ -45224,7 +45264,6 @@ impl StateTransaction<'_, '_> {
                         ValidationFail::InternalError(error.to_string())
                     })
                 })?;
-            vm.set_max_cycles(eff_cycles.get());
             vm.set_gas_limit(gas_limit);
             let host_args = self
                 .trigger_host_args(event, Json::default())
@@ -45720,10 +45759,7 @@ impl StateTransaction<'_, '_> {
                     self,
                     summary.prepared_contract().syscall_policy(),
                 )?;
-                let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
-                    self,
-                    &summary.metadata,
-                )?;
+                crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
                 let manifest = self
                     .world
                     .contract_manifests
@@ -45746,7 +45782,6 @@ impl StateTransaction<'_, '_> {
                     summary.abi_hash,
                 )
                 .map_err(ValidationFail::IvmAdmission)?;
-                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
                 } else {
@@ -45755,10 +45790,7 @@ impl StateTransaction<'_, '_> {
                             .saturating_add(self.last_tx_gas_used),
                     )
                 };
-                let mut gas_limit = gas_cap.min(remaining_block_budget);
-                if gas_limit == u64::MAX {
-                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                }
+                let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
                 let entrypoint_authorization =
                     crate::executor::authorize_prepared_raw_contract_selector(
                         &self.world,
@@ -45866,7 +45898,6 @@ impl StateTransaction<'_, '_> {
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
 
-                vm.set_max_cycles(eff_cycles.get());
                 vm.set_gas_limit(gas_limit);
                 let precharge_result = contract_call_context
                     .prepared_argument_record()
@@ -45956,13 +45987,10 @@ impl StateTransaction<'_, '_> {
                                 self,
                                 prepared_contract.syscall_policy(),
                             )?;
-                            let eff_cycles =
-                                crate::executor::validate_prepared_ivm_execution_policy(
-                                    self,
-                                    prepared_contract.metadata(),
-                                )?;
-                            let gas_cap =
-                                crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+                            crate::executor::validate_prepared_ivm_execution_policy(
+                                self,
+                                prepared_contract.metadata(),
+                            )?;
                             let remaining_block_budget = if self.gas_limit_per_block == 0 {
                                 u64::MAX
                             } else {
@@ -45971,10 +45999,7 @@ impl StateTransaction<'_, '_> {
                                         .saturating_add(self.last_tx_gas_used),
                                 )
                             };
-                            let mut gas_limit = gas_cap.min(remaining_block_budget);
-                            if gas_limit == u64::MAX {
-                                gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                            }
+                            let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
                             let selector = crate::executor::requested_contract_entrypoint(
                                 &contract_call_metadata,
                             )?
@@ -46166,7 +46191,6 @@ impl StateTransaction<'_, '_> {
                                 entrypoint_authorization,
                             ));
 
-                            vm.set_max_cycles(eff_cycles.get());
                             vm.set_gas_limit(gas_limit);
                             let precharge_result = contract_call_context
                                 .prepared_argument_record()

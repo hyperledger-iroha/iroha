@@ -2,6 +2,7 @@
 
 use super::*;
 use ivm_abi::{
+    SyscallPolicy,
     error::ExecutionDeferral,
     metadata::{LITERAL_SECTION_MAGIC, ProgramMetadata},
     pointer_abi::PointerType,

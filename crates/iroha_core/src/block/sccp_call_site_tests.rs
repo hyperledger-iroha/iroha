@@ -28,6 +28,7 @@ fn sccp_exempt_cap_is_judged_against_the_committed_parent_world() {
         signed,
         &crate::smartcontracts::isi::sccp::eligibility::Current(&state.world.view()),
         None,
+        false,
     )
     .expect("no transaction is exempt without SCCP");
     {
@@ -141,6 +142,7 @@ fn sccp_exempt_cap_counts_eligible_entry_points_of_the_block() {
             &block,
             &crate::smartcontracts::isi::sccp::eligibility::Current(&state.world.view()),
             None,
+            false,
         )
     };
     with_cap(2).expect("two eligible transactions fit a cap of two");
@@ -385,10 +387,10 @@ fn sccp_follower_rejects_second_included_forgery_independent_of_total_cap() {
     // history. The normative cap counts included content regardless of execution outcome;
     // two distinct signed outer transactions carrying the same proof still exceed it.
     let one = SignedBlock::genesis(vec![first.clone()], ordinary.private_key(), None, None);
-    ValidBlock::validate_sccp_exempt_cap_against(&one, &parent, Some(time)).unwrap();
+    ValidBlock::validate_sccp_exempt_cap_against(&one, &parent, Some(time), false).unwrap();
     let two = SignedBlock::genesis(vec![first, second], ordinary.private_key(), None, None);
     assert_eq!(two.network_entrypoints().count(), 2);
     let error =
-        ValidBlock::validate_sccp_exempt_cap_against(&two, &parent, Some(time)).unwrap_err();
+        ValidBlock::validate_sccp_exempt_cap_against(&two, &parent, Some(time), false).unwrap_err();
     assert!(error.to_string().contains("per-block caps"), "{error}");
 }

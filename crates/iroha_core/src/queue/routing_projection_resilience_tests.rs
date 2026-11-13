@@ -83,7 +83,7 @@ async fn push_records_teu_using_router_assignment() {
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn push_records_teu_from_ivm_metadata() {
+async fn push_records_teu_from_the_signed_ivm_gas_limit() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -91,16 +91,14 @@ async fn push_records_teu_from_ivm_metadata() {
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let (account_id, key_pair) = gen_account_in("wonderland");
     register_test_authority(&state, &account_id);
-    let max_cycles = 42_000_u64;
-    let tx = accepted_ivm_tx_by(account_id, &key_pair, &time_source, max_cycles);
+    // Gas is the only execution budget: the caller signs it, the artifact derives none.
+    let signed_gas_limit = 210_000_000_u64;
+    let tx = accepted_ivm_tx_by(account_id, &key_pair, &time_source, signed_gas_limit);
     let gas_limit = iroha_data_model::transaction::require_transaction_gas_limit(
         tx.external().unwrap().fee_payment_intent(),
     )
-    .expect("IVM input carries the signed gas derived from its cycle metadata");
-    assert_eq!(
-        gas_limit,
-        crate::smartcontracts::ivm::gas_limit_for_cycles(NonZeroU64::new(max_cycles).unwrap())
-    );
+    .expect("IVM input carries its signed gas limit");
+    assert_eq!(gas_limit, signed_gas_limit);
     let hash = tx.hash_as_entrypoint();
     queue
         .push(tx, state.view())

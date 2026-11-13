@@ -18,23 +18,23 @@ fn cost_of(word: u32) -> u64 {
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)
 }
-fn wide_ri(op: u8, rd: u8, rs1: u8, imm: i8) -> u32 {
+fn wide_ri(op: u8, rd: u8, rs1: u8, imm: i16) -> u32 {
     ivm::encoding::wide::encode_ri(op, rd, rs1, imm)
 }
-fn wide_load(op: u8, rd: u8, base: u8, imm: i8) -> u32 {
+fn wide_load(op: u8, rd: u8, base: u8, imm: i16) -> u32 {
     ivm::encoding::wide::encode_load(op, rd, base, imm)
 }
-fn wide_store(op: u8, base: u8, rs: u8, imm: i8) -> u32 {
+fn wide_store(op: u8, base: u8, rs: u8, imm: i16) -> u32 {
     ivm::encoding::wide::encode_store(op, base, rs, imm)
 }
-fn wide_branch(op: u8, rs1: u8, rs2: u8, offset_words: i8) -> u32 {
+fn wide_branch(op: u8, rs1: u8, rs2: u8, offset_words: i16) -> u32 {
     ivm::encoding::wide::encode_branch(op, rs1, rs2, offset_words)
 }
-fn wide_jump(op: u8, rd: u8, offset_words: i16) -> u32 {
+fn wide_jump(op: u8, rd: u8, offset_words: i32) -> u32 {
     ivm::encoding::wide::encode_jump(op, rd, offset_words)
 }
-fn wide_sys(op: u8, imm8: u8) -> u32 {
-    ivm::encoding::wide::encode_scall(u32::from(imm8))
+fn wide_sys(number: u32) -> u32 {
+    ivm::encoding::wide::encode_scall(number)
 }
 fn classic_encode_r16(op: u8, rd: u8, rs1: u8, rs2: u8) -> u16 {
     ((op & 0xF) as u16) << 12
@@ -153,7 +153,7 @@ fn schedule_vs_runtime_syscall_extra() {
     let addi_r10_16 = wide_ri(wide::arithmetic::ADDI, 10, 0, 16);
     push32(&mut code, addi_r10_16);
     // SCALL with imm8 = SYSCALL_ALLOC
-    let scall = wide_sys(wide::system::SCALL, ivm::syscalls::SYSCALL_ALLOC as u8);
+    let scall = wide_sys(ivm::syscalls::SYSCALL_ALLOC);
     push32(&mut code, scall);
     halt32(&mut code);
     // Sum base schedule; 16 bytes cost base 1 + two ABI words.
@@ -387,7 +387,7 @@ fn jal_and_jalr_offsets_gas() {
     assert_eq!(cost_of(jal), 2);
     // JALR with imm offsets 0 and 0x20; gas 2
     for &imm in &[0i32, 0x20] {
-        let jalr = wide_ri(wide::control::JALR, 1, 2, imm as i8);
+        let jalr = wide_ri(wide::control::JALR, 1, 2, imm as i16);
         assert_eq!(cost_of(jalr), 2);
     }
 }

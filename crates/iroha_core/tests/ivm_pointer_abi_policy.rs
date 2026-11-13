@@ -22,7 +22,7 @@ fn domainid_allowed_under_abi_current() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut vm = ivm::IVM::new(10_000);
@@ -45,7 +45,7 @@ fn unknown_pointer_type_rejected_under_current() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1,
+        max_cycles: 0,
         abi_version: 1, // v1
     };
     let mut vm = ivm::IVM::new(10_000);

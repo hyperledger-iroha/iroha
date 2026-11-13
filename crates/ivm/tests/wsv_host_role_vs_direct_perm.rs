@@ -73,13 +73,13 @@ fn role_vs_direct_permission_for_mint() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     let ad = make_tlv(
@@ -101,7 +101,7 @@ fn role_vs_direct_permission_for_mint() {
         .preload_input(domain_offset, &dom)
         .expect("preload owning domain");
     vm.set_register(14, Memory::INPUT_START + domain_offset);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
+    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
     // Create role `minter` with permission mint_asset:rose#wonder
@@ -114,7 +114,7 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + role.len() as u64 + 8);
-    let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE as u8]);
+    let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE]);
     vm.load_program(&prog_crole).unwrap();
     vm.run().expect("create role");
     // Grant role to alice
@@ -128,7 +128,7 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE as u8]);
+    let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE]);
     vm.load_program(&prog_grole).unwrap();
     vm.run().expect("grant role");
     // Mint via role → ok
@@ -149,7 +149,7 @@ fn role_vs_direct_permission_for_mint() {
         .preload_input(amount_offset, &tlv_amount)
         .expect("preload input");
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
+    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint via role");
     // Revoke role; mint should now be denied
@@ -161,7 +161,7 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_rrole = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_ROLE as u8]);
+    let prog_rrole = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_ROLE]);
     vm.load_program(&prog_rrole).unwrap();
     vm.run().expect("revoke role");
     vm.memory.preload_input(0, &tlv_bob).expect("preload input");
@@ -191,7 +191,7 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_gperm = assemble_syscalls(&[syscalls::SYSCALL_GRANT_PERMISSION as u8]);
+    let prog_gperm = assemble_syscalls(&[syscalls::SYSCALL_GRANT_PERMISSION]);
     vm.load_program(&prog_gperm).unwrap();
     vm.run().expect("grant direct perm");
     vm.memory.preload_input(0, &tlv_bob).expect("preload input");
@@ -217,7 +217,7 @@ fn role_vs_direct_permission_for_mint() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_alice.len() as u64 + 8);
-    let prog_rperm = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_PERMISSION as u8]);
+    let prog_rperm = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_PERMISSION]);
     vm.load_program(&prog_rperm).unwrap();
     vm.run().expect("revoke direct perm");
     vm.memory.preload_input(0, &tlv_bob).expect("preload input");

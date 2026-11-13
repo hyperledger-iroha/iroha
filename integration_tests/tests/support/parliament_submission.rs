@@ -109,7 +109,7 @@ pub fn minimal_contract_artifact_with_identity(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -156,7 +156,7 @@ pub fn minimal_contract_artifact_with_identity(
         enc::encode_store(wide::memory::STORE64, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_rr(wide::control::JALR, 0, 1, 0),
+        enc::encode_ri(wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&word.to_le_bytes());
     }

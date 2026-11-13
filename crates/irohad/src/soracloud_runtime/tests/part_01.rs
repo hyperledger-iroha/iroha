@@ -2632,7 +2632,7 @@ fn soracloud_unit_return_words() -> Vec<u32> {
         enc::encode_store(wide::memory::STORE64, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_rr(wide::control::JALR, 0, 1, 0),
+        enc::encode_ri(wide::control::JALR, 0, 1, 0),
     ]
 }
 fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
@@ -2692,7 +2692,7 @@ fn soracloud_echo_return_words(argument_index: u8) -> Vec<u32> {
         enc::encode_store(wide::memory::STORE64, 12, 5, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_rr(wide::control::JALR, 0, 1, 0),
+        enc::encode_ri(wide::control::JALR, 0, 1, 0),
     ]
 }
 fn soracloud_query_echo_artifact(name: &str, metadata: bool) -> Vec<u8> {

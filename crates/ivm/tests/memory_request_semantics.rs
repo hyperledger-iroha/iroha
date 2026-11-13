@@ -29,7 +29,7 @@ fn machine_with_max_cycles(words: &[u32], mode: u8, gas: u64, max_cycles: u64) -
     vm
 }
 
-fn registers(vm: &IVM) -> ([u64; 256], [bool; 256]) {
+fn registers(vm: &IVM) -> ([u64; ivm::parallel::REGISTER_COUNT], [bool; ivm::parallel::REGISTER_COUNT]) {
     (
         core::array::from_fn(|i| vm.registers.get(i)),
         core::array::from_fn(|i| vm.registers.tag(i)),
@@ -85,7 +85,7 @@ fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
 
 #[test]
 fn public_half_store_preserves_other_half_private_tag() {
-    for half in [0_i8, 8] {
+    for half in [0_i16, 8] {
         let words = [
             encode::encode_store(wide::memory::STORE64, 3, 1, 0),
             encode::encode_halt(),
@@ -151,7 +151,7 @@ fn output_forward_gap_is_preserved_and_rewind_traps_without_mutation() {
 fn signed_immediate_wrap_resolves_the_address_before_region_checks() {
     for mode in [0, ivm_mode::ZK] {
         for (base, immediate, address) in [
-            (Memory::HEAP_START + 128, -128_i8, Memory::HEAP_START),
+            (Memory::HEAP_START + 128, -128_i16, Memory::HEAP_START),
             (Memory::HEAP_START - 127, 127, Memory::HEAP_START),
             (u64::MAX, 1, 0),
             (u64::MAX - 7, 8, 0),

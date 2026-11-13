@@ -987,11 +987,7 @@ fn original_local_custody_invariant_halts_worker_without_fee_result_or_quarantin
                     chain.genesis_account(),
                     &iroha_data_model::account::AccountId::new(key.public_key().clone())
                 );
-                let mut program = ivm::ProgramMetadata {
-                    max_cycles: 100,
-                    ..Default::default()
-                }
-                .encode();
+                let mut program = ivm::ProgramMetadata::default().encode();
                 program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
                 let mut builder = TransactionBuilder::new(
                     chain.network_id(),
@@ -1066,11 +1062,7 @@ fn cold_prepare_keeps_original_recovery_refusal_after_execution_latches_recovery
                     vec![0xCE; 32],
                     iroha_crypto::Algorithm::Ed25519,
                 );
-                let mut program = ivm::ProgramMetadata {
-                    max_cycles: 100,
-                    ..Default::default()
-                }
-                .encode();
+                let mut program = ivm::ProgramMetadata::default().encode();
                 program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
                 let mut builder = TransactionBuilder::new(
                     chain.network_id(),

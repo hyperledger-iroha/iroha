@@ -39,7 +39,7 @@ fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000_000,
+        max_cycles: 0,
         abi_version: 1,
     }
     .encode();

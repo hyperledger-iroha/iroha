@@ -40,12 +40,9 @@ use reqwest::StatusCode;
 use std::time::{Duration, Instant};
 use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
-    kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
-        max_cycles: 1_000,
-        ..Default::default()
-    })
-    .compile_source("seiyaku TestContract { view fn main() authorize(anyone) { () } }")
-    .expect("compile the minimal contract with its canonical callable table")
+    kotodama_lang::compiler::Compiler::new()
+        .compile_source("seiyaku TestContract { view fn main() authorize(anyone) { () } }")
+        .expect("compile the minimal contract with its canonical callable table")
 }
 
 #[test]

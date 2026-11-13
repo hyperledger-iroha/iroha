@@ -191,7 +191,7 @@ fn false_zero_overflow_gas_predicates_and_trap_workspaces_fail_even_with_changed
         }
         if segment.outcome.trapped() {
             let other = if segment.outcome == SegmentOutcome::OutOfGas {
-                SegmentOutcome::AssertionFailed
+                SegmentOutcome::NumericFault
             } else {
                 SegmentOutcome::OutOfGas
             };

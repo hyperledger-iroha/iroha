@@ -14,9 +14,9 @@ use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 use std::{cell::Cell, collections::BTreeMap};
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-fn assemble_syscall(syscall: u8) -> Vec<u8> {
+fn assemble_syscall(syscall: u32) -> Vec<u8> {
     let mut code = Vec::with_capacity(8);
-    let word = encoding::wide::encode_scall(u32::from(syscall));
+    let word = encoding::wide::encode_scall(syscall);
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&HALT);
     assemble(&code)
@@ -48,7 +48,7 @@ fn raw_blake2b256(payload: &[u8]) -> [u8; 32] {
 fn debug_print_is_handled_by_default_host() {
     let mut vm = IVM::new(u64::MAX);
     // Program: SCALL 0x00; HALT
-    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_PRINT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_PRINT);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(result.is_ok(), "debug_print should be handled");
@@ -57,7 +57,7 @@ fn debug_print_is_handled_by_default_host() {
 fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     // Build a tiny program making a known allowed syscall (ALLOC)
     // and then HALT. Set ABI version to 1 in the header to exercise policy.
-    let mut bytes = assemble_syscall(syscalls::SYSCALL_ALLOC as u8);
+    let mut bytes = assemble_syscall(syscalls::SYSCALL_ALLOC);
     // Header layout: magic(4) major(1) minor(1) mode(1) vl(1) max_cycles(8) abi(1)
     // Set abi_version (last header byte) to 1
     bytes[4 + 1 + 1 + 1 + 1 + 8] = 1;
@@ -90,7 +90,7 @@ fn syscall_exit_halts_execution() {
 #[test]
 fn syscall_abort_marks_failure() {
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscall(syscalls::SYSCALL_ABORT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_ABORT);
     vm.load_program(&prog).unwrap();
     vm.set_register(10, 0xA11CE);
     let result = vm.run();
@@ -104,7 +104,7 @@ fn debug_log_accepts_json_tlv() {
     let tlv = make_tlv(PointerType::Json as u16, payload);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
-    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG);
     vm.load_program(&prog).unwrap();
     vm.run().expect("debug log should succeed");
 }
@@ -127,7 +127,7 @@ fn hash_syscalls_return_expected_digest_blobs() {
         let tlv = make_tlv(PointerType::Blob as u16, message);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc input blob");
         vm.set_register(10, ptr);
-        let prog = assemble_syscall(syscall as u8);
+        let prog = assemble_syscall(syscall);
         vm.load_program(&prog).expect("load program");
         vm.run().expect("hash syscall should succeed");
         let out = vm
@@ -152,7 +152,7 @@ fn get_public_input_returns_named_tlv() {
     let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT);
     vm.load_program(&prog).unwrap();
     vm.run().expect("get public input should succeed");
     let out_ptr = vm.register(10);
@@ -168,7 +168,7 @@ fn get_public_input_missing_name_errors() {
     let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::PermissionDenied)));
@@ -178,7 +178,7 @@ fn get_public_input_zero_pointer_errors() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::host::DefaultHost::new());
     vm.set_register(10, 0);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::NoritoInvalid)));
@@ -197,7 +197,7 @@ fn add_signatory_syscall_accepts_account_and_json() {
     let signatory_ptr = vm.alloc_input_tlv(&signatory_tlv).expect("alloc signatory");
     vm.set_register(10, account_ptr);
     vm.set_register(11, signatory_ptr);
-    let prog = assemble_syscall(syscalls::SYSCALL_ADD_SIGNATORY as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_ADD_SIGNATORY);
     vm.load_program(&prog).unwrap();
     vm.run().expect("add signatory should succeed");
 }
@@ -215,7 +215,7 @@ fn remove_signatory_syscall_accepts_account_and_json() {
     let signatory_ptr = vm.alloc_input_tlv(&signatory_tlv).expect("alloc signatory");
     vm.set_register(10, account_ptr);
     vm.set_register(11, signatory_ptr);
-    let prog = assemble_syscall(syscalls::SYSCALL_REMOVE_SIGNATORY as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_REMOVE_SIGNATORY);
     vm.load_program(&prog).unwrap();
     vm.run().expect("remove signatory should succeed");
 }
@@ -229,7 +229,7 @@ fn set_account_quorum_accepts_nonzero() {
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     vm.set_register(10, account_ptr);
     vm.set_register(11, 2);
-    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM);
     vm.load_program(&prog).unwrap();
     vm.run().expect("set account quorum should succeed");
 }
@@ -243,7 +243,7 @@ fn set_account_quorum_rejects_zero() {
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     vm.set_register(10, account_ptr);
     vm.set_register(11, 0);
-    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_SET_ACCOUNT_QUORUM);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::DecodeError)));
@@ -300,7 +300,7 @@ fn removed_hw_probe_syscalls_reject() {
 #[test]
 fn test_verify_proof_syscall() {
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF);
     vm.load_program(&prog).unwrap();
     let summary = norito::to_bytes(&vm.execution_summary()).expect("encode execution summary");
     let proof_tlv = make_tlv(PointerType::NoritoBytes as u16, &summary);
@@ -317,7 +317,7 @@ fn test_verify_proof_syscall() {
 #[test]
 fn test_execution_summary_syscall_returns_deterministic_summary() {
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY);
     vm.load_program(&prog).unwrap();
     vm.run()
         .expect("EXECUTION_SUMMARY should produce a summary");
@@ -408,7 +408,7 @@ fn test_get_merkle_path_syscall() {
     vm.memory.commit();
     vm.set_register(10, addr);
     vm.set_register(11, ivm::Memory::OUTPUT_START);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH);
     vm.load_program(&prog).unwrap();
     let expected = vm.memory.merkle_path(addr).unwrap();
     vm.run().expect("merkle path syscall failed");
@@ -432,7 +432,7 @@ fn test_get_merkle_path_with_root_syscall() {
     vm.set_register(10, addr);
     vm.set_register(11, ivm::Memory::OUTPUT_START);
     vm.set_register(12, root_out);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH);
     vm.load_program(&prog).unwrap();
     let expected_root = vm.memory.current_root();
     vm.run().expect("merkle path syscall failed");
@@ -452,7 +452,7 @@ fn test_get_merkle_compact_syscall() {
     vm.set_register(11, out);
     vm.set_register(12, 16); // cap depth to 16
     vm.set_register(13, root_out);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let path = vm.memory.merkle_path(addr).unwrap();
     let root = vm.memory.current_root();
@@ -515,7 +515,7 @@ fn test_get_merkle_path_syscall_out_of_bounds() {
         .saturating_add(ivm::Memory::STACK_SLOP);
     vm.set_register(10, max_addr);
     vm.set_register(11, ivm::Memory::OUTPUT_START);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
@@ -533,7 +533,7 @@ fn test_get_merkle_compact_syscall_out_of_bounds() {
     vm.set_register(11, out);
     vm.set_register(12, 0);
     vm.set_register(13, root_out);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
@@ -547,7 +547,7 @@ fn test_get_register_merkle_compact_syscall_out_of_bounds() {
     vm.set_register(11, out);
     vm.set_register(12, 0);
     vm.set_register(13, root_out);
-    let prog = assemble_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(VMError::RegisterOutOfBounds)));

@@ -92,7 +92,10 @@ fn complete_nested_demand_refuses_one_byte_short_before_copy_and_retries_exactly
         Err(VMError::AllocationDeferred(_))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
-    assert_eq!(fixture.states[0].gpr, [0xA5A5; crate::parallel::REGISTER_COUNT]);
+    assert_eq!(
+        fixture.states[0].gpr,
+        [0xA5A5; crate::parallel::REGISTER_COUNT]
+    );
     assert_eq!(memory_parts(&fixture.memory[1]).4, &[[4; 32]; 3]);
     budget.set_limit_bytes(expected);
     let snapshot = source.try_snapshot(&budget).unwrap();
@@ -139,7 +142,8 @@ fn delta_capture_expands_without_changing_source() {
     let budget = AllocationBudget::new(64 * 1024);
     let mut rows = super::DeltaTraceLog::new(Some(&budget));
     budget.with_deferred_refund_notifications(|scope| {
-        rows.prepare_batch(2, crate::parallel::REGISTER_COUNT, 1, Some(scope)).unwrap();
+        rows.prepare_batch(2, crate::parallel::REGISTER_COUNT, 1, Some(scope))
+            .unwrap();
     });
     let mut gpr = [0; crate::parallel::REGISTER_COUNT];
     let mut tags = [false; crate::parallel::REGISTER_COUNT];
@@ -181,7 +185,10 @@ fn original_state_backing_erases_registers_and_tags_before_credit_refund() {
         offset_of!(RegisterState, gpr),
         size_of::<[u64; crate::parallel::REGISTER_COUNT]>(),
     );
-    observer::watch_second_span(offset_of!(RegisterState, tags), size_of::<[bool; crate::parallel::REGISTER_COUNT]>());
+    observer::watch_second_span(
+        offset_of!(RegisterState, tags),
+        size_of::<[bool; crate::parallel::REGISTER_COUNT]>(),
+    );
     drop(snapshot);
     observer::assert_erased_and_freed();
     assert_eq!(observer::original_credit_at_free(), total);

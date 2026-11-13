@@ -13,16 +13,17 @@ mod state_operands;
 
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
-    COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
+    COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_ZK_TRACE_CYCLES,
     DOMAIN_WILDCARD_KEY, DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY,
     HINT_SKIP_CONTRACT_CALL_TARGET, HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE,
     HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
-    IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES,
-    TransferKind, WIDE_IMM_MAX, classify_ir_access, collect_dynamic_access_hints,
-    decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
-    emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64, encode_addi,
-    encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind,
-    push_word, record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
+    IMM14_MAX, IMM14_MIN, IrAccessClass, JAL_OFFSET_MAX, JAL_OFFSET_MIN, LiteralFixups,
+    NFT_COARSE_KEY, OFFSET24_MAX, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind,
+    classify_ir_access, collect_dynamic_access_hints, decoded_control_target, emit_addi,
+    emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
+    emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
+    patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
+    record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
     stack_slot_offset_bytes,
 };
 use crate::{
@@ -691,10 +692,10 @@ fn shared_host_requests_drive_canonical_roots_and_tally_access_hints() {
     }
 }
 #[test]
-fn default_max_cycles_matches_pipeline_bound() {
+fn default_zk_trace_bound_matches_pipeline_bound() {
     let opts = CompilerOptions::default();
-    assert_eq!(opts.max_cycles, DEFAULT_MAX_CYCLES);
-    assert!(opts.max_cycles > 0);
+    assert_eq!(opts.zk_trace_cycles, DEFAULT_ZK_TRACE_CYCLES);
+    assert_eq!(DEFAULT_ZK_TRACE_CYCLES.get(), 1_000_000);
 }
 #[test]
 fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
@@ -795,31 +796,28 @@ fn compiler_api_rejects_bare_fragments_and_implicit_main() {
     assert!(error.contains("exactly one"), "unexpected error: {error}");
 }
 #[test]
-fn selected_max_cycles_is_embedded_in_artifact() {
-    let opts = CompilerOptions {
-        max_cycles: 42,
-        ..CompilerOptions::default()
-    };
-    let compiler = Compiler::new_with_options(opts);
+fn selected_zk_trace_bound_is_embedded_only_in_zk_artifacts() {
     let src = include_str!("fixtures/v1/c002.ko");
-    let code = compiler.compile_source(src).expect("compile");
-    let parsed = ProgramMetadata::parse(&code).expect("parse meta");
-    assert_eq!(parsed.metadata.max_cycles, 42);
-}
-#[test]
-fn zero_max_cycles_is_rejected_before_artifact_generation() {
-    let compiler = Compiler::new_with_options(CompilerOptions {
-        max_cycles: 0,
-        ..CompilerOptions::default()
-    });
-    let error = compiler
-        .compile_source("seiyaku InvalidBudget { hajimari() {} }")
-        .expect_err("zero cycle ceiling must fail closed");
-    assert!(error.contains("K4001"), "unexpected error: {error}");
-    assert!(
-        error.contains("max_cycles ceiling must be greater than zero"),
-        "unexpected error: {error}"
-    );
+    let zk_trace_cycles = std::num::NonZeroU64::new(42).unwrap();
+    for force_zk in [false, true] {
+        let compiler = Compiler::new_with_options(CompilerOptions {
+            force_zk,
+            zk_trace_cycles,
+            ..CompilerOptions::default()
+        });
+        let code = compiler.compile_source(src).expect("compile");
+        let parsed = ProgramMetadata::parse(&code).expect("parse meta");
+        if force_zk {
+            assert_eq!(parsed.metadata.mode, crate::metadata::mode::ZK);
+            assert_eq!(parsed.metadata.max_cycles, 42);
+        } else {
+            assert_eq!(parsed.metadata.mode, 0);
+            assert_eq!(
+                parsed.metadata.max_cycles, 0,
+                "gas is the only budget of a non-ZK artifact"
+            );
+        }
+    }
 }
 #[test]
 fn loop_phi_lowering_is_deterministic() {
@@ -857,7 +855,7 @@ fn emit_addi_combines_a_small_immediate_with_the_initial_copy() {
 fn emit_load64_uses_bounded_indexed_offset() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
-    let offset = WIDE_IMM_MAX as i64 + 1;
+    let offset = i64::from(IMM14_MAX) + 1;
     emit_load64(&mut code, &fixups, 5, 6, offset, None).expect("emit load64");
     let recorded = fixups.into_inner();
     assert_eq!(recorded.len(), 1);
@@ -895,7 +893,7 @@ fn emit_load64_uses_bounded_indexed_offset() {
 fn emit_store64_uses_bounded_indexed_offset() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
-    let offset = WIDE_IMM_MAX as i64 + 1;
+    let offset = i64::from(IMM14_MAX) + 1;
     emit_store64(&mut code, &fixups, 6, 5, offset, 7).expect("emit store64");
     let recorded = fixups.into_inner();
     assert_eq!(recorded.len(), 1);
@@ -956,18 +954,26 @@ fn indexed_literal_fixup_is_one_word() {
     assert_eq!(rd, 5);
     assert_eq!(index, u16::MAX);
 }
+/// Byte offset of the first word beyond the direct signed 19-bit `JAL` range.
+fn first_word_beyond_jal() -> usize {
+    usize::try_from(JAL_OFFSET_MAX + 1).unwrap() * 4
+}
 #[test]
 fn far_jump_fixup_uses_one_word_signed24_transfer() {
     let mut code = Vec::new();
     let start = super::reserve_word(&mut code);
-    super::patch_jump_transfer(&mut code, start, 200_000).expect("patch far jump");
+    super::patch_jump_transfer(&mut code, start, first_word_beyond_jal() - 4)
+        .expect("patch farthest direct jump");
+    let word = u32::from_le_bytes(code.as_slice().try_into().unwrap());
+    assert_eq!(word, encode_jal(0, JAL_OFFSET_MAX * 4).unwrap());
+    super::patch_jump_transfer(&mut code, start, first_word_beyond_jal()).expect("patch far jump");
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code.try_into().unwrap());
     assert_eq!(
         instruction::wide::opcode(word),
         instruction::wide::control::JMP
     );
-    assert_eq!(instruction::wide::imm24(word), 50_000);
+    assert_eq!(instruction::wide::imm24(word), JAL_OFFSET_MAX + 1);
 }
 #[test]
 fn trampoline_jump_is_always_non_linking_and_range_checked() {
@@ -981,7 +987,7 @@ fn trampoline_jump_is_always_non_linking_and_range_checked() {
     );
     assert_eq!(instruction::wide::imm24(word), 1);
     let mut code = vec![0_u8; 4];
-    let first_out_of_range = 0x80_0000usize * 4;
+    let first_out_of_range = usize::try_from(OFFSET24_MAX + 1).unwrap() * 4;
     let error = super::patch_trampoline_jump(&mut code, 0, first_out_of_range)
         .expect_err("trampoline hops beyond signed24 must fail closed");
     assert!(error.contains("signed 24-bit word range"), "{error}");
@@ -1002,20 +1008,24 @@ fn near_call_fixup_is_one_word_jal() {
 fn far_call_fixup_uses_one_word_signed24_transfer() {
     let mut code = Vec::new();
     let start = super::reserve_word(&mut code);
-    super::patch_call_transfer(&mut code, start, 200_000).expect("patch far call");
+    super::patch_call_transfer(&mut code, start, first_word_beyond_jal() - 4)
+        .expect("patch farthest direct call");
+    let word = u32::from_le_bytes(code.as_slice().try_into().unwrap());
+    assert_eq!(word, encode_jal(1, JAL_OFFSET_MAX * 4).unwrap());
+    super::patch_call_transfer(&mut code, start, first_word_beyond_jal()).expect("patch far call");
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code.try_into().unwrap());
     assert_eq!(
         instruction::wide::opcode(word),
         instruction::wide::control::JALS
     );
-    assert_eq!(instruction::wide::imm24(word), 50_000);
+    assert_eq!(instruction::wide::imm24(word), JAL_OFFSET_MAX + 1);
 }
 #[test]
 fn transfer_beyond_signed24_is_deferred_instead_of_rejected() {
     let mut code = Vec::new();
     let at = reserve_word(&mut code);
-    let target = (0x80_0000usize + 1) * 4;
+    let target = usize::try_from(OFFSET24_MAX + 2).unwrap() * 4;
     let mut deferred = Vec::new();
     super::patch_or_defer_transfer(&mut code, at, target, TransferKind::Call, &mut deferred)
         .expect("far call must be deferred");
@@ -1099,7 +1109,7 @@ fn deferred_far_jump_uses_sparse_direct_trampoline_chain() {
             instruction::wide::control::JAL | instruction::wide::control::JMP
         ));
         let offset_words = match instruction::wide::opcode(word) {
-            instruction::wide::control::JAL => i64::from(instruction::wide::imm16(word)),
+            instruction::wide::control::JAL => i64::from(instruction::wide::jal_offset(word)),
             instruction::wide::control::JMP => i64::from(instruction::wide::imm24(word)),
             _ => unreachable!(),
         };
@@ -1214,7 +1224,7 @@ fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
     let record_decodes = words
         .iter()
         .filter(|word| {
-            instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
+            instruction::wide::opcode(**word) == instruction::wide::system::SCALL
                 && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
         })
         .count();
@@ -1234,7 +1244,7 @@ fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
         syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
     ];
     assert!(words.iter().all(|word| {
-        instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
+        instruction::wide::opcode(*word) != instruction::wide::system::SCALL
             || !typed_getters.contains(&encoding::wide::decode_scall(*word))
     }));
 }
@@ -1251,7 +1261,7 @@ fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
         .iter()
         .map(|chunk| u32::from_le_bytes(*chunk))
         .filter(|word| {
-            instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+            instruction::wide::opcode(*word) == instruction::wide::system::SCALL
                 && encoding::wide::decode_scall(*word) == syscalls::SYSCALL_INT_ADD
         })
         .count();
@@ -1351,7 +1361,7 @@ fn mint_trigger_takes_amount_from_one_typed_argument_record() {
     let record_decodes = words
         .iter()
         .filter(|word| {
-            instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
+            instruction::wide::opcode(**word) == instruction::wide::system::SCALL
                 && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
         })
         .count();
@@ -1360,7 +1370,7 @@ fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         "trigger records are prepared before guest execution"
     );
     assert!(words.iter().all(|word| {
-        instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
+        instruction::wide::opcode(*word) != instruction::wide::system::SCALL
             || encoding::wide::decode_scall(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
     }));
 }
@@ -1634,8 +1644,16 @@ seiyaku CompilerFixture { permission FixtureAccess;
 }
 #[test]
 fn encode_addi_rejects_out_of_range_immediate() {
-    let imm = (WIDE_IMM_MAX + 1) as i16;
-    assert!(super::encode_addi(1, 1, imm).is_err());
+    for imm in [IMM14_MIN, IMM14_MAX] {
+        let word = super::encode_addi(1, 2, imm).expect("signed 14-bit immediate");
+        assert_eq!(
+            encoding::wide::decode_ri(word),
+            (instruction::wide::arithmetic::ADDI, 1, 2, imm)
+        );
+    }
+    for imm in [IMM14_MIN - 1, IMM14_MAX + 1] {
+        assert!(super::encode_addi(1, 1, imm).is_err());
+    }
 }
 #[test]
 fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
@@ -1725,17 +1743,55 @@ fn private_numeric_staging_rejects_reserved_scratch_aliases_without_emitting_cod
 }
 #[test]
 fn encode_load64_rejects_out_of_range_offset() {
-    let imm = (WIDE_IMM_MAX + 1) as i16;
-    assert!(super::encode_load64_rv(1, 2, imm).is_err());
+    for imm in [IMM14_MIN, IMM14_MAX] {
+        let word = super::encode_load64_rv(1, 2, imm).expect("signed 14-bit displacement");
+        assert_eq!(
+            encoding::wide::decode_load(word),
+            (instruction::wide::memory::LOAD64, 1, 2, imm)
+        );
+    }
+    for imm in [IMM14_MIN - 1, IMM14_MAX + 1] {
+        assert!(super::encode_load64_rv(1, 2, imm).is_err());
+    }
 }
 #[test]
 fn encode_store64_rejects_out_of_range_offset() {
-    let imm = (WIDE_IMM_MAX + 1) as i16;
-    assert!(super::encode_store64_rv(1, 2, imm).is_err());
+    for imm in [IMM14_MIN, IMM14_MAX] {
+        let word = super::encode_store64_rv(1, 2, imm).expect("signed 14-bit displacement");
+        assert_eq!(instruction::wide::store_base(word), 1);
+        assert_eq!(instruction::wide::store_value(word), 2);
+        assert_eq!(instruction::wide::imm14(word), imm);
+    }
+    for imm in [IMM14_MIN - 1, IMM14_MAX + 1] {
+        assert!(super::encode_store64_rv(1, 2, imm).is_err());
+    }
 }
 #[test]
 fn encode_branch_rejects_unaligned_offsets() {
     assert!(super::encode_branch_rv(0x0, 1, 2, 2).is_err());
+}
+#[test]
+fn encode_branch_reaches_the_complete_signed_14_bit_word_range() {
+    for (bytes, words) in [(i16::MIN, IMM14_MIN), (i16::MAX & !3, IMM14_MAX), (8, 2)] {
+        let word = super::encode_branch_rv(0x5, 3, 4, bytes).expect("aligned branch offset");
+        assert_eq!(
+            encoding::wide::decode_branch(word),
+            (instruction::wide::control::BGE, 3, 4, words)
+        );
+    }
+}
+#[test]
+fn encode_jal_reaches_the_complete_signed_19_bit_word_range() {
+    for words in [JAL_OFFSET_MIN, JAL_OFFSET_MAX] {
+        let word = encode_jal(1, words * 4).expect("signed 19-bit JAL offset");
+        assert_eq!(
+            encoding::wide::decode_jump(word),
+            (instruction::wide::control::JAL, 1, words)
+        );
+    }
+    for words in [JAL_OFFSET_MIN - 1, JAL_OFFSET_MAX + 1] {
+        assert!(encode_jal(0, words * 4).is_err());
+    }
 }
 #[test]
 fn encode_jal_rejects_unaligned_offsets() {
@@ -1752,7 +1808,7 @@ fn emit_load64_requires_scratch_when_rd_equals_base() {
 fn emit_store64_requires_distinct_scratch() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
-    let err = emit_store64(&mut code, &fixups, 5, 6, 256, 5).unwrap_err();
+    let err = emit_store64(&mut code, &fixups, 5, 6, i64::from(IMM14_MAX) + 1, 5).unwrap_err();
     assert!(err.contains("emit_store64 scratch"));
 }
 #[test]
@@ -1774,7 +1830,7 @@ fn unary_neg_emits_exact_int_syscall() {
     let mut found = false;
     for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*chunk);
-        if instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
+        if instruction::wide::opcode(word) == instruction::wide::system::SCALL
             && encoding::wide::decode_scall(word) == syscalls::SYSCALL_INT_NEG
         {
             found = true;
@@ -1845,7 +1901,7 @@ fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
     ] {
         assert!(
             words.iter().any(|word| {
-                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                instruction::wide::opcode(*word) == instruction::wide::system::SCALL
                     && encoding::wide::decode_scall(*word) == syscall
             }),
             "missing exact adaptive-int comparison syscall {}",
@@ -3023,14 +3079,14 @@ seiyaku WideInfo { permission FixtureAccess;
         syscalls::SYSCALL_POINTER_TO_NORITO,
         syscalls::SYSCALL_DEBUG_LOG,
     ] {
-        let encoded = encoding::wide::encode_scall(syscall as u32).to_le_bytes();
+        let encoded = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(encoded.len()).any(|window| window == encoded),
             "expected V1 pointer/log syscall {syscall:#x}"
         );
     }
-    for retired in [0x53_u8, 0x55_u8] {
-        let encoded = encoding::wide::encode_scall(u32::from(retired)).to_le_bytes();
+    for retired in [0x53_u32, 0x55_u32] {
+        let encoded = encoding::wide::encode_scall(retired).to_le_bytes();
         assert!(
             !code.windows(encoded.len()).any(|window| window == encoded),
             "retired i64 codec syscall {retired:#x} must not be emitted"
@@ -3537,12 +3593,7 @@ fn vrf_builtins_emit_vrf_syscalls() {
             "VRF_VERIFY_BATCH",
         ),
     ] {
-        let needle = if let Ok(imm8) = u8::try_from(syscall) {
-            encoding::wide::encode_scall(u32::from(imm8))
-        } else {
-            encoding::wide::encode_scall(syscall)
-        }
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3563,13 +3614,8 @@ fn vrf_builtins_emit_vrf_syscalls() {
         .iter()
         .filter_map(|chunk| {
             let word = u32::from_le_bytes(*chunk);
-            match instruction::wide::opcode(word) {
-                instruction::wide::system::SCALL => {
-                    Some(u32::from(encoding::wide::decode_sys(word).1))
-                }
-                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_scall(word)),
-                _ => None,
-            }
+            (instruction::wide::opcode(word) == instruction::wide::system::SCALL)
+                .then(|| encoding::wide::decode_scall(word))
         })
         .collect::<Vec<_>>();
     for operation in [
@@ -4395,12 +4441,7 @@ fn public_context_builtins_emit_syscalls() {
             "SYSVAR_ENTRYPOINT",
         ),
     ] {
-        let word = if let Ok(imm8) = u8::try_from(syscall) {
-            encoding::wide::encode_scall(u32::from(imm8))
-        } else {
-            encoding::wide::encode_scall(syscall)
-        };
-        let needle = word.to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall"
@@ -4754,19 +4795,12 @@ fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
     assert_eq!(payment_error.variants.len(), 1);
     assert_eq!(payment_error.variants[0].name, "Unauthorized");
     assert_eq!(payment_error.variants[0].code, 1001);
-    let mut found_abort = false;
-    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
-        let word = u32::from_le_bytes(*chunk);
-        let op = instruction::wide::opcode(word);
-        if op == instruction::wide::system::SCALL {
-            let (_op, imm8) = encoding::wide::decode_sys(word);
-            if imm8 == crate::syscalls::SYSCALL_CONTRACT_ABORT as u8 {
-                found_abort = true;
-            }
-        }
-    }
+    let abort = encoding::wide::encode_scall(crate::syscalls::SYSCALL_CONTRACT_ABORT).to_le_bytes();
     assert!(
-        found_abort,
+        bytes[parsed.code_offset..]
+            .as_chunks::<4>()
+            .0
+            .contains(&abort),
         "expected CONTRACT_ABORT syscall in compiled require"
     );
 }
@@ -4781,18 +4815,14 @@ fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
         0,
         "assert should not enable ZK mode"
     );
-    let mut found_abort = false;
-    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
-        let word = u32::from_le_bytes(*chunk);
-        let op = instruction::wide::opcode(word);
-        if op == instruction::wide::system::SCALL {
-            let (_op, imm8) = encoding::wide::decode_sys(word);
-            if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
-                found_abort = true;
-            }
-        }
-    }
-    assert!(found_abort, "expected ABORT syscall in compiled assert");
+    let abort = encoding::wide::encode_scall(crate::syscalls::SYSCALL_ABORT).to_le_bytes();
+    assert!(
+        bytes[parsed.code_offset..]
+            .as_chunks::<4>()
+            .0
+            .contains(&abort),
+        "expected ABORT syscall in compiled assert"
+    );
 }
 #[test]
 fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
@@ -4805,18 +4835,14 @@ fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
         0,
         "assert_eq should not enable ZK mode"
     );
-    let mut found_abort = false;
-    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
-        let word = u32::from_le_bytes(*chunk);
-        let op = instruction::wide::opcode(word);
-        if op == instruction::wide::system::SCALL {
-            let (_op, imm8) = encoding::wide::decode_sys(word);
-            if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
-                found_abort = true;
-            }
-        }
-    }
-    assert!(found_abort, "expected ABORT syscall in compiled assert_eq");
+    let abort = encoding::wide::encode_scall(crate::syscalls::SYSCALL_ABORT).to_le_bytes();
+    assert!(
+        bytes[parsed.code_offset..]
+            .as_chunks::<4>()
+            .0
+            .contains(&abort),
+        "expected ABORT syscall in compiled assert_eq"
+    );
 }
 #[test]
 fn source_meta_cannot_override_build_configuration() {
@@ -5274,7 +5300,7 @@ fn native_json_accepts_returned_state_cursors() {
 }
 
 #[test]
-fn native_json_construction_emits_one_extended_build_syscall() {
+fn native_json_construction_emits_one_build_syscall() {
     let source = include_str!("fixtures/v1/c146.ko");
     let bytes = test_mode_compiler()
         .compile_source(source)
@@ -5290,7 +5316,7 @@ fn native_json_construction_emits_one_extended_build_syscall() {
         words
             .iter()
             .filter(|word| {
-                instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
+                instruction::wide::opcode(**word) == instruction::wide::system::SCALL
                     && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_JSON_BUILD
             })
             .count(),
@@ -5302,10 +5328,7 @@ fn native_json_construction_emits_one_extended_build_syscall() {
         syscalls::SYSCALL_JSON_SET_I64,
         syscalls::SYSCALL_JSON_SET_ACCOUNT_ID,
     ] {
-        assert!(words.iter().all(|word| {
-            instruction::wide::opcode(*word) != instruction::wide::system::SCALL
-                || instruction::wide::imm8(*word) as u8 as u32 != retired
-        }));
+        assert!(!words.contains(&encoding::wide::encode_scall(retired)));
     }
 }
 #[test]
@@ -7184,18 +7207,13 @@ fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
         .iter()
         .filter_map(|word| {
             let word = u32::from_le_bytes(*word);
-            match instruction::wide::opcode(word) {
-                instruction::wide::system::SCALL => {
-                    Some(u32::from(encoding::wide::decode_sys(word).1))
-                }
-                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_scall(word)),
-                _ => None,
-            }
+            (instruction::wide::opcode(word) == instruction::wide::system::SCALL)
+                .then(|| encoding::wide::decode_scall(word))
         })
         .collect()
 }
 #[test]
-fn json_string_and_bool_getters_emit_their_extended_syscalls() {
+fn json_string_and_bool_getters_emit_their_registry_syscalls() {
     let source = r#"
 seiyaku JsonFields {
     view fn flags() authorize(anyone) -> bool {

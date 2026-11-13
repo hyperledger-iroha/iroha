@@ -15,13 +15,13 @@ fn dump(src: &str) {
     let mut pc = 0u64;
     while pc + 4 <= mem.code_len() {
         let w = ivm_decode(&mem, pc).unwrap();
-        let opcode = (w >> 24) as u8;
-        let (_, imm) = ivm::encoding::wide::decode_sys(w);
+        let opcode = ivm::instruction::wide::opcode(w);
         if opcode == ivm::instruction::wide::system::SCALL {
-            println!("SCALL @+{pc} imm=0x{imm:02x}");
+            let number = ivm::encoding::wide::decode_scall(w);
+            println!("SCALL @+{pc} number=0x{number:06x}");
         }
         if count < 32 {
-            println!("+{pc:03}: op=0x{opcode:02x} imm=0x{imm:02x} raw=0x{w:08x}");
+            println!("+{pc:03}: op=0x{opcode:02x} raw=0x{w:08x}");
             count += 1;
         }
         pc += 4;

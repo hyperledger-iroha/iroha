@@ -33,8 +33,8 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
                 6,
                 7,
             ),
-            4 => enc::encode_rr(wide::arithmetic::CLZ, 20, 6, 255),
-            5 => enc::encode_rr(wide::arithmetic::CTZ, 21, 7, 255),
+            4 => enc::encode_rr(wide::arithmetic::CLZ, 20, 6, 0),
+            5 => enc::encode_rr(wide::arithmetic::CTZ, 21, 7, 0),
             _ => enc::encode_ri(wide::arithmetic::XORI, 22, 6, -128),
         })
         .collect::<Vec<_>>();
@@ -48,7 +48,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         &[
             (6, 0xffff_ffff_ffff_fffe),
             (7, 0x8000_ffff_ffff_ffff),
-            (255, u64::MAX),
+            (31, u64::MAX),
         ],
         100_000,
     );
@@ -321,17 +321,18 @@ fn common_source_view_preserves_every_old_family_and_all_profile_columns() {
         wide::arithmetic::ANDI,
         wide::arithmetic::ORI,
         wide::arithmetic::XORI,
-        wide::arithmetic::ROTL_IMM,
-        wide::arithmetic::ROTR_IMM,
     ] {
         words.push(enc::encode_ri(opcode, 8, 6, -128));
     }
+    for opcode in [wide::arithmetic::ROTL_IMM, wide::arithmetic::ROTR_IMM] {
+        words.push(enc::encode_ri(opcode, 8, 6, 63));
+    }
     words.extend(COMPARE_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 7)));
     words.extend(BRANCH_OPS.map(|opcode| enc::encode_branch(opcode, 6, 7, 1)));
-    words.extend(COUNT_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 255)));
+    words.extend(COUNT_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 0)));
     words.extend(MULTIPLY_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 7)));
     for opcode in [wide::arithmetic::NEG, wide::arithmetic::NOT] {
-        words.push(enc::encode_rr(opcode, 8, 6, 255));
+        words.push(enc::encode_rr(opcode, 8, 6, 0));
     }
     for condition in [0, 7] {
         words.push(enc::encode_rr(wide::arithmetic::CMOV, 8, 6, condition));
@@ -347,12 +348,7 @@ fn common_source_view_preserves_every_old_family_and_all_profile_columns() {
                 enc::encode_ri(wide::arithmetic::ADDI, 25, 25, 0),
             ],
             3,
-            &[
-                (6, 0x8000_ffff_ffff_ffff),
-                (7, u64::MAX),
-                (8, 91),
-                (255, 37),
-            ],
+            &[(6, 0x8000_ffff_ffff_ffff), (7, u64::MAX), (8, 91), (31, 37)],
             u64::MAX,
         );
         let rows = segment.witness_rows(&records).unwrap();
@@ -390,7 +386,7 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
         &[(6, u64::MAX), (7, i64::cast_unsigned(i64::MIN))],
         1_000,
     );
-    for register in [0, 6, 7, 8, 255] {
+    for register in [0, 6, 7, 8, 31] {
         let mut before = segment.before;
         before.tags[register] = true;
         assert!(
@@ -425,8 +421,8 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
 fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope() {
     let (segment, records) = maximum_segment();
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-    assert_eq!(segment.base_width_v1(), 1_356);
-    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+    assert_eq!(segment.base_width_v1(), 908);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_025);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -444,8 +440,8 @@ fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope()
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_153_152);
-    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+    assert_eq!(bound, 3_149_632);
+    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xda; 32],
@@ -463,7 +459,7 @@ fn native_stark_proves_maximum_multiply_segment_and_binds_signedness_and_outputs
     let (segment, records) = maximum_segment();
     let columns = segment.columns(&records).unwrap();
     let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-    assert!(proof.len() <= 4_153_152);
+    assert!(proof.len() <= 3_149_632);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for register in [8, 9, 10, 11] {
         let mut after = segment.after;

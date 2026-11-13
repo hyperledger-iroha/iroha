@@ -52,11 +52,10 @@ pub(super) fn emit_saved_registers(
         i64::try_from(offset).map_err(|_| "saved register slot exceeds signed address space")?;
         offsets.push(offset);
     }
-    let large = offsets
-        .iter()
-        .filter(|offset| **offset > WIDE_IMM_MAX as usize)
-        .count();
-    // At most ten allocated callee-preserved registers fit in one 256-byte
+    let direct =
+        |offset: usize| i64::try_from(offset).is_ok_and(|offset| fit_imm14(offset).is_some());
+    let large = offsets.iter().filter(|offset| !direct(**offset)).count();
+    // At most ten allocated callee-preserved registers fit in one 16 KiB
     // window. Four large accesses save at least 24 executable bytes, covering
     // a worst-case 16-byte new i64 directory/data entry as well.
     let windowed = !retain_scalar() && large >= 4 && registers.len() <= 10;
@@ -67,11 +66,11 @@ pub(super) fn emit_saved_registers(
         let first_large = offsets
             .iter()
             .copied()
-            .find(|offset| *offset > WIDE_IMM_MAX as usize)
+            .find(|offset| !direct(*offset))
             .unwrap();
         i64::try_from(first_large)
             .ok()
-            .and_then(|offset| offset.checked_sub(i64::from(WIDE_IMM_MIN)))
+            .and_then(|offset| offset.checked_sub(i64::from(IMM14_MIN)))
             .ok_or("saved register window anchor overflow")?;
     }
     let mut window = StackTableWindow::new(27);
@@ -150,7 +149,7 @@ pub(super) fn emit_epilogue(
     )?;
     push_word(
         code,
-        encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0),
+        encoding::wide::encode_ri(instruction::wide::control::JALR, 0, 1, 0),
     );
     Ok(())
 }

@@ -102,7 +102,7 @@ fn payout_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 4,
+        max_cycles: 0,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -187,7 +187,7 @@ fn payout_contract_artifact() -> (
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
@@ -203,7 +203,7 @@ fn pool_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 4,
+        max_cycles: 0,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -276,7 +276,7 @@ fn pool_contract_artifact() -> (
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }

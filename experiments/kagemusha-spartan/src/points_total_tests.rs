@@ -189,9 +189,9 @@ where
 {
     let shape = Shape {
         label: "total points inner",
-        sx: 11,
+        sx: 12,
         row_bits: 2,
-        col_bits: 9,
+        col_bits: 10,
         k: 3,
     };
     let gens = Gens::<C>::new(shape.cols());

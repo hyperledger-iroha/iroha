@@ -249,7 +249,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000,
+        max_cycles: 0,
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -841,6 +841,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             )),
         },
         torii: A::Torii {
+            runtime_checkpoint: Default::default(),
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             max_content_len: (1_048_576u64).into(),
             data_dir: torii_data_dir,
@@ -1170,7 +1171,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ivm_max_decoded_instructions: defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
             ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-            quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_gas: defaults::pipeline::QUARANTINE_TX_MAX_GAS,
             query_default_cursor_mode: A::QueryCursorMode::Ephemeral,
             query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,

@@ -75,7 +75,8 @@ seiyaku LiteralRoots {
             .iter()
             .any(|function| function.function_name == "private_authority")
     );
-    let authority_word = crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_GET_AUTHORITY);
+    let authority_word =
+        crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_GET_AUTHORITY);
     for output in [&before, &after] {
         let parsed = crate::metadata::ProgramMetadata::parse(&output.artifact).unwrap();
         assert_eq!(
@@ -152,7 +153,7 @@ fn literal_folding_preserves_forced_zk_and_cycle_metadata() {
     let direct = "seiyaku Forced { view fn read() authorize(anyone) -> quantity { let quantity value = 0; return value; } }";
     let compiler = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        max_cycles: 100_000,
+        zk_trace_cycles: std::num::NonZeroU64::new(100_000).unwrap(),
         ..CompilerOptions::default()
     });
     let helper = compiler
@@ -165,6 +166,11 @@ fn literal_folding_preserves_forced_zk_and_cycle_metadata() {
         helper, direct,
         "literal substitution leaves the same global ZK and cycle policy"
     );
+    let header = crate::metadata::ProgramMetadata::parse(&helper)
+        .expect("forced-zk header")
+        .metadata;
+    assert_eq!(header.mode, crate::metadata::mode::ZK);
+    assert_eq!(header.max_cycles, 100_000, "the selected ZK trace bound");
 }
 
 #[test]
@@ -371,7 +377,6 @@ fn canonical_dlmm_literal_folding_measures_same_compiler_artifacts_and_public_me
             metadata.version_major,
             metadata.version_minor,
             metadata.mode,
-            metadata.vector_length,
             metadata.max_cycles,
             metadata.abi_version,
         )

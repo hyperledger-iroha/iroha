@@ -16,7 +16,7 @@ use crate::{
         },
     },
     state::{StateReadOnly, StateTransaction},
-    sumeragi::certified_chain::committed_block,
+    sumeragi::certified_chain::committed_identity,
 };
 use iroha_crypto::{Hash, HashOf};
 #[cfg(test)]
@@ -111,9 +111,9 @@ fn current_custody(
     if committed.anchor.state_digest != current.index.digest || committed.state != current.state {
         return Err(Error::Custody);
     }
-    // Consensus-visible data only (certificates are per node): the committed frame of the
-    // parent is the anchored block.
-    let parent_block = committed_block(tx, parent).map_err(|_| Error::Custody)?;
+    // Consensus-visible identity only (certificates are per node). Portable checkpoint
+    // ancestry authenticates an omitted parent without granting full-body custody.
+    let parent_block = committed_identity(tx, parent).map_err(|_| Error::Custody)?;
     if *parent_block.block_hash().as_ref() != committed.anchor.block_hash {
         return Err(Error::Custody);
     }

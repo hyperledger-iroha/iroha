@@ -9,6 +9,12 @@
 //! admitted, counted and executed as exempt exactly when it is eligible. A transaction of an
 //! exempt shape that is not eligible is never refused for that: it pays the ordinary fee.
 //!
+//! A keepalive is eligible exactly when it is due (K5): an SCCP term on the committed parent,
+//! or Parliament's terms. Those are Parliament's due predicate on a committed World at the
+//! candidate height (admission, quoting, the proposer and the queue's quotas) or the executing
+//! block's own `governance_due_applied` (execution and validation, K2); the two agree because
+//! the due predicate lists exactly what the pass applies.
+//!
 //! Eligible forgery evidence is exempt only on success; R-EX rejects a failed carrier.
 //! For other eligible transactions that fail, the executor charges
 //! the ordinary Nexus fee within its signed fee intent, when that intent covers the fee and
@@ -16,6 +22,7 @@
 
 use super::{
     admission::{self, SccpExemptClassV1},
+    keepalive::DueWorkUnavailable,
     light_clients, self_claim,
 };
 use crate::state::{StateTransaction, WorldReadOnly};
@@ -37,7 +44,8 @@ fn single<T: 'static>(payload: &TransactionPayload) -> Option<&T> {
 }
 
 /// Return the exempt class `payload` is eligible for against the committed parent World
-/// `world`, or `None` when it pays the ordinary fee (§4.19).
+/// `world` for the candidate block at `next_height`, or `None` when it pays the ordinary fee
+/// (§4.19).
 ///
 /// Only a payload with an [`admission::exempt_shape`] can be eligible, and only while SCCP
 /// exists. Per class:
@@ -51,34 +59,38 @@ fn single<T: 'static>(payload: &TransactionPayload) -> Option<&T> {
 /// transaction and rejects an eligible one that is invalid.
 #[must_use]
 pub fn exempt_class(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     payload: &TransactionPayload,
     committed_time_ms: Option<u64>,
+    next_height: u64,
 ) -> Option<SccpExemptClassV1> {
     exempt_class_from(
         &super::eligibility::Current(world),
         payload,
         committed_time_ms,
+        |time_ms| {
+            super::parliament_iface::governance_due(world, committed_time_ms, next_height, time_ms)
+        },
     )
 }
 
-/// Classify using the exact borrowed current or acquired pre-block facts.
+/// Classify using the exact borrowed current or acquired pre-block facts. `governance` supplies
+/// Parliament's terms of a keepalive's due predicate at the keepalive's block time; it is asked
+/// only for a keepalive that no SCCP term justifies.
 pub(crate) fn exempt_class_from(
     source: &(impl super::eligibility::EligibilityRead + ?Sized),
     payload: &TransactionPayload,
     committed_time_ms: Option<u64>,
+    governance: impl FnOnce(u64) -> Result<bool, DueWorkUnavailable>,
 ) -> Option<SccpExemptClassV1> {
     if super::keepalive::valid_shape(payload) {
         return payload
             .creation_time_ms
             .checked_add(1)
             .filter(|time| {
-                // TODO(design §12.3 slice 3, open list): a keepalive justified by Parliament
-                // work alone is not classified exempt, so fee admission refuses it. K3 needs
-                // Parliament's terms at the candidate height for admission and the block's own
-                // `governance_due_applied` at execution.
-                super::keepalive::due_from(source, committed_time_ms, 0, *time, || Ok(false))
-                    == Ok(true)
+                super::keepalive::due_from(source, committed_time_ms, 0, *time, || {
+                    governance(*time)
+                }) == Ok(true)
             })
             .map(|_| SccpExemptClassV1::Keepalive);
     }
@@ -105,11 +117,12 @@ pub(crate) fn exempt_class_from(
 /// succeeds, judged against the committed parent World `world` ([`exempt_class`]).
 #[must_use]
 pub fn exempt_on_success(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     payload: &TransactionPayload,
     committed_time_ms: Option<u64>,
+    next_height: u64,
 ) -> bool {
-    exempt_class(world, payload, committed_time_ms).is_some()
+    exempt_class(world, payload, committed_time_ms, next_height).is_some()
 }
 
 /// Return the [`exempt_class`] of `payload` executing in `state_transaction`, judged against
@@ -126,10 +139,15 @@ pub fn exempt_class_in_block(
         return Ok(None);
     }
     let committed_time_ms = super::hold::committed_time_ms(state_transaction)?;
+    // The block's own pass decides Parliament's terms (K2).
+    // SPEC: §13.4 HC809 — the block's own pass justifies a keepalive (K2, K3).
+    let applied = state_transaction.governance_due_applied
+        && !cfg!(all(test, sumeragi_core_mutation = "HC809"));
     Ok(exempt_class_from(
         &super::eligibility::TransactionParent(&state_transaction.world),
         payload,
         committed_time_ms,
+        |_| Ok(applied),
     ))
 }
 
@@ -178,10 +196,11 @@ mod tests {
         assert!(!exempt_on_success(
             &view,
             sample_signed_transaction().payload(),
-            None
+            None,
+            0
         ));
         let advance = with_instructions(vec![eligible_advance().into()]);
-        assert_eq!(exempt_class(&view, &advance, None), None);
+        assert_eq!(exempt_class(&view, &advance, None, 0), None);
     }
 
     #[test]
@@ -192,9 +211,9 @@ mod tests {
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         let ordinary = sample_signed_transaction();
         assert_eq!(admission::exempt_shape(ordinary.payload()), None);
-        assert!(!exempt_on_success(&*stx.world, ordinary.payload(), None));
+        assert!(!exempt_on_success(&*stx.world, ordinary.payload(), None, 0));
         let record = with_instructions(vec![SampleInstructions::record().into()]);
-        assert!(!exempt_on_success(&*stx.world, &record, None));
+        assert!(!exempt_on_success(&*stx.world, &record, None, 0));
         assert!(single::<AdvanceSccpLightClientV1>(&record).is_none());
     }
 
@@ -210,18 +229,26 @@ mod tests {
         let mut block = state.block(header(2));
         let mut stx = block.transaction();
         let payload = with_instructions(vec![advance.clone().into()]);
-        assert!(!exempt_on_success(&*stx.world, &payload, None), "no SCCP");
+        assert!(
+            !exempt_on_success(&*stx.world, &payload, None, 0),
+            "no SCCP"
+        );
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         let class = Some(SccpExemptClassV1::KeeperAdvance { network: NETWORK });
-        assert_eq!(exempt_class(&*stx.world, &payload, None), class);
+        assert_eq!(exempt_class(&*stx.world, &payload, None, 0), class);
         // No account of the test World is registered: the authority does not matter.
         for seed in [1, 2] {
             let mut other = payload.clone();
             other.authority = authority(seed);
-            assert_eq!(exempt_class(&*stx.world, &other, None), class);
+            assert_eq!(exempt_class(&*stx.world, &other, None, 0), class);
         }
         assert_eq!(
-            exempt_class(&*stx.world, &with_instructions(vec![backfill.into()]), None),
+            exempt_class(
+                &*stx.world,
+                &with_instructions(vec![backfill.into()]),
+                None,
+                0
+            ),
             None,
             "a Backfill pays the ordinary fee"
         );
@@ -229,7 +256,8 @@ mod tests {
             exempt_class(
                 &*stx.world,
                 &with_instructions(vec![advance.clone().into(), advance.into()]),
-                None
+                None,
+                0
             ),
             None,
             "only a single advance has the keeper-advance shape"
@@ -248,7 +276,7 @@ mod tests {
             admission::exempt_shape(&settle),
             Some(SccpExemptClassV1::SelfClaim)
         );
-        assert_eq!(exempt_class(&*stx.world, &settle, None), None);
+        assert_eq!(exempt_class(&*stx.world, &settle, None, 0), None);
         // No other SCCP instruction has an exempt shape.
         for instruction in [
             InstructionBox::from(SampleInstructions::initialize()),
@@ -257,7 +285,7 @@ mod tests {
             SampleInstructions::equivocation().into(),
         ] {
             assert_eq!(
-                exempt_class(&*stx.world, &with_instructions(vec![instruction]), None),
+                exempt_class(&*stx.world, &with_instructions(vec![instruction]), None, 0),
                 None
             );
         }
@@ -271,7 +299,7 @@ mod tests {
         let payload = with_instructions(vec![eligible_advance().into()]);
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         assert!(
-            exempt_on_success(&*stx.world, &payload, None),
+            exempt_on_success(&*stx.world, &payload, None, 0),
             "eligible against the block's own writes"
         );
         assert_eq!(
@@ -284,5 +312,67 @@ mod tests {
                 .expect("original parent source"),
             None
         );
+    }
+
+    /// A standalone keepalive of K3's exact shape.
+    fn keepalive(time: u64) -> TransactionPayload {
+        let mut payload = sample_signed_transaction().payload().clone();
+        payload.authority = authority(31);
+        payload.instructions = Executable::Instructions(
+            vec![iroha_data_model::isi::chain::Keepalive {}.into()].into(),
+        );
+        payload.creation_time_ms = time;
+        payload.fee_payment =
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        payload
+    }
+
+    #[test]
+    fn a_keepalive_is_exempt_exactly_when_parliament_or_sccp_makes_it_due() {
+        let state = blank_state();
+        let mut block = state.block(header(2));
+        let mut stx = block.transaction();
+        let payload = keepalive(100);
+        assert!(super::super::keepalive::valid_shape(&payload));
+        // Without SCCP and without Parliament work it is not due, so it is not eligible.
+        assert_eq!(
+            exempt_class_from(
+                &super::super::eligibility::Current(&*stx.world),
+                &payload,
+                None,
+                |_| Ok(false),
+            ),
+            None
+        );
+        // Parliament's terms alone justify it, at the keepalive's block time.
+        assert_eq!(
+            exempt_class_from(
+                &super::super::eligibility::Current(&*stx.world),
+                &payload,
+                None,
+                |time_ms| Ok(time_ms == 101),
+            ),
+            Some(SccpExemptClassV1::Keepalive)
+        );
+        // Unavailable Parliament work is never a due set.
+        assert_eq!(
+            exempt_class_from(
+                &super::super::eligibility::Current(&*stx.world),
+                &payload,
+                None,
+                |_| Err(DueWorkUnavailable),
+            ),
+            None
+        );
+        // Execution asks the block's own pass (K2).
+        assert_eq!(exempt_class_in_block(&stx, &payload).expect("source"), None);
+        stx.governance_due_applied = true;
+        assert_eq!(
+            exempt_class_in_block(&stx, &payload).expect("source"),
+            Some(SccpExemptClassV1::Keepalive),
+            "the block's own pass justifies a keepalive's exemption"
+        );
+        // A root without the anonymous family has no Parliament term at admission.
+        assert_eq!(exempt_class(&*stx.world, &payload, None, 3), None);
     }
 }

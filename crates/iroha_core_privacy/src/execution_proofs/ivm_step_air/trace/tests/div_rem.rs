@@ -54,9 +54,15 @@ pub(super) fn attempted(
             assert!(matches!(actual, Err(ivm::VMError::OutOfGas)));
             SegmentOutcome::OutOfGas
         }
-        DiagnosticStepOutcome::Trapped(VmTrapKind::AssertionFailed) => {
-            assert!(matches!(actual, Err(ivm::VMError::AssertionFailed)));
-            SegmentOutcome::AssertionFailed
+        DiagnosticStepOutcome::Trapped(VmTrapKind::NumericFault) => {
+            assert!(matches!(
+                actual,
+                Err(ivm::VMError::NumericFault(
+                    ivm::numeric::NumericFaultV1::DivisionByZero
+                        | ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
+                ))
+            ));
+            SegmentOutcome::NumericFault
         }
         other => panic!("unexpected division boundary {other:?}"),
     };
@@ -77,7 +83,7 @@ fn expected(kind: usize, a: u64, b: u64, gas: u64) -> Result<u64, SegmentOutcome
     }
     if b == 0 || (division::signed_kind(kind) && a == i64::cast_unsigned(i64::MIN) && b == u64::MAX)
     {
-        return Err(SegmentOutcome::AssertionFailed);
+        return Err(SegmentOutcome::NumericFault);
     }
     Ok(match kind {
         0 => i64::cast_unsigned(u64::cast_signed(a) / u64::cast_signed(b)),
@@ -283,11 +289,24 @@ fn authenticated_root_gas_is_distinct_from_recorded_division_budget() {
 }
 
 #[test]
-fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries() {
+fn division_attempts_enforce_strict_zk_cycle_limit_and_public_boundaries() {
     let (segment, records) = single(0, 17, 0, 10);
     let instruction = records[0].instruction.unwrap();
-    for (max, mode, limit) in [(7, 0, 7), (0, ivm::ivm_mode::ZK, ivm::zk::MAX_CYCLES)] {
-        let contract = contract_with_cycle_policy(&[instruction], max, mode);
+    // A non-ZK artifact has no cycle limit, so a trapped attempt at any cycle stays admitted.
+    let mut unbounded = records.clone();
+    unbounded[0].before.cycles = u64::MAX;
+    unbounded[0].after.cycles = u64::MAX;
+    let valid = ScalarSegment::new(
+        segment.contract.clone(),
+        1,
+        &unbounded[0].before,
+        &unbounded[0].after,
+        segment.outcome,
+    )
+    .unwrap();
+    assert_rows(&valid, &valid.witness_rows(&unbounded).unwrap());
+    for (max, limit) in [(1, 1), (7, 7), (1 << 40, 1 << 40)] {
+        let contract = contract_with_cycle_policy(&[instruction], max, ivm::ivm_mode::ZK);
         for cycles in [limit - 1, limit] {
             let mut changed = records.clone();
             let pc = (contract.code_offset() - contract.header_len()) as u64;
@@ -310,7 +329,7 @@ fn division_attempts_enforce_strict_artifact_cycle_limit_and_public_boundaries()
             }
         }
     }
-    for register in [0, 6, 7, 8, 255] {
+    for register in [0, 6, 7, 8, 31] {
         let mut before = segment.before;
         before.tags[register] = true;
         assert!(

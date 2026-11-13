@@ -113,6 +113,15 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
         closing = CompletableFuture.completedFuture(null)
         enrollment
     }
+    /** Authenticate future experimental programs before their separate account admission. */
+    fun installSpartan(programBundle: ByteArray, signedManifest: ByteArray,
+        signature: ByteArray): KagemushaSpartanRuntimeV1 = synchronized(gate) {
+        requireLive()
+        check(admission.canTransferToEnrollment()) { "account admission already started" }
+        val selected = runtime.installSpartan(programBundle, signedManifest, signature)
+        closing = CompletableFuture.completedFuture(null)
+        selected
+    }
     /** Retry ordinary refusal using the same originals, Native challenge and account signature.
      * Explicit future cancellation retires custody; successful admission transfers it once.
      */

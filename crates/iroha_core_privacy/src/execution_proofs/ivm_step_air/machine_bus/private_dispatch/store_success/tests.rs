@@ -45,7 +45,7 @@ fn word_event(index: u32, clock: u32, before: u64, after: u64, write: bool) -> [
         write,
     )
 }
-fn program(base: u8, source: u8, imm: i8) -> Program {
+fn program(base: u8, source: u8, imm: i16) -> Program {
     Program::new(dispatch_tests::contract(
         &[enc::encode_store(wide::memory::STORE64, base, source, imm)],
         1_000,
@@ -59,17 +59,17 @@ impl Fixture {
         let mut dispatch = dispatch_tests::Fixture::new(program, 0, false, 0);
         dispatch.schedule = schedule.dispatch();
         let instruction = program.words[0];
-        let base = address.wrapping_sub(i64::cast_unsigned(i64::from(wide::imm8(instruction))));
-        let value = if wide::rs1(instruction) == 0 {
+        let base = address.wrapping_sub(i64::cast_unsigned(i64::from(wide::imm14(instruction))));
+        let value = if wide::store_value(instruction) == 0 {
             0
-        } else if wide::rs1(instruction) == wide::rd(instruction) {
+        } else if wide::store_value(instruction) == wide::store_base(instruction) {
             base
         } else {
             0x0123_4567_89ab_cdef
         };
         let private = private
-            && wide::rs1(instruction) != 0
-            && wide::rs1(instruction) != wide::rd(instruction);
+            && wide::store_value(instruction) != 0
+            && wide::store_value(instruction) != wide::store_base(instruction);
         for (word, value) in [(6, base), (7, address)] {
             dispatch_tests::bits(
                 &mut dispatch.row
@@ -80,12 +80,12 @@ impl Fixture {
         dispatch_tests::carries(
             &mut dispatch.row[super::super::CARRIES + 8..super::super::CARRIES + 12],
             base,
-            i64::cast_unsigned(i64::from(wide::imm8(instruction))),
+            i64::cast_unsigned(i64::from(wide::imm14(instruction))),
             false,
         );
         for (slot, index, value, tag) in [
-            (4, wide::rd(instruction), base, false),
-            (5, wide::rs1(instruction), value, private),
+            (4, wide::store_base(instruction), base, false),
+            (5, wide::store_value(instruction), value, private),
         ] {
             dispatch.packets.fields[slot] = dispatch_tests::event(
                 (
@@ -723,7 +723,7 @@ fn actual_native_store_matches_original_operand_order_bytes_and_completion_tarif
                         vm.set_register(3, packet::half(originals.producer(5), BEFORE, 0));
                         vm.registers.set_tag(3, private);
                     }
-                    let before: Vec<_> = (0..256)
+                    let before: Vec<_> = (0..ivm::parallel::REGISTER_COUNT)
                         .map(|i| (vm.registers.get(i), vm.registers.tag(i)))
                         .collect();
                     vm.memory.clear_tracking();

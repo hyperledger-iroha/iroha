@@ -7,6 +7,10 @@ publish = false
 
 [workspace]
 
+[features]
+# Isolated hardware fixture binaries only; never selected by a shipping bridge.
+device-fixture = ["iroha_data_model/test-fixtures", "iroha_data_model/transparent_api"]
+
 [dependencies]
 iroha_pasta = { path = "../../crates/iroha_pasta" }
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["bls"] }
@@ -23,6 +27,9 @@ num-bigint = "0.4.8"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
 norito = { path = "../../crates/norito", default-features = false, features = ["base-codec"] }
+
+[dev-dependencies]
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["bls", "test-fixtures", "transparent_api"] }
 
 [patch.crates-io]
 # Match the canonical workspace's fallible native-digit Quantity implementation.

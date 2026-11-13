@@ -9,15 +9,14 @@ fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut out = meta.encode();

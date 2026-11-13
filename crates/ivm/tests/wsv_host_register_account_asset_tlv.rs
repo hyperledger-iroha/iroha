@@ -73,7 +73,7 @@ fn register_account_and_asset_then_mint() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     // 2) Register the recipient account
@@ -87,7 +87,7 @@ fn register_account_and_asset_then_mint() {
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
     // 3) Register asset definition rose#wonder
@@ -110,7 +110,7 @@ fn register_account_and_asset_then_mint() {
         .preload_input(domain_offset, &dom)
         .expect("preload owning domain");
     vm.set_register(14, Memory::INPUT_START + domain_offset);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
+    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
     // 4) Mint 7 units of rose to bob
@@ -131,7 +131,7 @@ fn register_account_and_asset_then_mint() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
+    let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
 }
@@ -155,7 +155,7 @@ fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
     // Bare asset names no longer inherit a domain from the caller.
@@ -164,7 +164,7 @@ fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
         .preload_input(0, &invalid_name)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
+    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET]);
     vm.load_program(&prog_ad).unwrap();
     let err = vm.run().expect_err("bare asset names should be rejected");
     assert!(matches!(err, ivm::VMError::DecodeError));

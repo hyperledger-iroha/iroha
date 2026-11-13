@@ -688,10 +688,16 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     let mut vm = quiet_vm(1_000_000);
     let mut gpr = [0; crate::parallel::REGISTER_COUNT];
     gpr[7] = 91;
-    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
-    vm.trace_log.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
-    vm.delta_trace.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
-    vm.delta_trace.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
+    vm.trace_log
+        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
+    vm.trace_log
+        .record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
+    vm.delta_trace
+        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
+    vm.delta_trace
+        .record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
     let reg_root = vm.registers.merkle_root();
     let mem_root = vm.memory.root();
     vm.step_log.prepare_cycles(1).expect("prepaid cycle row");
@@ -715,9 +721,12 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     vm.pc_trace.prepare(1, None).unwrap();
     vm.pc_trace.record_reserved(12);
     vm.trace_log.scrub();
-    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
+    vm.trace_log
+        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
     gpr[7] = 0;
-    vm.trace_log.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
+    vm.trace_log
+        .record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
     assert_ne!(copied.pc_trace.as_slice(), vm.pc_trace.as_slice());
     assert!(!copied.trace_log.entries().eq(vm.trace_log.entries()));
 }
@@ -840,8 +849,14 @@ fn worker_private_range_copy_refusal_leaves_source_intact() {
 #[test]
 fn idle_retention_rejects_live_trace_allocations_without_discarding_them() {
     let mut vm = quiet_vm(1_000_000);
-    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
-    vm.trace_log.record_reserved(4, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+    vm.trace_log
+        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
+    vm.trace_log.record_reserved(
+        4,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
     let retained_trace = vm.trace_log.try_clone_allocation(None).unwrap();
     assert!(!vm.try_retain_cache_allocations());
     assert!(vm.trace_log.entries().eq(retained_trace.entries()));

@@ -37,7 +37,7 @@ fn value(packet: &ivm::execution_packets::NativePacket, after: bool) -> u64 {
 
 fn instruction(opcode: u8, destination: u8, left: u8, amount: u8) -> u32 {
     if IMMEDIATE.contains(&opcode) {
-        enc::encode_ri(opcode, destination, left, u8::cast_signed(amount))
+        enc::encode_ri(opcode, destination, left, i16::from(amount))
     } else {
         enc::encode_rr(opcode, destination, left, amount)
     }
@@ -73,7 +73,7 @@ fn check_expression(native: &NativeInvocation, window: usize, word: u32, left: u
         assert_eq!(second.after_private(), 0);
     } else {
         assert_eq!(Fields::native(second).0, [F::ZERO; packet::WIDTH]);
-        assert_eq!(amount, u64::from(i8::cast_unsigned(wide::imm8(word))));
+        assert_eq!(amount, u64::from(wide::rotate_amount(word)));
     }
     let destination = wide::rd(word);
     assert_eq!(output.enabled(), destination != 0);
@@ -158,7 +158,7 @@ fn every_register_count_keeps_full_original_bits_and_signed_shift_semantics() {
 
 #[test]
 fn every_rotate_immediate_is_unsigned_without_a_fabricated_count_read() {
-    let amounts: Vec<u8> = (0..=u8::MAX).collect();
+    let amounts: Vec<u8> = (0..=wide::ROTATE_AMOUNT_MAX).collect();
     for left in [i64::cast_unsigned(i64::MIN), 0xfedc_ba98_7654_3210] {
         for amounts in amounts.chunks(29) {
             let mut body = vec![enc::encode_literal(wide::memory::LDI64, 4, 0)];
@@ -198,7 +198,7 @@ fn shifts_preserve_read_order_atomic_aliases_and_r0_reads_without_writes() {
             (0, 4, 5),
             (4, 4, 4),
             (6, 0, 5),
-            (0, 255, 0),
+            (0, 31, 0),
         ] {
             let mut body = Vec::new();
             for opcode in REGISTER.into_iter().chain(IMMEDIATE) {
@@ -209,7 +209,7 @@ fn shifts_preserve_read_order_atomic_aliases_and_r0_reads_without_writes() {
                     destination,
                     first,
                     if IMMEDIATE.contains(&opcode) {
-                        255
+                        wide::ROTATE_AMOUNT_MAX
                     } else {
                         second
                     },
@@ -223,7 +223,7 @@ fn shifts_preserve_read_order_atomic_aliases_and_r0_reads_without_writes() {
             for (index, opcode) in REGISTER.into_iter().chain(IMMEDIATE).enumerate() {
                 let word = body[index * 3 + 2];
                 let amount = if IMMEDIATE.contains(&opcode) {
-                    255
+                    u64::from(wide::ROTATE_AMOUNT_MAX)
                 } else {
                     match second {
                         0 => 0,
@@ -257,7 +257,11 @@ fn all_shift_original_ports_and_barrel_stage_cells_reject_mutations() {
             opcode,
             4,
             4,
-            if IMMEDIATE.contains(&opcode) { 255 } else { 5 },
+            if IMMEDIATE.contains(&opcode) {
+                wide::ROTATE_AMOUNT_MAX
+            } else {
+                5
+            },
         );
         let body = [
             enc::encode_literal(wide::memory::LDI64, 4, 0),

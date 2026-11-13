@@ -46,7 +46,7 @@ pub(super) fn finality_page(
     }
     let network = network_id_from_genesis_hash_bytes(network_bytes);
     let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes(checkpoint_hex, MAX)?)
-        .map_err(|_| invalid())?;
+        .map_err(|error| NativeValidationError::Read("checkpoint_decode", error))?;
     let mut total = 0usize;
     let mut frames = Vec::new();
     for frame in proof_frames_hex {
@@ -60,11 +60,11 @@ pub(super) fn finality_page(
                 &encoded,
                 norito::canonical_decode_limits(encoded.len()),
             )
-            .map_err(|_| invalid())?,
+            .map_err(|error| NativeValidationError::Read("proof_decode", error.into()))?,
         );
     }
-    let page =
-        verify_checkpoint_page(network, &checkpoint, &frames, 64, MAX).map_err(|_| invalid())?;
+    let page = verify_checkpoint_page(network, &checkpoint, &frames, 64, MAX)
+        .map_err(|error| NativeValidationError::Read("finality_page", error))?;
     page.tip()
         .verify_global_scope(network, checkpoint.chain_id())
         .map_err(|_| invalid())?;
@@ -134,7 +134,11 @@ fn keys(expected: &[u8]) -> Result<Vec<StateKeyV1>, NativeValidationError> {
 #[pyo3(name = "verify_state_rows_v1")]
 #[expect(
     clippy::too_many_arguments,
+<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
 )]
 pub(super) fn verify_state_rows_v1_py(
     py: Python<'_>,

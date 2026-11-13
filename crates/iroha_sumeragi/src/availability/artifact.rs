@@ -293,6 +293,11 @@ impl VerifiedAvailability<'_> {
                 cfg!(sumeragi_mutation = "MS20") || row_digest(crypto, row) == hash
             })
     }
+    /// Exact signed row commitment for a bounded portable reader retaining verified metadata.
+    /// A commitment alone proves no received bytes, padding or native available-body custody.
+    pub fn row_commitment(&self, index: usize) -> Option<Hash32> {
+        self.authorization(index).map(|(hash, _)| hash)
+    }
     /// Exact public geometry, after signed layout and protocol-cap validation. The caller owns
     /// `shape.encoded_bytes()` bytes and `shape.workspace_words()` u16 scratch elements.
     pub fn shape(&self) -> CompactShape {
@@ -573,6 +578,33 @@ mod tests {
         assert!(!manifest.accepts_row(6, &[1, 2], &f.keys.crypto));
         assert!(!manifest.accepts_row(0, &f.encoded.codeword()[..7], &f.keys.crypto));
         assert!(!manifest.accepts_row(0, &[0; 8], &f.keys.crypto));
+    }
+
+    #[test]
+    fn portable_row_commitments_match_exact_original_coordinates() {
+        let f = Fixture::new();
+        let verified = verify_availability(
+            INSTANCE,
+            &f.config,
+            &f.header,
+            f.frame.as_slice(),
+            &f.keys.crypto,
+        )
+        .unwrap();
+        for index in 0..verified.shape().chunk_count() {
+            assert_eq!(
+                verified.row_commitment(index),
+                Some(row_digest(
+                    &f.keys.crypto,
+                    &f.encoded.codeword()[verified.shape().chunk_range(index).unwrap()],
+                ))
+            );
+        }
+        assert_eq!(
+            verified.row_commitment(verified.shape().chunk_count()),
+            None
+        );
+        assert_eq!(verified.row_commitment(usize::MAX), None);
     }
 
     #[test]

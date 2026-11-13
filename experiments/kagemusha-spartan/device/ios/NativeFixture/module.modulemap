@@ -1,0 +1,9 @@
+// Both headers are the canonical source originals, never a copied bridge stub.
+module NoritoBridge {
+  header "../../../../../crates/connect_norito_bridge/include/connect_norito_bridge.h"
+  export *
+}
+module SpartanDeviceFixture {
+  header "../../runtime/spartan_device_fixture.h"
+  export *
+}

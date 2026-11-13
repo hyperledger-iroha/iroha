@@ -50,7 +50,7 @@ fn interpreter_statement(word: u32, left: u64, amount: u64) -> ShiftStepStatemen
     assert_eq!(step.instruction, Some(word));
     assert_eq!(step.outcome, DiagnosticStepOutcome::Completed);
     assert_eq!(step.opcode_gas, gas::cost_of(word));
-    for register in 0..256 {
+    for register in 0..ivm::parallel::REGISTER_COUNT {
         if register != rd || rd == 0 {
             assert_eq!(
                 step.before.registers[register],
@@ -155,7 +155,7 @@ fn shift_all_seven_opcodes_match_interpreter_boundaries_and_masked_amounts() {
         }
     }
     for opcode in IMMEDIATE_OPCODES {
-        for amount in [0, 1, 3, 8, 9, 16, 31, 32, 40, 63, 64, 127, 128, 255] {
+        for amount in [0, 1, 3, 8, 9, 16, 31, 32, 40, 62, 63] {
             for left in [
                 0,
                 1,
@@ -167,7 +167,7 @@ fn shift_all_seven_opcodes_match_interpreter_boundaries_and_masked_amounts() {
                     opcode,
                     3,
                     1,
-                    u8::cast_signed(u8::try_from(amount).expect("bounded fixture value")),
+                    i16::try_from(amount).expect("bounded fixture value"),
                 );
                 let statement = interpreter_statement(word, left, u64::MAX);
                 assert_eq!(statement.amount, amount);
@@ -204,15 +204,10 @@ fn shift_register_aliases_r0_and_immediate_register_nonreads_match_interpreter()
         }
     }
     for opcode in IMMEDIATE_OPCODES {
-        for (rd, rs1) in [(3, 1), (1, 1), (0, 1), (3, 0), (0, 0), (255, 255)] {
-            for amount in [0, 1, 255] {
+        for (rd, rs1) in [(3, 1), (1, 1), (0, 1), (3, 0), (0, 0), (31, 31)] {
+            for amount in [0, 1, 63] {
                 assert_relation(interpreter_statement(
-                    ivm::encoding::wide::encode_ri(
-                        opcode,
-                        rd,
-                        rs1,
-                        u8::cast_signed(u8::try_from(amount).expect("bounded fixture value")),
-                    ),
+                    ivm::encoding::wide::encode_ri(opcode, rd, rs1, amount),
                     0x8000_0000_0000_003f,
                     0xdead_beef,
                 ));
@@ -328,11 +323,11 @@ fn shift_self_consistent_forged_results_control_aliases_and_immediates_fail_air(
         assert_rejected(forged);
     }
     let immediate = interpreter_statement(
-        ivm::encoding::wide::encode_ri(wide::arithmetic::ROTL_IMM, 3, 1, -1),
+        ivm::encoding::wide::encode_ri(wide::arithmetic::ROTL_IMM, 3, 1, 63),
         0x1234_5678_8000_0001,
         0,
     );
-    assert_eq!(immediate.amount, 255);
+    assert_eq!(immediate.amount, 63);
     assert!(
         ShiftStepStatement {
             amount: u64::MAX,

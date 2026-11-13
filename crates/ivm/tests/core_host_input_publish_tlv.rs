@@ -17,7 +17,7 @@ fn input_publish_rejects_unknown_type_id() {
     vm.set_host(CoreHost::new());
     let tlv = make_tlv(0x00FF, b"oops");
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_INPUT_PUBLISH_TLV]);
     vm.load_program(&prog).expect("load");
     vm.set_register(10, ptr);
     let err = vm

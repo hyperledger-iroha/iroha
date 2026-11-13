@@ -650,6 +650,8 @@ mod tests {
     }
     fn prove_verdict(b: &Built) {
         let (c, i, w) = b;
+        let start = std::time::Instant::now();
+        eprintln!("total signature proof starts: verdict={:?}, memory={:?}", i.io[4], c.proving_memory_accounting());
         let g = Gens::<Vesta>::new(c.shape.cols());
         let (p, _) = crate::spartan::prove_circuit(
             &c.shape,
@@ -663,6 +665,7 @@ mod tests {
         let mut forged = i.clone();
         forged.io[4] = Fp::ONE - forged.io[4];
         assert!(crate::spartan::verify_circuit(&c.shape, &g, &forged, &p.to_bytes(), c).is_err());
+        eprintln!("total signature proof and forged-verdict rejection completed in {:?}", start.elapsed());
     }
     #[test]
     fn total_request_signature_layout_and_rows() {
@@ -673,6 +676,7 @@ mod tests {
         let b = build(&key, &input);
         assert_eq!(b.1.io[4], Fp::ONE);
         assert!(holds(&b));
+        eprintln!("total signature retained memory breakdown {:?}", b.0.proving_memory_accounting());
     }
     #[test]
     fn total_request_signatures_have_same_vk_and_unforgeable_verdicts() {

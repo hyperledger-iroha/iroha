@@ -432,9 +432,9 @@ impl CompilerSession {
             crate::compiler::CompilerMode::Test => 1_u8,
         };
         let baseline = iroha_crypto::Hash::new_from_chunks(&[
-            b"kotodama-compiler-policy-v2\0",
+            b"kotodama-compiler-policy-v3\0",
             &[u8::from(self.options.force_zk)],
-            &self.options.max_cycles.to_le_bytes(),
+            &self.options.zk_trace_cycles.get().to_le_bytes(),
             &self.options.chain_discriminant.to_le_bytes(),
             &[mode],
         ]);

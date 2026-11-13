@@ -2191,11 +2191,7 @@ mod tests {
         .expect("encode state int record")
     }
     fn minimal_program() -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            max_cycles: 1,
-            ..ivm::ProgramMetadata::default()
-        };
-        let mut program = meta.encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }

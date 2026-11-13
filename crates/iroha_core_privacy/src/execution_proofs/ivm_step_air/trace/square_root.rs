@@ -83,7 +83,7 @@ pub(in super::super) fn append_residues(
     product: &[F],
     sources: Sources<'_>,
     gas_digits: &[F],
-    (active, out_of_gas, assertion_failed): (F, F, F),
+    (active, out_of_gas, numeric_fault): (F, F, F),
 ) {
     let initial = out.len();
     let success = active.sub(out_of_gas);
@@ -206,6 +206,7 @@ pub(in super::super) fn append_residues(
     }
     out.push(active.mul(bank[d::LOCAL_TRAP]).sub(out_of_gas));
     out.push(active.mul(bank[d::GAS_BORROWS + 3]).sub(out_of_gas));
-    out.push(assertion_failed);
+    // ISQRT is total; only gas exhaustion can trap it.
+    out.push(numeric_fault);
     debug_assert_eq!(out.len() - initial, CONSTRAINTS);
 }

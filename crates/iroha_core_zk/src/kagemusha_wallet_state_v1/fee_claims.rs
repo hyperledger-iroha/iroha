@@ -1,7 +1,10 @@
 //! Separate earned-fee Payment custody and exact finalized-payout acknowledgements.
 use super::*;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
-use iroha_data_model::sumeragi_finality::{VerifiedSumeragiBlock, VerifiedWorldStateSnapshotV1};
+use iroha_data_model::sumeragi_finality::{
+    VerifiedSumeragiBlock, VerifiedWorldStateSnapshotV1, WorldStateSchemaPolicyV1,
+    native_world_schema_family_v1,
+};
 
 /// Opaque native finality and authenticated World evidence for one immutable payout row.
 /// The wallet additionally checks its own artifact-selected scheme and Global chain scope.
@@ -158,6 +161,10 @@ fn verify_payout(
         .block
         .verify_global_scope(network, chain)
         .map_err(|_| Error::Invalid("finalized fee payout scope"))?;
+    native_world_schema_family_v1()
+        .as_slice()
+        .select_schema(evidence.world.schema_hash())
+        .map_err(|_| Error::Invalid("finalized fee payout World schema"))?;
     // Core records the canonical framed row as Vec<u8>; authenticate that exact semantic
     // value, not the payout structure under a different snapshot schema.
     let bytes =

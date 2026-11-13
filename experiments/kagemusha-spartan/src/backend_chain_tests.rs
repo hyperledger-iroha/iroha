@@ -15,9 +15,9 @@ use group::{Curve, Group};
 use iroha_pasta::{Ep, Eq};
 use std::sync::Arc;
 
-const P_COLUMNS: usize = 16;
-const S_COLUMNS: usize = 15;
-const DIMENSIONS: ((usize, usize), (usize, usize)) = ((28, 26), (27, 25));
+const P_COLUMNS: usize = 18;
+const S_COLUMNS: usize = 17;
+const DIMENSIONS: ((usize, usize), (usize, usize)) = ((24, 25), (24, 24));
 type Built<F> = (UniformCircuit<F>, Instance<F>, Witness<F>);
 
 struct Generation {
@@ -47,7 +47,7 @@ impl Generation {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Step {
     SenderBoot,
     ReceiverBoot,
@@ -351,6 +351,36 @@ fn layouts(chain: &Chain, gens: &PairGens, previous: Option<&Generation>) -> (La
     )
 }
 
+/// A completed proof needs only its public verifier program. Dropping the
+/// compiler arrays here keeps later generations from retaining every private
+/// witness and lookup table from earlier operations.
+fn retain_public_program<F: Scalar + zeroize::Zeroize>(
+    compiled: UniformCircuit<F>,
+    primary: bool,
+) -> Arc<UniformCircuit<F>> {
+    let expected = (
+        compiled.program_digest(),
+        compiled.layout(),
+        compiled.io_len,
+    );
+    let (operations, constants, fixed_fields) = compiled.public_program_counts();
+    eprintln!(
+        "retained {} public program: operations={operations}, constants={constants}, fixed_fields={fixed_fields}",
+        if primary { "primary" } else { "secondary" },
+    );
+    let public = compiled.into_verifier_program();
+    assert_eq!(
+        (public.program_digest(), public.layout(), public.io_len),
+        expected,
+        "retained program preserves its exact authenticated relation and IO"
+    );
+    assert!(
+        public.arrays.is_empty(),
+        "no retained private compiler arrays"
+    );
+    Arc::new(public)
+}
+
 fn prove_step(
     chain: &Chain,
     gens: &PairGens,
@@ -360,13 +390,20 @@ fn prove_step(
     generation: usize,
 ) -> UniformPair {
     let plan = previous.map(|p| OperationPlan::new(gens, p, step));
-    let (cp, ip, wp) = build(
+    let (cp, ip, mut wp) = build(
         primary(chain, gens, plan.as_ref(), step),
         true,
         Some(layout.0),
     );
-    let (cs, is, ws) = build(secondary(gens, plan.as_ref(), step), false, Some(layout.1));
+    let (cs, is, mut ws) = build(secondary(gens, plan.as_ref(), step), false, Some(layout.1));
     assert_eq!((cp.layout(), cs.layout()), layout);
+    eprintln!(
+        "full backend generation {generation} {step:?}: P shape={:?}, memory={:?}; S shape={:?}, memory={:?}",
+        cp.shape,
+        cp.proving_memory_accounting(),
+        cs.shape,
+        cs.proving_memory_accounting(),
+    );
     let pair = crate::prove_linked_pair(
         "full backend chain",
         generation,
@@ -378,7 +415,18 @@ fn prove_step(
         &ws,
     );
     assert!(pair.ok, "both linked native proofs");
-    crate::linked_uniform(&Arc::new(cp), ip, &Arc::new(cs), is, pair, step.kind())
+    eprintln!(
+        "full backend generation {generation} {step:?}: linked pair verified in {:.2}s, proofs {} + {} B",
+        pair.secs,
+        pair.pp.to_bytes().len(),
+        pair.ps.to_bytes().len(),
+    );
+    zeroize::Zeroize::zeroize(&mut wp);
+    zeroize::Zeroize::zeroize(&mut ws);
+    drop((wp, ws));
+    let cp = retain_public_program(cp, true);
+    let cs = retain_public_program(cs, false);
+    crate::linked_uniform(&cp, ip, &cs, is, pair, step.kind())
 }
 
 fn generation(
@@ -512,7 +560,222 @@ fn complete_payment(chain: &Chain, send: &UniformPair, gens: &PairGens) -> usize
         decoded.size.envelope,
         decoded.size.companion
     );
+    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("research-payment.ipm1"), &encoded).unwrap();
+    std::fs::write(
+        output.join("payment-size.txt"),
+        format!(
+            "IPM1={}\npair={}\nenvelope={}\ncompanion={}\nQR_budget={}\n",
+            encoded.len(),
+            decoded.size.pair,
+            decoded.size.envelope,
+            decoded.size.companion,
+            payment_wire::QR_BUDGET,
+        ),
+    )
+    .unwrap();
     encoded.len()
+}
+
+/// Prove that distributable public artifacts, with no retained witness
+/// arrays, reproduce both native verifiers and all final accumulator checks.
+fn imported_programs(final_chain: &Generation) -> Generation {
+    use crate::spartan::{self, Link};
+    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    std::fs::create_dir_all(&output).unwrap();
+    let kinds = std::array::from_fn(|kind| {
+        let mut pair = final_chain.kinds[kind].clone();
+        let primary = pair
+            .cp
+            .export_program()
+            .expect("public primary program artifact");
+        let secondary = pair
+            .cs
+            .export_program()
+            .expect("public secondary program artifact");
+        let cp = UniformCircuit::<Fp>::import_program(&primary, true).unwrap();
+        let cs = UniformCircuit::<Fq>::import_program(&secondary, false).unwrap();
+        assert_eq!(cp.program_digest(), pair.cp.program_digest());
+        assert_eq!(cs.program_digest(), pair.cs.program_digest());
+        std::fs::write(
+            output.join(format!("research-kind-{kind}-primary.norito")),
+            &primary,
+        )
+        .unwrap();
+        std::fs::write(
+            output.join(format!("research-kind-{kind}-secondary.norito")),
+            &secondary,
+        )
+        .unwrap();
+        eprintln!(
+            "final public program kind {kind}: primary={} B secondary={} B",
+            primary.len(),
+            secondary.len()
+        );
+        pair.cp = Arc::new(cp);
+        pair.cs = Arc::new(cs);
+        pair
+    });
+    let mut receiver_boot = final_chain.receiver_boot.clone();
+    receiver_boot.cp = kinds[BOOTSTRAP].cp.clone();
+    receiver_boot.cs = kinds[BOOTSTRAP].cs.clone();
+    let imported = Generation {
+        kinds,
+        receiver_boot,
+    };
+    let gens = imported.generators();
+    for pair in imported.kinds.iter().chain([&imported.receiver_boot]) {
+        let r = pair.r;
+        let rlc = move |_: &[u8; 32]| r;
+        let d = spartan::verify_linked_circuit(
+            &pair.cp.shape,
+            &gens.p,
+            &pair.ip,
+            &pair.pp.to_bytes(),
+            &Link::First { rho: pair.rho, r },
+            pair.cp.as_ref(),
+        )
+        .unwrap();
+        let rho = spartan::verify_linked_circuit(
+            &pair.cs.shape,
+            &gens.s,
+            &pair.is,
+            &pair.ps.to_bytes(),
+            &Link::Second {
+                d: pair.d,
+                rlc: &rlc,
+            },
+            pair.cs.as_ref(),
+        )
+        .unwrap();
+        assert_eq!((d, rho), (pair.d, pair.rho));
+        assert_eq!(
+            matrix_checks(pair, &gens),
+            (true, true),
+            "imported exact matrix programs"
+        );
+        let traced = trace_uniform(pair.clone(), &gens);
+        assert!(crate::generator_claim::decide(
+            &gens.p,
+            &inherited_generator_claim(&traced.tr_p, &gens.p).unwrap()
+        ));
+        assert!(crate::generator_claim::decide(
+            &gens.s,
+            &inherited_generator_claim(&traced.tr_s, &gens.s).unwrap()
+        ));
+    }
+    imported
+}
+
+fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generation) {
+    use crate::bootstrap_context::{BURNED_TOTAL, CONTEXT_IO, FIELDS, LINEAGE_FIELDS, LINEAGE_IO};
+    let send = &final_chain.kinds[SEND];
+    let trusted = crate::carrier::TrustedProfile::from_parameters(
+        chain.sender_context.relation,
+        send.cp.shape,
+        send.cp.as_ref(),
+        send.cs.shape,
+        send.cs.as_ref(),
+        true,
+    )
+    .unwrap();
+    let projection = crate::carrier::ProjectedInputs::from_authenticated_fields(
+        send.ip.io[HEAD_IO],
+        send.ip.io[STATEMENT_IO],
+        send.ip.io[RECEIPT_IO],
+        send.ip.io[CONTEXT_IO..CONTEXT_IO + FIELDS]
+            .try_into()
+            .unwrap(),
+        send.ip.io[LINEAGE_IO..LINEAGE_IO + LINEAGE_FIELDS]
+            .try_into()
+            .unwrap(),
+        send.ip.io[TABLE_IO..TABLE_IO + 4].try_into().unwrap(),
+        SEND,
+    )
+    .unwrap();
+    let mut raw = incoming_encoding(&trace_uniform(send.clone(), gens)).bytes;
+    raw[42..74].fill(255); // Noncanonical R in an otherwise exact fixed-profile frame.
+    let decoded = crate::carrier::decode_projected_candidate(&trusted, &raw, &projection).unwrap();
+    let incoming = UniformPair {
+        cp: send.cp.clone(),
+        ip: decoded.ip,
+        pp: decoded.pp,
+        cs: send.cs.clone(),
+        is: decoded.is,
+        ps: decoded.ps,
+        d: decoded.d,
+        rho: decoded.rho,
+        r: decoded.r,
+        kind: SEND,
+    };
+    let pairs = [
+        trace_uniform(final_chain.receiver_boot.clone(), gens),
+        trace_incoming_candidate(incoming, gens, raw.clone()),
+    ];
+    assert!(
+        incoming_verdict_values(gens, &pairs[1])
+            .iter()
+            .any(|b| *b == 0)
+    );
+    let witness = crate::receive_fixture::from_send_with_validity(
+        &chain.receiver_bootstrap,
+        &chain.receiver_key,
+        &chain.send,
+        &raw,
+        final_chain.receiver_boot.ip.io.clone().try_into().unwrap(),
+        false,
+    )
+    .unwrap();
+    let folds =
+        GeneratorFolds::prepare(gens, &pairs, &crate::fs::ProofEntropy::fresh().unwrap()).unwrap();
+    let (w, _) = p_operation(OperationWitness::Receive(&witness), gens, &pairs, &folds).unwrap();
+    let layout = (
+        final_chain.kinds[RECEIVE].cp.layout(),
+        final_chain.kinds[RECEIVE].cs.layout(),
+    );
+    let (cp, ip, wp) = build(w, true, Some(layout.0));
+    let (w, _) = s_operation(RECEIVE, gens, &pairs, &folds);
+    let (cs, is, ws) = build(w, false, Some(layout.1));
+    assert_eq!(
+        cp.program_digest(),
+        final_chain.kinds[RECEIVE].cp.program_digest(),
+        "Burn uses the exact Receive program"
+    );
+    assert_eq!(
+        cs.program_digest(),
+        final_chain.kinds[RECEIVE].cs.program_digest()
+    );
+    let proof = crate::prove_linked_pair(
+        "malformed R actual Receive Burn",
+        250,
+        &cp,
+        &ip,
+        &wp,
+        &cs,
+        &is,
+        &ws,
+    );
+    assert!(proof.ok);
+    assert_eq!(
+        ip.io[LINEAGE_IO + BURNED_TOTAL],
+        Fp::from(10),
+        "invalid candidate irreversibly burns its credit"
+    );
+    let pair = crate::linked_uniform(&Arc::new(cp), ip, &Arc::new(cs), is, proof, RECEIVE);
+    assert_eq!(matrix_checks(&pair, gens), (true, true));
+    let traced = trace_uniform(pair, gens);
+    assert!(crate::generator_claim::decide(
+        &gens.p,
+        &inherited_generator_claim(&traced.tr_p, &gens.p).unwrap()
+    ));
+    assert!(crate::generator_claim::decide(
+        &gens.s,
+        &inherited_generator_claim(&traced.tr_s, &gens.s).unwrap()
+    ));
+    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    std::fs::write(output.join("research-malformed-incoming-pair.bin"), &raw).unwrap();
+    eprintln!("actual malformed-R Receive verified under the same program; adjusted burn=10");
 }
 
 #[test]
@@ -524,10 +787,50 @@ fn complete_recursive_bootstrap_load_send_receive() {
     for hop in 1..=12 {
         let gens = previous.generators();
         let next = generation(&chain, &gens, Some(&previous), hop);
-        if next.program_ids() == previous.program_ids() {
+        let before = previous.program_ids();
+        let after = next.program_ids();
+        for kind in 0..4 {
+            for side in 0..2 {
+                let hex = |v: &[u8; 32]| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                eprintln!(
+                    "generation {hop} kind {kind} side {side} program {} -> {} ({})",
+                    hex(&before[kind][side]),
+                    hex(&after[kind][side]),
+                    if before[kind][side] == after[kind][side] {
+                        "stable"
+                    } else {
+                        "changed"
+                    },
+                );
+                if before[kind][side] != after[kind][side] {
+                    let difference = if side == 0 {
+                        previous.kinds[kind]
+                            .cp
+                            .public_program_differences(&next.kinds[kind].cp)
+                    } else {
+                        previous.kinds[kind]
+                            .cs
+                            .public_program_differences(&next.kinds[kind].cs)
+                    };
+                    eprintln!("generation {hop} kind {kind} side {side}: {difference}");
+                }
+            }
+        }
+        if after == before {
             let final_gens = next.generators();
             let final_chain = final_chain(&chain, &final_gens, next);
+            // Record the actual complete monetary bytes before the separate
+            // program-distribution size gate, while requiring both gates below.
             let bytes = complete_payment(&chain, &final_chain.kinds[SEND], &final_gens);
+            drop(imported_programs(&final_chain));
+            malformed_receive_burn(&chain, &final_gens, &final_chain);
+            crate::native::test_full_chain_native(
+                &chain,
+                &final_chain.kinds,
+                &final_chain.receiver_boot,
+                DIMENSIONS,
+            )
+            .expect("complete native Send/Receive prepare, resume, finalize and verify flow");
             assert_eq!(chain.load.after_core[9], Fp::from(100));
             assert_eq!(chain.send.after_core[9], Fp::from(90));
             let sent = trace_uniform(final_chain.kinds[SEND].clone(), &final_gens);

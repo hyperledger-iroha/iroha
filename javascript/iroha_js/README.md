@@ -53,6 +53,19 @@ try {
   }
 }
 
+// Queue rejections and HTTP 429/503 responses also name a reject code and retry delay, from
+// JSON and binary Norito envelopes alike; `envelopeCode` stays the envelope's own code.
+try {
+  await torii.submitTransaction(signedTransaction);
+} catch (error) {
+  if (error instanceof ToriiHttpError && error.details?.retry_after_seconds !== undefined) {
+    // 429 queue_full: rejectCode `PRTRY:QUEUE_FULL`, details.queue = { state, queued, ... }
+    console.error(error.envelopeCode, error.rejectCode, error.details.retry_after_seconds);
+  } else {
+    throw error;
+  }
+}
+
 // Event streams take the same filters; abort the signal or `break` to unsubscribe.
 const subscription = new AbortController();
 for await (const frame of torii.streamEvents({
@@ -2493,11 +2506,16 @@ try {
   await rpc.call("/v1/pipeline/submit", payload);
 } catch (error) {
   if (error instanceof NoritoRpcError) {
-    console.error(`status ${error.status}: ${error.body}`);
+    console.error(`status ${error.status}: ${error.code ?? error.body}`);
   }
   throw error;
 }
 ```
+
+When the error body is Torii's canonical Norito error envelope, `error.code`,
+`error.errorMessage` and `error.details` carry its code, exact message and
+decoded details (such as `retry_after_seconds`); all three are `null` for any
+other body, whose lossy text rendering stays in `error.body`.
 
 Pass a custom `fetchImpl`, per-request headers, alternate HTTP methods, or an
 AbortSignal when integrating with higher-level transports. The helper returns

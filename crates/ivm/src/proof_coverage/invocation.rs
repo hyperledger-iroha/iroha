@@ -148,13 +148,11 @@ pub const INVOCATION_OBLIGATIONS: &[InvocationObligation] = &[
     open(
         "statement.execution_limits",
         Obligation::StatementBinding,
-        "the gas limit, the cycle horizon, the shared signed-source cycle allowance and the host output limits are bound into the statement from committed protocol State; node-local configuration never selects a limit that changes the outcome",
+        "the gas limit, the ZK trace bound and the host output limits are bound into the statement from committed protocol State; node-local configuration never selects a limit that changes the outcome",
     )
     .citing(&[
         cite("crates/ivm/src/ivm.rs", "pub fn set_gas_limit("),
         cite("crates/ivm/src/ivm.rs", "pub fn set_max_cycles("),
-        cite("crates/ivm/src/ivm.rs", "pub struct VmCycleBudget"),
-        cite(ROOT_EFFECTS, "self.pipeline.quarantine_tx_max_cycles"),
         cite(ROOT_EFFECTS, "max_instructions: self.pipeline.overlay_max_instructions"),
     ]),
     open(

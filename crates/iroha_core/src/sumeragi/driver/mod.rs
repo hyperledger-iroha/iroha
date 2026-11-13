@@ -871,11 +871,41 @@ pub(in crate::sumeragi) fn assemble_startup_history(
         // availability owner continue its original ancestry walk with constant custody.
         // Init still receives the exact same ascending window and original certificates.
         recent_headers.push(header.clone());
-        for height in (first..t).rev() {
-            let entry = startup_entry(blocks, height)?;
-            recent_headers.push(entry.manifest.header);
+        let retained = if first < t {
+            blocks.startup_headers(first, t - 1).map_err(|error| {
+                error.map_rejection(|source| StartupHistoryError::Read {
+                    height: first,
+                    source,
+                })
+            })?
+        } else {
+            None
+        };
+        if let Some(mut headers) = retained {
+            if headers.len() as u64 != t - first
+                || headers
+                    .iter()
+                    .enumerate()
+                    .any(|(index, header)| header.height != first + index as u64)
+            {
+                return Err(StartupHistoryError::Read {
+                    height: first,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "authenticated startup header window is incomplete or unordered",
+                    ),
+                }
+                .into());
+            }
+            headers.push(recent_headers.pop().expect("original tip header"));
+            recent_headers = headers;
+        } else {
+            for height in (first..t).rev() {
+                let entry = startup_entry(blocks, height)?;
+                recent_headers.push(entry.manifest.header);
+            }
+            recent_headers.reverse();
         }
-        recent_headers.reverse();
     }
     Ok(StartupHistory {
         tip,

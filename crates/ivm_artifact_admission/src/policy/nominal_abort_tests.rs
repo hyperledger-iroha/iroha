@@ -108,13 +108,10 @@ fn shared_abort_suffix_rejects_every_substituted_word_effect_return_and_reserved
     noncanonical_publish[2] |= 0x100;
     assert_shared_refusal(&noncanonical_publish, &roots);
     let mut substituted_terminal = words.clone();
-    substituted_terminal[7] = enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT);
+    substituted_terminal[7] = enc::encode_halt();
     assert_shared_refusal(&substituted_terminal, &roots);
     let mut inserted_effect = words.clone();
-    inserted_effect.insert(
-        2,
-        enc::encode_scall(syscalls::SYSCALL_STATE_SET),
-    );
+    inserted_effect.insert(2, enc::encode_scall(syscalls::SYSCALL_STATE_SET));
     assert_shared_refusal(&inserted_effect, &roots);
 }
 
@@ -147,7 +144,7 @@ fn shared_abort_suffix_rejects_middle_targets_and_any_callable_root() {
 fn shared_abort_suffix_rejects_conditional_entry_fallthrough_and_arbitrary_body_sharing() {
     let roots = BTreeSet::from([0, 4]);
     for replacement in [
-        enc::encode_rr(wide::control::BEQ, 0, 0, 1),
+        enc::encode_branch(wide::control::BEQ, 0, 0, 1),
         enc::encode_ri(wide::arithmetic::ADDI, 2, 0, 0),
     ] {
         let mut words = shared_words();
@@ -435,7 +432,7 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
     let main_pc = interface.entrypoints[main].entry_pc;
     let mut bypass = decoded.clone();
     let index = bypass.iter().position(|op| op.pc == main_pc).unwrap();
-    let offset = i16::try_from((i128::from(hajimari) - i128::from(main_pc)) / 4).unwrap();
+    let offset = i32::try_from((i128::from(hajimari) - i128::from(main_pc)) / 4).unwrap();
     bypass[index].inst = enc::encode_jump(wide::control::JAL, 0, offset);
     assert!(
         validate_contract_interface(

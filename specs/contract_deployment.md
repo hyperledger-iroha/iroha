@@ -98,7 +98,7 @@ Chunks may arrive out of order. Replaying the same bytes at the same index is
 idempotent, while changing a descriptor or replaying an index with different
 bytes is rejected. Finalization requires every index, rebuilds bytes in index
 order, and rechecks the exact size, domain-separated code hash, IVM/CNTR
-artifact, cycle ceiling, and current code-size cap. It then registers through
+artifact, ZK trace-bound ceiling, and current code-size cap. It then registers through
 the same atomic helper as `RegisterSmartContractBytes` and removes the pending
 upload. A failed finalization keeps all staged chunks so the caller can retry
 after correcting the missing prerequisite. `CancelSmartContractCodeUpload` is

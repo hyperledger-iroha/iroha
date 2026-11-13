@@ -2433,10 +2433,12 @@ pub fn binding_chain_linked(
         .map(io_cell),
     );
     let check_a = first + BL_CHECK;
-    let (mu_v, vals) = (mu.clone(), values.to_vec());
+    let mu_v = zeroize::Zeroizing::new(fq_bytes(mu));
+    let vals = zeroize::Zeroizing::new(values.to_vec());
     let fill = move |rho: &[u8; 32]| -> LinkCells {
         let rho = BigUint::from_bytes_le(rho);
-        let cols = linked_columns(&shape, &q, &mu_v, &vals, &rho, nn, &chunks, &word_chunks);
+        let mu = BigUint::from_bytes_le(mu_v.as_ref());
+        let cols = linked_columns(&shape, &q, &mu, &vals, &rho, nn, &chunks, &word_chunks);
         let n = vals.len();
         let mut out = Vec::new();
         for (k, col) in cols.value.iter().enumerate() {

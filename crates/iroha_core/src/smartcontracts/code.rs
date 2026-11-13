@@ -569,8 +569,9 @@ fn stored_artifact_has_retired_abi(
     let current = ivm_abi::syscalls::compute_abi_hash(super::ivm::artifact_policy(world, bytes));
     Ok(bytes.len() >= ivm_abi::metadata::HEADER_SIZE
         && bytes[0..4] == ivm_abi::metadata::MAGIC[..]
-        && bytes[16] == 1
-        && bytes[17..49] != current[..])
+        && bytes[ivm_abi::metadata::HEADER_ABI_VERSION_OFFSET] == 1
+        && bytes[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE]
+            != current[..])
 }
 /// Read immutable admitted artifacts and compute the exact new scalar initialization obligations.
 ///
@@ -1378,13 +1379,21 @@ mod tests {
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     ) {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 4,
-            abi_version,
-        };
+        minimal_contract_artifact_with_header(
+            ivm::ProgramMetadata {
+                abi_version,
+                ..ivm::ProgramMetadata::default()
+            },
+            0,
+        )
+    }
+    fn minimal_contract_artifact_with_header(
+        meta: ivm::ProgramMetadata,
+        features_bitmap: u64,
+    ) -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
         let entrypoint = EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::View,
@@ -1414,7 +1423,7 @@ mod tests {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
+            features_bitmap,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -1441,7 +1450,7 @@ mod tests {
             ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
         ] {
             code.extend_from_slice(&instruction.to_le_bytes());
         }
@@ -2061,7 +2070,23 @@ seiyaku LifecycleTwo { permission CanRunLifecycleTwo;
             .get(&artifact_id)
             .cloned()
             .expect("stored v1 bytecode");
-        retired[17..49].fill(0x5e);
+        for prefix_len in [
+            0,
+            ivm_abi::metadata::HEADER_SIZE - 1,
+            ivm_abi::metadata::HEADER_SIZE,
+        ] {
+            transaction
+                .world
+                .contract_code
+                .insert(artifact_id.clone(), retired[..prefix_len].to_vec());
+            assert!(
+                !stored_artifact_has_retired_abi(&transaction.world, &contract_address, v1_hash)
+                    .expect("bounded fixed-header inspection"),
+                "a truncated or current fixed header cannot identify a retired ABI"
+            );
+        }
+        retired[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE]
+            .fill(0x5e);
         transaction.world.contract_code.insert(artifact_id, retired);
         let v2_hash = register(
             r"seiyaku RetiredTwo { permission CanRunRetired; kotoage fn run() authorize(CanRunRetired) {} }",
@@ -2625,41 +2650,57 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
         }
     }
     #[test]
-    fn register_code_rejects_zero_cycle_ceiling() {
+    fn register_code_rejects_trace_bound_inconsistent_with_zk_mode() {
         let (state, authority, _kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        let (mut code, _) = minimal_contract_artifact(1);
-        code[8..16].copy_from_slice(&0_u64.to_le_bytes());
-        let code_hash = ivm::contract_code_hash(&code);
-        let error = register_code_bytes(
-            &authority,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            code,
-            &mut stx,
-        )
-        .expect_err("zero-cycle artifact registration must fail closed");
-        assert!(
-            matches!(
-                &error,
-                RegistryError::Instruction(
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(message)
-                    )
-                ) if message.contains("omits a non-zero `max_cycles`")
-            ),
-            "unexpected registration error: {error:?}"
+        let budget = ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET;
+        // `max_cycles` is the ZK trace bound: non-zero exactly for a ZK header.
+        let (mut zk_without_bound, _) = minimal_contract_artifact_with_header(
+            ivm::ProgramMetadata {
+                mode: ivm::ivm_mode::ZK,
+                max_cycles: 2,
+                ..ivm::ProgramMetadata::default()
+            },
+            ivm::CONTRACT_FEATURE_BIT_ZK,
         );
-        assert!(
-            stx.world
-                .contract_code
-                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    code_hash
-                ))
-                .is_none(),
-            "rejected artifact must not enter world state"
-        );
+        zk_without_bound[budget.clone()].copy_from_slice(&0_u64.to_le_bytes());
+        let (mut bound_without_zk, _) = minimal_contract_artifact(1);
+        bound_without_zk[budget].copy_from_slice(&2_u64.to_le_bytes());
+        for (code, expected) in [
+            (zk_without_bound, "declares no trace bound"),
+            (bound_without_zk, "declares trace bound 2 without ZK mode"),
+        ] {
+            let code_hash = ivm::contract_code_hash(&code);
+            let error = register_code_bytes(
+                &authority,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code,
+                &mut stx,
+            )
+            .expect_err("an inconsistent trace bound must fail closed");
+            assert!(
+                matches!(
+                    &error,
+                    RegistryError::Instruction(
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(message)
+                        )
+                    ) if message.contains(expected)
+                ),
+                "unexpected registration error: {error:?}"
+            );
+            assert!(
+                stx.world
+                    .contract_code
+                    .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash
+                    ))
+                    .is_none(),
+                "rejected artifact must not enter world state"
+            );
+        }
     }
     #[test]
     fn register_code_rejects_cycle_ceiling_above_committed_policy() {
@@ -2680,8 +2721,15 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
         let mut block = state.block(default_header(1));
         assert_eq!(block.pipeline.ivm_max_cycles_upper_bound.get(), 1);
         let mut stx = block.transaction();
-        let (mut code, _) = minimal_contract_artifact(1);
-        code[8..16].copy_from_slice(&2_u64.to_le_bytes());
+        // The committed ceiling bounds the trace of a ZK artifact.
+        let (code, _) = minimal_contract_artifact_with_header(
+            ivm::ProgramMetadata {
+                mode: ivm::ivm_mode::ZK,
+                max_cycles: 2,
+                ..ivm::ProgramMetadata::default()
+            },
+            ivm::CONTRACT_FEATURE_BIT_ZK,
+        );
         let code_hash = ivm::contract_code_hash(&code);
         let error = register_code_bytes(
             &authority,
@@ -2697,7 +2745,7 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(message)
                     )
-                ) if message.contains("`max_cycles` exceeds upper bound")
+                ) if message.contains("exceeds the node upper bound")
             ),
             "unexpected registration error: {error:?}"
         );

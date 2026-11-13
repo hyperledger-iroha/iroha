@@ -57,7 +57,7 @@ impl IVMHost for UnreachedRootHost {
 fn first_runtime_row_refuses_before_strict_default_argument_metadata_or_effects() {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        max_cycles: 64,
+        zk_trace_cycles: std::num::NonZeroU64::new(64).expect("ZK trace bound"),
         ..CompilerOptions::default()
     })
     .compile_source("seiyaku TraceRoot { view fn main(bool ready) authorize(anyone) -> bool { return ready; } }")
@@ -108,7 +108,7 @@ fn first_runtime_row_refuses_before_strict_default_argument_metadata_or_effects(
 fn strict_root_keeps_the_post_clear_epoch_and_initial_argument_observation() {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        max_cycles: 64,
+        zk_trace_cycles: std::num::NonZeroU64::new(64).expect("ZK trace bound"),
         ..CompilerOptions::default()
     })
     .compile_source("seiyaku TraceRoot { view fn main() authorize(anyone) {} }")
@@ -130,7 +130,7 @@ fn strict_root_keeps_the_post_clear_epoch_and_initial_argument_observation() {
     assert_eq!(vm.proof_state_epoch, epoch.wrapping_add(1));
     let first = vm.delta_register_trace().entry(0).unwrap();
     assert_eq!(first.pc, entry_pc);
-    assert_eq!(first.changes.len(), 256);
+    assert_eq!(first.changes.len(), crate::parallel::REGISTER_COUNT);
     assert_eq!(first.changes[1], (1, code_end, false));
     assert_eq!(first.changes[31], (31, stack_top, false));
     drop(vm);
@@ -143,7 +143,11 @@ fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
         let original = AllocationBudget::new(LIMIT);
         let mut vm = generic(
             &original,
-            &[encode_rr(opcode, 7, 5, 6), encode_halt()],
+            // Register-unary ISQRT keeps its reserved rs2 field zero.
+            &[
+                encode_rr(opcode, 7, 5, if opcode == a::ISQRT { 0 } else { 6 }),
+                encode_halt(),
+            ],
             TraceMode::DeltaRegisters,
             1,
         );
@@ -158,7 +162,7 @@ fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
         assert_eq!(vm.pc, initial + 4);
         assert_eq!(vm.trace_log.len(), cycles as usize);
         assert!(vm.trace_log.entries().all(|row| row.pc == initial + 4));
-        assert_eq!(vm.trace_log.entry(0).unwrap().changes.len(), 256);
+        assert_eq!(vm.trace_log.entry(0).unwrap().changes.len(), crate::parallel::REGISTER_COUNT);
         assert!(
             vm.trace_log
                 .entries()
@@ -178,7 +182,7 @@ impl IVMHost for NetChangesHost {
         Ok(0)
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        for register in 1..256 {
+        for register in 1..crate::parallel::REGISTER_COUNT {
             if register % 2 == 0 && register != 10 {
                 if vm.zk_mode_enabled() {
                     vm.registers.set_tag(register, true);
@@ -213,7 +217,7 @@ fn actual_syscall_value_and_tag_only_net_changes_use_one_public_full_span() {
     vm.run_with_host(&mut NetChangesHost).unwrap();
     assert_eq!(
         vm.delta_register_trace().entry(1).unwrap().changes.len(),
-        255
+        crate::parallel::REGISTER_COUNT - 1
     );
     assert!(
         vm.delta_register_trace()
@@ -254,10 +258,7 @@ fn actual_non_zk_host_mode_replacement_is_local_refusal_not_unfunded_append() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = generic(
         &original,
-        &[
-            encode_scall(crate::syscalls::SYSCALL_ABORT),
-            encode_halt(),
-        ],
+        &[encode_scall(crate::syscalls::SYSCALL_ABORT), encode_halt()],
         TraceMode::DeltaRegisters,
         0,
     );
@@ -281,10 +282,7 @@ fn actual_zk_host_custody_violation_is_a_local_invariant_deferral() {
     let original = AllocationBudget::new(LIMIT);
     let mut vm = generic(
         &original,
-        &[
-            encode_scall(crate::syscalls::SYSCALL_ABORT),
-            encode_halt(),
-        ],
+        &[encode_scall(crate::syscalls::SYSCALL_ABORT), encode_halt()],
         TraceMode::DeltaRegisters,
         64,
     );
@@ -343,9 +341,8 @@ fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect()
         exit: false,
         calls: 0,
     };
-    let shared_cycles = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(5).unwrap());
     assert!(
-        matches!(vm.run_with_host_and_cycle_budget(&mut host, &shared_cycles),
+        matches!(vm.run_with_host(&mut host),
         Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }))
         if requested_bytes == 8 * std::mem::size_of::<u64>())
     );
@@ -354,7 +351,6 @@ fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect()
     assert_eq!(vm.pc, start + 12);
     assert_eq!(vm.registers.snapshot()[7], 2);
     assert_eq!(vm.cycles, 3);
-    assert_eq!(shared_cycles.consumed(), 3);
     assert_eq!(
         vm.gas_remaining,
         GAS - crate::gas::cost_of(syscall).unwrap() - 2 * crate::gas::cost_of(add).unwrap()
@@ -378,8 +374,7 @@ fn payable_padding_refuses_before_effects_but_unpayable_padding_preserves_oog() 
             exit: true,
             calls: 0,
         };
-        let shared_cycles = crate::ivm::VmCycleBudget::new(std::num::NonZeroU64::new(64).unwrap());
-        let outcome = vm.run_with_host_and_cycle_budget(&mut host, &shared_cycles);
+        let outcome = vm.run_with_host(&mut host);
         if payable {
             assert!(matches!(
                 outcome,
@@ -387,16 +382,10 @@ fn payable_padding_refuses_before_effects_but_unpayable_padding_preserves_oog() 
                     AllocationRefusal::ExceedsLimit { .. }
                 ))
             ));
-            assert_eq!(
-                (vm.cycles, shared_cycles.consumed(), vm.gas_remaining),
-                (1, 1, 63)
-            );
+            assert_eq!((vm.cycles, vm.gas_remaining), (1, 63));
         } else {
             assert!(matches!(outcome, Err(VMError::OutOfGas)));
-            assert_eq!(
-                (vm.cycles, shared_cycles.consumed(), vm.gas_remaining),
-                (64, 64, 62)
-            );
+            assert_eq!((vm.cycles, vm.gas_remaining), (64, 62));
         }
         assert_eq!(host.calls, 1);
         assert_eq!(vm.pc, start + 4);

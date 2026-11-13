@@ -55,6 +55,34 @@ pub struct ParameterManifest {
 }
 
 impl AuthenticatedParameters {
+    /// Exact lower bound from unavoidable simultaneous dense prover vectors.
+    /// This excludes symbolic planning, retained programs, allocator and worker
+    /// overhead; passing it is necessary, not evidence of device feasibility.
+    pub fn minimum_proving_memory_bytes(&self, kind: usize) -> Result<u64> {
+        let program = self
+            .inner
+            .programs
+            .get(kind)
+            .ok_or(Error::Malformed("wallet kind"))?;
+        let count = |bits: usize| 1u64.checked_shl(bits as u32).ok_or(Error::ResourceLimit);
+        let wp = count(program.primary.shape.sw())?;
+        let ws = count(program.secondary.shape.sw())?;
+        let cp = count(program.primary.shape.sx)?;
+        let cs = count(program.secondary.shape.sx)?;
+        let phase = |w: u64, other: u64, constraints: u64| {
+            w.checked_mul(4)
+                .and_then(|n| n.checked_add(other))
+                .and_then(|n| constraints.checked_mul(3).and_then(|c| n.checked_add(c)))
+                .and_then(|n| n.checked_mul(32))
+                .ok_or(Error::ResourceLimit)
+        };
+        let prefix = wp
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(ws))
+            .and_then(|n| n.checked_mul(32))
+            .ok_or(Error::ResourceLimit)?;
+        Ok(prefix.max(phase(wp, 0, cp)?).max(phase(ws, wp, cs)?))
+    }
     /// Authenticate all eight exact public programs under Native's independently
     /// installed scheme root and checkpoint-rooted finality reader. SDK bridges
     /// obtain these two trusted inputs from their native installation owner;
@@ -544,6 +572,17 @@ struct OutputFrame {
     head: Vec<u8>,
     payment: Vec<u8>,
 }
+pub(super) fn retained_output_part(bytes: &[u8], part: u32) -> Result<Vec<u8>> {
+    let out: OutputFrame = super::decode(bytes)?;
+    if out.version != 1 || super::encode(&out)? != bytes {
+        return Err(Error::Malformed("retained output"));
+    }
+    match part {
+        0 => Ok(out.head),
+        1 => Ok(out.payment),
+        _ => Err(Error::Malformed("retained output selector")),
+    }
+}
 fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
     match w {
         ExactOperationWitness::Bootstrap(x) => &mut x.input.receipt,
@@ -581,7 +620,7 @@ fn freeze_witness(
     let r = receipt_mut(&mut w);
     r.signature = [0; 64];
     r.body[242..306].fill(0);
-    let mut bytes = super::witness_codec::encode_witness(&w)?;
+    let mut bytes = zeroize::Zeroizing::new(super::witness_codec::encode_witness(&w)?);
     bytes.extend_from_slice(&head.profile[full::HEAD_IO].to_repr());
     bytes.extend_from_slice(&head.custody_digest);
     let digest = crate::payment::byte_digest(u64::from_le_bytes(*b"kgwprep1"), &bytes).to_repr();
@@ -621,7 +660,11 @@ impl<S: Scalar + zeroize::Zeroize> Drop for PrivateCircuit<S> {
         self.0.zeroize_witness_values();
     }
 }
-fn check_constraints(w: full::Wiring<Fp>, columns: usize) -> Result<()> {
+fn check_constraints(
+    w: full::Wiring<Fp>,
+    columns: usize,
+    source: Option<&dyn TimeSource>,
+) -> Result<()> {
     let (a, p, n, t, c) = w.finish();
     let entropy = ProofEntropy::fresh().map_err(|_| Error::Unavailable("OS proof entropy"))?;
     let seed = zeroize::Zeroizing::new(
@@ -642,6 +685,16 @@ fn check_constraints(w: full::Wiring<Fp>, columns: usize) -> Result<()> {
         seed.as_ref(),
     );
     let c = PrivateCircuit(c);
+    if let Some(source) = source {
+        let required = c.proving_memory_accounting().additional_peak_bytes as u64;
+        let available = source.available_memory_bytes()?;
+        if available < required {
+            return Err(Error::NotEnoughMemory {
+                required,
+                available,
+            });
+        }
+    }
     let mut wit = zeroize::Zeroizing::new(wit);
     let mut rng = entropy.stream(b"preparation relation check");
     let ch = [rng.scalar(), rng.scalar()];
@@ -664,6 +717,92 @@ fn check_constraints(w: full::Wiring<Fp>, columns: usize) -> Result<()> {
     }
 }
 impl NativeEngine {
+    fn require_minimum_memory(
+        &self,
+        parameters: &AuthenticatedParameters,
+        kind: usize,
+    ) -> Result<()> {
+        if let Some(source) = &self.time {
+            let required = parameters.minimum_proving_memory_bytes(kind)?;
+            let available = source.available_memory_bytes()?;
+            if available < required {
+                return Err(Error::NotEnoughMemory {
+                    required,
+                    available,
+                });
+            }
+        }
+        Ok(())
+    }
+    fn incoming_candidate(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<IncomingCandidate> {
+        let p = &parameters.inner;
+        let trusted = p.profile(full::SEND)?;
+        let d = payment_wire::decode_candidate(
+            &payment_wire::Profile {
+                pair: &trusted,
+                scheme: p.scheme,
+                relation: p.relation,
+            },
+            bytes,
+        )
+        .map_err(Error::Rejected)?;
+        let profile: [Fp; 64] = d
+            .projection
+            .primary()
+            .io
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Malformed("candidate profile"))?;
+        let decoded = carrier::decode_projected_candidate(&trusted, &d.pair_bytes, &d.projection)
+            .map_err(Error::Rejected)?;
+        // Parsing and the exact full verifier derive this private verdict. No
+        // foreign Boolean can skip proof checks or turn a malformed candidate into credit.
+        let valid = match self.verify_payment(bytes, parameters) {
+            Ok(_) => true,
+            Err(
+                e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_)),
+            ) => return Err(e),
+            Err(_) => false,
+        };
+        let program = &p.programs[full::SEND];
+        let pair = full::UniformPair {
+            cp: program.primary.clone(),
+            ip: decoded.ip,
+            pp: decoded.pp,
+            cs: program.secondary.clone(),
+            is: decoded.is,
+            ps: decoded.ps,
+            d: decoded.d,
+            rho: decoded.rho,
+            r: decoded.r,
+            kind: full::SEND,
+        };
+        Ok(IncomingCandidate {
+            profile,
+            proof_digest: d.digests.proof,
+            valid,
+            originals: d.originals,
+            pair,
+            pair_bytes: d.pair_bytes,
+        })
+    }
+    /// Authenticate exact future credential and issuer-certificate originals under
+    /// the installed scheme root and the actual certified table generators.
+    pub fn authenticate_credential_originals(
+        &self,
+        credential: &[u8],
+        certificate: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<Credential> {
+        let credential = read_credential(credential)?;
+        let certificate = read_certificate(certificate)?;
+        authenticate_credential(&parameters.inner, &credential, &certificate)?;
+        Ok(credential)
+    }
     /// Bind the canonical local custody/OS clock adapter. Controls-off operations
     /// use `Default` and never acquire a network or clock dependency.
     pub fn with_time_source(time: Arc<dyn TimeSource>) -> Self {
@@ -746,7 +885,7 @@ impl NativeEngine {
                 "Send crossed quota charge boundary",
             ));
         }
-        check_constraints(w, 13)
+        check_constraints(w, 13, self.time.as_deref())
     }
     /// Start from an authenticated enrollment original and the provider's protected
     /// marker. No funded state or synthetic recursive predecessor is introduced.
@@ -840,6 +979,7 @@ impl NativeEngine {
                 return check_constraints(
                     prepared.wiring,
                     p.programs[full::BOOTSTRAP].primary.shape.col_bits,
+                    self.time.as_deref(),
                 );
             }
             ExactOperationWitness::Load {
@@ -872,7 +1012,8 @@ impl NativeEngine {
                 step,
                 incoming_payment,
             } => {
-                let verified = self.verify_payment(incoming_payment, parameters)?;
+                let candidate = self.incoming_candidate(incoming_payment, parameters)?;
+                let verified = &candidate.originals;
                 if step.request.body != verified.request.body
                     || step.request.signature != verified.request.signature
                     || !exact_credential(&step.payer, &verified.payer)
@@ -882,21 +1023,16 @@ impl NativeEngine {
                 {
                     return Err(Error::AuthorityMismatch("exact incoming Payment originals"));
                 }
-                let incoming = full::native_incoming(&mut w, family, &verified);
-                let prepared = crate::receive::append_preparation(
-                    &mut w,
-                    family,
-                    step,
-                    &predecessor,
-                    &incoming,
-                )
-                .map_err(Error::Malformed)?;
-                if prepared.valid().value(&w) != Fp::ONE {
-                    return Err(Error::Rejected("incoming Payment admission".into()));
-                }
+                let incoming = full::native_incoming_candidate(&mut w, family, &candidate);
+                crate::receive::append_preparation(&mut w, family, step, &predecessor, &incoming)
+                    .map_err(Error::Malformed)?;
             }
         }
-        check_constraints(w, p.programs[kind(witness)].primary.shape.col_bits)
+        check_constraints(
+            w,
+            p.programs[kind(witness)].primary.shape.col_bits,
+            self.time.as_deref(),
+        )
     }
     fn prepare_retained(
         &self,
@@ -985,6 +1121,14 @@ impl Engine for NativeEngine {
         capsule: &RecoveryCapsule,
         parameters: &AuthenticatedParameters,
     ) -> Result<()> {
+        let kind = match capsule.kind() {
+            1 => full::BOOTSTRAP,
+            2 => full::LOAD,
+            3 => full::SEND,
+            4 => full::RECEIVE,
+            _ => return Err(Error::Malformed("capsule kind")),
+        };
+        self.require_minimum_memory(parameters, kind)?;
         let prepared = self.resume(capsule, parameters)?;
         self.check_send_time(&prepared.witness, true)
     }
@@ -1053,6 +1197,7 @@ impl Engine for NativeEngine {
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
+        self.require_minimum_memory(parameters, kind(witness))?;
         self.check_send_time(witness, false)?;
         self.prepare_retained(witness, head, parameters)
     }
@@ -1129,18 +1274,12 @@ impl Engine for NativeEngine {
             incoming_payment, ..
         } = &witness
         {
-            let trusted = p.profile(full::SEND)?;
-            let d = payment_wire::decode(
-                &payment_wire::Profile {
-                    pair: &trusted,
-                    scheme: p.scheme,
-                    relation: p.relation,
-                },
-                incoming_payment,
-            )
-            .map_err(Error::Rejected)?;
-            let u = verify_pair(p, full::SEND, d.pair)?;
-            pairs.push(full::trace_uniform(u, &p.generators));
+            let candidate = self.incoming_candidate(incoming_payment, parameters)?;
+            pairs.push(full::trace_incoming_candidate(
+                candidate.pair,
+                &p.generators,
+                candidate.pair_bytes,
+            ));
         }
         let entropy = ProofEntropy::fresh().map_err(|_| Error::Unavailable("OS proof entropy"))?;
         let folds = if k == full::BOOTSTRAP {
@@ -1213,16 +1352,35 @@ impl Engine for NativeEngine {
         {
             return Err(Error::AuthorityMismatch("operation compiled program"));
         }
-        let (_, d, _) = spartan::prove_linked_circuit(
+        // Both actual builders are resident. The primary prefix allocates no
+        // matrix plans; the secondary is dropped before the full primary proof.
+        // Only one circuit's additional workspace is live at either full proof.
+        // This accounted estimate is not a complete process peak
+        // (closures and allocator overhead remain opaque).
+        if let Some(source) = &self.time {
+            let required = cp
+                .proving_memory_accounting()
+                .additional_peak_bytes
+                .max(cs.proving_memory_accounting().additional_peak_bytes)
+                .checked_add(
+                    u64::try_from(iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES)
+                        .map_err(|_| Error::ResourceLimit)?,
+                )
+                .ok_or(Error::ResourceLimit)?;
+            let available = source.available_memory_bytes()?;
+            if available < required {
+                return Err(Error::NotEnoughMemory {
+                    required,
+                    available,
+                });
+            }
+        }
+        let d = spartan::prepare_linked_phase1(
             &cp.shape,
             &p.generators.p,
             &ip,
             &wp,
             &mut entropy.stream(b"primary"),
-            &Link::First {
-                rho: [0; 32],
-                r: [0; 32],
-            },
             &*cp,
         );
         let rlc = |_: &[u8; 32]| [0; 32];
@@ -1235,6 +1393,11 @@ impl Engine for NativeEngine {
             &Link::Second { d, rlc: &rlc },
             &*cs,
         );
+        // Verification uses the independently authenticated public programs.
+        // Retaining the secondary's private arrays/plans through the primary
+        // proof only increased memory; the completion needs its proof and IO.
+        drop(ws);
+        drop(cs);
         let (pp, d2, _) = spartan::prove_linked_circuit(
             &cp.shape,
             &p.generators.p,
@@ -1247,6 +1410,8 @@ impl Engine for NativeEngine {
         if d != d2 {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
+        drop(wp);
+        drop(cp);
         let u = verify_pair(
             p,
             k,
@@ -1358,4 +1523,270 @@ impl Engine for NativeEngine {
             head,
         })
     }
+}
+
+/// The full chain driver calls the actual sealed native API after its program
+/// fixed point. Test software signatures model only the isolated fixture keys.
+#[cfg(test)]
+pub(crate) fn test_full_chain_native(
+    chain: &crate::chain_fixture::Chain,
+    pairs: &[full::UniformPair; 4],
+    receiver_boot: &full::UniformPair,
+    dimensions: ((usize, usize), (usize, usize)),
+) -> std::result::Result<(), String> {
+    fn run(
+        chain: &crate::chain_fixture::Chain,
+        pairs: &[full::UniformPair; 4],
+        receiver_boot: &full::UniformPair,
+        dimensions: ((usize, usize), (usize, usize)),
+    ) -> Result<()> {
+        use iroha_data_model::sumeragi_finality::{
+            SumeragiCommitVerifierV1, test_fixtures::NativeFinalityFixture,
+        };
+        let fixture = NativeFinalityFixture::new_with_explicit_parameters();
+        let finality = SumeragiCommitVerifierV1::new(&fixture.verifier())
+            .map_err(|e| Error::Rejected(e.to_string()))?;
+        let programs: [Program; 4] = std::array::from_fn(|i| Program {
+            primary: pairs[i].cp.clone(),
+            secondary: pairs[i].cs.clone(),
+        });
+        let manifest = ParameterManifest {
+            version: 1,
+            scheme: chain.sender_context.root.scheme,
+            relation: chain.sender_context.relation,
+            primary: std::array::from_fn(|i| programs[i].primary.program_digest()),
+            secondary: std::array::from_fn(|i| programs[i].secondary.program_digest()),
+            dimensions_p: [dimensions.0.0 as u32, dimensions.0.1 as u32],
+            dimensions_s: [dimensions.1.0 as u32, dimensions.1.1 as u32],
+            finality_network: finality.network().to_string(),
+            finality_chain: finality.chain_id().to_string(),
+        };
+        let manifest = super::encode(&manifest)?;
+        let signature = bootstrap::sign(
+            crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), &manifest),
+            &BigUint::from_bytes_be(&[0x11; 32]),
+            "native test parameter manifest",
+        );
+        let parameters = ParameterSet::authenticate(
+            programs,
+            &manifest,
+            signature,
+            chain.sender_context.root.root.clone(),
+            finality.clone(),
+        )?;
+        let bundle_bytes = parameters.export_program_bundle()?;
+        if let Ok(path) = std::env::var("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS") {
+            let path = std::path::Path::new(&path);
+            std::fs::create_dir_all(path).map_err(|e| Error::Rejected(e.to_string()))?;
+            for (name, bytes) in [
+                ("program-bundle.norito", bundle_bytes.as_slice()),
+                ("parameter-manifest.norito", manifest.as_slice()),
+                ("parameter-signature.bin", signature.as_slice()),
+            ] {
+                std::fs::write(path.join(name), bytes)
+                    .map_err(|e| Error::Rejected(e.to_string()))?;
+            }
+        }
+        let bundle = ProgramBundle::decode(&bundle_bytes)?;
+        let imported: [Program; 4] = (0..4)
+            .map(|i| {
+                Ok(Program {
+                    primary: Arc::new(
+                        UniformCircuit::import_program(&bundle.primary[i], true)
+                            .map_err(Error::Rejected)?,
+                    ),
+                    secondary: Arc::new(
+                        UniformCircuit::import_program(&bundle.secondary[i], false)
+                            .map_err(Error::Rejected)?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| Error::Malformed("test programs"))?;
+        let parameters = ParameterSet::authenticate(
+            imported,
+            &manifest,
+            signature,
+            chain.sender_context.root.root.clone(),
+            finality,
+        )?;
+        let engine = NativeEngine::default();
+        for i in [full::BOOTSTRAP, full::LOAD, full::SEND] {
+            let bytes = encode_head(
+                &parameters,
+                &pairs[i],
+                &chain.send.credential,
+                &chain.sender_bootstrap.certificate,
+            )?;
+            engine.verify_head(&bytes, &chain.send.credential, &parameters)?;
+        }
+        let receive_head = encode_head(
+            &parameters,
+            &pairs[full::RECEIVE],
+            &chain.receiver_bootstrap.credential,
+            &chain.receiver_bootstrap.certificate,
+        )?;
+        engine.verify_head(
+            &receive_head,
+            &chain.receiver_bootstrap.credential,
+            &parameters,
+        )?;
+        let sender_head = encode_head(
+            &parameters,
+            &pairs[full::LOAD],
+            &chain.send.credential,
+            &chain.sender_bootstrap.certificate,
+        )?;
+        let mut sender = engine.verify_head(&sender_head, &chain.send.credential, &parameters)?;
+        // This unit fixture has no durable provider; the provider integration binds
+        // its actual marker before producing the identical sealed predecessor.
+        sender.custody_digest = [17; 32];
+        let mut native_send = chain.send.clone();
+        // Controls-off preparation derives one deterministic Core lower/upper.
+        native_send.upper = native_send.lower;
+        native_send.statement[25] = Fp::from(native_send.lower);
+        native_send.receipt.body[210..242]
+            .copy_from_slice(&crate::statement::digest(&native_send.statement).to_repr());
+        let operation = ExactOperationWitness::Send(Box::new(native_send.clone()));
+        let prepared = engine.prepare(&operation, &sender, &parameters)?;
+        let capsule = prepared.capsule().clone();
+        let frozen = capsule.encode()?;
+        let restored = engine.resume(&capsule, &parameters)?;
+        if restored.capsule().encode()? != frozen {
+            return Err(Error::AuthorityMismatch("native exact resume"));
+        }
+        let signed = bootstrap::sign(
+            super::field(&prepared.signing_message())?,
+            &chain.sender_key.d,
+            "native Send fixture hardware boundary",
+        );
+        let receipt =
+            HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signed)?;
+        eprintln!("native full-chain: finalizing Send through actual Engine");
+        let completed = engine.finalize(prepared, &receipt, &parameters)?;
+        let exact = completed.completion().encode()?;
+        let verified = engine.verify_completion(&capsule, completed.completion(), &parameters)?;
+        if verified.completion().encode()? != exact {
+            return Err(Error::AuthorityMismatch("native retained Send bytes"));
+        }
+        let payment = completed.completion().output_part(1)?;
+        let received = engine.verify_payment(&payment, &parameters)?;
+        let mut changed = payment.clone();
+        let at = changed.len() / 2;
+        changed[at] ^= 1;
+        if engine.verify_payment(&changed, &parameters).is_ok() {
+            return Err(Error::AuthorityMismatch("native Payment tamper test"));
+        }
+        let boot = encode_head(
+            &parameters,
+            receiver_boot,
+            &chain.receiver_bootstrap.credential,
+            &chain.receiver_bootstrap.certificate,
+        )?;
+        let mut receiver =
+            engine.verify_head(&boot, &chain.receiver_bootstrap.credential, &parameters)?;
+        receiver.custody_digest = [19; 32];
+        let mut actual_send = native_send;
+        actual_send.receipt = received.receipt().clone();
+        let witness = crate::receive_fixture::from_send(
+            &chain.receiver_bootstrap,
+            &chain.receiver_key,
+            &actual_send,
+            received.exact_pair(),
+            *receiver.profile(),
+        )
+        .map_err(Error::Malformed)?;
+        let prepared = engine.prepare(
+            &ExactOperationWitness::Receive {
+                step: Box::new(witness),
+                incoming_payment: payment.clone().into(),
+            },
+            &receiver,
+            &parameters,
+        )?;
+        let capsule = prepared.capsule().clone();
+        let signed = bootstrap::sign(
+            super::field(&prepared.signing_message())?,
+            &chain.receiver_key.d,
+            "native Receive fixture hardware boundary",
+        );
+        let receipt =
+            HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signed)?;
+        eprintln!("native full-chain: finalizing Receive through actual Engine");
+        let completed = engine.finalize(prepared, &receipt, &parameters)?;
+        engine.verify_completion(&capsule, completed.completion(), &parameters)?;
+        if !completed.completion().output_part(1)?.is_empty() {
+            return Err(Error::AuthorityMismatch("Receive has no outbound Payment"));
+        }
+        // Same fixed profile, noncanonical R: its exact bytes enter the total
+        // parser and the authenticated Receive relation must derive Burn.
+        let trusted = parameters.inner.profile(full::SEND)?;
+        let payment_profile = payment_wire::Profile {
+            pair: &trusted,
+            scheme: parameters.inner.scheme,
+            relation: parameters.inner.relation,
+        };
+        let mut raw = received.exact_pair().to_vec();
+        raw[42..74].fill(255);
+        let malformed = payment_wire::test_replace_pair(&payment_profile, &payment, raw.clone())
+            .map_err(Error::Rejected)?;
+        let candidate = engine.incoming_candidate(&malformed, &parameters)?;
+        if candidate.valid || candidate.pair_bytes != raw {
+            return Err(Error::AuthorityMismatch(
+                "native malformed candidate exact originals",
+            ));
+        }
+        let witness = crate::receive_fixture::from_send_with_validity(
+            &chain.receiver_bootstrap,
+            &chain.receiver_key,
+            &actual_send,
+            &raw,
+            *receiver.profile(),
+            false,
+        )
+        .map_err(Error::Malformed)?;
+        let prepared = engine.prepare(
+            &ExactOperationWitness::Receive {
+                step: Box::new(witness),
+                incoming_payment: malformed.clone().into(),
+            },
+            &receiver,
+            &parameters,
+        )?;
+        let capsule = prepared.capsule().clone();
+        let resumed = engine.resume(&capsule, &parameters)?;
+        let ExactOperationWitness::Receive {
+            incoming_payment, ..
+        } = resumed.witness.as_ref()
+        else {
+            return Err(Error::AuthorityMismatch("native Burn resume kind"));
+        };
+        if incoming_payment.as_ref() != malformed.as_slice() {
+            return Err(Error::AuthorityMismatch(
+                "native Burn retains malformed originals",
+            ));
+        }
+        let signed = bootstrap::sign(
+            super::field(&prepared.signing_message())?,
+            &chain.receiver_key.d,
+            "native Burn fixture hardware boundary",
+        );
+        let receipt =
+            HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signed)?;
+        eprintln!("native full-chain: finalizing malformed-R Burn through actual Engine");
+        let burned = engine.finalize(prepared, &receipt, &parameters)?;
+        let verified = engine.verify_completion(&capsule, burned.completion(), &parameters)?;
+        if verified.head.profile
+            [crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL]
+            != Fp::from(10)
+        {
+            return Err(Error::AuthorityMismatch(
+                "native malformed Payment must burn ten",
+            ));
+        }
+        eprintln!("native full-chain: sealed prepare/finalize/verify/resume/retention passed");
+        Ok(())
+    }
+    run(chain, pairs, receiver_boot, dimensions).map_err(|e| e.to_string())
 }

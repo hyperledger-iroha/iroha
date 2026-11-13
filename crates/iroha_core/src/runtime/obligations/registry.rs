@@ -2,17 +2,17 @@
 //! completion, and what a restriction or a change set must leave to a registered obligation.
 //!
 //! `world.runtime_obligations` holds the one [`ObligationRecordV1`] each owner holds: an account
-//! that registered for itself, or the subject account of a contract whose lifecycle controller
-//! registered for it. A registration commits to the exact instructions that complete the
+//! that registered for itself, or a contract subject registered by its lifecycle controller or
+//! by its authenticated named-profile invocation. A registration commits to the exact instructions that complete the
 //! obligation and captures their completion closure from the selection the root executes.
 //!
 //! - **Completion.** When the owner issues one of the committed instructions, the kernel
 //!   executes it as a completion and marks it performed on success: admission closure and
 //!   completion-only on the definitions behind it, or behind what it invokes, do not stop it
 //!   ([`performing`], [`super::Step`]). Each committed instruction lends that capability once.
-//!   A contract has no kernel call under the first-release ABI, and needs none: the committed
-//!   instructions it queues under its subject account complete the obligation registered for
-//!   it in the same way.
+//!   The baseline ABI has no registration kernel call: committed instructions a contract queues
+//!   under its subject account complete the obligation registered for it. The independently
+//!   selected contract lifecycle host profile also lets it register and end its own obligation.
 //! - **Activation.** A new binding may coexist with a captured implementation. The completion
 //!   runs under its captured context, including authorization and host selection, while normal
 //!   instructions run under the new binding. Removing or disabling a required definition, or

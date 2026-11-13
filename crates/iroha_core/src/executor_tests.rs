@@ -5,6 +5,8 @@ mod content_publish_permission;
 mod custody_upgrade;
 #[path = "executor_restricted_dataspace_read_tests.rs"]
 mod restricted_dataspace_read;
+#[path = "executor_runtime_obligation_profile_tests.rs"]
+mod runtime_obligation_profile;
 
 use super::*;
 use crate::{
@@ -402,11 +404,7 @@ mod zk_hydration_route_tests {
     fn trigger_route_preserves_cold_registry_owner_and_fresh_state_retry() {
         let state = route_state();
         let trigger_id: TriggerId = "hydration_registry_callback".parse().unwrap();
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 100,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         // HALT itself costs zero gas; execute one real arithmetic instruction so
         // the unchanged fresh-retry gas assertion witnesses actual VM execution.
         program.extend_from_slice(
@@ -1373,11 +1371,7 @@ fn borrowed_transaction_proof_rejects_without_authoritative_relation() {
 fn borrowed_raw_ivm_keeps_original_bytecode_and_completed_work() {
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let state = state_after_genesis(World::with([], [account], []));
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(
         &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 1)
             .to_le_bytes(),
@@ -1483,11 +1477,7 @@ fn successful_live_batch_settlement_retains_nested_execute_trigger_ivm_gas() {
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let state = state_after_genesis(World::with([], [account], []));
     let trigger_id: TriggerId = "live_batch_ivm_gas".parse().expect("trigger id");
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(
         &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 1)
             .to_le_bytes(),
@@ -7843,11 +7833,7 @@ fn genesis_raw_ivm_carriers_reject_before_debit_or_supply_change() {
 fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
     let (mut config, authority, fee_asset) = authenticated_genesis_fee_config();
     let trigger_id: TriggerId = "authenticated_genesis_generic_ivm".parse().unwrap();
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(
         &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
             .to_le_bytes(),
@@ -7932,11 +7918,7 @@ fn local_custody_invariant_abandons_transaction_without_gas_or_fee() {
 fn check_local_checkout_abandons_transaction(reason: ivm::error::ExecutionDeferral) {
     let (state, keypair, authority, _, _, fee_asset, _) =
         pipeline_fee_state_fixture(state_after_genesis);
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(
         &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
             .to_le_bytes(),
@@ -13180,7 +13162,7 @@ fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 100_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut program = metadata.encode();
@@ -13192,7 +13174,7 @@ fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
                 ivm::instruction::wide::arithmetic::ADDI,
                 10,
                 10,
-                i8::try_from(chunk).expect("bounded ADDI chunk"),
+                i16::try_from(chunk).expect("bounded ADDI chunk"),
             )
             .to_le_bytes(),
         );
@@ -13527,7 +13509,7 @@ fn contract_program_with_entrypoint_kind(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut program = metadata.encode();
@@ -13595,8 +13577,7 @@ fn contract_program_with_private_input_entrypoint(
     let mut program = metadata.encode();
     program.extend_from_slice(&interface.encode_section());
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT)
-        .to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT).to_le_bytes(),
     );
     program.extend_from_slice(&crate::ivm_test_support::unit_return());
     program
@@ -14651,7 +14632,7 @@ fn identityless_raw_and_proved_dispatch_reject_before_argument_decode_or_proof_w
     let program = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             force_zk: true,
-            max_cycles: 10_000,
+            zk_trace_cycles: core::num::NonZeroU64::new(10_000).expect("non-zero trace bound"),
             ..kotodama_lang::compiler::CompilerOptions::default()
         },
     )
@@ -15247,11 +15228,7 @@ fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
         .build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let state = state_after_genesis(World::with([domain], [account], []));
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let generic_code_hash = ivm::contract_code_hash(&program);
     let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
@@ -15364,17 +15341,20 @@ fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
         block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
     state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-    state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
-    let error = super::Executor::Initial
+    // `max_cycles` bounds only a ZK trace: the live ceiling never limits a non-ZK program,
+    // whose only budget is the signed gas.
+    state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(1_u64);
+    super::Executor::Initial
         .execute_transaction(&mut state_transaction, &authority, &signed, &mut ivm_cache)
         .map_err(crate::execution_attempt::expect_completed_rejection)
-        .expect_err("direct generic IVM must honor the live cycle ceiling");
-    assert!(matches!(
-        error,
-        ValidationFail::IvmAdmission(
-            iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(_)
-        )
-    ));
+        .expect("a non-ZK generic program has no cycle check");
+}
+#[test]
+fn quarantine_gas_cap_narrows_the_root_limit_only_downwards() {
+    assert_eq!(cap_gas_limit(100, None), 100);
+    assert_eq!(cap_gas_limit(100, Some(40)), 40);
+    assert_eq!(cap_gas_limit(100, Some(100)), 100);
+    assert_eq!(cap_gas_limit(100, Some(400)), 100);
 }
 include!("executor_contract_dispatch_tests.rs");
 include!("executor_privacy_occurrence_tests.rs");

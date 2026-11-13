@@ -1528,8 +1528,8 @@ impl IVM {
     }
     /// Enable or disable zero-knowledge features.
     ///
-    /// When enabled and no explicit cycle limit has been set, the default
-    /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
+    /// Enabling ZK on code without a trace bound installs the default [`zk::MAX_CYCLES`];
+    /// disabling ZK clears the bound, since ordinary execution is bounded by gas alone.
     ///
     /// # Errors
     /// Private-range corruption or exhausted local diagnostic capacity leaves the
@@ -1579,7 +1579,10 @@ impl IVM {
     pub fn zk_trace_enabled(&self) -> bool {
         self.zk_trace_enabled
     }
-    /// Set the maximum cycle count used for zero-knowledge padding and enforcement.
+    /// Set the ZK trace bound: the cycle count a ZK-mode run traps at and pads to.
+    ///
+    /// Loading a program installs its header bound, so this is a host/tooling override for raw
+    /// code or tests. Ordinary (non-ZK) execution has no cycle bound; gas alone limits it.
     pub fn set_max_cycles(&mut self, max: u64) {
         // The active trace shape is fixed at invocation start. A host callback
         // may configure a later invocation, but it must not silently truncate
@@ -1785,11 +1788,9 @@ impl IVM {
         self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
         self.literal_table = image.literal_table;
+        // The header parser requires a nonzero trace bound exactly for ZK programs.
         self.max_cycles = image.metadata.max_cycles;
         self.zk_mode = image.metadata.mode & crate::metadata::mode::ZK != 0;
-        if self.zk_mode && self.max_cycles == 0 {
-            self.max_cycles = zk::MAX_CYCLES;
-        }
         // Overlay code while preserving INPUT/STACK contents that may have
         // been preloaded by the host/tests. HEAP/OUTPUT are cleared per load.
         self.predecoded = image.predecoded;
@@ -4086,7 +4087,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let src = instruction::wide::rs1(instr);
                         let amt = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(src, amt)?;
+                        let tag = self.zk_join_tags(src, amt);
                         let sh = (self.registers.get(amt) & 0x3f) as u32;
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
@@ -4099,7 +4100,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let src = instruction::wide::rs1(instr);
                         let amt = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(src, amt)?;
+                        let tag = self.zk_join_tags(src, amt);
                         let sh = (self.registers.get(amt) & 0x3f) as u32;
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
@@ -4647,7 +4648,7 @@ impl IVM {
                 let remaining = self.max_cycles - self.cycles;
                 // Preserve the existing OOG outcome when padding cannot be paid.
                 // Otherwise admit its complete root backing before any padding
-                // cycles, shared allowance or gas are consumed.
+                // cycles or gas are consumed.
                 if self.gas_remaining >= remaining {
                     self.prepare_trace_padding(&invocation_trace, remaining)?;
                 }
@@ -6845,7 +6846,7 @@ mod failed_program_install_tests {
                 self
             }
         }
-        let syscall = crate::encoding::wide::encode_syscallx(crate::syscalls::SYSCALL_DEBUG_PRINT);
+        let syscall = crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_DEBUG_PRINT);
         let code = [syscall, syscall, crate::encoding::wide::encode_halt()]
             .into_iter()
             .flat_map(u32::to_le_bytes)

@@ -155,13 +155,12 @@ impl State {
         let native = view
             .native_execution_tip()
             .ok_or("no native State publication")?;
-        // The native tip's Iroha hash is the hash of the certified block.
-        let certified_block = tip.block_hash();
+        let certified_block_hash = tip.block_hash();
         if native.height() != tip.height()
-            || native.iroha_hash() != certified_block
+            || native.iroha_hash() != certified_block_hash
             || native.core_hash() != tip.core_hash()
             || native.result() != tip.result()
-            || view.latest_block_hash() != Some(tip.block_hash())
+            || view.latest_block_hash() != Some(certified_block_hash)
             || *view.network_id() != tip.commitment().schedule.current.network_id
             || !runtime::keyed_state::selected(view.world().runtime_selection())
         {

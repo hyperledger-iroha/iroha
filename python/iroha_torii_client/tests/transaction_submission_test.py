@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import iroha_torii_client as torii_client
@@ -1056,4 +1058,153 @@ def test_noncanonical_receipt_signer_is_rejected_by_inspector_before_dispatch() 
 
     assert callbacks.authenticate_calls == [(SIGNED_TRANSACTION, "not-a-key")]
     assert callbacks.verify_calls == []
+    assert transport.calls == []
+
+
+# Rust-authored ErrorEnvelope frames whose details carry queue and retry metadata.
+ERROR_ENVELOPE_DETAILS = json.loads(
+    (Path(__file__).resolve().parents[3] / "fixtures/torii/error_envelope_details_v1.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def envelope_row(name: str) -> dict[str, Any]:
+    return next(row for row in ERROR_ENVELOPE_DETAILS["decoded"] if row["name"] == name)
+
+
+class FixtureEnvelopeDecoder:
+    """Stand-in for iroha_python's decoder: the Rust frames map to their envelopes."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, bytes]] = []
+        self.envelopes = {
+            bytes.fromhex(row["norito_hex"]): (row["code"], row["message"], row["details"])
+            for row in ERROR_ENVELOPE_DETAILS["decoded"]
+        }
+
+    def __call__(self, content_type: Any, body: bytes) -> Any:
+        self.calls.append((content_type, body))
+        return self.envelopes.get(body)
+
+
+def submit_with_decoder(session: requests.Session, callbacks: NativeCallbacks, decoder: Any) -> Any:
+    return transaction_submission.submit_transaction_once_v1(
+        session=session,
+        base_url="https://torii.example",
+        signed_transaction=SIGNED_TRANSACTION,
+        inspect_transaction_submission=callbacks.inspect,
+        expected_receipt_signer=RECEIPT_SIGNER,
+        verify_receipt=callbacks.verify,
+        decode_error_envelope=decoder,
+    )
+
+
+def test_definitive_rejection_exposes_a_decoded_error_envelope() -> None:
+    # The frame exceeds the 512-byte preview, so only the envelope bound fits it.
+    row = envelope_row("every_decoded_field")
+    frame = bytes.fromhex(row["norito_hex"])
+    assert len(frame) > transaction_submission.TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1
+    response = Response(400, body=frame)
+    session, transport = stock_submission(response)
+    callbacks = NativeCallbacks()
+    decoder = FixtureEnvelopeDecoder()
+
+    with pytest.raises(transaction_submission.TransactionSubmissionHttpError) as caught:
+        submit_with_decoder(session, callbacks, decoder)
+
+    error = caught.value
+    assert (error.status_code, error.reject_code) == (400, None)
+    assert (error.code, error.error_message, error.details) == (
+        row["code"],
+        row["message"],
+        row["details"],
+    )
+    assert (error.body_preview, error.body_truncated) == (None, False)
+    assert f"error={row['code']}: " in str(error)
+    assert decoder.calls == [("application/x-norito", frame)]
+    assert len(transport.calls) == 1
+    assert response.closed
+
+    # Without a decoder the same body keeps the bounded lossy preview.
+    session, transport = stock_submission(Response(400, body=frame))
+    with pytest.raises(transaction_submission.TransactionSubmissionHttpError) as caught:
+        submit(session, NativeCallbacks())
+    error = caught.value
+    assert (error.code, error.error_message, error.details) == (None, None, None)
+    assert error.body_preview is not None
+    assert error.body_truncated is True
+
+
+@pytest.mark.parametrize("name", ["queue_full", "already_committed", "transaction_admission_deferred"])
+def test_queue_rejection_details_stay_diagnostic_for_ambiguous_outcomes(name: str) -> None:
+    row = envelope_row(name)
+    headers = {}
+    if "reject_code" in row["details"]:
+        headers["x-iroha-reject-code"] = row["details"]["reject_code"]
+    response = Response(row["status"], body=bytes.fromhex(row["norito_hex"]), headers=headers)
+    session, transport = stock_submission(response)
+    callbacks = NativeCallbacks()
+
+    with pytest.raises(transaction_submission.AmbiguousTransactionSubmissionError) as caught:
+        submit_with_decoder(session, callbacks, FixtureEnvelopeDecoder())
+
+    error = caught.value
+    assert error.status_code == row["status"]
+    assert error.reject_code == row["details"].get("reject_code")
+    assert (error.code, error.error_message, error.details) == (
+        row["code"],
+        row["message"],
+        row["details"],
+    )
+    assert error.body_preview is None
+    assert "reconcile by transaction hash" in str(error)
+    assert callbacks.verify_calls == []
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "decoder",
+    [
+        lambda _type, _body: None,
+        lambda _type, _body: ("code", "message"),
+        lambda _type, _body: ("code", "message", ["not", "a", "mapping"]),
+        lambda _type, _body: (_ for _ in ()).throw(ValueError("decoder failure")),
+    ],
+    ids=["refused", "two_tuple", "bad_details", "raises"],
+)
+def test_bodies_the_decoder_does_not_type_keep_the_preview(decoder: Any) -> None:
+    session, transport = stock_submission(Response(400, body=b"invalid transaction"))
+
+    with pytest.raises(transaction_submission.TransactionSubmissionHttpError) as caught:
+        submit_with_decoder(session, NativeCallbacks(), decoder)
+
+    error = caught.value
+    assert (error.code, error.error_message, error.details) == (None, None, None)
+    assert (error.body_preview, error.body_truncated) == ("invalid transaction", False)
+    assert len(transport.calls) == 1
+
+
+def test_oversized_error_bodies_are_never_decoded() -> None:
+    limit = transaction_submission.TRANSACTION_SUBMISSION_ERROR_ENVELOPE_MAX_BYTES_V1
+    session, transport = stock_submission(Response(400, body=b"x" * (limit + 1)))
+    decoder = FixtureEnvelopeDecoder()
+
+    with pytest.raises(transaction_submission.TransactionSubmissionHttpError) as caught:
+        submit_with_decoder(session, NativeCallbacks(), decoder)
+
+    assert decoder.calls == []
+    assert caught.value.body_preview == "x" * transaction_submission.TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1
+    assert caught.value.body_truncated is True
+    assert len(transport.calls) == 1
+
+
+def test_non_callable_error_envelope_decoder_is_rejected_before_dispatch() -> None:
+    session, transport = stock_submission(Response())
+    callbacks = NativeCallbacks()
+
+    with pytest.raises(TypeError, match="decode_error_envelope must be callable"):
+        submit_with_decoder(session, callbacks, "not callable")
+
+    assert callbacks.authenticate_calls == []
     assert transport.calls == []

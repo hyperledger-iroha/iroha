@@ -143,3 +143,212 @@ mod tests {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferProofKind {
+    Intent,
+    Reservation,
+    Export,
+    Import,
+    Cancellation,
+}
+impl TransferProofKind {
+    fn parse(value: &str) -> Result<Self, Error> {
+        match value {
+            "intent" => Ok(Self::Intent),
+            "reservation" => Ok(Self::Reservation),
+            "export" => Ok(Self::Export),
+            "import" => Ok(Self::Import),
+            "cancellation" => Ok(Self::Cancellation),
+            _ => Err(routing::conversion_error(
+                "game transfer proof kind must be intent, reservation, export, import or cancellation".into(),
+            )),
+        }
+    }
+}
+
+fn transfer_value<T>(
+    value: Result<Option<T>, String>,
+    format: crate::utils::ResponseFormat,
+) -> Result<AxResponse, Error>
+where
+    T: norito::NoritoSerialize + norito::json::JsonSerialize + Send + 'static,
+{
+    let value = value
+        .map_err(|message| Error::Query(iroha_data_model::ValidationFail::InternalError(message)))?
+        .ok_or_else(|| Error::AppNotFound {
+            code: "game_transfer_record_not_found",
+            message: "the requested original transfer record is absent at this root".into(),
+        })?;
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        Ok(crate::NoritoBody(value).into_response())
+    } else {
+        routing::pretty_json_response(&value)
+    }
+}
+
+fn transfer_read(
+    view: &impl iroha_core::state::StateReadOnly,
+    world: Hash,
+    transfer: Hash,
+    kind: Option<TransferProofKind>,
+    format: crate::utils::ResponseFormat,
+) -> Result<AxResponse, Error> {
+    use iroha_core::smartcontracts::isi::game_partition as game;
+    match kind {
+        None => transfer_value(
+            game::native_game_transfer_snapshot(view, world, transfer),
+            format,
+        ),
+        Some(TransferProofKind::Intent) => transfer_value(
+            game::game_unit_export_intent_proof(view, world, transfer),
+            format,
+        ),
+        Some(TransferProofKind::Reservation) => transfer_value(
+            game::game_unit_reservation_proof(view, world, transfer),
+            format,
+        ),
+        Some(TransferProofKind::Export) => transfer_value(
+            game::reserved_game_unit_export_proof(view, world, transfer),
+            format,
+        ),
+        Some(TransferProofKind::Import) => transfer_value(
+            game::game_unit_import_ack_proof(view, world, transfer),
+            format,
+        ),
+        Some(TransferProofKind::Cancellation) => transfer_value(
+            game::game_unit_export_cancel_proof(view, world, transfer),
+            format,
+        ),
+    }
+}
+
+pub async fn transfer_snapshot(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((world, transfer)): axum::extract::Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    transfer_response(app, world, transfer, None, headers, remote).await
+}
+
+pub async fn transfer_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((world, transfer, kind)): axum::extract::Path<(String, String, String)>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    transfer_response(
+        app,
+        world,
+        transfer,
+        Some(TransferProofKind::parse(&kind)?),
+        headers,
+        remote,
+    )
+    .await
+}
+
+async fn transfer_response(
+    app: SharedAppState,
+    world: String,
+    transfer: String,
+    kind: Option<TransferProofKind>,
+    headers: axum::http::HeaderMap,
+    remote: std::net::SocketAddr,
+) -> Result<AxResponse, Error> {
+    let route = if kind.is_some() {
+        "/v1/game-partitions/{world}/transfers/{transfer}/proof/{kind}"
+    } else {
+        "/v1/game-partitions/{world}/transfers/{transfer}/state"
+    };
+    let (world, transfer) = (hash_selector(&world)?, hash_selector(&transfer)?);
+    let _principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        route,
+        app.authenticated_api_token_principal(&headers),
+    );
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    let response =
+        routing::run_admitted_blocking(admission, "game transfer proof worker failed", move || {
+            transfer_read(&state.view(), world, transfer, kind, format)
+        })
+        .await?;
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote.ip()),
+        route,
+        response,
+        true,
+    )
+    .await
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    #[test]
+    fn transfer_proof_selector_has_only_exact_protocol_stages() {
+        for (value, expected) in [
+            ("intent", TransferProofKind::Intent),
+            ("reservation", TransferProofKind::Reservation),
+            ("export", TransferProofKind::Export),
+            ("import", TransferProofKind::Import),
+            ("cancellation", TransferProofKind::Cancellation),
+        ] {
+            assert_eq!(TransferProofKind::parse(value).unwrap(), expected);
+        }
+        for value in ["", "snapshot", "ack", "IMPORT", "../state", "import/intent"] {
+            assert!(TransferProofKind::parse(value).is_err());
+        }
+    }
+
+    #[test]
+    fn transfer_read_never_invents_absent_discovery_or_certified_records() {
+        let state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::new(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        for kind in [
+            None,
+            Some(TransferProofKind::Intent),
+            Some(TransferProofKind::Reservation),
+            Some(TransferProofKind::Export),
+            Some(TransferProofKind::Import),
+            Some(TransferProofKind::Cancellation),
+        ] {
+            let result = transfer_read(
+                &state.view(),
+                Hash::prehashed([1; 32]),
+                Hash::prehashed([2; 32]),
+                kind,
+                crate::utils::ResponseFormat::Norito,
+            );
+            assert!(matches!(
+                result,
+                Err(Error::AppNotFound {
+                    code: "game_transfer_record_not_found",
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            transfer_value::<u64>(
+                Err("original source unavailable".into()),
+                crate::utils::ResponseFormat::Norito
+            ),
+            Err(Error::Query(_))
+        ));
+    }
+}

@@ -3736,7 +3736,11 @@ transaction is admitted, quoted, counted and executed as exempt exactly when it
 is eligible. A transaction of an exempt shape that is not eligible is never
 refused for its shape: it pays the ordinary fee and does not count toward the
 quotas. Admission pre-verifies every eligible transaction and rejects only an
-eligible transaction that is invalid.
+eligible transaction that is invalid. A keepalive is eligible exactly when it is
+due (K5). Its Parliament terms are the due predicate on the committed tip at the
+candidate height for admission, quoting and the proposer, and the executing
+block's own `governance_due_applied` for execution and validation (K2); both
+depend only on the parent state, `t(B)` and the pulses `B` carries.
 
 Fee exemption is "exempt on success, charged on failure": a failed eligible
 transaction is charged the ordinary Nexus fee within its signed fee intent,

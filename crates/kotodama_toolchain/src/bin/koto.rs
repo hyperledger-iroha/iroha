@@ -237,9 +237,10 @@ struct BuildArgs {
     /// Write the manifest to this path, or `-` for stdout (one source only).
     #[arg(long, value_name = "FILE.json")]
     manifest_out: Option<PathBuf>,
-    /// Cycle ceiling recorded in the artifact header; must not exceed node admission policy.
-    #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
-    max_cycles: Option<u64>,
+    /// ZK trace bound recorded in the header of a `--zk` artifact; must not exceed the chain's
+    /// `ivm_max_cycles_upper_bound`. A non-ZK artifact carries no bound: gas is its only budget.
+    #[arg(long, value_name = "COUNT", requires = "zk")]
+    zk_trace_cycles: Option<std::num::NonZeroU64>,
     /// Exact named ABI V1 host profile required by the produced contract.
     #[arg(long, value_parser = ["abi-v1", "iroha.ivm.runtime_lifecycle.v1"], default_value = "abi-v1")]
     host_profile: String,
@@ -1040,7 +1041,7 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         target_dir,
         out: explicit_output,
         manifest_out: explicit_manifest_output,
-        max_cycles,
+        zk_trace_cycles,
         host_profile,
         upgrade_from,
         verify,
@@ -1097,8 +1098,8 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         "abi-v1" => ivm::SyscallPolicy::AbiV1,
         _ => unreachable!("clap validates the exact named host profile"),
     };
-    if let Some(max_cycles) = max_cycles {
-        compiler_options.max_cycles = max_cycles;
+    if let Some(zk_trace_cycles) = zk_trace_cycles {
+        compiler_options.zk_trace_cycles = zk_trace_cycles;
     }
     compiler_options.chain_discriminant = capabilities.chain_discriminant();
     compiler_options.force_zk = capabilities.zk;
@@ -3197,6 +3198,25 @@ mod tests {
         }
     }
     #[test]
+    fn zk_trace_bound_is_a_positive_zk_only_build_option() {
+        assert_eq!(build_args(&["a.ko"]).zk_trace_cycles, None);
+        let args = build_args(&["--zk", "--zk-trace-cycles", "4096", "a.ko"]);
+        assert!(args.capabilities.zk);
+        assert_eq!(
+            args.zk_trace_cycles.map(std::num::NonZeroU64::get),
+            Some(4096)
+        );
+        let error = parse_cli(&["build", "--zk-trace-cycles", "4096", "a.ko"])
+            .expect_err("a trace bound requires ZK mode");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(report_status_for(&error), ExitStatus::Usage);
+        assert!(parse_cli(&["build", "--zk", "--zk-trace-cycles", "0", "a.ko"]).is_err());
+        assert!(parse_cli(&["build", "--max-cycles", "1000000", "a.ko"]).is_err());
+    }
+    #[test]
     fn offline_upgrade_verification_accepts_only_exact_compiled_host_profiles() {
         for policy in [
             ivm::SyscallPolicy::AbiV1,
@@ -3215,7 +3235,7 @@ mod tests {
             let verified = verify_build_contract_artifact(&output.artifact).unwrap();
             assert_eq!(verified.syscall_policy, policy);
             let mut unknown = output.artifact;
-            unknown[ivm::metadata::HEADER_ABI_HASH_OFFSET..ivm::metadata::HEADER_SIZE].fill(0xA5);
+            unknown[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE].fill(0xA5);
             assert!(verify_build_contract_artifact(&unknown).is_err());
         }
         assert!(verify_build_contract_artifact(b"truncated").is_err());

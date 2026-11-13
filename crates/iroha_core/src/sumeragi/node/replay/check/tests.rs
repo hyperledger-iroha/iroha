@@ -22,6 +22,56 @@ fn run<T: Send + 'static>(test: impl FnOnce() -> T + Send + 'static) -> T {
         .unwrap_or_else(|failure| std::panic::resume_unwind(failure))
 }
 
+#[test]
+fn replay_copy_preserves_portable_prefix_and_sparse_body_unavailability() {
+    run(|| {
+        let (_directory, mut config, kura, fixture) =
+            crate::kura::checkpoint_prefix::tests::imported();
+        let boundary = UpgradeCheckpointV1 {
+            height: 2,
+            block_hash: fixture.hashes[1],
+        };
+        kura.record_history_boundary(&boundary).unwrap();
+        drop(kura);
+        config.init_mode = iroha_config::kura::InitMode::Fast;
+        let (source, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &iroha_config::parameters::actual::LaneConfig::default(),
+        )
+        .unwrap();
+        let before = inventory(&source.store_root());
+        let mut copied = 0;
+        let copy = copy_store(
+            &source,
+            &config,
+            &iroha_config::parameters::actual::LaneConfig::default(),
+            &iroha_data_model::nexus::LaneCatalog::default(),
+            &mut |count| copied = count,
+        )
+        .unwrap();
+        assert!(copied > 0);
+        assert_eq!(inventory(&source.store_root()), before);
+        assert_eq!(copy.history_boundary(), Some(boundary));
+        assert_eq!(copy.checkpoint_prefix_height(), Some(2));
+        assert!(
+            copy.native_frame_read(2, fixture.hashes[1])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            copy.checkpoint_prefix_frame(2).unwrap(),
+            Some(fixture.frames[0].clone())
+        );
+        let after = inventory(&copy.store_root());
+        for (path, bytes) in before
+            .iter()
+            .filter(|(path, _)| path.starts_with("checkpoint_prefix"))
+        {
+            assert_eq!(after.get(path), Some(bytes));
+        }
+    });
+}
+
 /// Every file under `root` with its bytes.
 fn inventory(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {

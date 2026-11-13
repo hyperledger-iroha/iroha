@@ -213,6 +213,20 @@ fn base_array<F: PrimeField>(
     }
 }
 
+/// Inactive array slots have no constraints or witness positions. Complete
+/// zero tests produce 1 on the dummy identity, so clear those padding-only
+/// helper values before placement; every present arithmetic row is retained.
+fn zero_absent<F: PrimeField>(array: &mut Array<F>, families: usize) {
+    let n = 1usize << array.rho;
+    for column in &mut array.values {
+        for (i, value) in column.iter_mut().enumerate() {
+            if i / n >= families || i % n >= array.r_count {
+                *value = F::ZERO;
+            }
+        }
+    }
+}
+
 /// Upgrade the DAG addition array while preserving its existing x/y ports.
 pub fn additions<F: PrimeField>(
     family: usize,
@@ -260,6 +274,7 @@ pub fn additions<F: PrimeField>(
         b.equal(&b.own(k), &b.constant(F::ZERO));
     }
     b.a.r_count = p.len();
+    zero_absent(&mut b.a, 1);
     b.a
 }
 
@@ -373,12 +388,16 @@ pub fn endoscale<C: PastaCurve>(
     for k in [4, 5, 6] {
         step.equal(&step.own(k), &step.constant(F::<C>::ZERO));
     }
+    let mut arrays = vec![
+        base_array("complete endo base", family, base, false),
+        init.a,
+        step.a,
+    ];
+    for array in &mut arrays {
+        zero_absent(array, inputs.len());
+    }
     Ladder {
-        arrays: vec![
-            base_array("complete endo base", family, base, false),
-            init.a,
-            step.a,
-        ],
+        arrays,
         results,
         scalars,
     }
@@ -562,23 +581,27 @@ pub fn mixed_mul<C: PastaCurve>(
             }
         })
         .collect();
+    let mut arrays = vec![
+        base_array("complete multiplication base", family, base, false),
+        init.a,
+        step.a,
+        tail.a,
+        base_array("complete multiplication fixed base", family, fixed, true),
+        base_array("complete multiplication selector", family, select, true),
+        check,
+        base_array(
+            "complete multiplication correction point",
+            family,
+            correction,
+            true,
+        ),
+        end.a,
+    ];
+    for array in &mut arrays {
+        zero_absent(array, inputs.len());
+    }
     Ladder {
-        arrays: vec![
-            base_array("complete multiplication base", family, base, false),
-            init.a,
-            step.a,
-            tail.a,
-            base_array("complete multiplication fixed base", family, fixed, true),
-            base_array("complete multiplication selector", family, select, true),
-            check,
-            base_array(
-                "complete multiplication correction point",
-                family,
-                correction,
-                true,
-            ),
-            end.a,
-        ],
+        arrays,
         results,
         scalars,
     }

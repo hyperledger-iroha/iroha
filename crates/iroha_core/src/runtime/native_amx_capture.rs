@@ -7,7 +7,7 @@ use iroha_data_model::{
         wire_id_of,
     },
     runtime::{
-        definition::RootSelectionV1,
+        definition::{DefinitionDescriptorV1, DefinitionLookup, RootSelectionV1},
         native_amx::{
             NativeAmxCaptureV1 as Record, NativeAmxKindV1 as Kind, SERVICE, SERVICE_CLOSURE,
         },
@@ -196,6 +196,95 @@ fn wires(kind: Kind) -> Vec<String> {
     values
 }
 
+// Native AMX performs no contract calls. Exclude unrelated host roots before walking
+// dependencies, so they cannot change the default implementation or nested bindings.
+fn capture_native(
+    canonical: &RootSelectionV1,
+    definitions: &impl DefinitionLookup,
+    terminal: &[String],
+    height: u64,
+) -> Result<CompletionCaptureV1, Error> {
+    let mut selection = canonical.clone();
+    selection.active.retain(|id| {
+        !matches!(
+            definitions.definition(id),
+            Some(DefinitionDescriptorV1::HostProfile(_))
+        )
+    });
+    CompletionCaptureV1::capture(&selection, definitions, terminal, height).map_err(refused)
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use iroha_data_model::runtime::definition::{
+        HostProfileDescriptorV1, RestrictionEntryV1, RestrictionV1,
+    };
+
+    #[test]
+    fn native_amx_capture_excludes_host_roots_and_preserves_native_closure_and_restrictions() {
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"AMX capture test")),
+        );
+        let mut selection = catalog
+            .activation(
+                crate::runtime::catalog::additions::NATIVE_AMX_CAPTURE.module,
+                &catalog.baseline,
+                &catalog.definitions,
+                network,
+                50,
+                [1; 32],
+            )
+            .unwrap()
+            .apply(&catalog.baseline, &catalog.definitions)
+            .unwrap()
+            .selection;
+        let mut definitions = catalog.definitions.clone();
+        let profile = DefinitionDescriptorV1::HostProfile(HostProfileDescriptorV1 {
+            abi_version: 1,
+            abi_hash: [49; 32],
+            metering: [18; 32],
+        });
+        let profile_id = profile.id().unwrap();
+        definitions.insert(profile_id, profile);
+        selection.active.push(profile_id);
+        selection.active.sort();
+        selection.restrictions.push(RestrictionEntryV1 {
+            definition: profile_id,
+            restriction: RestrictionV1::Disabled(50),
+        });
+        selection.restrictions.sort_by_key(|entry| entry.definition);
+        for terminal in [
+            wires(Kind::GlobalDecision),
+            wires(Kind::ParticipantSettlement(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            )),
+            vec![wire_id_of::<PrepareAmxV1>().unwrap().to_owned()],
+        ] {
+            let capture = capture_native(&selection, &definitions, &terminal, 50).unwrap();
+            assert!(capture.host_profiles.is_empty());
+            let mut expected =
+                CompletionCaptureV1::capture(&selection, &definitions, &terminal, 50).unwrap();
+            assert!(expected.host_profiles.contains(&profile_id));
+            expected.host_profiles.clear();
+            assert_eq!(capture, expected);
+            assert!(capture.default_implementation.is_some());
+            assert_eq!(capture.terminal_effects().collect::<Vec<_>>(), terminal);
+            // An unrelated restricted host cannot grant an exemption to a native terminal.
+            let mut restricted = selection.clone();
+            restricted.restrictions.push(RestrictionEntryV1 {
+                definition: capture.terminal[0].implementation,
+                restriction: RestrictionV1::Disabled(50),
+            });
+            restricted
+                .restrictions
+                .sort_by_key(|entry| entry.definition);
+            assert!(capture_native(&restricted, &definitions, &terminal, 50).is_err());
+        }
+    }
+}
+
 fn context(
     world: &impl WorldReadOnly,
     canonical: &RootSelectionV1,
@@ -333,16 +422,12 @@ fn new_capture(
         return Err(refused("AMX opening already captured"));
     }
     let canonical = tx.world.runtime_selection.canonical();
-    let mut capture = CompletionCaptureV1::capture(
+    let capture = capture_native(
         canonical,
         &PublishedDefinitions(&tx.world.runtime_definitions),
         &wires(kind),
         tx.block_height(),
-    )
-    .map_err(refused)?;
-    // These native operations invoke no contract. Their implementation dependencies remain
-    // intact, but an unrelated IVM host selection is not AMX custody authority.
-    capture.host_profiles.clear();
+    )?;
     ensure_actual(tx, &capture)?;
     let expected = context(&*tx.world, canonical, &capture)?;
     for (kind, other) in cohort {
@@ -369,18 +454,14 @@ fn check_prepare_admission_checked(tx: &StateTransaction<'_, '_>) -> Result<(), 
     if !enabled(tx.world.runtime_selection.canonical()).map_err(refused)? {
         return Ok(());
     }
-    let mut capture = CompletionCaptureV1::capture(
+    let capture = capture_native(
         tx.world.runtime_selection.canonical(),
         &PublishedDefinitions(&tx.world.runtime_definitions),
         &[wire_id_of::<PrepareAmxV1>()
             .expect("AMX creator is registered")
             .into()],
         tx.block_height(),
-    )
-    .map_err(refused)?;
-    // These native operations invoke no contract. Their implementation dependencies remain
-    // intact, but an unrelated IVM host selection is not AMX custody authority.
-    capture.host_profiles.clear();
+    )?;
     ensure_actual(tx, &capture)?;
     // Even a No/held Prepare advances shared participant verification State.
     guard_participant_cohort_checked(tx)
@@ -568,14 +649,12 @@ fn ordinary_instruction(
     super::resolve(instruction, canonical, tx.block_height(), || None).map_err(Error::Rejected)?;
     let wire = iroha_data_model::isi::instruction_wire_id(instruction)
         .ok_or_else(|| refused("AMX operation has no registered wire identity"))?;
-    let mut capture = CompletionCaptureV1::capture(
+    let capture = capture_native(
         canonical,
         &PublishedDefinitions(&tx.world.runtime_definitions),
         &[wire.to_owned()],
         tx.block_height(),
-    )
-    .map_err(refused)?;
-    capture.host_profiles.clear();
+    )?;
     ensure_actual(tx, &capture)
 }
 

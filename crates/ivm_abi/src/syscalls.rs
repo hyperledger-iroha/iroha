@@ -3615,7 +3615,7 @@ mod tests {
                 .fault_semantics
                 .contains("Numeric(RegisterIntegerOverflow)")
         );
-        assert_surface_mutation_changes_hash(|candidate| candidate.isa.register_count = 256);
+        assert_surface_mutation_changes_hash(|candidate| candidate.isa.register_count = 31);
         assert_surface_mutation_changes_hash(|candidate| {
             candidate.isa.opcodes[0].layout = "rd[23:16]+rs1[15:8]+rs2[7:0]";
         });
@@ -4959,6 +4959,7 @@ mod tests {
                 ("invalid_failure_mode", 11),
                 ("reserved_register_nonzero", 12),
                 ("negative_square_root", 13),
+                ("register_integer_overflow", 14),
             ]
         );
         assert_eq!(

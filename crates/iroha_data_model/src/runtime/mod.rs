@@ -18,6 +18,8 @@ pub mod native_escrow;
 /// Destination-reserved native game transfers and original completion custody.
 pub mod native_game;
 pub mod obligation;
+/// Certified retirement statements and bounded ordinary-write inclusion checks.
+pub mod retirement;
 /// Explicit one-time SoraFS successor authorization and certificate.
 pub mod sorafs_repair;
 pub mod taira_activation;

@@ -16,12 +16,12 @@ fn registers_merkle_root_matches_canonical() {
     // set a couple of registers and tags
     regs.set(10, 0xdead_beef_dead_beefu64);
     regs.set_tag(10, true);
-    regs.set(123, 42);
-    regs.set_tag(123, false);
-    // Build expected leaves (256-register file)
-    let mut leaves = vec![reg_leaf(0, false); 256];
+    regs.set(23, 42);
+    regs.set_tag(23, false);
+    // Build expected leaves (32-register file)
+    let mut leaves = vec![reg_leaf(0, false); ivm::parallel::REGISTER_COUNT];
     leaves[10] = reg_leaf(0xdead_beef_dead_beefu64, true);
-    leaves[123] = reg_leaf(42, false);
+    leaves[23] = reg_leaf(42, false);
     let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves);
     let expected_root = tree.root().unwrap();
     assert_eq!(regs.merkle_root(), expected_root);
@@ -32,9 +32,9 @@ fn registers_root_and_path_combined_matches_separate() {
     // Modify a few registers and tags to ensure non-trivial paths
     regs.set(5, 123456789);
     regs.set_tag(5, true);
-    regs.set(77, 0xA5A5);
-    regs.set_tag(77, false);
-    for &idx in &[0usize, 5, 17, 77, 255] {
+    regs.set(27, 0xA5A5);
+    regs.set_tag(27, false);
+    for &idx in &[0usize, 5, 17, 27, 31] {
         let path_s: [[u8; 32]; REGISTER_MERKLE_PATH_DEPTH] = regs.merkle_path(idx).unwrap();
         let root_s = regs.merkle_root();
         let (root_c, path_c) = regs.merkle_root_and_path(idx).unwrap();

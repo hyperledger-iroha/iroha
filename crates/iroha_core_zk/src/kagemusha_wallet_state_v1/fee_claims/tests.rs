@@ -36,7 +36,7 @@ fn snapshot(
 ) -> WorldStateSnapshotV1 {
     let bytes = norito::to_bytes(payout).unwrap();
     WorldStateSnapshotV1 {
-        schema_hash: iroha_crypto::Hash::new(b"wallet synthetic payout schema"),
+        schema_hash: native_world_schema_family_v1()[0],
         entries: vec![WorldStateSnapshotEntryV1 {
             field_id: "world.kagemusha_wallet_ledger".into(),
             kind: WorldStateElementKindV1::Table,
@@ -457,4 +457,36 @@ fn fee_original_read_refusals_preserve_exact_pair_and_ledger_transport_retry() {
         RetainedFeeClaim::decode_canonical(&malformed, &scheme),
         Err(Error::Invalid("fee claim original bindings"))
     ));
+}
+
+#[test]
+fn finalized_fee_payout_requires_a_qualified_world_schema_at_its_own_cut() {
+    let mut native = NativeFinalityFixture::start("wallet-fee-schema-selection");
+    let mut scheme: KagemushaWalletSchemeV1 =
+        super::super::tests::fixture("KagemushaWalletSchemeV1");
+    scheme.network_id = *native.network_id().as_bytes();
+    let mut snapshot = snapshot(&scheme, &payout());
+    let qualified = native_world_schema_family_v1();
+    let unknown = iroha_crypto::Hash::new(b"wallet synthetic payout schema");
+    assert!(!qualified.contains(&unknown));
+
+    for schema in qualified.into_iter().chain(std::iter::once(unknown)) {
+        snapshot.schema_hash = schema;
+        let block = certify(&mut native, &snapshot);
+        let world = snapshot.authenticate(&block).unwrap();
+        let evidence = FinalizedPayoutEvidence {
+            block: &block,
+            world: &world,
+            payout: payout(),
+        };
+        let result = verify_payout(&scheme, native.chain_id(), [2; 32], &claim(), &evidence);
+        if schema == unknown {
+            assert!(matches!(
+                result,
+                Err(Error::Invalid("finalized fee payout World schema"))
+            ));
+        } else {
+            result.unwrap();
+        }
+    }
 }

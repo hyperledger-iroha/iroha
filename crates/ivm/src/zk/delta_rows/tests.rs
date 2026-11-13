@@ -20,7 +20,11 @@ fn prepare(
 }
 fn first(log: &mut DeltaTraceLog, original: &AllocationBudget) {
     prepare(log, 1, 0, 0, original).unwrap();
-    log.record_reserved(12, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(
+        12,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
 }
 
 #[test]
@@ -50,7 +54,7 @@ fn private_changes_do_not_select_physical_span_or_growth_geometry() {
             ));
         }
         outputs.push(geometry);
-        assert_eq!(log.changes.as_slice().len(), 256 + 20 * 2);
+        assert_eq!(log.changes.as_slice().len(), crate::parallel::REGISTER_COUNT + 20 * 2);
         for index in 1..log.len() {
             if (index - 1) % 3 != 0 {
                 assert!(log.entry(index).unwrap().changes.is_empty());
@@ -73,9 +77,9 @@ fn borrowed_logical_rows_preserve_the_exact_previous_trace_hash_input() {
     let mut values = [0; crate::parallel::REGISTER_COUNT];
     let mut tags = [false; crate::parallel::REGISTER_COUNT];
     for pc in 0u64..12 {
-        prepare(&mut log, 1, 256, 0, &original).unwrap();
+        prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
         values[7] = pc.wrapping_mul(19);
-        tags[255] = pc % 2 == 1;
+        tags[crate::parallel::REGISTER_COUNT - 1] = pc % 2 == 1;
         let changes: Vec<_> = (0..crate::parallel::REGISTER_COUNT)
             .filter(|&index| {
                 previous.as_ref().is_none_or(|last| {
@@ -130,7 +134,7 @@ fn complete_dual_backing_growth_refuses_atomically_with_original_release_source(
     first(&mut log, &original);
     // Both descriptor and public change backing must grow in this batch.
     let old = original.reserved_bytes();
-    let demand = 8 * size_of::<Row>() + 512 * size_of::<(usize, u64, bool)>();
+    let demand = 8 * size_of::<Row>() + 2 * crate::parallel::REGISTER_COUNT * size_of::<(usize, u64, bool)>();
     let row_ptr = log.rows.as_slice().as_ptr();
     let change_ptr = log.changes.as_slice().as_ptr();
     original.set_limit_bytes(old + demand - 1);
@@ -138,7 +142,7 @@ fn complete_dual_backing_growth_refuses_atomically_with_original_release_source(
         requested_bytes,
         release,
         ..
-    })) = prepare(&mut log, 7, 256, 0, &original)
+    })) = prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original)
     else {
         panic!("combined growth refusal");
     };
@@ -154,11 +158,15 @@ fn complete_dual_backing_growth_refuses_atomically_with_original_release_source(
     assert_eq!(log.changes.as_slice().as_ptr(), change_ptr);
     assert!(log.pending.is_none());
     original.set_limit_bytes(old + demand);
-    prepare(&mut log, 7, 256, 0, &original).unwrap();
+    prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
     assert_eq!(original.peak_reserved_bytes(), old + demand);
     assert_eq!(original.reserved_bytes(), demand);
     for pc in 0..7 {
-        log.record_reserved(pc, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+        log.record_reserved(
+            pc,
+            [0; crate::parallel::REGISTER_COUNT],
+            [false; crate::parallel::REGISTER_COUNT],
+        );
     }
     assert_eq!(log.len(), 8);
 }
@@ -178,7 +186,7 @@ fn second_allocation_refusal_and_partial_copy_unwind_keep_live_rows() {
             REFUSE_ALLOCATION.set(2);
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prepare(&mut log, 7, 256, 0, &original)
+            prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original)
         }));
         if panic {
             assert!(result.is_err());
@@ -193,10 +201,10 @@ fn second_allocation_refusal_and_partial_copy_unwind_keep_live_rows() {
         assert_eq!(original.reserved_bytes(), before);
         assert_eq!(log.rows.as_slice().as_ptr(), row_ptr);
         assert_eq!(log.changes.as_slice().as_ptr(), change_ptr);
-        assert_eq!(log.entry(0).unwrap().changes.len(), 256);
+        assert_eq!(log.entry(0).unwrap().changes.len(), crate::parallel::REGISTER_COUNT);
         assert!(log.pending.is_none());
     }
-    prepare(&mut log, 7, 256, 0, &original).unwrap();
+    prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
 }
 
 #[test]
@@ -218,7 +226,7 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
             )));
     });
     assert!(matches!(
-        prepare(&mut log, usize::MAX, 256, 256, &original),
+        prepare(&mut log, usize::MAX, crate::parallel::REGISTER_COUNT, crate::parallel::REGISTER_COUNT, &original),
         Err(VMError::AllocationDeferred(
             AllocationRefusal::DemandOverflow
         ))
@@ -231,20 +239,28 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
-    log.record_reserved(4, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
-    log.record_reserved(8, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(
+        4,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
+    log.record_reserved(
+        8,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
     original.set_limit_bytes(0);
     log.scrub();
     prepare(&mut log, 2, 0, 0, &original).unwrap();
-    log.record_reserved(12, [7; 256], [true; 256]);
-    log.record_reserved(16, [7; 256], [true; 256]);
+    log.record_reserved(12, [7; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(16, [7; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
     assert_eq!(original.reserved_bytes(), before);
     original
         .with_deferred_refund_notifications(|scope| log.reset(Some(scope)))
         .unwrap();
     assert_eq!(original.reserved_bytes(), 0);
     assert!(matches!(
-        prepare(&mut log, 1, 256, 0, &original),
+        prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original),
         Err(VMError::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
         ))
@@ -256,7 +272,7 @@ fn snapshot_preserves_prepaid_public_spans_and_independent_final_owner() {
     let original = AllocationBudget::new(LIMIT);
     let mut log = DeltaTraceLog::new(Some(&original));
     first(&mut log, &original);
-    prepare(&mut log, 3, 256, 0, &original).unwrap();
+    prepare(&mut log, 3, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
     let before = original.reserved_bytes();
     let mut copied = original
         .with_deferred_refund_notifications(|scope| log.try_clone_allocation(Some(scope)))
@@ -268,8 +284,12 @@ fn snapshot_preserves_prepaid_public_spans_and_independent_final_owner() {
     );
     original.set_limit_bytes(0);
     for pc in 0..3 {
-        log.record_reserved(pc, [3; 256], [true; 256]);
-        copied.record_reserved(pc, [9; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+        log.record_reserved(pc, [3; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
+        copied.record_reserved(
+            pc,
+            [9; crate::parallel::REGISTER_COUNT],
+            [false; crate::parallel::REGISTER_COUNT],
+        );
     }
     assert_ne!(log.entry(1), copied.entry(1));
     assert_eq!(log.entry(2).unwrap().changes, &[]);
@@ -297,20 +317,23 @@ fn discarded_unobserved_credit_preserves_partial_history_and_allows_caught_retry
     // A refused root/first instruction has not consumed the first full image.
     original.set_limit_bytes(0);
     prepare(&mut log, 3, 0, 0, &original).unwrap();
-    log.record_reserved(12, [41; 256], [true; 256]);
-    log.record_reserved(16, [41; 256], [true; 256]);
+    log.record_reserved(12, [41; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(16, [41; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
     let rows = log.rows.as_slice().as_ptr();
     let changes = log.changes.as_slice().as_ptr();
     log.discard_unobserved();
     log.discard_unobserved();
     assert_eq!(log.len(), 2);
-    assert_eq!(log.entry(0).unwrap().changes[255], (255, 41, true));
+    assert_eq!(
+        log.entry(0).unwrap().changes[crate::parallel::REGISTER_COUNT - 1],
+        (crate::parallel::REGISTER_COUNT - 1, 41, true)
+    );
     assert!(log.entry(1).unwrap().changes.is_empty());
-    assert_eq!(log.changes.as_slice().len(), 256);
+    assert_eq!(log.changes.as_slice().len(), crate::parallel::REGISTER_COUNT);
     // A retry with no new register changes uses the original pending capacity;
-    // canceling did not erase `last` and cannot force another 256-word image.
+    // canceling did not erase `last` and cannot force another full register image.
     prepare(&mut log, 1, 0, 0, &original).unwrap();
-    log.record_reserved(20, [41; 256], [true; 256]);
+    log.record_reserved(20, [41; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
     assert!(log.entry(2).unwrap().changes.is_empty());
     assert_eq!(log.rows.as_slice().as_ptr(), rows);
     assert_eq!(log.changes.as_slice().as_ptr(), changes);
@@ -337,7 +360,11 @@ fn discarding_snapshot_pending_credit_does_not_cancel_the_original_batch() {
     log.record_reserved(16, values, [false; crate::parallel::REGISTER_COUNT]);
     log.record_reserved(20, values, [false; crate::parallel::REGISTER_COUNT]);
     prepare(&mut copied, 1, 0, 0, &original).unwrap();
-    copied.record_reserved(24, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+    copied.record_reserved(
+        24,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
     assert_eq!(log.entry(1).unwrap().changes, &[(7, 19, false)]);
     assert!(copied.entry(1).unwrap().changes.is_empty());
     assert_eq!(log.len(), 3);
@@ -356,10 +383,10 @@ fn actual_delta_change_destructor_erases_fields_before_original_refund() {
     let original = observer::budget();
     for field in 0..3 {
         let mut log = DeltaTraceLog::new(Some(original));
-        prepare(&mut log, 1, 256, 0, original).unwrap();
-        log.record_reserved(19, [u64::MAX; 256], [true; 256]);
+        prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, original).unwrap();
+        log.record_reserved(19, [u64::MAX; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
         let base = log.changes.as_slice().as_ptr().cast::<u8>();
-        let change = &log.changes.as_slice()[255];
+        let change = &log.changes.as_slice()[crate::parallel::REGISTER_COUNT - 1];
         let spans = [
             (
                 std::ptr::from_ref(&change.0).cast::<u8>(),
@@ -390,8 +417,8 @@ fn actual_delta_change_destructor_erases_fields_before_original_refund() {
 fn partial_private_change_copy_unwind_scrubs_new_backing_and_keeps_original_credit() {
     let original = AllocationBudget::new(LIMIT);
     let mut log = DeltaTraceLog::new(Some(&original));
-    prepare(&mut log, 1, 256, 0, &original).unwrap();
-    log.record_reserved(41, [0xfedc_ba98_7654_3210; 256], [true; 256]);
+    prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
+    log.record_reserved(41, [0xfedc_ba98_7654_3210; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
     let before = original.reserved_bytes();
     let rows = log.rows.as_slice().as_ptr();
     let changes = log.changes.as_slice().as_ptr();
@@ -399,20 +426,24 @@ fn partial_private_change_copy_unwind_scrubs_new_backing_and_keeps_original_cred
     // therefore follows an actual copied private tuple, not a descriptor.
     PANIC_AFTER_COPY.set(true);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prepare(&mut log, 1, 256, 0, &original).unwrap();
+        prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
     }));
     assert!(result.is_err());
     assert_eq!(original.reserved_bytes(), before);
     assert_eq!(log.rows.as_slice().as_ptr(), rows);
     assert_eq!(log.changes.as_slice().as_ptr(), changes);
     assert_eq!(
-        log.entry(0).unwrap().changes[255],
-        (255, 0xfedc_ba98_7654_3210, true)
+        log.entry(0).unwrap().changes[crate::parallel::REGISTER_COUNT - 1],
+        (crate::parallel::REGISTER_COUNT - 1, 0xfedc_ba98_7654_3210, true)
     );
     assert!(log.pending.is_none());
-    prepare(&mut log, 1, 256, 0, &original).unwrap();
-    log.record_reserved(45, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
-    assert_eq!(log.entry(1).unwrap().changes.len(), 256);
+    prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original).unwrap();
+    log.record_reserved(
+        45,
+        [0; crate::parallel::REGISTER_COUNT],
+        [false; crate::parallel::REGISTER_COUNT],
+    );
+    assert_eq!(log.entry(1).unwrap().changes.len(), crate::parallel::REGISTER_COUNT);
     drop(log);
     assert_eq!(original.reserved_bytes(), 0);
 }
@@ -437,7 +468,7 @@ fn diagnostic_capture_rejects_corrupt_indices_without_a_raw_row_constructor() {
         Err(VMError::DecodeError)
     ));
     assert_eq!(original.reserved_bytes(), before);
-    assert_eq!(log.changes.as_slice()[7].0, 256);
+    assert_eq!(log.changes.as_slice()[7].0, crate::parallel::REGISTER_COUNT);
     drop(log);
     assert_eq!(original.reserved_bytes(), 0);
 }

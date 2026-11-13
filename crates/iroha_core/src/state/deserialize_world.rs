@@ -9124,6 +9124,10 @@ fn decode_world_fields(
         iroha_crypto::Hash,
         iroha_data_model::runtime::native_game::NativeGameTransferV1,
     > = take_required(&mut map, "runtime_game_transfers")?;
+    let runtime_retirements: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::retirement::RuntimeRetirementStateV1,
+    > = take_required(&mut map, "runtime_retirements")?;
     let runtime_escrow_captures: Storage<
         iroha_data_model::escrow::EscrowId,
         iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
@@ -9251,6 +9255,7 @@ fn decode_world_fields(
         runtime_deferred_consents,
         runtime_amx_captures,
         runtime_game_transfers,
+        runtime_retirements,
         runtime_escrow_captures,
         runtime_migrations,
         runtime_boundaries,
@@ -9522,12 +9527,113 @@ fn decode_world_fields(
     Ok(world)
 }
 
+// Shape checks cover both exact snapshot cuts. Service admission separately binds the
+// selected history owner and the certified root; an included receipt is only data here.
+fn validate_runtime_retirement_shapes(
+    world: &World,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), StateRestoreError> {
+    fn validate(cut: &impl WorldReadOnly, field: &str) -> Result<(), json::Error> {
+        use iroha_data_model::runtime::retirement::MAX_RETIREMENT_DEFINITIONS;
+        for (index, (definition, record)) in cut.runtime_retirements().iter().enumerate() {
+            if index >= MAX_RETIREMENT_DEFINITIONS {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: "permanent runtime history exceeds its definition capacity".into(),
+                });
+            }
+            record
+                .validate(*definition)
+                .map_err(|error| json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: error.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+    validate(&world.view(), "world.runtime_retirements")?;
+    let previous = world.try_block_and_revert(budget)?;
+    validate(&previous, "world.runtime_retirements.revert")?;
+    Ok(())
+}
+
+// Bind the persisted history to signed genesis and the exact restored current/undo
+// heights. The snapshot's receipt cannot choose its own network, root or instance.
+fn validate_runtime_retirement_roots(state: &State) -> Result<(), MergeLedgerCommitError> {
+    use iroha_data_model::runtime::retirement::RuntimeRetirementRootV1;
+    let budget = state.ivm_execution_budget();
+    budget.with_deferred_refund_notifications(|_| {
+        let invalid = |reason| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored runtime retirement history: {reason}"
+            ))
+        };
+        // Empty fresh State does not yet have a signed genesis. Check both cuts
+        // before taking that fast path; undo-only history still needs authority.
+        let current_has_history = {
+            let world = state.world.view();
+            crate::runtime::retirement::validate_persistence(&world).map_err(&invalid)?;
+            crate::runtime::retirement::service_enabled(world.runtime_selection())
+                .map_err(&invalid)?
+                || world.runtime_retirements().iter().next().is_some()
+        };
+        let previous_has_history = {
+            let previous = state
+                .world
+                .try_block_and_revert(&budget)
+                .map_err(StateStorageAdmissionError::World)?;
+            crate::runtime::retirement::validate_persistence(&previous).map_err(&invalid)?;
+            crate::runtime::retirement::service_enabled(previous.runtime_selection())
+                .map_err(&invalid)?
+                || previous.runtime_retirements().iter().next().is_some()
+        };
+        if !current_has_history && !previous_has_history {
+            return Ok(());
+        }
+        let (root, height) = {
+            let view = state.view();
+            let chain =
+                crate::sumeragi::certified_chain::CertifiedChain::new(&view).map_err(|error| {
+                    match error {
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            invalid(error.to_string())
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                            MergeLedgerCommitError::ExecutionDeferred(original)
+                        }
+                    }
+                })?;
+            let root = RuntimeRetirementRootV1 {
+                network: *view.network_id(),
+                scope: chain.root_scope(),
+                instance: chain.instance().0,
+            };
+            let height =
+                u64::try_from(view.height()).map_err(|error| invalid(error.to_string()))?;
+            crate::runtime::retirement::validate_root(view.world(), root, height)
+                .map_err(&invalid)?;
+            (root, height)
+        };
+        let previous = state
+            .world
+            .try_block_and_revert(&budget)
+            .map_err(StateStorageAdmissionError::World)?;
+        crate::runtime::retirement::validate_root(&previous, root, height.saturating_sub(1))
+            .map_err(invalid)
+    })
+}
+
+#[cfg(test)]
+#[path = "runtime_retirement_restore_tests.rs"]
+mod runtime_retirement_restore_tests;
+
 fn parse_world(
     execution_budget: &iroha_allocation::AllocationBudget,
     map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
     let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
+    validate_runtime_retirement_shapes(&world, execution_budget)?;
     crate::runtime::ironwood::admission::world(&mut world).map_err(|error| match error {
         crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
             StateRestoreError::Serialization(json::Error::InvalidField {
@@ -10940,6 +11046,30 @@ fn build_state(
     // the next block's time triggers start from this header's creation time.
     let latest_block_header = if emergency_fast {
         None
+    } else if kura.checkpoint_prefix_height() == Some(restored_height) {
+        let hashes = block_hashes.view();
+        let portable = kura
+            .walk_checkpoint_prefix_lookup(
+                &chain_id,
+                network_id,
+                hashes.len(),
+                &|index| hashes.get(index).copied(),
+                &mut |_| Ok(()),
+            )
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    MergeLedgerCommitError::ExecutionDeferred(original)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(original.to_string())
+                }
+            })?
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionStatePublication(
+                    "original portable checkpoint header disappeared".into(),
+                )
+            })?;
+        Some(*portable.checkpoint().header())
     } else {
         NonZeroUsize::new(restored_tip)
             .map(|height| kura.get_block(height, &execution_budget))
@@ -11098,6 +11228,7 @@ fn build_state(
         *state.lane_manifests.get_mut() = projection.manifests;
         *state.lane_privacy_registry.get_mut() = privacy;
     }
+    validate_runtime_retirement_roots(&state)?;
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
@@ -11208,8 +11339,7 @@ fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         ivm_max_decoded_bytes: iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
         quarantine_max_txs_per_block:
             iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-        quarantine_tx_max_cycles:
-            iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+        quarantine_tx_max_gas: iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_GAS,
         query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
         query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
         query_stored_min_gas_units:

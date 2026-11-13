@@ -689,6 +689,79 @@ def test_expect_status_ignores_adversarial_non_string_reject_code() -> None:
     assert "array" not in message
 
 
+def test_expect_status_types_a_decoded_error_envelope_and_keeps_other_bodies() -> None:
+    # A Norito-negotiating route receives Torii's envelope as binary bytes; the
+    # injected decoder sees them with the response media type in both read modes.
+    binary = b"\x80binary-envelope\xff"
+    seen = []
+
+    def decode(content_type, body):
+        seen.append((content_type, body))
+        return ("typed_code", "  exact message  ", None) if body == binary else None
+
+    for maximum_body_bytes in (None, 64):
+        seen.clear()
+        response = StubResponse(
+            409,
+            raw=binary,
+            headers={"Content-Type": "application/x-norito", "x-iroha-reject-code": "PRTRY:TYPED"},
+        )
+        with pytest.raises(torii_module.ToriiConflictError) as exc:
+            ToriiClient._expect_status(
+                response, (200,), maximum_body_bytes=maximum_body_bytes, decode_error_envelope=decode
+            )
+        assert seen == [("application/x-norito", binary)]
+        error = exc.value
+        assert (error.status, error.code, error.message, error.details) == (
+            409,
+            "typed_code",
+            "  exact message  ",
+            {},
+        )
+        assert error.reject_code == "PRTRY:TYPED"
+
+    # Decoded details type the error; without Torii's headers they also supply
+    # the reject code and the retry delay.
+    details = {"reject_code": "PRTRY:QUEUE_FULL", "retry_after_seconds": 7}
+    response = StubResponse(429, raw=binary, headers={"Content-Type": "application/x-norito"})
+    with pytest.raises(torii_module.ToriiRateLimitedError) as exc:
+        ToriiClient._expect_status(
+            response,
+            (200,),
+            decode_error_envelope=lambda _type, _body: ("queue_full", "queue is full", details),
+        )
+    error = exc.value
+    assert (error.code, error.message, error.details) == ("queue_full", "queue is full", details)
+    assert (error.reject_code, error.retry_after) == ("PRTRY:QUEUE_FULL", 7)
+    response = StubResponse(
+        429,
+        raw=binary,
+        headers={
+            "Content-Type": "application/x-norito",
+            "x-iroha-reject-code": "PRTRY:HEADER",
+            "Retry-After": "2",
+        },
+    )
+    with pytest.raises(torii_module.ToriiRateLimitedError) as exc:
+        ToriiClient._expect_status(
+            response,
+            (200,),
+            decode_error_envelope=lambda _type, _body: ("queue_full", "queue is full", details),
+        )
+    assert (exc.value.reject_code, exc.value.retry_after) == ("PRTRY:HEADER", 2)
+
+    # A body the decoder refuses keeps the previous classification and strictness.
+    response = StubResponse(409, raw=b"plain failure", headers={"Content-Type": "text/plain"})
+    with pytest.raises(torii_module.ToriiConflictError) as exc:
+        ToriiClient._expect_status(response, (200,), decode_error_envelope=decode)
+    assert (exc.value.code, exc.value.message) == (None, "plain failure")
+    response = StubResponse(409, raw=b"\x80other", headers={"Content-Type": "application/x-norito"})
+    with pytest.raises(ValueError, match="strict UTF-8"):
+        ToriiClient._expect_status(
+            response, (200,), maximum_body_bytes=64, decode_error_envelope=decode
+        )
+
+
 VPN_ACCOUNT = "vpn-user@paynet"
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_ESCROW = "vpn-escrow@paynet"

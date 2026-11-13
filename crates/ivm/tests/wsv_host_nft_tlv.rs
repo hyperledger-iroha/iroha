@@ -60,7 +60,7 @@ fn create_transfer_set_nft_with_tlv() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + tlv_nft.len() as u64 + 8);
-    let prog_create = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET as u8]);
+    let prog_create = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET]);
     vm.load_program(&prog_create).unwrap();
     vm.run().expect("create nft via tlv failed");
     // Set NFT data as owner
@@ -79,7 +79,7 @@ fn create_transfer_set_nft_with_tlv() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + key_offset);
     vm.set_register(12, Memory::INPUT_START + json_offset);
-    let prog_set = assemble_syscalls(&[syscalls::SYSCALL_NFT_SET_METADATA as u8]);
+    let prog_set = assemble_syscalls(&[syscalls::SYSCALL_NFT_SET_METADATA]);
     vm.load_program(&prog_set).unwrap();
     vm.run().expect("set nft data via tlv failed");
     // Transfer NFT to bob (caller=alice)
@@ -101,7 +101,7 @@ fn create_transfer_set_nft_with_tlv() {
         12,
         Memory::INPUT_START + tlv_from.len() as u64 + tlv_nft.len() as u64 + 16,
     );
-    let prog_xfer = assemble_syscalls(&[syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8]);
+    let prog_xfer = assemble_syscalls(&[syscalls::SYSCALL_NFT_TRANSFER_ASSET]);
     vm.load_program(&prog_xfer).unwrap();
     vm.run().expect("transfer nft via tlv failed");
     // Switch caller to an unrelated account before trying to mutate metadata again

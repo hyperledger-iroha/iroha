@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn exact_source_order_preserves_r0_aliases_and_never_reads_an_immediate_register() {
-        for (destination, left, right) in [(0, 0, 0), (4, 4, 5), (5, 4, 5), (255, 255, 255)] {
+        for (destination, left, right) in [(0, 0, 0), (4, 4, 5), (5, 4, 5), (31, 31, 31)] {
             for opcode in BINARY {
                 let word = enc::encode_rr(opcode, destination, left, right);
                 assert_eq!(
@@ -105,7 +105,12 @@ mod tests {
                 );
             }
             for opcode in IMMEDIATE {
-                for immediate in [i8::MIN, -1, 0, i8::MAX] {
+                for immediate in [
+                    ivm_abi::instruction::wide::IMM14_MIN,
+                    -1,
+                    0,
+                    ivm_abi::instruction::wide::IMM14_MAX,
+                ] {
                     let word = enc::encode_ri(opcode, destination, left, immediate);
                     assert_eq!(
                         public_scalar_operands(word),

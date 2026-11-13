@@ -343,11 +343,7 @@ fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
     let id: TriggerId = "pipeline_local_refusal".parse().unwrap();
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 100,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let action = Action::new(
         Executable::Ivm(IvmBytecode::from_compiled(program)),

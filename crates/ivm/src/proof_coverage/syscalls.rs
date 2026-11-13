@@ -129,7 +129,7 @@ impl SyscallRelation {
     }
 
     /// Relation obligation classes every syscall of this class engages, in
-    /// addition to those of the dispatching `SCALL`/`SYSTEM` opcode.
+    /// addition to those of the dispatching `SCALL` opcode.
     #[must_use]
     pub const fn obligations(self) -> &'static [Obligation] {
         match self {

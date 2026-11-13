@@ -452,7 +452,6 @@ pub mod isi {
         executable: &Executable,
         metadata: &Metadata,
         upper_bound: core::num::NonZeroU64,
-        fuel: core::num::NonZeroU64,
         prepared_contracts: crate::smartcontracts::ivm::cache::PreparedContractCache,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         let bytecode = match executable {
@@ -499,10 +498,10 @@ pub mod isi {
                 },
             )?;
         }
-        crate::smartcontracts::ivm::validate_cycle_limits(admitted.metadata(), upper_bound, fuel)
+        crate::smartcontracts::ivm::validate_zk_trace_bound(admitted.metadata(), upper_bound)
             .map_err(|error| {
-            Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
-        })?;
+                Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
+            })?;
         Ok(())
     }
     fn is_permission_trigger_associated_with_any(
@@ -693,12 +692,6 @@ pub mod isi {
             new_trigger.action().executable(),
             new_trigger.metadata(),
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
-            state_transaction
-                .world
-                .parameters
-                .get()
-                .smart_contract()
-                .fuel(),
             state_transaction.prepared_contract_cache(),
         )
         .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?;
@@ -1436,7 +1429,6 @@ pub mod isi {
                     &Executable::ContractCall(invocation),
                     &Metadata::default(),
                     bound,
-                    bound,
                     PreparedContractCache::with_capacity(0),
                 )
             };
@@ -1456,11 +1448,7 @@ pub mod isi {
             use crate::smartcontracts::ivm::cache::PreparedContractCache;
             use iroha_allocation::{AllocationBudget, AllocationRefusal};
 
-            let mut program = ivm::ProgramMetadata {
-                max_cycles: 10_000,
-                ..ivm::ProgramMetadata::default()
-            }
-            .encode();
+            let mut program = ivm::ProgramMetadata::default().encode();
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
             let bound = core::num::NonZeroU64::new(10_000).unwrap();
@@ -1469,7 +1457,6 @@ pub mod isi {
             let result = enforce_ivm_trigger_program_policy(
                 &executable,
                 &Metadata::default(),
-                bound,
                 bound,
                 cache.clone(),
             );
@@ -1482,14 +1469,8 @@ pub mod isi {
             ));
             assert_eq!(budget.peak_reserved_bytes(), 0);
             budget.set_limit_bytes(64 * 1024 * 1024);
-            enforce_ivm_trigger_program_policy(
-                &executable,
-                &Metadata::default(),
-                bound,
-                bound,
-                cache,
-            )
-            .expect("same original pool admits after local pressure resolves");
+            enforce_ivm_trigger_program_policy(&executable, &Metadata::default(), bound, cache)
+                .expect("same original pool admits after local pressure resolves");
             assert!(budget.peak_reserved_bytes() > 0);
             assert_eq!(budget.reserved_bytes(), 0);
         }
@@ -1508,7 +1489,6 @@ pub mod isi {
                 enforce_ivm_trigger_program_policy(
                     &executable,
                     &Metadata::default(),
-                    bound,
                     bound,
                     crate::smartcontracts::ivm::cache::PreparedContractCache::with_capacity(0),
                 ),
@@ -2348,7 +2328,7 @@ mod tests {
         );
     }
     #[test]
-    fn trigger_registration_rejects_zero_and_over_ceiling_ivm_headers() {
+    fn trigger_registration_rejects_non_zk_bound_and_over_ceiling_zk_headers() {
         use iroha_data_model::{
             events::execute_trigger::ExecuteTriggerEventFilter,
             transaction::{Executable, IvmBytecode},
@@ -2378,16 +2358,25 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
-        for (id, max_cycles, expected) in [
-            ("zero_cycle_trigger", 0_u64, "omits a non-zero `max_cycles`"),
+        // `max_cycles` is the ZK trace bound: a non-ZK header declaring one fails header
+        // admission, and a ZK header's bound must lie within the committed ceiling.
+        for (id, mode, max_cycles, expected) in [
             (
-                "over_cycle_trigger",
+                "non_zk_bound_trigger",
+                0_u8,
                 2_u64,
-                "`max_cycles` exceeds upper bound",
+                "declares trace bound 2 without ZK mode",
+            ),
+            (
+                "over_ceiling_zk_trigger",
+                ivm::ivm_mode::ZK,
+                2_u64,
+                "exceeds the node upper bound",
             ),
         ] {
             let trigger_id: TriggerId = id.parse().expect("trigger id");
             let metadata = ivm::ProgramMetadata {
+                mode,
                 max_cycles,
                 ..ivm::ProgramMetadata::default()
             };

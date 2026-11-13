@@ -128,8 +128,7 @@ fn prepared_lru_eviction_refund_reenters_cache_after_unlock() {
     // artifact while capacity exists, then exercise only its LRU publication
     // under full original-pool pressure.
     let before = budget.reserved_bytes();
-    let mut next = super::tests::minimal_program();
-    next[8..16].copy_from_slice(&23_u64.to_le_bytes());
+    let next = super::tests::minimal_program_variant(23);
     let next = ivm::prepare_contract_with_memory_budget(&next, &budget).unwrap();
     let next_bytes = budget.reserved_bytes() - before;
     budget.set_limit_bytes(budget.reserved_bytes());

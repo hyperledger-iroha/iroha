@@ -25,32 +25,56 @@ fn koto_build_meta_header_smoke() {
     let bin = env!("CARGO_BIN_EXE_koto");
     let input = example("10_meta_header.ko");
     // Output into Cargo's integration-test scratch directory.
-    let out = build_dir("meta").join("cli_smoke_meta.to");
+    let directory = build_dir("meta");
+    let header = |name: &str, flags: &[&str]| {
+        let out = directory.join(name);
+        let status = Command::new(bin)
+            .arg("build")
+            .arg(input.as_os_str())
+            .arg("--out")
+            .arg(out.as_os_str())
+            .args(flags)
+            .status()
+            .expect("spawn CLI");
+        assert!(status.success(), "CLI did not exit successfully");
+        let bytes = fs::read(&out).expect("read output .to");
+        let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse header");
+        assert_eq!(
+            parsed.metadata.version_minor, 1,
+            "contract artifacts must emit IVM 1.1"
+        );
+        assert!(
+            parsed.contract_interface.is_some(),
+            "compiled contract must embed a CNTR section",
+        );
+        assert_eq!(parsed.metadata.abi_version, 1);
+        parsed.metadata
+    };
+    let ordinary = header("cli_smoke_meta.to", &[]);
+    assert_eq!(ordinary.mode, 0);
+    assert_eq!(
+        ordinary.max_cycles, 0,
+        "a non-ZK artifact carries no cycle bound; gas is its only budget"
+    );
+    let zk = header(
+        "cli_smoke_meta_zk.to",
+        &["--zk", "--zk-trace-cycles", "2000"],
+    );
+    assert_eq!(zk.mode, ivm::ivm_mode::ZK);
+    assert_eq!(zk.max_cycles, 2000);
     let status = Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())
         .arg("--out")
-        .arg(out.as_os_str())
-        .arg("--max-cycles")
-        .arg("2000")
+        .arg(directory.join("cli_smoke_meta_rejected.to").as_os_str())
+        .args(["--zk-trace-cycles", "2000"])
         .status()
         .expect("spawn CLI");
-    assert!(status.success(), "CLI did not exit successfully");
-    let bytes = fs::read(&out).expect("read output .to");
-    let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse header");
-    let meta = parsed.metadata;
     assert_eq!(
-        meta.version_minor, 1,
-        "contract artifacts must emit IVM 1.1"
+        status.code(),
+        Some(2),
+        "a ZK trace bound without --zk is a usage error"
     );
-    assert!(
-        parsed.contract_interface.is_some(),
-        "compiled contract must embed a CNTR section",
-    );
-    assert_eq!(meta.abi_version, 1);
-    assert_eq!(meta.vector_length, 0);
-    assert_eq!(meta.max_cycles, 2000);
-    assert_eq!(meta.mode, 0);
 }
 #[test]
 fn compile_tuple_return_minimal() {

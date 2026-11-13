@@ -19,7 +19,7 @@ pub(crate) fn panic_if_requested() {
 fn contract(source: &str, max_cycles: u64) -> PreparedContract {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        max_cycles,
+        zk_trace_cycles: std::num::NonZeroU64::new(max_cycles).expect("ZK trace bound"),
         ..CompilerOptions::default()
     })
     .compile_source(source)

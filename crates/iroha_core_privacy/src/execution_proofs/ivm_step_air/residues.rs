@@ -42,7 +42,7 @@ impl<S: Sink> Sink for Scaled<'_, S> {
 }
 
 /// One history row is the largest repeatedly evaluated bank.
-pub(super) const CAPACITY: usize = 721;
+pub(super) const CAPACITY: usize = 724;
 
 /// Fixed stack scratch, wiped on every flush and on unwind.
 pub(super) struct Scratch([F; CAPACITY]);

@@ -99,9 +99,12 @@ impl StorePhase {
             vm,
             address,
             base_value: address
-                .wrapping_sub(i64::cast_unsigned(i64::from(wide::imm8(instruction)))),
+                .wrapping_sub(i64::cast_unsigned(i64::from(wide::imm14(instruction)))),
             clocks,
-            registers: [wide::rd(instruction), wide::rs1(instruction)],
+            registers: [
+                wide::store_base(instruction),
+                wide::store_value(instruction),
+            ],
             stack: address >= ivm::Memory::STACK_START && end <= stack_top,
             gas_after,
             pc,

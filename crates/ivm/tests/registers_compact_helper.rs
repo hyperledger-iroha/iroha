@@ -7,7 +7,7 @@ use std::num::NonZeroU64;
 fn registers_compact_helper_matches_syscall() {
     let target = 9usize;
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT]);
     vm.load_program(&prog).unwrap();
     vm.set_register(target, 0xCAFEBABE);
     vm.set_register(5, 0x12345678);

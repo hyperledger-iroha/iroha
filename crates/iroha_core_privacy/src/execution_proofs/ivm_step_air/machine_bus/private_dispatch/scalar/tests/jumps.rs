@@ -6,7 +6,7 @@ fn instruction(wide_offset: bool, offset: i32) -> u32 {
     if wide_offset {
         enc::encode_offset24(wide::control::JMP, offset)
     } else {
-        enc::encode_jump(wide::control::JAL, 0, i16::try_from(offset).unwrap())
+        enc::encode_jump(wide::control::JAL, 0, offset)
     }
 }
 
@@ -21,7 +21,7 @@ fn first_jump(wide_offset: bool, offset: i32, gas: u64) -> (Program, ScalarFixtu
             (0, u64::MAX, true),
             (2, u64::MAX, true),
             (3, 17, false),
-            (255, 23, true),
+            (31, 23, true),
         ],
         gas,
         64,
@@ -293,7 +293,7 @@ fn direct_jumps_reach_both_bounded_image_edges_and_reject_non_boundaries() {
         let (minimum, maximum) = if wide_offset {
             (-(1 << 23), (1 << 23) - 1)
         } else {
-            (i32::from(i16::MIN), i32::from(i16::MAX))
+            (wide::JAL_OFFSET_MIN, wide::JAL_OFFSET_MAX)
         };
         for offset in [minimum, -1, 5, maximum] {
             let mut invalid = artifact.artifact().to_vec();
@@ -366,7 +366,7 @@ fn direct_jump_extension_keeps_other_destinations_and_indirect_forms_rejected() 
     let artifact = contract(&[instruction(false, 0)], 64, ivm::ivm_mode::ZK);
     for forbidden in [
         enc::encode_jump(wide::control::JAL, 2, 0),
-        enc::encode_jump(wide::control::JAL, 255, 0),
+        enc::encode_jump(wide::control::JAL, 31, 0),
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),

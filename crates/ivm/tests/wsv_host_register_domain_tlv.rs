@@ -45,7 +45,7 @@ fn register_domain_with_permission_via_tlv() {
     let dom = make_tlv(PointerType::DomainId as u16, b"new_domain");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog).unwrap();
     vm.run()
         .expect("register_domain should succeed with permission");
@@ -64,7 +64,7 @@ fn register_domain_without_permission_rejected() {
     let dom = make_tlv(PointerType::DomainId as u16, b"no_perm_domain");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }

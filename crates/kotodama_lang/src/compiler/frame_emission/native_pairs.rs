@@ -25,7 +25,25 @@ fn pair(case: &cases::Case) -> (crate::session::CompileOutput, crate::session::C
     let before = compile(case.source, true);
     let after = compile(case.source, false);
     assert_metadata(&before, &after);
-    assert!(after.artifact.len() < before.artifact.len());
+    if matches!(case.id, "large_frame" | "division_trap") {
+        // The current signed 14-bit displacement directly addresses every slot
+        // in this source. It is the negative control for opening a saved-slot
+        // window; the emitter unit test separately crosses IMM14_MAX.
+        assert!(
+            before.report.budget_report.iter().all(|function| {
+                u64::from(function.frame_bytes) <= super::super::IMM14_MAX as u64
+            })
+        );
+        assert_eq!(before.artifact, after.artifact);
+    } else {
+        assert!(
+            after.artifact.len() < before.artifact.len(),
+            "{} shared restoration: before={} after={}",
+            case.id,
+            before.artifact.len(),
+            after.artifact.len()
+        );
+    }
     for output in [&before, &after] {
         assert!(
             output

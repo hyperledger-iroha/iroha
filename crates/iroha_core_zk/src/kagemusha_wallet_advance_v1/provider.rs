@@ -155,6 +155,36 @@ pub struct KagemushaWalletProviderV1<
 }
 
 impl<F: KagemushaWalletFsV1, P, C, R> KagemushaWalletProviderV1<F, P, C, R> {
+    /// Share only the platform callbacks while retaining the same exclusive filesystem owner.
+    pub(crate) fn into_shared_platform(
+        self,
+    ) -> (
+        KagemushaWalletProviderV1<F, std::sync::Arc<P>, C, R>,
+        std::sync::Arc<P>,
+    ) {
+        let platform = std::sync::Arc::new(self.platform);
+        let provider = KagemushaWalletProviderV1 {
+            platform: platform.clone(),
+            store: self.store,
+            scheme_id: self.scheme_id,
+            options: self.options,
+            cache: self.cache,
+            pending_reasons: self.pending_reasons,
+            generation_results: self.generation_results,
+            generation_dispatches: self.generation_dispatches,
+            adopted: self.adopted,
+            slot_phases: self.slot_phases,
+            archive_writes: self.archive_writes,
+            archive_phase: self.archive_phase,
+            archive_batches: self.archive_batches,
+            archive_swept: self.archive_swept,
+            sentinel: self.sentinel,
+            _lock: self._lock,
+            _frames: self._frames,
+        };
+        (provider, platform)
+    }
+
     /// Transfer the same exclusive provider to explicit frame owners. No persistent byte,
     /// staged write, lock or durability evidence is changed. Semantic reconciliation caches
     /// are cleared so the new owners must decode current source-bound originals themselves.

@@ -3056,10 +3056,12 @@ def test_replay_dispatch_preserves_typed_admission_and_channel_refusal(
     ("        if keyed_cut.is_none()\n            && let Some(execution) = &this.keyed_execution\n        {",
      "        if keyed_cut.is_none()\n            && let Some(execution) = &foreign.keyed_execution\n        {"),
     ("*runtime_checkpoint_prepared = true;", "*runtime_checkpoint_prepared = false;"),
-    ("if let Some(checkpoint) = runtime_checkpoint.take() {",
-     "if let Some(checkpoint) = foreign_checkpoint.take() {"),
-    ("            checkpoint.publish()?;", "            drop(checkpoint);"),
-    ("            checkpoint.publish()?;", "            let _ = checkpoint.publish();"),
+    ("if let Some(checkpoint) = runtime_checkpoint.as_ref() {",
+     "if let Some(checkpoint) = foreign_checkpoint.as_ref() {"),
+    ("            checkpoint.durability()?;", "            let _ = checkpoint.durability();"),
+    # A published block's checkpoint publishes once, after the terminal writers.
+    ("                checkpoint.publish();\n", ""),
+    ("                .is_some_and(|publication| publication.published)", "                .is_some()"),
     ("boundary.persist(&state_ref.kura).map_err(|error| {",
      "boundary.persist(&foreign.kura).map_err(|error| {"),
     ("tip.height() == block_height && tip.iroha_hash() == block_header_hash",
@@ -4595,7 +4597,7 @@ CAPACITY_REGISTRATION = "    fn record_hidden_sortition_capacity_failure("
 ELECTION_REGISTRATION = "    pub(crate) fn register_sortition_request("
 FAIL_ELECTION = "    pub fn fail_body_election_no_roster("
 PLAN_DRIVER = "    pub fn plan_driver_v1("
-CADENCE = "    fn parliament_sortition_pulse_epoch_length_v1("
+CADENCE = "    pub(crate) fn parliament_sortition_pulse_epoch_length_v1("
 CREATE_ATTEMPT = "    fn create_parliament_host_attempt("
 BASELINE_EXECUTOR = "    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {"
 SORAFS_EXECUTOR = (
@@ -5119,9 +5121,11 @@ RETIRED_KEYED_DROP = (
     "                    .expect(\"publication\")\n                    .retired_keyed\n"
     "                    .take(),\n            );\n"
 )
+CHECKPOINT_PUBLISH = '            if self\n                .publication\n                .as_ref()\n                .is_some_and(|publication| publication.published)\n                && let Some(checkpoint) = self\n                    .publication\n                    .as_mut()\n                    .expect("publication")\n                    .runtime_checkpoint\n                    .take()\n            {\n                checkpoint.publish();\n            }\n'
 TERMINAL_RELEASE = (
     "        if terminal {\n            mv::BlockRetirement::release_writers(self);\n"
-    "            // Releasing persistent nodes can wake allocation waiters. All publication\n"
+    + CHECKPOINT_PUBLISH
+    + "            // Releasing persistent nodes can wake allocation waiters. All publication\n"
     "            // fences and physical writers must be free before dropping retired versions.\n"
     + RETIRED_KEYED_DROP + "        }\n"
 )

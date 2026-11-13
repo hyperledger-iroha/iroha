@@ -5,6 +5,7 @@ use crate::{
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_sumeragi::preimage::{InstanceKind, instance_id};
+
 #[test]
 fn constructor_binds_authenticated_genesis_and_chain_to_the_global_instance() {
     let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();

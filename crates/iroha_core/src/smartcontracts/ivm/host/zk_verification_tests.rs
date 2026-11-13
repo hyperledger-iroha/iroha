@@ -300,13 +300,12 @@ fn generic_verify_proof_syscall_reports_registry_precheck_errors() {
 fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
     let mut host = CoreHost::new(fixture_account("alice"));
     let code = [
-        ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT)
-        .to_le_bytes(),
+        ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT).to_le_bytes(),
         ivm::encoding::wide::encode_halt().to_le_bytes(),
     ]
     .concat();
     let mut vm = IVM::new(20);
-    vm.load_program(&build_program(&code, 0))
+    vm.load_program(&build_program(&code))
         .expect("load verifier program");
     let payload_ptr = store_tlv(
         &mut vm,
@@ -378,13 +377,12 @@ fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
     .expect("decode metering envelope");
     let payload = norito::to_bytes(&vec![envelope.clone(), envelope]).expect("encode ZK batch");
     let code = [
-        ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH)
-        .to_le_bytes(),
+        ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH).to_le_bytes(),
         ivm::encoding::wide::encode_halt().to_le_bytes(),
     ]
     .concat();
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&build_program(&code, 0))
+    vm.load_program(&build_program(&code))
         .expect("load batch verifier program");
     let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, pointer);

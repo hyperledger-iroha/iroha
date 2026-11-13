@@ -154,6 +154,27 @@ fn assert_snapshot_equal(actual: &str, expected: &str) {
 }
 
 #[test]
+fn checkpoint_fixture_reports_original_serialized_extent() {
+    let mut chain = chain();
+    chain.commit_at(HOUR_MS, Vec::new());
+    let original = CapturedStateSnapshot::capture(chain.state()).unwrap();
+    let members = crate::state::deserialize::json_object_members(&original.json).unwrap();
+    let world = members.iter().find(|(name, _)| *name == "world").unwrap().1;
+    let mut fields: Vec<_> = crate::state::deserialize::json_object_members(world)
+        .unwrap()
+        .into_iter()
+        .map(|(name, bytes)| (name, bytes.len()))
+        .collect();
+    fields.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+    assert!(
+        original.json.len() <= 64 * 1024 * 1024,
+        "original complete fixture snapshot is {} bytes, exceeding its 64 MiB checkpoint policy; largest fields: {:?}",
+        original.json.len(),
+        &fields[..fields.len().min(5)]
+    );
+}
+
+#[test]
 fn checkpoint_integrity_failure_halts_with_original_cause_and_image_retained() {
     use crate::sumeragi::{
         driver::traits::PublicationError, executor::publication::original_refusal,

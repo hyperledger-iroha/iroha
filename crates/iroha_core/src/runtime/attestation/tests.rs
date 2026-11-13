@@ -115,12 +115,13 @@ fn unfinished_game_export_is_not_drafted_or_signed_without_rewriting_frozen_cons
     .unwrap();
     let change = {
         let view = world.view();
-        assert!(
+        assert!(matches!(
             crate::runtime::draft_addition(&view, network(), GAME_PARTITIONS.module, 200, [1; 32])
-                .unwrap_err()
-                .to_string()
-                .contains("export completion custody")
-        );
+                .unwrap_err(),
+            CatalogError::Addition { module, reason }
+                if module == GAME_PARTITIONS.module
+                    && reason == crate::runtime::catalog::UNQUALIFIED_NATIVE_REASON
+        ));
         catalog
             .activation(
                 GAME_PARTITIONS.module,

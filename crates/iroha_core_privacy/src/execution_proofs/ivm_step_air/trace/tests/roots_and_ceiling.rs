@@ -10,7 +10,7 @@ fn single(
     gas: u64,
 ) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     attempted(
-        &[enc::encode_rr(opcode, 8, 6, 7)],
+        &[register_word(opcode, 8, 6, 7)],
         1,
         &[(6, left), (7, right), (8, 91)],
         gas,
@@ -56,7 +56,7 @@ fn assert_result(
 }
 
 #[test]
-fn isqrt_matches_native_square_boundaries_aliases_r0_unused_operand_and_gas() {
+fn isqrt_matches_native_square_boundaries_aliases_r0_and_gas() {
     let mut values = vec![0, 1, 2, 3, u64::MAX, 0xffff_ffff_0000_0001, 1 << 63];
     for root in [
         2_u64,
@@ -76,9 +76,9 @@ fn isqrt_matches_native_square_boundaries_aliases_r0_unused_operand_and_gas() {
         for (rd, rs) in [(8, 6), (6, 6), (0, 6), (8, 0), (0, 0)] {
             for gas in [0, 5, 6, 7, 1 << 32] {
                 let (segment, records) = attempted(
-                    &[enc::encode_rr(wide::arithmetic::ISQRT, rd, rs, 255)],
+                    &[enc::encode_rr(wide::arithmetic::ISQRT, rd, rs, 0)],
                     1,
-                    &[(6, value), (8, 91), (255, u64::MAX)],
+                    &[(6, value), (8, 91), (31, u64::MAX)],
                     gas,
                 );
                 let source = segment.before.registers[usize::from(rs)];
@@ -159,7 +159,7 @@ fn div_ceil_matches_native_all_signs_overflow_zero_aliases_r0_and_gas_precedence
                 let result = if gas < 12 {
                     Err(SegmentOutcome::OutOfGas)
                 } else if b == 0 || (a == i128::from(i64::MIN) && b == -1) {
-                    Err(SegmentOutcome::AssertionFailed)
+                    Err(SegmentOutcome::NumericFault)
                 } else {
                     Ok(u64::from_le_bytes(
                         i128::to_le_bytes(a / b + i128::from(a % b != 0 && (a < 0) == (b < 0)))
@@ -198,7 +198,7 @@ fn root_and_ceiling_all_interior_columns_are_bound_on_success_and_native_traps()
         let (segment, records) = attempted(
             &[
                 enc::encode_ri(wide::arithmetic::ADDI, 24, 24, 0),
-                enc::encode_rr(opcode, 8, 6, 7),
+                register_word(opcode, 8, 6, 7),
             ],
             2,
             &[(6, a), (7, b), (8, 91)],
@@ -325,10 +325,10 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
             }
         }
         let body = [
-            enc::encode_rr(opcode, 8, 6, 7),
+            register_word(opcode, 8, 6, 7),
             enc::encode_ri(wide::arithmetic::ADDI, 9, 9, 1),
         ];
-        let prepared = contract_with_cycle_policy(&body, cost - 1, 0);
+        let prepared = contract_with_cycle_policy(&body, cost - 1, ivm::ivm_mode::ZK);
         let root_words = crate::ivm_test_support::unit_callable(0)
             .result_word_count()
             .unwrap() as u64;
@@ -417,7 +417,7 @@ fn maximum(tail_gas: u64) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         if tail_gas < 12 {
             SegmentOutcome::OutOfGas
         } else {
-            SegmentOutcome::AssertionFailed
+            SegmentOutcome::NumericFault
         }
     );
     (segment, records)
@@ -428,8 +428,8 @@ fn nonlinear_scalar_maximum_geometry_preserves_cap_queries_and_degree_four() {
     for tail in [11, 12] {
         let (segment, records) = maximum(tail);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_356);
-        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.base_width_v1(), 908);
+        assert_eq!(segment.profile_constraint_count_v1(), 2_025);
         assert_eq!(segment.profile_fixed_width_v1(), 10);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
@@ -447,8 +447,8 @@ fn nonlinear_scalar_maximum_geometry_preserves_cap_queries_and_degree_four() {
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_153_152);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+        assert_eq!(bound, 3_149_632);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xd0 + u8::from_le_bytes(
@@ -472,7 +472,7 @@ fn native_stark_proves_nonlinear_maximum_trace_and_binds_boundaries_and_workspac
         let (segment, records) = maximum(tail);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_153_152);
+        assert!(proof.len() <= 3_149_632);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         for field in 0..4 {
             let mut after = segment.after;
@@ -498,7 +498,7 @@ fn native_stark_proves_nonlinear_maximum_trace_and_binds_boundaries_and_workspac
             &segment.before,
             &segment.after,
             if tail < 12 {
-                SegmentOutcome::AssertionFailed
+                SegmentOutcome::NumericFault
             } else {
                 SegmentOutcome::OutOfGas
             },

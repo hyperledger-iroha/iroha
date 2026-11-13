@@ -4,6 +4,8 @@ use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::meas
 use ivm::{IVM, Memory, Perm, ProgramMetadata, VMError, encoding::wide as enc, ivm_mode};
 use packet::{AFTER, AFTER_TAG, BEFORE, BEFORE_TAG, ENABLED, Event, Space};
 
+/// Architectural register file size of the fixture register arrays.
+const REGISTERS: usize = ivm::parallel::REGISTER_COUNT;
 const LOW: u64 = 0x0123_4567_89ab_cdef;
 const HIGH: u64 = 0xfedc_ba98_7654_3210;
 const OLD: [u8; 16] = [0xa5; 16];
@@ -32,8 +34,8 @@ fn scalar(address: u64, source: u8) -> StorePhase {
         MemoryOutcome::Ready,
     )
 }
-fn registers(p: StorePhase) -> [u64; 256] {
-    let mut values = [0; 256];
+fn registers(p: StorePhase) -> [u64; REGISTERS] {
+    let mut values = [0; REGISTERS];
     values[1] = LOW;
     values[2] = HIGH;
     values[3] = p.base_value;
@@ -58,14 +60,14 @@ struct Fixture {
 }
 impl Fixture {
     // The Boolean/integer oracle is independent of the polynomial equations.
-    fn new(p: StorePhase, mask: u16, values: &[u64; 256], tags: [bool; 256]) -> Self {
+    fn new(p: StorePhase, mask: u16, values: &[u64; REGISTERS], tags: [bool; REGISTERS]) -> Self {
         Self::with_memory(p, mask, values, tags, OLD)
     }
     fn with_memory(
         p: StorePhase,
         mask: u16,
-        values: &[u64; 256],
-        tags: [bool; 256],
+        values: &[u64; REGISTERS],
+        tags: [bool; REGISTERS],
         before: [u8; 16],
     ) -> Self {
         let mut reads = [[F::ZERO; packet::WIDTH]; 2];
@@ -187,7 +189,7 @@ fn store_truth_tables_preserve_half_masks_and_all_typed_effects() {
             ] {
                 let p = StorePhase { outcome, ..p };
                 for private in [false, true] {
-                    let mut tags = [false; 256];
+                    let mut tags = [false; REGISTERS];
                     tags[1] = private;
                     // An unrelated private register never enters the truth table.
                     tags[2] = true;
@@ -223,7 +225,7 @@ fn every_store_mask_effect_log_control_and_read_tuple_mutation_is_rejected() {
         scalar(Memory::STACK_START + 8, 1),
     ] {
         for private in [false, true] {
-            let mut tags = [false; 256];
+            let mut tags = [false; REGISTERS];
             tags[1] = private;
             let f = Fixture::new(p, 0xa55a, &registers(p), tags);
             assert!(f.accepts());
@@ -271,7 +273,7 @@ fn rejected_stores_cannot_erase_operand_reads_or_commit_memory_register_pc_cycle
     ] {
         let mut p = scalar(Memory::HEAP_START, 1);
         p.outcome = outcome;
-        let mut tags = [false; 256];
+        let mut tags = [false; REGISTERS];
         tags[1] = true;
         let f = Fixture::new(p, 0xffff, &registers(p), tags);
         assert!(f.accepts());
@@ -303,7 +305,7 @@ fn rejected_stores_cannot_erase_operand_reads_or_commit_memory_register_pc_cycle
 fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted() {
     for source in 0..4 {
         let p = scalar(Memory::HEAP_START, source);
-        let f = Fixture::new(p, 0, &registers(p), [false; 256]);
+        let f = Fixture::new(p, 0, &registers(p), [false; REGISTERS]);
         assert!(f.accepts());
         // r0 reads zero, and a source equal to the base register reads the base.
         if source == 0 || source == 3 {
@@ -316,7 +318,7 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
     // Preserve the forged source's read-preservation tuple AND every derived
     // write/log byte. Only equality to the earlier same-register read may fail.
     let p = scalar(Memory::HEAP_START, 3);
-    let original = Fixture::new(p, 0, &registers(p), [false; 256]);
+    let original = Fixture::new(p, 0, &registers(p), [false; REGISTERS]);
     assert!(original.accepts());
     let mut changed = original;
     changed.reads[1][BEFORE] = changed.reads[1][BEFORE].add(F::ONE);
@@ -334,7 +336,10 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
     let alias_start = 2 * (8 + 4 + 9 + 1 + 9) + 5;
     assert_eq!(failed, [alias_start]);
     assert!(!changed.accepts());
-    for immediate in i8::MIN..=i8::MAX {
+    for immediate in (wide::IMM14_MIN..=wide::IMM14_MAX)
+        .step_by(61)
+        .chain([wide::IMM14_MAX])
+    {
         let word = enc::encode_store(wide::memory::STORE64, 3, 1, immediate);
         let p = phase(word, Memory::HEAP_START, MemoryOutcome::Ready);
         assert_eq!(
@@ -342,7 +347,7 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
                 .wrapping_add(i64::cast_unsigned(i64::from(immediate))),
             p.address
         );
-        let f = Fixture::new(p, 0, &registers(p), [false; 256]);
+        let f = Fixture::new(p, 0, &registers(p), [false; REGISTERS]);
         assert!(f.accepts());
         let mut m = f;
         m.reads[0][BEFORE] = m.reads[0][BEFORE].add(F::ONE);
@@ -511,7 +516,7 @@ fn assert_native_write(vm: &IVM, f: &Fixture) {
 
 #[test]
 fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_registers() {
-    for half in [0_i8, 8] {
+    for half in [0_i16, 8] {
         for source in [0_u8, 1, 3] {
             let address = Memory::HEAP_START + 0x80;
             let word = enc::encode_store(wide::memory::STORE64, 3, source, half);
@@ -521,14 +526,14 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
                 MemoryOutcome::Ready,
             );
             let values = registers(p);
-            let f = Fixture::new(p, 0, &values, [false; 256]);
+            let f = Fixture::new(p, 0, &values, [false; REGISTERS]);
             assert!(f.accepts());
             let mut vm = native(&[word, enc::encode_halt()], 100);
             vm.memory.store_bytes(address, &OLD).unwrap();
             for (i, &value) in values.iter().enumerate().take(4) {
                 vm.set_register(i, value);
             }
-            let registers_before: [(u64, bool); 256] =
+            let registers_before: [(u64, bool); REGISTERS] =
                 std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
             vm.memory.clear_tracking();
             vm.run().unwrap();
@@ -560,7 +565,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
         for private in [false, true] {
             let p = scalar(address, 1);
             let word = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
-            let mut tags = [false; 256];
+            let mut tags = [false; REGISTERS];
             tags[1] = private;
             let values = registers(p);
             let f = Fixture::new(p, 0, &values, tags);
@@ -571,7 +576,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
                 vm.set_register(i, value);
                 vm.registers.set_tag(i, tags[i]);
             }
-            let registers_before: [(u64, bool); 256] =
+            let registers_before: [(u64, bool); REGISTERS] =
                 std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
             vm.memory.clear_tracking();
             let result = vm.run();
@@ -600,7 +605,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
     let p = phase(word, 0, MemoryOutcome::AccessRefused);
     assert_eq!(p.base_value, u64::MAX);
     let values = registers(p);
-    let f = Fixture::new(p, 0, &values, [false; 256]);
+    let f = Fixture::new(p, 0, &values, [false; REGISTERS]);
     assert!(f.accepts());
     let mut vm = native(&[word, enc::encode_halt()], 100);
     let code_before = vm.memory.load_u64(0).unwrap();
@@ -638,7 +643,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
 
 #[test]
 fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_rewind_is_atomic() {
-    for half in [0_i8, 8] {
+    for half in [0_i16, 8] {
         let words = [
             enc::encode_store(wide::memory::STORE64, 3, 1, 0),
             enc::encode_halt(),
@@ -702,7 +707,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
         forward,
         0,
         &core::array::from_fn(|i| vm.registers.get(i)),
-        [false; 256],
+        [false; REGISTERS],
         [0; 16],
     );
     assert!(forward_fixture.accepts());
@@ -725,7 +730,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
         p,
         0,
         &core::array::from_fn(|i| vm.registers.get(i)),
-        [false; 256],
+        [false; REGISTERS],
     );
     assert!(f.accepts());
     vm.memory.clear_tracking();
@@ -807,9 +812,12 @@ fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission
     }
     assert_eq!(WIDTH * (136 * 2 * 8 + 2 * 32), 35_840);
     assert_eq!((WIDTH + ports) * (136 * 2 * 8 + 2 * 32), 264_320);
+    // Packet/log/control linkage is not free profile space; it fits the
+    // 32-register scalar segment's remaining proof-byte headroom without any
+    // integrated-profile admission claim.
     assert!(
-        (WIDTH + ports) * (136 * 2 * 8 + 2 * 32) > 41_152,
-        "packet/log/control linkage is not free profile space"
+        (WIDTH + ports) * (136 * 2 * 8 + 2 * 32) <= 1_044_672,
+        "packet/log/control linkage must stay within the scalar segment headroom"
     );
     // Two different fixed memory dispositions both admit their own exact
     // conditional outcomes. This is intentionally NOT proof of permission.
@@ -818,8 +826,8 @@ fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission
         outcome: MemoryOutcome::AccessRefused,
         ..ready
     };
-    let a = Fixture::new(ready, 0, &registers(ready), [false; 256]);
-    let b = Fixture::new(refused, 0, &registers(refused), [false; 256]);
+    let a = Fixture::new(ready, 0, &registers(ready), [false; REGISTERS]);
+    let b = Fixture::new(refused, 0, &registers(refused), [false; REGISTERS]);
     assert!(a.accepts() && b.accepts());
     assert_ne!(a.control, b.control);
     let mut mixed = a;

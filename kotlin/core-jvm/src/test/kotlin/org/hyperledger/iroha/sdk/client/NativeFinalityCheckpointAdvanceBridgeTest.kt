@@ -112,10 +112,9 @@ private object TimeIronwoodPublicCorpusV1 {
     val inputKeys = listOf("BOI_ACTIVATION_FIXTURE_DIR", "BOI_ACTIVATION_MANIFEST_SHA256",
         "BOI_ACTIVATION_PRODUCER_RECEIPT", "BOI_ACTIVATION_PRODUCER_RECEIPT_SHA256")
     // Selection is pure: it does not read files or touch the native bridge.
-    fun selection(environment: Map<String, String>): Map<String, String>? {
+    fun selection(environment: Map<String, String>): Map<String, String> {
         val present = inputKeys.filter { environment.containsKey(it) }
-        if (present.isEmpty()) return null
-        require(present.size == inputKeys.size) { "partial activation input selection" }
+        require(present.size == inputKeys.size) { "all four BOI_ACTIVATION inputs are required" }
         val selected = inputKeys.associateWith { key -> environment.getValue(key).also { require(it.isNotEmpty()) { "empty $key" } } }
         for (key in listOf("BOI_ACTIVATION_MANIFEST_SHA256", "BOI_ACTIVATION_PRODUCER_RECEIPT_SHA256")) hex(selected.getValue(key))
         for (key in listOf("BOI_ACTIVATION_FIXTURE_DIR", "BOI_ACTIVATION_PRODUCER_RECEIPT")) {
@@ -193,10 +192,7 @@ private object TimeIronwoodPublicCorpusV1 {
 
 class NativeTimeIronwoodActivationFixtureTest {
     @Test fun pinnedExternalActivationCallsRealJniAndRefusesSubstitutions() {
-        val selected = TimeIronwoodPublicCorpusV1.selection(System.getenv())
-        org.junit.jupiter.api.Assumptions.assumeTrue(selected != null,
-            "No activation corpus selected: all four BOI_ACTIVATION input keys are absent")
-        val fixture = TimeIronwoodPublicCorpusV1.load(requireNotNull(selected))
+        val fixture = TimeIronwoodPublicCorpusV1.load(TimeIronwoodPublicCorpusV1.selection(System.getenv()))
         val digest = MessageDigest.getInstance("SHA-256").digest(fixture.checkpoint)
         fun advance(frames: List<ByteArray>, checkpoint: ByteArray = fixture.checkpoint, network: NetworkId = fixture.network,
             chain: String = fixture.chain, sha: ByteArray = digest, height: BigInteger = fixture.anchor, context: ByteArray = fixture.context) =
@@ -235,9 +231,9 @@ class NativeTimeIronwoodActivationSelectionTest {
         "BOI_ACTIVATION_MANIFEST_SHA256" to "1".repeat(64),
         "BOI_ACTIVATION_PRODUCER_RECEIPT" to "/activation-selection/producer.json",
         "BOI_ACTIVATION_PRODUCER_RECEIPT_SHA256" to "2".repeat(64))
-    @Test fun allAbsentIsUnselected() {
-        assertEquals(null, TimeIronwoodPublicCorpusV1.selection(emptyMap()))
-        assertEquals(null, TimeIronwoodPublicCorpusV1.selection(mapOf("UNRELATED" to "value")))
+    @Test fun allAbsentRefuses() {
+        assertFails { TimeIronwoodPublicCorpusV1.selection(emptyMap()) }
+        assertFails { TimeIronwoodPublicCorpusV1.selection(mapOf("UNRELATED" to "value")) }
     }
     @Test fun everyPartialSelectionRefuses() {
         val keys = TimeIronwoodPublicCorpusV1.inputKeys

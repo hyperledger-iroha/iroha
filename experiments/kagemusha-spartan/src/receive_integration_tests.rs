@@ -273,6 +273,7 @@ fn accepted_invalid_proof_and_invalid_request_signature_share_full_receive_matri
         let start = std::time::Instant::now();
         let candidate = build(input).unwrap();
         let gens = Gens::<Vesta>::new(candidate.0.shape.cols());
+        eprintln!("full Receive case {i} memory {:?}", candidate.0.proving_memory_accounting());
         let key = spartan::fixed_commitments(&candidate.0.shape, &gens, &candidate.0);
         let matrix = fingerprint(&candidate.0);
         if let Some(expected) = &expected_matrix {

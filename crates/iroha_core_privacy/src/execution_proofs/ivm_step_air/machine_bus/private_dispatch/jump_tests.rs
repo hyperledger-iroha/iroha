@@ -13,10 +13,10 @@ use ivm::{
 };
 use std::sync::Arc;
 
-fn jump(opcode: u8, displacement: i16) -> u32 {
+fn jump(opcode: u8, displacement: i32) -> u32 {
     match opcode {
         wide::control::JAL => enc::encode_jump(opcode, 0, displacement),
-        wide::control::JMP => enc::encode_offset24(opcode, i32::from(displacement)),
+        wide::control::JMP => enc::encode_offset24(opcode, displacement),
         _ => unreachable!("direct jump fixture"),
     }
 }
@@ -34,7 +34,7 @@ fn recorded_with_limit(
     let artifact = contract(body, max_cycles, ivm::ivm_mode::ZK);
     let mut vm = IVM::new(gas);
     vm.load_prepared(&artifact).unwrap();
-    for (index, value, tag) in [(6, 91, true), (7, u64::MAX, true), (255, 37, false)] {
+    for (index, value, tag) in [(6, 91, true), (7, u64::MAX, true), (31, 37, false)] {
         vm.set_register(index, value);
         vm.registers.set_tag(index, tag);
     }
@@ -314,7 +314,7 @@ fn direct_jumps_reject_every_extra_register_frame_and_memory_producer() {
 
 #[test]
 fn direct_jump_encoding_scope_and_prepared_target_ownership_remain_exact() {
-    for displacement in [i16::MIN, -1, 0, i16::MAX] {
+    for displacement in [wide::JAL_OFFSET_MIN, -1, 0, wide::JAL_OFFSET_MAX] {
         assert!(role(jump(wide::control::JAL, displacement)) == Some(Role::Jump));
     }
     for displacement in [-0x80_0000, -1, 0, 0x7f_ffff] {
@@ -323,7 +323,7 @@ fn direct_jump_encoding_scope_and_prepared_target_ownership_remain_exact() {
     assert!(role(enc::encode_jump(wide::control::JAL, 1, 1)) == Some(Role::Child));
     for instruction in [
         enc::encode_jump(wide::control::JAL, 2, 1),
-        enc::encode_jump(wide::control::JAL, 255, 1),
+        enc::encode_jump(wide::control::JAL, 31, 1),
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
@@ -353,7 +353,7 @@ fn direct_jump_encoding_scope_and_prepared_target_ownership_remain_exact() {
     }
     for opcode in [wide::control::JAL, wide::control::JMP] {
         let admitted = contract(&[jump(opcode, 1)], 1_000, ivm::ivm_mode::ZK);
-        for displacement in [-1, 5, i16::MAX] {
+        for displacement in [-1, 5, wide::JAL_OFFSET_MAX] {
             let mut artifact = admitted.artifact().to_vec();
             let offset = admitted.code_offset();
             artifact[offset..offset + 4].copy_from_slice(&jump(opcode, displacement).to_le_bytes());

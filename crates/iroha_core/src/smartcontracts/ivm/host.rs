@@ -9217,6 +9217,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
         let gas = self.queue_instruction_after_preflight(vm, instruction)?;
+        // Output admission may retain an original local refusal without enqueueing the effect.
+        // Publish the queue-success return only after that same admission has succeeded.
+        self.ensure_output_budget()?;
         vm.set_register(10, 0);
         Ok(gas)
     }
@@ -12857,7 +12860,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 1,
+            max_cycles: 0,
             abi_version: 1,
         };
         let mut vm = ivm::IVM::new(50_000_000);
@@ -15659,7 +15662,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_host(host);
         // Minimal program: HALT, but we only exercise host.validate_tlv via manual call
         let code = [ivm::encoding::wide::encode_halt().to_le_bytes()].concat();
-        let program = build_program(&code, 0);
+        let program = build_program(&code);
         vm.load_program(&program).unwrap();
         // Prepare TLVs: nft_id (correct), key (WRONG: Json instead of Name), value (Json)
         let nft_id = NftId::of(
@@ -15698,7 +15701,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             ivm::encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat();
-        let program = build_program(&code, 0);
+        let program = build_program(&code);
         vm.load_program(&program).unwrap();
         let res = vm.run();
         assert!(
@@ -15716,7 +15719,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             Arc::new(vec![owner.clone()]),
         ));
         let code = [ivm::encoding::wide::encode_halt().to_le_bytes()].concat();
-        let program = build_program(&code, 0);
+        let program = build_program(&code);
         vm.load_program(&program).unwrap();
         // payload is a Name
         let key: iroha_model_base::name::Name = "k".parse().unwrap();
@@ -15752,16 +15755,8 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
     }
 }
 #[cfg(test)]
-fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
-    let mut program = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length,
-        max_cycles: 1_000_000,
-        abi_version: 1,
-    }
-    .encode();
+fn build_program(code: &[u8]) -> Vec<u8> {
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(code);
     program
 }

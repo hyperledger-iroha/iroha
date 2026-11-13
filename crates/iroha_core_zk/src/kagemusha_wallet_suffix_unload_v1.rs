@@ -431,8 +431,12 @@ impl SuffixSegmentV1 {
     ///
     /// # Errors
     /// An encoding failure.
-    pub fn to_canonical_bytes(self) -> Result<Vec<u8>, SuffixErrorV1> {
-        norito::encode_canonical(&self).map_err(|_| SuffixErrorV1::Rejected("segment encoding"))
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "encoding borrows the state opening and lineage fields"
+    )]
+    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SuffixErrorV1> {
+        norito::encode_canonical(self).map_err(|_| SuffixErrorV1::Rejected("segment encoding"))
     }
 
     /// Decode one canonical segment frame (at most 8 KiB). Decoding grants nothing.

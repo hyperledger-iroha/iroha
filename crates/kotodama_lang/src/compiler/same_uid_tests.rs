@@ -16,7 +16,7 @@ fn same_uid_read_compiles_in_views_and_effectful_entrypoints() {
             .iter()
             .map(|v| u32::from_le_bytes(*v))
             .filter(|w| {
-                instruction::wide::opcode(*w) == instruction::wide::system::SYSTEM
+                instruction::wide::opcode(*w) == instruction::wide::system::SCALL
                     && encoding::wide::decode_scall(*w) == syscalls::SYSCALL_ASSET_SAME_UID
             })
             .count();

@@ -1,5 +1,8 @@
 //! Original private scalar/branch reads, tags, writes, comparisons and shifts.
-//! Total NOT/NEG reuse the ALU; signed MIN/MAX select full original words.
+//! A two-register destination joins both source tags (`tag(rs1) OR tag(rs2)`);
+//! unary and immediate forms inherit the left tag. CMOV conditions, branch,
+//! division and ABS operands stay public. Total NOT/NEG reuse the ALU; signed
+//! MIN/MAX select full original words.
 //! Four multiply variants reuse the exact full-width product/correction bank.
 //! Successful DIV/DIVU/REM/REMU reuse that product, the remainder comparison and
 //! the original shift workspace; their native trap-sensitive operands are public.
@@ -10,9 +13,9 @@
 //! Total ISQRT reuses the full-width product/remainder bank with an exact
 //! 32-bit floor root, preserving its source tag and six-gas/six-cycle ports.
 //! Signed GCD uses exact normalized products and bounded Bezout in the existing
-//! digit workspace, retaining both tags and twelve-gas/twelve-cycle ports.
+//! digit workspace, joining both tags with twelve-gas/twelve-cycle ports.
 //! Signed MEAN shares the original 65-bit ADD arithmetic and truncates toward
-//! zero, preserving both operand tags and the original two-gas/three-cycle ports.
+//! zero, joining both operand tags with the original two-gas/three-cycle ports.
 //!
 //! This bank consumes the enclosing dispatcher's private canonical fetch cells
 //! and its sole original packet array. It has no independent instruction list,
@@ -132,7 +135,7 @@ fn right_immediate(instruction: u32) -> Option<u64> {
         | wide::arithmetic::ISQRT => return Some(0),
         wide::arithmetic::NOT => return Some(u64::MAX),
         wide::arithmetic::CMOVI => {
-            return Some(i64::cast_unsigned(i64::from(wide::imm8(instruction))));
+            return Some(i64::cast_unsigned(i64::from(wide::imm14(instruction))));
         }
         _ => {}
     }
@@ -140,7 +143,7 @@ fn right_immediate(instruction: u32) -> Option<u64> {
         wide::opcode(instruction),
         wide::arithmetic::ROTL_IMM | wide::arithmetic::ROTR_IMM
     ) {
-        Some(u64::from(i8::cast_unsigned(wide::imm8(instruction))))
+        Some(u64::from(wide::rotate_amount(instruction)))
     } else {
         immediate_operand(instruction)
     }
@@ -378,15 +381,10 @@ pub(super) fn append_residues(
                 .sub(negating.mul(left)),
         );
     }
-    // A ZK binary register instruction rejects differently tagged operands,
-    // even when its destination is r0. Constants and unary operations inherit rs1's tag.
-    out.push(
-        register_right
-            .sub(register_move.mul(move_taken))
-            .mul(p[SCALAR_LEFT][BEFORE_TAG].sub(p[SCALAR_RIGHT][BEFORE_TAG])),
-    );
-    // CMOV may copy a secret-tagged value, but its condition must be public,
-    // including a false condition or rd0. CMOVI writes a public immediate.
+    // Differently tagged register operands do not trap: the destination joins
+    // both tags below. CMOV may copy a secret-tagged value, but its condition
+    // must be public, including a false condition or rd0. CMOVI writes a public
+    // immediate.
     out.push(move_selected.mul(p[SCALAR_LEFT][BEFORE_TAG]));
     // Conditional branches are forbidden on either private-tagged operand,
     // including equal tags and r0 aliases; their execution path stays private
@@ -609,7 +607,7 @@ pub(super) fn append_residues(
             signed: division_signed,
             ceiling: ceiling_selected,
             out_of_gas: F::ZERO,
-            assertion_failed: F::ZERO,
+            numeric_fault: F::ZERO,
         },
     );
     // Original source and pre-debit gas digits own the exact floor equation.
@@ -736,11 +734,19 @@ pub(super) fn append_residues(
         .mul(move_taken)
         .mul(p[SCALAR_RIGHT][BEFORE_TAG]);
     // Every ordinary destination inherits the original left read's tag; a
-    // taken CMOV copies its source tag and CMOVI writes a public immediate.
+    // two-register form joins the right read's tag as Boolean OR
+    // (`l + r - l*r`), which is exact on the Boolean packet tags. Immediate
+    // and unary right operands are not register reads and never join. A taken
+    // CMOV copies its source tag and CMOVI writes a public immediate.
+    let left_tag = p[SCALAR_LEFT][BEFORE_TAG];
+    let right_tag = p[SCALAR_RIGHT][BEFORE_TAG];
+    let joined_destination =
+        select(&|w| !is_conditional_move(w) && has_destination(w) && right_immediate(w).is_none());
     out.push(
         p[SCALAR_DESTINATION][AFTER_TAG]
             .mul(F::ONE.sub(load))
-            .sub(ordinary_destination.mul(p[SCALAR_LEFT][BEFORE_TAG]))
+            .sub(ordinary_destination.mul(left_tag))
+            .sub(joined_destination.mul(right_tag.sub(left_tag.mul(right_tag))))
             .sub(moved_tag),
     );
 }

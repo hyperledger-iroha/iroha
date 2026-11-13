@@ -2175,6 +2175,17 @@ fn validate_initial_native_instruction_authority(
         if matches!(
             set_parameter.inner(),
             iroha_data_model::parameter::Parameter::Custom(parameter)
+                if parameter.id().name().as_ref()
+                    == iroha_data_model::nexus::DataSpaceRetirementRequestV1::PARAMETER_ID_STR
+        ) {
+            // Owner-signed dataspace retirement. Its Core handler requires the signer to be
+            // the exact active SNS owner and generation of the catalogued dataspace and writes
+            // only the protected retirement record; it never stores this request.
+            return Ok(());
+        }
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
                 if iroha_data_model::hijiri::is_hijiri_parameter_id(parameter.id())
         ) {
             if is_genesis

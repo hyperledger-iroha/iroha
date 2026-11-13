@@ -58,6 +58,16 @@ pub struct Term<F> {
 
 pub type Lin<F> = Vec<Term<F>>;
 
+trait TemplateTerm<F> {
+    fn term(&self) -> &Term<F>;
+}
+impl<F> TemplateTerm<F> for Term<F> {
+    fn term(&self) -> &Term<F> { self }
+}
+impl<F> TemplateTerm<F> for (Term<F>, Factor) {
+    fn term(&self) -> &Term<F> { &self.0 }
+}
+
 pub struct Array<F> {
     pub name: &'static str,
     pub family: usize,
@@ -356,6 +366,11 @@ pub struct UniformCircuit<F> {
 
 #[path = "program_artifact.rs"]
 mod program_artifact;
+#[path = "public_retention.rs"]
+mod public_retention;
+#[path = "proving_memory.rs"]
+mod proving_memory;
+pub use proving_memory::ProvingMemoryAccounting;
 
 /// A linear combination's value at slot `i` of array `a`, from the arrays'
 /// values (multiplicities are counted before the layout exists).
@@ -2394,82 +2409,50 @@ impl<F: Scalar> UniformCircuit<F> {
                             j,
                             mat,
                             base: self.row_base[a][j],
-                            len: 1 << self.m(a),
-                            targets: Vec::new(),
+                            targets: Vec::with_capacity(lin.len()),
                             rs: (0..1usize << arr.rho)
                                 .filter(|r| self.r_present(a, *r))
                                 .collect(),
-                            entries: Vec::new(),
-                            factors: Vec::new(),
+                            factors: lin.iter().map(|(_, f)| *f).collect(),
                             sums: Vec::new(),
                         };
-                        job.entries = vec![Vec::new(); job.rs.len()];
-                        job.factors = lin.iter().map(|(_, f)| *f).collect();
+                        // Retain one target per symbolic term. Expanding each
+                        // target/map/coefficient into every present r consumed
+                        // hundreds of MB for a single signature relation.
                         for (ti, (term, _)) in lin.iter().enumerate() {
-                            let (target, map) = match &term.src {
-                                Src::One => (
-                                    GatherTarget {
-                                        base: 1 << sw,
-                                        lo: 0,
-                                        hi: 0,
-                                        rho: 0,
-                                        carry: false,
-                                    },
-                                    None,
-                                ),
+                            let target = match &term.src {
+                                Src::One => Some(GatherTarget {
+                                    base: 1 << sw,
+                                    lo: 0,
+                                    hi: 0,
+                                    rho: 0,
+                                    carry: false,
+                                }),
                                 Src::Own(k) => {
                                     let b = &self.blocks[a][*k];
-                                    (
-                                        GatherTarget {
-                                            base: b.base,
-                                            lo: b.lo,
-                                            hi: b.hi,
-                                            rho: arr.rho,
-                                            carry: true,
-                                        },
-                                        None,
-                                    )
+                                    Some(GatherTarget {
+                                        base: b.base,
+                                        lo: b.lo,
+                                        hi: b.hi,
+                                        rho: arr.rho,
+                                        carry: true,
+                                    })
                                 }
-                                Src::Link { array, cell, map } => {
+                                Src::Link { array, cell, .. } => {
                                     let b = &self.blocks[*array][*cell];
-                                    (
-                                        GatherTarget {
-                                            base: b.base,
-                                            lo: b.lo,
-                                            hi: b.hi,
-                                            rho: self.arrays[*array].rho,
-                                            carry: !self.global(*array),
-                                        },
-                                        Some(map),
-                                    )
+                                    Some(GatherTarget {
+                                        base: b.base,
+                                        lo: b.lo,
+                                        hi: b.hi,
+                                        rho: self.arrays[*array].rho,
+                                        carry: !self.global(*array),
+                                    })
                                 }
                                 Src::All { .. } => {
                                     job.sums.push(ti);
-                                    continue;
+                                    None
                                 }
                             };
-                            let t = job.targets.len() as u32;
-                            for (&r, list) in job.rs.iter().zip(job.entries.iter_mut()) {
-                                if bool::from(term.coef[r].is_zero()) {
-                                    continue;
-                                }
-                                let rr = if matches!(term.src, Src::One) {
-                                    Some(0)
-                                } else {
-                                    map.map_or(Some(r), |m| m[r])
-                                };
-                                if let Some(rr) = rr {
-                                    // Unit coefficients add or subtract the value.
-                                    let kind = if term.coef[r] == F::ONE {
-                                        1
-                                    } else if term.coef[r] == -F::ONE {
-                                        2
-                                    } else {
-                                        0
-                                    };
-                                    list.push((ti as u32, t, target.offset(rr) as u32, kind));
-                                }
-                            }
                             job.targets.push(target);
                         }
                         jobs.push(job);
@@ -2864,7 +2847,7 @@ impl<F: Scalar> UniformCircuit<F> {
                         })
                         .collect();
                     assert!(
-                        readers.len() <= u16::MAX as usize,
+                        readers.len() <= u32::MAX as usize,
                         "{}: readers of one block",
                         arr2.name
                     );
@@ -2894,7 +2877,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                 coefs.push(coef);
                                 (0, (coefs.len() - 1) as u32)
                             };
-                            entries.push((ri as u16, kind, row, index));
+                            entries.push((ri, kind, row, index));
                         }
                         offsets.push(u32::try_from(entries.len()).expect("plan entries"));
                     }
@@ -2915,21 +2898,10 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Readers of every cell block (the prover's gather of `M(r_x, .)`).
     /// The readers, from the symbolic rows (the terms of every proof's rows).
     fn readers(&self) -> &Readers {
-        self.readers.get_or_init(|| {
-            let rows: Vec<Vec<[Lin<F>; 3]>> = self
-                .symbolic_rows()
-                .into_iter()
-                .map(|rows| {
-                    rows.into_iter()
-                        .map(|row| row.map(|lin| lin.into_iter().map(|(t, _)| t).collect()))
-                        .collect()
-                })
-                .collect();
-            self.readers_for(&rows)
-        })
+        self.readers.get_or_init(|| self.readers_for(self.symbolic()))
     }
 
-    fn readers_for(&self, rows: &[Vec<[Lin<F>; 3]>]) -> Readers {
+    fn readers_for<T: TemplateTerm<F>>(&self, rows: &[Vec<[Vec<T>; 3]>]) -> Readers {
         let mut readers: Vec<Vec<Vec<Reader>>> = self
             .arrays
             .iter()
@@ -2954,6 +2926,7 @@ impl<F: Scalar> UniformCircuit<F> {
             for (j, row) in rows[a].iter().enumerate() {
                 for (mat, lin) in row.iter().enumerate() {
                     for (t, term) in lin.iter().enumerate() {
+                        let term = term.term();
                         match &term.src {
                             Src::One => one_readers.push((a, j, mat, t)),
                             Src::Own(k) => {
@@ -3137,7 +3110,7 @@ impl<F: Scalar> UniformCircuit<F> {
         word(&mut h,self.shape.label.len());h.update(self.shape.label.as_bytes());
         for v in [self.shape.sx,self.shape.row_bits,self.shape.col_bits,self.shape.k,self.io_len,self.constraints,
             self.p1_rows,self.pl_rows,self.p2_rows,self.fixed_rows,self.wallet_rows,
-            self.wallet_io.unwrap_or(usize::MAX)] {word(&mut h,v);}
+            self.wallet_io.unwrap_or(u32::MAX as usize)] {word(&mut h,v);}
         let degree=self.challenge_degrees();
         for v in [self.phase2_challenges(),degree.0,degree.1] {word(&mut h,v);}
         let tape=self.plan();word(&mut h,tape.inputs);word(&mut h,tape.ops.len());word(&mut h,tape.pool.len());
@@ -3762,7 +3735,10 @@ impl<F: Scalar> UniformCircuit<F> {
 
     /// The entries of every array, or of one.
     pub fn entries_of(&self, ch: &[F], only: Option<usize>) -> Vec<(usize, usize, usize, F)> {
-        let rows = self.instantiated_rows(ch);
+        // Selecting one array must not clone and instantiate every other
+        // array. Streaming matrix audits call this once per array; the old
+        // implementation made them quadratic in the program size.
+        let rows = self.symbolic();
         let mut out = Vec::new();
         for (a, arr) in self.arrays.iter().enumerate() {
             if only.is_some_and(|o| o != a) {
@@ -3771,8 +3747,10 @@ impl<F: Scalar> UniformCircuit<F> {
             let rmask = (1 << arr.rho) - 1;
             for (j, row) in rows[a].iter().enumerate() {
                 for (mat, lin) in row.iter().enumerate() {
+                    let factors: Vec<F> = lin.iter().map(|(_, f)|
+                        Self::factor_value(ch, *f).unwrap_or(F::ONE)).collect();
                     for i in (0..1 << self.m(a)).filter(|i| self.present(a, *i)) {
-                        for term in lin {
+                        for ((term, _), factor) in lin.iter().zip(&factors) {
                             if let Src::All { array, cell } = &term.src {
                                 for i2 in
                                     (0..1 << self.m(*array)).filter(|i2| self.present(*array, *i2))
@@ -3781,11 +3759,11 @@ impl<F: Scalar> UniformCircuit<F> {
                                         mat,
                                         self.row_base[a][j] + i,
                                         self.blocks[*array][*cell].index(i2),
-                                        term.coef[0],
+                                        term.coef[0] * factor,
                                     ));
                                 }
                             } else if let Some(y) = self.ypos(a, &term.src, i) {
-                                out.push((mat, self.row_base[a][j] + i, y, term.coef[i & rmask]));
+                                out.push((mat, self.row_base[a][j] + i, y, term.coef[i & rmask] * factor));
                             }
                         }
                     }
@@ -4305,7 +4283,7 @@ struct MPlan<F> {
     /// The present rows reading each r', a reader's rows together: (reader,
     /// coefficient kind: 1 for +1, 2 for -1, 0 for `coefs[index]`, the
     /// constraint row of `(p = 0, r)`, index).
-    entries: Vec<(u16, u8, u32, u32)>,
+    entries: Vec<(u32, u8, u32, u32)>,
     coefs: Vec<F>,
     readers: Vec<MReader>,
 }
@@ -4357,16 +4335,12 @@ struct GatherJob {
     a: usize,
     j: usize,
     mat: usize,
-    /// The row block: first constraint row and length.
+    /// First constraint row of the block.
     base: usize,
-    len: usize,
-    targets: Vec<GatherTarget>,
-    /// The present r, and per present r: (term of the row, its target, the
-    /// target offset of r').
+    /// One target per term; sum terms are computed separately.
+    targets: Vec<Option<GatherTarget>>,
+    /// The present r. Maps and coefficients stay in the symbolic terms.
     rs: Vec<usize>,
-    /// (term, target, offset of r', coefficient kind: 1 for +1, 2 for -1, 0
-    /// for any other value).
-    entries: Vec<Vec<(u32, u32, u32, u8)>>,
     /// Each term's LogUp challenge factor.
     factors: Vec<Factor>,
     /// Sum terms (the same value at every instance).
@@ -4391,20 +4365,31 @@ impl GatherJob {
         let mut pb = vec![0usize; self.targets.len()];
         for p in ps {
             for (b, t) in pb.iter_mut().zip(&self.targets) {
-                *b = t.p_base(p);
+                *b = t.map_or(0, |target| target.p_base(p));
             }
             let row0 = self.base + (p << rho);
-            for (&r, list) in self.rs.iter().zip(&self.entries) {
+            for &r in &self.rs {
                 let mut acc = sums;
-                for &(ti, t, off, kind) in list {
-                    let v = z[pb[t as usize] + off as usize];
-                    match (fv[ti as usize], kind) {
+                for (ti, ((term, _), target)) in lin.iter().zip(&self.targets).enumerate() {
+                    let Some(target) = target else { continue; };
+                    let coef = term.coef[r];
+                    if bool::from(coef.is_zero()) { continue; }
+                    let rr = match &term.src {
+                        Src::One => Some(0),
+                        Src::Own(_) => Some(r),
+                        Src::Link { map, .. } => map[r],
+                        Src::All { .. } => unreachable!("sum targets are absent"),
+                    };
+                    let Some(rr) = rr else { continue; };
+                    let v = z[pb[ti] + target.offset(rr)];
+                    let kind = if coef == F::ONE { 1 } else if coef == -F::ONE { 2 } else { 0 };
+                    match (fv[ti], kind) {
                         (None, 1) => acc += v,
                         (None, 2) => acc -= v,
-                        (None, _) => acc += lin[ti as usize].0.coef[r] * v,
+                        (None, _) => acc += coef * v,
                         (Some(f), 1) => acc += f * v,
                         (Some(f), 2) => acc -= f * v,
-                        (Some(f), _) => acc += f * (lin[ti as usize].0.coef[r] * v),
+                        (Some(f), _) => acc += f * (coef * v),
                     }
                 }
                 // SAFETY: present rows of different jobs never coincide (the
@@ -4420,6 +4405,12 @@ impl GatherJob {
 struct OutPtr<F>(*mut F);
 unsafe impl<F: Send> Send for OutPtr<F> {}
 unsafe impl<F: Sync> Sync for OutPtr<F> {}
+impl<F> OutPtr<F> {
+    /// Caller guarantees an in-bounds element with no concurrent access.
+    unsafe fn write(&self, index: usize, value: F) {
+        unsafe { self.0.add(index).write(value); }
+    }
+}
 
 /// Montgomery batch inversion in parallel chunks.
 pub(crate) fn batch_invert<F: Field>(v: &mut [F]) {
@@ -5050,9 +5041,8 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
                     .collect()
             })
             .collect();
-        let writes: Vec<Vec<(usize, F)>> = jobs
-            .par_iter()
-            .map(|&(b, start)| {
+        let output = OutPtr(out.as_mut_ptr());
+        let write_job = |&(b, start): &(usize, usize)| {
                 let (plan, weights) = (&plans[b], &weights[b]);
                 let (a2, k2) = (plan.a2, plan.k2);
                 let rho2 = c.arrays[a2].rho;
@@ -5064,9 +5054,9 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
                         ex[c.row_base[a][j]] * weight(a, j, mat, t) * rows[a][j][mat][t].0.coef[0]
                     })
                     .sum();
-                (start..(start + SPAN).min(1usize << c.m(a2)))
+                for i2 in (start..(start + SPAN).min(1usize << c.m(a2)))
                     .filter(|i2| c.present(a2, *i2))
-                    .map(|i2| {
+                {
                         let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
                         let mut acc = all;
                         let entries =
@@ -5095,15 +5085,17 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
                             }
                             acc += weights[ri as usize] * sum;
                         }
-                        (block.index(i2), acc)
-                    })
-                    .collect()
-            })
-            .collect();
-        for list in writes {
-            for (y, v) in list {
-                out[y] = v;
-            }
+                        // SAFETY: each plan owns a distinct placed cell
+                        // block, and jobs partition that block's instances.
+                        // Public-IO jobs run serially below because separate
+                        // arrays can name the same IO slots. The constant slot
+                        // is updated only after all jobs have finished.
+                        unsafe { output.write(block.index(i2), acc); }
+                }
+            };
+        jobs.par_iter().filter(|(b, _)| !c.is_io(plans[*b].a2)).for_each(&write_job);
+        for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
+            write_job(job);
         }
         let one: F = rd
             .one_readers
@@ -5638,7 +5630,7 @@ mod tests {
         let mut readers = Array {
             name: "many small cross-family readers", family: 1, rho: 2,
             r_count: 3, fixed: false, lookups: vec![], widths: vec![255],
-            rows: vec![], values: vec![vec![Fv::ONE; 16]],
+            rows: vec![], values: vec![(0..16).map(|i| if i / 4 < 3 && i % 4 < 3 { Fv::ONE } else { Fv::ZERO }).collect()],
         };
         for i in 0..128 {
             let repeated = (i * 127) % n;
@@ -5756,6 +5748,8 @@ mod tests {
             assert_eq!(az[x] * bz[x], cz[x], "row {x} holds");
         }
         let entries = c.entries(&[]);
+        let by_array: Vec<_> = (0..c.arrays.len()).flat_map(|a| c.entries_of(&[], Some(a))).collect();
+        assert_eq!(entries, by_array, "per-array streaming preserves exact entry order");
         let mut abc = [
             vec![Fv::ZERO; 1 << shape.sx],
             vec![Fv::ZERO; 1 << shape.sx],
@@ -5786,6 +5780,24 @@ mod tests {
             m[y] += ex[x] * v * [ra, rb, rcc][mat];
         }
         assert_eq!(rel.m_table(&shape, &ex, ra, rb, rcc), m);
+    }
+
+    #[test]
+    fn proving_memory_projects_lazy_plans_without_building_them() {
+        let (c, _, _) = small();
+        assert!(c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none());
+        let before = c.proving_memory_accounting();
+        assert!(c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none());
+        assert!(before.retained_bytes > 0);
+        let _ = c.gather_plan();
+        let _ = c.m_plans();
+        let after = c.proving_memory_accounting();
+        assert!(after.retained_bytes > before.retained_bytes);
+        assert!(after.additional_peak_bytes < before.additional_peak_bytes);
+        assert!(after.retained_bytes - before.retained_bytes
+            <= before.additional_peak_bytes - after.additional_peak_bytes,
+            "the structural projection covers the actual retained plans");
+        assert_eq!(after.accounted_peak_bytes, after.retained_bytes + after.additional_peak_bytes);
     }
 
     /// The interval closed forms (one, own, identity, broadcast, shifts by

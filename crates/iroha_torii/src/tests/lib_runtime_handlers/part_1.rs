@@ -2881,6 +2881,7 @@ fn mk_app_state_for_tests_with_native_scope(
         vpn_operator_signer: None,
         runtime_attestation_signer: None,
         runtime_checkpoints: None,
+        runtime_checkpoint_package: None,
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]

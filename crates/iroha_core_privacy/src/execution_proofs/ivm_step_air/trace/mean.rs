@@ -64,7 +64,7 @@ pub(super) fn append_residues(
     sum: &[F],
     sources: Sources<'_>,
     gas_digits: &[F],
-    (active, out_of_gas, assertion_failed): (F, F, F),
+    (active, out_of_gas, numeric_fault): (F, F, F),
 ) {
     let initial = out.len();
     append_arithmetic_residues(out, bank, sum, sources, active);
@@ -78,7 +78,8 @@ pub(super) fn append_residues(
     out.push(active.mul(delta.mul(gas[NO_GAS])));
     out.push(active.mul(gas[NO_GAS].mul(gas[NO_GAS_INVERSE])));
     out.push(active.mul(gas[NO_GAS]).sub(out_of_gas));
-    out.push(assertion_failed);
+    // MEAN has no numeric fault; only gas exhaustion can trap it.
+    out.push(numeric_fault);
     debug_assert_eq!(out.len() - initial, CONSTRAINTS);
 }
 

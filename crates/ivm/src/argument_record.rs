@@ -3816,10 +3816,8 @@ mod tests {
         let control_next = vm.alloc_input_tlv(&sentinel).expect("control allocation");
         let mut program = crate::metadata::ProgramMetadata::default().encode();
         program.extend_from_slice(
-            &crate::encoding::wide::encode_scall(
-                ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
-            )
-            .to_le_bytes(),
+            &crate::encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD)
+                .to_le_bytes(),
         );
         program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_program(&program).expect("load argument syscall");
@@ -3866,10 +3864,8 @@ mod tests {
             .expect("bounded envelope shapes receive a conservative quote");
         let mut program = crate::metadata::ProgramMetadata::default().encode();
         program.extend_from_slice(
-            &crate::encoding::wide::encode_scall(
-                ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
-            )
-            .to_le_bytes(),
+            &crate::encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD)
+                .to_le_bytes(),
         );
         program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_program(&program).expect("load argument syscall");

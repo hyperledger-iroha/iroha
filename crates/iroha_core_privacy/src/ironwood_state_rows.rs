@@ -160,6 +160,36 @@ fn namespace(pool: PrivacyPoolIdV1) -> PrivacyRuntimeNamespaceV1 {
     )
 }
 
+pub(crate) fn validate_pool_state(
+    pool: PrivacyPoolIdV1,
+    asset: &AssetDefinitionId,
+    payer: &AccountId,
+    state: &PrivacyOrchardPoolStateV1,
+    head: &PrivacyRootHeadRecordV1,
+) -> Result<PrivacyRuntimeNamespaceV1, FinalityError> {
+    state.validate().map_err(|_| invalid())?;
+    if state.asset_definition_id() != asset
+        || state.public_balance_scope() != AssetBalanceScope::Global
+        || state.reserve_account() == payer
+        || state.epoch() != head.epoch()
+        || state.root() != head.root()
+    {
+        return Err(invalid());
+    }
+    let bootstrap = PrivacyIronwoodPoolBootstrapV1::new(
+        pool,
+        asset.clone(),
+        AssetBalanceScope::Global,
+        state.reserve_account().clone(),
+    )
+    .map_err(|_| invalid())?;
+    if bootstrap.digest().map_err(|_| invalid())?.as_bytes() != state.bootstrap_digest().as_bytes()
+    {
+        return Err(invalid());
+    }
+    Ok(bootstrap.namespace())
+}
+
 /// Derive the first two generic selectors solely from the independently selected pool ID.
 ///
 /// # Errors
@@ -219,27 +249,7 @@ impl<'a> IronwoodPoolContextV1<'a> {
             decode::<PrivacyStateItemRecordV1>(record.value.as_deref().ok_or_else(invalid)?)?;
         let state = record.orchard_pool_state_ref().ok_or_else(invalid)?;
         let head: PrivacyRootHeadRecordV1 = decode(head.value.as_deref().ok_or_else(invalid)?)?;
-        state.validate().map_err(|_| invalid())?;
-        if state.asset_definition_id() != asset
-            || state.public_balance_scope() != AssetBalanceScope::Global
-            || state.reserve_account() == payer
-            || state.epoch() != head.epoch()
-            || state.root() != head.root()
-        {
-            return Err(invalid());
-        }
-        let bootstrap = PrivacyIronwoodPoolBootstrapV1::new(
-            pool,
-            asset.clone(),
-            AssetBalanceScope::Global,
-            state.reserve_account().clone(),
-        )
-        .map_err(|_| invalid())?;
-        if bootstrap.digest().map_err(|_| invalid())?.as_bytes()
-            != state.bootstrap_digest().as_bytes()
-        {
-            return Err(invalid());
-        }
+        validate_pool_state(pool, asset, payer, state, &head)?;
         Ok(Self {
             block,
             schema,

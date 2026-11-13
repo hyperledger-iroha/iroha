@@ -438,8 +438,9 @@ Quarantine lane bounds (normative)
   `pipeline_validity_policy_v1` parameter, not node configuration):
   - `quarantine_max_txs_per_block` (default: 0; a zero cap disables the lane
     and rejects transactions explicitly marked for quarantine)
-  - `quarantine_tx_max_cycles` (default: 0; otherwise bounded by the ordinary
-    IVM cycle ceiling)
+  - `quarantine_tx_max_gas` (default: 0 = no cap; otherwise a quarantine
+    transaction runs under `min(transaction gas limit, cap)`, the one gas
+    allowance every VM segment and nested call of the transaction draws from)
   If a tx exceeds limits or still accesses keys outside its set, it MUST abort.
   Emit structured telemetry with code hash, offending keys, and decision.
 
@@ -1472,9 +1473,9 @@ Determinism specification (normative, summary)
 - Hardware‑neutral: gas costs are derived from the scalar reference
   implementation, independent of wall‑clock time or acceleration.
 - Opcode table: every IVM opcode has one fixed gas cost; the terminating `HALT`
-  is the only free opcode. An invocation's gas limit is derived from its cycle
-  limit with the fixed `GAS_PER_CYCLE` conversion bound into the gas‑schedule
-  hash (`specs/gas_model.md`).
+  is the only free opcode. Gas is the only execution budget: the caller supplies
+  it and nested invocations draw from the parent's remaining gas; no header field
+  converts into gas (`specs/gas_model.md`).
 - Syscalls/precompiles: built‑ins and host syscalls specify fixed cost models
   (e.g., per key touched, per byte hashed); cryptographic primitives are
   syscalls priced with published schedules.

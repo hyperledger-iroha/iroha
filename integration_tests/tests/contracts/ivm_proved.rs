@@ -47,7 +47,7 @@ const EXECUTION_UNAVAILABLE: &str =
 fn counter_artifact() -> Vec<u8> {
     kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         force_zk: true,
-        max_cycles: 4_096,
+        zk_trace_cycles: core::num::NonZeroU64::new(4_096).expect("non-zero trace bound"),
         ..Default::default()
     })
     .compile_source(
@@ -401,9 +401,9 @@ async fn run() -> Result<()> {
     let client = bounded_client(&network.client());
     let http = integration_tests::http::client();
     let artifact = counter_artifact();
-    let parsed = ivm::ProgramMetadata::parse(&artifact)?;
-    let gas_limit = iroha_core::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata)
-        .map_err(|error| eyre!("counter gas limit: {error:?}"))?;
+    // The caller signs the gas budget; the artifact's trace bound derives none.
+    ivm::ProgramMetadata::parse(&artifact)?;
+    let gas_limit = 20_000_000_u64;
     let fee_payment = FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(gas_limit));
     let (address, _, height) = deploy_contract_artifact(
         &client,

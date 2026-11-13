@@ -34,6 +34,7 @@ mod native_amx_capture;
 mod native_escrow_capture;
 mod native_game_capture;
 pub(crate) mod parameters;
+mod retirement;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -140,6 +141,7 @@ pub struct ReleaseCatalog {
     native_escrow_capture_compositions: BTreeMap<DefinitionId, native_escrow_capture::Composition>,
     native_amx_capture_compositions: BTreeMap<DefinitionId, native_amx_capture::Composition>,
     native_game_capture_compositions: BTreeMap<DefinitionId, native_game_capture::Composition>,
+    retirement_compositions: BTreeMap<DefinitionId, retirement::Composition>,
     /// The typed committed parameters this release adds after the baseline, by Parameter
     /// definition ([`parameters`]); a root recognizes one only while its selection activates it.
     parameter_additions: parameters::ParameterAdditions,
@@ -573,6 +575,7 @@ impl ReleaseCatalog {
             native_escrow_capture_compositions: BTreeMap::new(),
             native_amx_capture_compositions: BTreeMap::new(),
             native_game_capture_compositions: BTreeMap::new(),
+            retirement_compositions: BTreeMap::new(),
             parameter_additions: BTreeMap::new(),
             ironwood: None,
         };
@@ -764,6 +767,7 @@ impl ReleaseCatalog {
                 || addition.module == additions::NATIVE_ESCROW_CAPTURE.module
                 || addition.module == additions::NATIVE_AMX_CAPTURE.module
                 || addition.module == additions::NATIVE_GAME_CAPTURE.module
+                || addition.module == additions::RUNTIME_RETIREMENT.module
                 || addition.module == additions::CONTRACT_LIFECYCLE.module;
             let (storage_dependencies, interface_dependencies) = if addition.module
                 == additions::NATIVE_GAME_CAPTURE.module
@@ -868,6 +872,7 @@ impl ReleaseCatalog {
         catalog.compile_native_game_capture()?;
         catalog.compile_runtime_lifecycle_after_native_game()?;
         catalog.compile_contract_lifecycle()?;
+        catalog.compile_retirement()?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -1277,6 +1282,15 @@ impl ReleaseCatalog {
     ) -> Result<ChangeSetV1, CatalogError> {
         if module == additions::NATIVE_GAME_CAPTURE.module {
             return self.draft_native_game_capture(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::RUNTIME_RETIREMENT.module {
+            return self.draft_retirement(
                 current,
                 published,
                 network,

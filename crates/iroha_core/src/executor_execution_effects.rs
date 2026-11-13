@@ -44,7 +44,6 @@ struct RootEffects {
     kind: RootKind,
     max_instructions: usize,
     max_bytes: u64,
-    cycle_budget: Option<ivm::VmCycleBudget>,
     instructions: usize,
     bytes: u64,
     authored: bool,
@@ -57,7 +56,6 @@ struct RootEffects {
 enum EffectFault {
     Instructions { attempted: usize, maximum: usize },
     Bytes { maximum: u64 },
-    Cycles { maximum: u64 },
     Owner(String),
     NativeAmx(iroha_data_model::isi::error::InstructionExecutionError),
 }
@@ -73,9 +71,6 @@ impl EffectFault {
             Self::Bytes { maximum } => ValidationFail::NotPermitted(format!(
                 "overlay exceeds max bytes: more than {maximum}"
             )),
-            Self::Cycles { maximum } => {
-                ValidationFail::NotPermitted(format!("quarantine cycle budget exceeded: {maximum}"))
-            }
             Self::Owner(message) => ValidationFail::InternalError(message.clone()),
             Self::NativeAmx(error) => ValidationFail::InstructionFailed(error.clone()),
         }
@@ -207,10 +202,6 @@ impl StateTransaction<'_, '_> {
             kind,
             max_instructions: self.pipeline.overlay_max_instructions,
             max_bytes: self.pipeline.overlay_max_bytes,
-            cycle_budget: crate::tx::is_quarantine_transaction(signed)
-                .then(|| core::num::NonZeroU64::new(self.pipeline.quarantine_tx_max_cycles))
-                .flatten()
-                .map(ivm::VmCycleBudget::new),
             instructions: 0,
             bytes: 0,
             authored: false,
@@ -231,33 +222,6 @@ impl StateTransaction<'_, '_> {
         let message = message.into();
         self.execution_effects.state = EffectState::Broken(message.clone());
         ValidationFail::InternalError(message)
-    }
-
-    /// Borrow the actual signed root's sole cycle allowance for this VM segment.
-    /// Actual trigger execution is a separate scope, including generic callbacks.
-    pub(crate) fn execution_cycle_budget(
-        &self,
-    ) -> Result<Option<&ivm::VmCycleBudget>, ValidationFail> {
-        match &self.execution_effects.state {
-            EffectState::Broken(message) => {
-                return Err(ValidationFail::InternalError(message.clone()));
-            }
-            EffectState::Root(RootEffects {
-                fault: Some(fault), ..
-            }) => return Err(fault.validation()),
-            _ => {}
-        }
-        if self.execution_callback_active() {
-            return Ok(None);
-        }
-        match &self.execution_effects.state {
-            EffectState::Root(root) if root.matches(self) && !root.closed => {
-                Ok(root.cycle_budget.as_ref())
-            }
-            _ => Err(ValidationFail::InternalError(
-                "VM execution has no active exact signed-root owner".into(),
-            )),
-        }
     }
 
     /// Admit the actual authored signed instruction set, exactly once.
@@ -373,29 +337,9 @@ impl StateTransaction<'_, '_> {
             );
         };
         root.closed = true;
-        if let Some(cycles) = &root.cycle_budget {
-            if !cycles.is_open() {
-                root.fault = Some(EffectFault::Owner(
-                    "signed-root cycle owner is invalid or closed".into(),
-                ));
-            } else if root.fault.is_none() && cycles.exhausted() {
-                root.fault = Some(EffectFault::Cycles {
-                    maximum: cycles.limit(),
-                });
-            }
-        }
         root.fault
             .as_ref()
             .map_or(Ok(()), |fault| Err(fault.validation()))
-    }
-
-    /// Observe the actual retained counter in tests, including a closed root.
-    #[cfg(test)]
-    pub(super) fn completed_execution_cycles_for_tests(&self) -> Option<u64> {
-        match &self.execution_effects.state {
-            EffectState::Root(root) => root.cycle_budget.as_ref().map(ivm::VmCycleBudget::consumed),
-            _ => None,
-        }
     }
 
     /// Exact typed preparation-limit refusal, independent of diagnostic strings.
@@ -410,13 +354,7 @@ impl StateTransaction<'_, '_> {
             EffectState::Idle => Ok(()),
             EffectState::Broken(message) => Err(message.clone()),
             EffectState::Root(root)
-                if !root.closed
-                    || !root.matches(self)
-                    || self.execution_callback_active()
-                    || root
-                        .cycle_budget
-                        .as_ref()
-                        .is_some_and(|budget| !budget.is_open()) =>
+                if !root.closed || !root.matches(self) || self.execution_callback_active() =>
             {
                 Err("instruction effect owner is incomplete or foreign".into())
             }
@@ -437,10 +375,6 @@ impl StateTransaction<'_, '_> {
                     && root.fault.is_none()
                     && root.matches(self)
                     && !self.execution_callback_active()
-                    && root
-                        .cycle_budget
-                        .as_ref()
-                        .is_none_or(|budget| budget.is_open() && !budget.exhausted())
             }
         }
     }
@@ -496,7 +430,6 @@ mod byte_tests {
             kind: RootKind::Instructions,
             max_instructions: 0,
             max_bytes,
-            cycle_budget: None,
             instructions: 0,
             bytes: 0,
             authored: false,

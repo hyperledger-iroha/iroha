@@ -697,6 +697,7 @@ pub(crate) fn kura_read_attempt_error<E>(
     {
         use crate::kura::Error;
         match error {
+            Error::CheckpointPrefixDeferred(original) => ExecutionAttemptError::Deferred(*original),
             Error::NoritoFrame(error) => {
                 norito_decode_attempt_error(error, |error| rejected(Error::NoritoFrame(error)))
             }

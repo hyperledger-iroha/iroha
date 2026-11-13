@@ -30,7 +30,7 @@ import {
 const ARTIFACT = Uint8Array.from([
   0x49, 0x56, 0x4d, 0x00,
   0x01, 0x01, 0x01,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x01,
   ...Array(32).fill(0),
 ]);
@@ -44,9 +44,9 @@ test("packed entrypoints expose identical browser-safe IVM artifact identities",
   assert.equal(subpathMaxBytes, mainMaxBytes);
   const expected = {
     codeHashHex:
-      "83000f5bff780fe02a9ad2c2e3b1b77d3afdabbbe483bfd2bda19fce28df7c37",
+      "4a792a013d50d682f9f7fadbeb49f2fea050d92056c63c1389b132e08ac0f4e9",
     artifactSha256Hex:
-      "24f1d8c07c034f0a3bbeafbd901f938550b21863d8489ad3201dca64482d7b29",
+      "32b7de41ef7d6e98df7599798877b113c2bbafc3872de12ca242cd8dbf88c07d",
   };
   assert.deepEqual(computeFromMain(ARTIFACT), expected);
   assert.deepEqual(computeFromBrowser(ARTIFACT), expected);
@@ -165,9 +165,9 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     assert.equal(packedModule.IVM_ARTIFACT_MAX_BYTES, mainMaxBytes);
     assert.deepEqual(packedModule.computeIvmArtifactHashes(ARTIFACT), {
       codeHashHex:
-        "83000f5bff780fe02a9ad2c2e3b1b77d3afdabbbe483bfd2bda19fce28df7c37",
+        "4a792a013d50d682f9f7fadbeb49f2fea050d92056c63c1389b132e08ac0f4e9",
       artifactSha256Hex:
-        "24f1d8c07c034f0a3bbeafbd901f938550b21863d8489ad3201dca64482d7b29",
+        "32b7de41ef7d6e98df7599798877b113c2bbafc3872de12ca242cd8dbf88c07d",
     });
     const offsetBytes = new Uint8Array(ARTIFACT.byteLength + 9);
     offsetBytes.set(ARTIFACT, 5);

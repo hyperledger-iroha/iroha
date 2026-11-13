@@ -16,14 +16,14 @@ const RADIX: u64 = 1 << 32;
 /// Memory opcode semantics derived from one still-unauthenticated instruction.
 #[derive(Clone, Copy)]
 pub(super) struct Operation {
-    immediate: i8,
+    immediate: i16,
 }
 
 impl Operation {
     pub(super) fn from_word(instruction: u32) -> Option<Self> {
         match wide::opcode(instruction) {
             wide::memory::LOAD64 | wide::memory::STORE64 => Some(Self {
-                immediate: wide::imm8(instruction),
+                immediate: wide::imm14(instruction),
             }),
             _ => None,
         }
@@ -72,7 +72,7 @@ pub(super) fn append_residues(
     let start = out.len();
     sources.append_residues(out);
     // Signed carry values are exactly -1, 0 or 1. Each limb equation has
-    // integer magnitude below 2*2^32+128, so field zero cannot hide a p-offset.
+    // integer magnitude below 2*2^32+2^13, so field zero cannot hide a p-offset.
     for carry in carries {
         out.push(carry.mul(carry.sub(F::ONE)).mul(carry.add(F::ONE)));
     }
@@ -112,9 +112,29 @@ mod tests {
             .all(|x| x == F::ZERO)
     }
 
-    fn operation(opcode: u8, last: u8) -> Operation {
-        Operation::from_word(enc::encode_rr(opcode, 1, 3, last)).unwrap()
+    fn operation(opcode: u8, immediate: i16) -> Operation {
+        let word = if opcode == wide::memory::STORE64 {
+            enc::encode_store(opcode, 3, 1, immediate)
+        } else {
+            enc::encode_ri(opcode, 1, 3, immediate)
+        };
+        Operation::from_word(word).unwrap()
     }
+
+    /// Every signed 14-bit displacement boundary plus nearby limb-crossing values.
+    const IMMEDIATES: [i16; 11] = [
+        wide::IMM14_MIN,
+        wide::IMM14_MIN + 1,
+        -256,
+        -129,
+        -128,
+        -1,
+        0,
+        1,
+        127,
+        128,
+        wide::IMM14_MAX,
+    ];
 
     #[test]
     fn every_signed_immediate_and_limb_boundary_has_unique_wrapping_carries() {
@@ -123,21 +143,25 @@ mod tests {
             1,
             127,
             128,
-            255,
-            u64::from(u32::MAX) - 127,
+            8191,
+            8192,
+            u64::from(u32::MAX) - 8191,
             u64::from(u32::MAX),
             RADIX,
-            RADIX + 127,
+            RADIX + 8191,
             (1 << 63) - 1,
             1 << 63,
-            u64::MAX - 127,
+            u64::MAX - 8191,
             u64::MAX - 1,
             u64::MAX,
         ];
         for base in bases {
-            for immediate in i8::MIN..=i8::MAX {
+            for immediate in (wide::IMM14_MIN..=wide::IMM14_MAX)
+                .step_by(97)
+                .chain(IMMEDIATES)
+            {
                 for opcode in [wide::memory::LOAD64, wide::memory::STORE64] {
-                    let op = operation(opcode, i8::cast_unsigned(immediate));
+                    let op = operation(opcode, immediate);
                     // Independent machine-integer oracle, not the carry witness formula.
                     let effective = i64::cast_unsigned(
                         u64::cast_signed(base).wrapping_add(i64::from(immediate)),
@@ -158,8 +182,13 @@ mod tests {
 
     #[test]
     fn every_address_bit_and_signed_carry_rejects_mutation() {
-        for (base, immediate) in [(0, -1_i8), (u64::MAX, 1), (RADIX - 1, 127), (RADIX, -128)] {
-            let op = operation(wide::memory::LOAD64, i8::cast_unsigned(immediate));
+        for (base, immediate) in [
+            (0, -1_i16),
+            (u64::MAX, 1),
+            (RADIX - 1, wide::IMM14_MAX),
+            (RADIX, wide::IMM14_MIN),
+        ] {
+            let op = operation(wide::memory::LOAD64, immediate);
             let effective = base.wrapping_add_signed(i64::from(immediate));
             let bits = word::witness(base, effective);
             let carries = witness(base, op);
@@ -191,26 +220,26 @@ mod tests {
     }
 
     #[test]
-    fn only_the_two_scalar_memory_opcodes_select_an_imm8_that_cannot_be_dropped() {
+    fn only_the_two_scalar_memory_opcodes_select_an_imm14_that_cannot_be_dropped() {
         // Every other opcode byte, assigned or not, has no address operation.
         for opcode in 0..=u8::MAX {
             assert_eq!(
-                Operation::from_word(enc::encode_rr(opcode, 1, 3, 127)).is_some(),
+                Operation::from_word((u32::from(opcode) << 24) | 127).is_some(),
                 matches!(opcode, wide::memory::LOAD64 | wide::memory::STORE64),
                 "opcode {opcode:#x}"
             );
         }
-        let base = RADIX + 256;
-        for last in 1..=u8::MAX {
+        let base = RADIX + (1 << 14);
+        for immediate in IMMEDIATES.into_iter().filter(|immediate| *immediate != 0) {
             for opcode in [wide::memory::LOAD64, wide::memory::STORE64] {
-                let scalar = operation(opcode, last);
-                let shifted = base.wrapping_add_signed(i64::from(u8::cast_signed(last)));
+                let scalar = operation(opcode, immediate);
+                let shifted = base.wrapping_add_signed(i64::from(immediate));
                 assert!(accepts(
                     &word::witness(base, shifted),
                     &witness(base, scalar),
                     scalar
                 ));
-                // A nonzero final operand byte is always the signed offset.
+                // A nonzero displacement field is always the signed offset.
                 assert!(!accepts(
                     &word::witness(base, base),
                     &witness(base, scalar),
@@ -264,7 +293,7 @@ mod tests {
     fn address_equations_match_native_signed_offsets_and_wrap() {
         let address = Memory::HEAP_START + 256;
         let value = 0xfedc_ba98_7654_3210_u64;
-        for immediate in [-128_i8, -127, -1, 0, 1, 63, 126, 127] {
+        for immediate in IMMEDIATES {
             for store in [false, true] {
                 let word = if store {
                     enc::encode_store(wide::memory::STORE64, 3, 1, immediate)
@@ -295,7 +324,7 @@ mod tests {
                 );
             }
         }
-        for (base, imm) in [(u64::MAX, 1_i8), (u64::MAX - 7, 8)] {
+        for (base, imm) in [(u64::MAX, 1_i16), (u64::MAX - 7, 8)] {
             let word = enc::encode_load(wide::memory::LOAD64, 1, 3, imm);
             let op = Operation::from_word(word).unwrap();
             assert!(accepts(&word::witness(base, 0), &witness(base, op), op));
@@ -312,7 +341,7 @@ mod tests {
         assert_eq!(WIDTH, 2);
         assert_eq!(CONSTRAINTS, 132);
         for opcode in [wide::memory::LOAD64, wide::memory::STORE64] {
-            let op = operation(opcode, 128);
+            let op = operation(opcode, wide::IMM14_MIN);
             assert_eq!(
                 measured_maximum_affine_degree_v1(
                     [opcode; 32],

@@ -23,6 +23,19 @@ pub trait AvailabilitySchedule: Send + Sync {
     /// # Errors
     /// Historical state is corrupt, cannot be authenticated, or cannot be read.
     fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>>;
+
+    /// Authenticated portable startup headers, with no claim to missing body custody.
+    /// Nonportable schedules leave the ordinary committed-entry source in use.
+    ///
+    /// # Errors
+    /// Original proof, State identity, source or local resource failure.
+    fn checkpoint_headers(
+        &self,
+        _first: u64,
+        _last: u64,
+    ) -> Result<Option<Vec<iroha_sumeragi::message::BlockHeader>>, Attempt<io::Error>> {
+        Ok(None)
+    }
 }
 
 /// Bind caller-selected identity to the independent historical schedule before any disk read.

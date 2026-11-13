@@ -36,6 +36,7 @@ mod fi_context_assertion;
 mod fi_context_continuation;
 mod gpu;
 mod kagemusha_wallet_advance;
+mod kagemusha_spartan;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
 mod kagemusha_wallet_suffix;

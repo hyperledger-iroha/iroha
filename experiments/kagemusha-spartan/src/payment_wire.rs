@@ -536,6 +536,15 @@ pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate
     })
 }
 
+/// Reframe an exact-profile malformed candidate for native Burn integration tests.
+#[cfg(test)]
+pub(crate) fn test_replace_pair(profile: &Profile<'_>, payment: &[u8], pair: Vec<u8>) -> Result<Vec<u8>, String> {
+    let candidate = decode_candidate(profile, payment)?;
+    carrier::frame_projected_pair(profile.pair, &pair)?;
+    let (envelope, companion) = compact(&candidate.originals, pair)?;
+    peer_encode(&encode_norito(&envelope)?, &encode_norito(&companion)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,12 +9,13 @@ use crate::{
 };
 use iroha_data_model::ValidationFail;
 use norito::codec::Encode;
-const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
-const WIDE_IMM_MIN: i32 = -128;
-const WIDE_IMM_MAX: i32 = 127;
 const RESULT_LENGTH_PREFIX_BYTES: u64 = 8;
-fn chunk_immediate(value: i32) -> i8 {
-    value.clamp(WIDE_IMM_MIN, WIDE_IMM_MAX) as i8
+fn chunk_immediate(value: i32) -> i16 {
+    let clamped = value.clamp(
+        i32::from(instruction::wide::IMM14_MIN),
+        i32::from(instruction::wide::IMM14_MAX),
+    );
+    i16::try_from(clamped).expect("14-bit immediate fits i16")
 }
 fn emit_addi_inplace(code: &mut Vec<u32>, register: u8, mut value: i32) {
     while value != 0 {
@@ -157,6 +158,7 @@ pub fn build_encoded_result_program(result_bytes: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::IVM;
+    const TEST_GAS_LIMIT: u64 = 1_000_000;
     #[test]
     fn default_executor_uses_authenticated_generic_header_and_loads() {
         let program = build_default_executor_program();
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(parsed.metadata.version_minor, 1);
         assert!(parsed.literal_section.is_some());
         assert!(parsed.code_offset > parsed.header_len);
-        let mut vm = IVM::new(DEFAULT_MAX_CYCLES);
+        let mut vm = IVM::new(TEST_GAS_LIMIT);
         vm.load_program(&program)
             .expect("default executor passes admission");
         vm.set_register(10, crate::Memory::OUTPUT_START);
@@ -210,7 +212,7 @@ mod tests {
                 .expect("literal descriptor decodes");
             assert_eq!(kind, LiteralKindV1::I64);
         }
-        let mut vm = IVM::new(DEFAULT_MAX_CYCLES);
+        let mut vm = IVM::new(TEST_GAS_LIMIT);
         vm.load_program(&program)
             .expect("encoded-result program passes admission");
         vm.set_register(10, crate::Memory::OUTPUT_START);

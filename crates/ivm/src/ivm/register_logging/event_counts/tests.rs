@@ -3,8 +3,8 @@
 use super::*;
 use crate::{
     IVM, ProgramMetadata,
-    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_sys, encode_scall},
-    instruction::wide::{arithmetic as a, control as c, memory as m, system as s},
+    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
+    instruction::wide::{arithmetic as a, control as c, memory as m},
 };
 use iroha_allocation::AllocationBudget;
 
@@ -40,8 +40,7 @@ fn every_admitted_opcode_has_a_finite_public_geometry_bound() {
             "opcode {opcode:#04x}"
         );
         if let Ok(rows) = result {
-            // Current maximum is the bounded syscall host write publication;
-            // ordinary 64-lane vector work occupies exactly 256 rows.
+            // The current maximum is the bounded syscall host write publication.
             assert!(rows <= 280, "opcode {opcode:#04x}: {rows}");
         }
     }
@@ -93,10 +92,17 @@ fn scalar_bounds_match_real_value_reads_and_separate_tag_writes() {
         a::ISQRT,
         a::ABS,
     ];
-    for destination in [0, 5, 6, 255] {
+    // Canonical words only: register-unary forms keep rs2 zero and rotate
+    // amounts stay within 0..=63, so the interpreter admits every probe.
+    let canonical = |opcode: u8, destination: u8| match wide::operand_format(opcode) {
+        Some(wide::OperandFormat::Register3) => encode_rr(opcode, destination, 5, 6),
+        Some(wide::OperandFormat::Register2) => encode_rr(opcode, destination, 5, 0),
+        _ => encode_ri(opcode, destination, 5, 6),
+    };
+    for destination in [0, 5, 6, 31] {
         for (opcodes, reads) in [(&binary[..], 2), (&unary[..], 1)] {
             for &opcode in opcodes {
-                let word = encode_rr(opcode, destination, 5, 6);
+                let word = canonical(opcode, destination);
                 let actual = observed(word, |vm| {
                     vm.set_register(5, 9);
                     vm.set_register(6, 3);
@@ -182,26 +188,23 @@ fn syscall_budget_contains_both_restore_and_host_net_change_paths() {
         // Each saved output is read, cleared, then retagged before the host;
         // quote rejection restores its value and tag instead of calling it.
         assert!(bound >= initial + 5 * output_only);
-        assert!(bound >= initial + 3 * output_only + 255);
+        assert!(bound >= initial + 3 * output_only + crate::parallel::REGISTER_COUNT - 1);
         assert_eq!(
             instruction(encode_scall(number), false, false).unwrap(),
             bound
         );
-        if let Ok(number8) = u8::try_from(number) {
-            assert_eq!(
-                instruction(encode_scall(u32::from(number8)), false, false).unwrap(),
-                bound
-            );
-        }
     }
-    assert_eq!(syscall(syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM), 256);
+    assert_eq!(
+        syscall(syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM),
+        crate::parallel::REGISTER_COUNT
+    );
     let private_input = syscall(syscalls::SYSCALL_GET_PRIVATE_INPUT);
-    assert!(private_input >= 256);
+    assert!(private_input >= crate::parallel::REGISTER_COUNT);
 }
 
 #[test]
 fn native_observations_count_original_before_and_delayed_after_reads_even_for_r0() {
-    for destination in [0, 5, 255] {
+    for destination in [0, 5, 31] {
         for (opcode, extra) in [
             (a::ADD, 4),
             (a::MULHSU, 4),

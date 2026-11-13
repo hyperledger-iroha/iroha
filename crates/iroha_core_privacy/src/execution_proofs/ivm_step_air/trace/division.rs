@@ -1,4 +1,4 @@
-//! Exact signed/unsigned quotient, remainder, arithmetic traps and gas admission.
+//! Exact signed/unsigned quotient, remainder, numeric-fault traps and gas admission.
 //!
 //! On division rows the 208-cell shift workspace is reused. New quartic range
 //! checks occupy only cells already Boolean under the old barrel constraints;
@@ -160,7 +160,7 @@ pub(in super::super) struct Selection {
     pub(in super::super) signed: F,
     pub(in super::super) ceiling: F,
     pub(in super::super) out_of_gas: F,
-    pub(in super::super) assertion_failed: F,
+    pub(in super::super) numeric_fault: F,
 }
 
 pub(in super::super) fn append_residues(
@@ -178,9 +178,9 @@ pub(in super::super) fn append_residues(
         signed,
         ceiling,
         out_of_gas,
-        assertion_failed,
+        numeric_fault,
     } = selection;
-    let trap = out_of_gas.add(assertion_failed);
+    let trap = out_of_gas.add(numeric_fault);
     let success = active.sub(trap);
     // Old shift rows make every one of these positions Boolean, so the
     // unconditional range constraints preserve every prior row and padding.
@@ -338,7 +338,7 @@ pub(in super::super) fn append_residues(
         active
             .mul(F::ONE.sub(insufficient))
             .mul(error)
-            .sub(assertion_failed),
+            .sub(numeric_fault),
     );
     debug_assert_eq!(out.len() - initial, CONSTRAINTS);
 }

@@ -88,45 +88,23 @@ fn decode_artifact_invariant_across_metadata_fields() {
         d
     };
     let golden = decode(&base);
-    for mode in [0, ivm_mode::ZK] {
+    for cyc in [1u64, 10, 1_000, u32::MAX as u64, u64::from(u32::MAX) + 1] {
         let mut m = base.clone();
-        m.mode = mode;
-        assert_eq!(&*golden, &*decode(&m), "mode 0x{mode:02x}");
-    }
-    for vlen in [0u8, 1, 4, 8, 16, 32, 64] {
-        let mut m = base.clone();
-        m.vector_length = vlen;
-        assert_eq!(&*golden, &*decode(&m), "vlen {vlen}");
-    }
-    for cyc in [0u64, 1, 10, 1_000, u32::MAX as u64, u64::from(u32::MAX) + 1] {
-        let mut m = base.clone();
+        m.mode = ivm_mode::ZK;
         m.max_cycles = cyc;
-        assert_eq!(&*golden, &*decode(&m), "cycles {cyc}");
+        assert_eq!(&*golden, &*decode(&m), "ZK cycles {cyc}");
     }
     let mut m = base.clone();
     m.abi_version = 1;
     assert_eq!(&*golden, &*decode(&m), "abi 1");
     let mut m = base.clone();
-    m.vector_length = 65;
+    m.max_cycles = 65;
     let mut artifact = m.encode();
     artifact.extend_from_slice(&code);
-    let err = IvmCache::decode_artifact(&artifact).expect_err("oversize vector length rejects");
-    assert!(match (
-        &(err),
-        &(VMError::ProgramVectorLengthTooLarge {
-            max_allowed: ivm::VECTOR_LENGTH_MAX,
-        })
-    ) {
-        (
-            VMError::ProgramVectorLengthTooLarge {
-                max_allowed: actual_field_1,
-            },
-            VMError::ProgramVectorLengthTooLarge {
-                max_allowed: expected_field_1,
-            },
-        ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
-        _ => false,
-    });
+    assert!(matches!(
+        IvmCache::decode_artifact(&artifact),
+        Err(VMError::MaxCyclesWithoutZk { max_cycles: 65 })
+    ));
 }
 #[test]
 fn decode_artifact_rejects_retired_or_unknown_minor_version() {

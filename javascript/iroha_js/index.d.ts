@@ -9254,18 +9254,88 @@ export interface SubmitTransactionAndWaitOptions
 // Errors shared by every Torii client
 // ---------------------------------------------------------------------------
 
-/** `details` of Torii's `{"code", "message", "details"}` error envelope. */
+/**
+ * Unsigned integer from a decoded error envelope: a `number` when it is a safe
+ * integer, a `bigint` otherwise.
+ */
+export type ToriiErrorDetailsUnsigned = number | bigint;
+
+/** `details.queue` of a transaction queue rejection. */
+export interface ToriiQueueErrorSnapshot {
+  /** `healthy` or `saturated`. */
+  readonly state: string;
+  readonly queued: ToriiErrorDetailsUnsigned;
+  readonly capacity: ToriiErrorDetailsUnsigned;
+  readonly saturated: boolean;
+}
+
+/** `details.axt` of a validation failure under AXT policy. */
+export interface ToriiAxtErrorDetails {
+  readonly code?: string;
+  readonly reason?: string;
+  readonly snapshot_version?: ToriiErrorDetailsUnsigned;
+  readonly dataspace?: ToriiErrorDetailsUnsigned;
+  readonly lane?: number;
+  readonly active_handle_era?: ToriiErrorDetailsUnsigned;
+  readonly next_handle_counter?: ToriiErrorDetailsUnsigned;
+}
+
+/** `details.fee` of a fee-payment rejection. */
+export interface ToriiFeeErrorDetails {
+  /** Stable snake-case fee rejection code. */
+  readonly code: string;
+  /** Whether retrying unchanged after a state or capacity change can succeed. */
+  readonly retryable: boolean;
+  readonly program_id?: string;
+  readonly program_revision?: ToriiErrorDetailsUnsigned;
+  readonly asset_definition_id?: string;
+  readonly required?: string;
+  readonly available?: string;
+  readonly rule_id?: string;
+  readonly observation_height?: ToriiErrorDetailsUnsigned;
+  readonly remediation?: string;
+}
+
+/**
+ * `details` of Torii's `{"code", "message", "details"}` error envelope. Absent
+ * fields are omitted. A canonical Norito or JSON envelope is decoded exactly
+ * when its details carry only the typed fields below (besides `ivm_fault`).
+ */
 export interface ToriiErrorDetails {
   /** Canonical deterministic runtime fault when the HTTP error arose from IVM execution. */
   readonly ivm_fault?: IvmFaultV1 | null;
+  /** Public surface layer that produced the error (`cli`, `torii`, `mcp`, ...). */
+  readonly layer?: string;
+  /** ISO-20022-style or Torii-local rejection code, such as `PRTRY:QUEUE_FULL`. */
+  readonly reject_code?: string;
+  /** Queue pressure when Torii's transaction queue rejected a submission. */
+  readonly queue?: ToriiQueueErrorSnapshot;
+  /** Suggested retry delay in seconds; Torii sets it on every HTTP 429 and 503. */
+  readonly retry_after_seconds?: ToriiErrorDetailsUnsigned;
+  /** Endpoint associated with throttling or version failures. */
+  readonly endpoint?: string;
   /** The request control at fault (`filter`, `sort`, `select`, ...). */
   readonly field?: string;
   /** The data field at fault, when there is one. */
   readonly actual?: string;
   /** The accepted fields, as a comma-separated string. */
   readonly expected?: string;
+  /** Network profile involved in the error. */
+  readonly profile?: string;
+  /** I105 chain discriminant involved in the error. */
+  readonly chain_discriminant?: number;
+  /** Canonical transaction-entrypoint hash involved in an admission failure. */
+  readonly entrypoint_hash?: string;
+  /** Signed transaction hash involved in a finality or status failure. */
+  readonly tx_hash?: string;
+  /** Last observed transaction status when a finality wait failed. */
+  readonly last_status?: string;
   /** A suggested fix, such as the closest field name. */
   readonly hint?: string;
+  /** AXT rejection metadata. */
+  readonly axt?: ToriiAxtErrorDetails;
+  /** Fee-payment rejection metadata. */
+  readonly fee?: ToriiFeeErrorDetails;
   readonly [key: string]: unknown;
 }
 
@@ -9334,7 +9404,8 @@ export declare class FilterSyntaxError extends ListQueryError {
 /**
  * A non-success HTTP response. `code`, `errorMessage` and `details` come from
  * Torii's `{"code", "message", "details"}` error envelope; `rejectCode` from
- * `x-iroha-reject-code` (which also becomes `code` when present).
+ * `x-iroha-reject-code` or `details.reject_code` (which also becomes `code`
+ * when present). Routes that negotiate Norito decode the binary envelope too.
  */
 export declare class ToriiHttpError extends ToriiError {
   constructor(details: {
@@ -9342,6 +9413,7 @@ export declare class ToriiHttpError extends ToriiError {
     statusText?: string | null;
     expected?: ReadonlyArray<number>;
     code?: string | null;
+    envelopeCode?: string | null;
     rejectCode?: string | null;
     errorMessage?: string | null;
     bodyText?: string | null;
@@ -9351,6 +9423,8 @@ export declare class ToriiHttpError extends ToriiError {
   readonly status: number;
   readonly statusText: string | null;
   readonly expected: ReadonlyArray<number>;
+  /** The envelope's own `code` (such as `queue_full`), even when `code` is the reject code. */
+  readonly envelopeCode: string | null;
   readonly rejectCode: string | null;
   /** The envelope `message`, or a compact rendering of the body. */
   readonly errorMessage: string | null;
@@ -11617,7 +11691,14 @@ export declare class NoritoRpcClient {
 
 export declare class NoritoRpcError extends Error {
   readonly status: number;
+  /** Lossy text rendering of the error body. */
   readonly body: string;
+  /** Code of Torii's canonical error envelope, or `null` for any other body. */
+  readonly code: string | null;
+  /** Exact message of Torii's canonical error envelope, or `null` for any other body. */
+  readonly errorMessage: string | null;
+  /** Decoded details of Torii's canonical error envelope, or `null` when absent. */
+  readonly details: ToriiErrorDetails | null;
 }
 
 export function supportedCryptoAlgorithms(): CryptoAlgorithm[];

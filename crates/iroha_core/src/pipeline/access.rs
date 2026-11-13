@@ -2694,9 +2694,9 @@ mod tests {
             if wide::opcode(word) == wide::arithmetic::ADDI
                 && wide::rd(word) == 31
                 && wide::rs1(word) == 31
-                && wide::imm8(word) < 0
+                && wide::imm14(word) < 0
             {
-                callable.frame_bytes = u32::from(wide::imm8(word).unsigned_abs());
+                callable.frame_bytes = u32::from(wide::imm14(word).unsigned_abs());
             }
         }
         callable
@@ -2727,7 +2727,7 @@ mod tests {
             enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
             enc::encode_load(wide::memory::LOAD64, 1, 31, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 31, 31, 32),
-            enc::encode_rr(wide::control::JALR, 0, 1, 0),
+            enc::encode_ri(wide::control::JALR, 0, 1, 0),
             enc::encode_literal(wide::memory::LDLIT, 16, 1),
         ];
         words[8] = if long_call {
@@ -2759,7 +2759,7 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 10_000,
+            max_cycles: 0,
             abi_version: 1,
         };
         let embedded_entrypoints = entrypoints
@@ -2787,7 +2787,7 @@ mod tests {
             let word = u32::from_le_bytes(*bytes);
             let offset = match wide::opcode(word) {
                 wide::control::JALS => i64::from(wide::imm24(word)),
-                wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
+                wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::jal_offset(word)),
                 _ => continue,
             };
             let target = (index as u64 * 4)
@@ -4093,7 +4093,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 10_000,
+            max_cycles: 0,
             abi_version: 1,
         };
         let literals = [&key_tlv, &value_tlv];
@@ -4238,7 +4238,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 10_000,
+            max_cycles: 0,
             abi_version: 1,
         }
         .encode();
@@ -4291,7 +4291,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 10_000,
+            max_cycles: 0,
             abi_version: 1,
         };
         let mut prog = meta.encode();
@@ -4452,7 +4452,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
                 ivm::encoding::wide::encode_halt(),
                 ivm::encoding::wide::encode_scall(syscall),
-                ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
+                ivm::encoding::wide::encode_ri(wide::control::JALR, 0, 1, 0),
             ];
             let mut program = ivm::ProgramMetadata::default().encode();
             program.extend(code.into_iter().flat_map(u32::to_le_bytes));

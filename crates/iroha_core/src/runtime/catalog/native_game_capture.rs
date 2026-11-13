@@ -1,6 +1,7 @@
 //! Immutable service compositions for certified native game-transfer completion custody.
 
 use super::*;
+use iroha_data_model::runtime::definition::DefinitionKind;
 use iroha_data_model::runtime::native_game::{SERVICE, SERVICE_CLOSURE};
 
 #[derive(Clone, Debug)]
@@ -8,7 +9,7 @@ pub(super) struct Composition {
     pub(super) services: DefinitionId,
     pub(super) replacements: BTreeMap<DefinitionId, DefinitionId>,
     pub(super) addition: AdditionDefinitions,
-    prerequisites: Vec<AdditionDefinitions>,
+    pub(super) prerequisites: Vec<AdditionDefinitions>,
 }
 
 fn failure(reason: impl Into<String>) -> CatalogError {
@@ -314,7 +315,6 @@ impl ReleaseCatalog {
         transitions.push(SelectionTransitionV1::SetServicesProfile(
             composition.services,
         ));
-        successor.check_closure(&self.definitions)?;
         let mut pending: Vec<_> = successor
             .active
             .iter()
@@ -335,13 +335,31 @@ impl ReleaseCatalog {
                 .definitions
                 .get(&id)
                 .ok_or_else(|| failure("game completion dependency is absent"))?;
-            pending.extend(
-                descriptor
-                    .typed_dependencies()
-                    .into_iter()
-                    .map(|(_, dependency)| dependency),
-            );
+            for (kind, dependency) in descriptor.typed_dependencies() {
+                // The original game interfaces keep their immutable event and codec
+                // definitions even when the selected native family has newer ones.
+                // Retain that exact declared closure instead of rewriting the interfaces.
+                if kind == DefinitionKind::Storage {
+                    if !successor.installed_storage.contains(&dependency) {
+                        successor.installed_storage.push(dependency);
+                        transitions.push(SelectionTransitionV1::InstallStorage(dependency));
+                    }
+                } else if kind == DefinitionKind::ServicesProfile {
+                    if dependency != successor.services_profile {
+                        return Err(failure(
+                            "game completion depends on a foreign services profile",
+                        ));
+                    }
+                } else if !successor.active.contains(&dependency) {
+                    successor.active.push(dependency);
+                    transitions.push(SelectionTransitionV1::Activate(dependency));
+                }
+                pending.push(dependency);
+            }
         }
+        successor.active = sorted(successor.active);
+        successor.installed_storage = sorted(successor.installed_storage);
+        successor.check_closure(&self.definitions)?;
         let publish = needed
             .into_iter()
             .filter(|id| published.definition(id).is_none())
@@ -379,7 +397,7 @@ pub(super) fn selected_capture(
     };
     if !services.services.iter().any(|entry| {
         entry.name == SERVICE
-            && entry.reference_closure == iroha_crypto::Hash::new(SERVICE_CLOSURE).into()
+            && entry.reference_closure == <[u8; 32]>::from(iroha_crypto::Hash::new(SERVICE_CLOSURE))
     }) {
         return false;
     }

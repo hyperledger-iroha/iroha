@@ -2,7 +2,7 @@ use crate::common;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
-use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
+use ivm::{CoreHost, IVM, Memory, PointerType, encoding, syscalls};
 use norito::to_bytes;
 const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland.universal";
 const ALT_NFT_ID: &[u8] = b"lily$wonderland.universal";
@@ -31,9 +31,8 @@ fn assemble(code: &[u8]) -> Vec<u8> {
     out
 }
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
-    let scall = wide::system::SCALL;
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&encoding::wide::encode_scall(num as u32).to_le_bytes());
+    bytes.extend_from_slice(&encoding::wide::encode_scall(num).to_le_bytes());
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     assemble(&bytes)
 }

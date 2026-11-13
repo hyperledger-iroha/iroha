@@ -111,6 +111,62 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
     }
 
+    /// Authenticate the explicit future experimental program bundle with this
+    /// Native installation's scheme root and signed genesis, then transfer the
+    /// SAME exclusive journal. A funded current head cannot become a future
+    /// Bootstrap; the future owner requires its exact verified retained head.
+    ///
+    /// # Errors
+    /// Returns this unchanged owner on artifact, finality or custody-phase refusal.
+    pub fn into_spartan(
+        self,
+        bundle: &[u8],
+        manifest: &[u8],
+        signature: [u8; 64],
+    ) -> Result<
+        crate::kagemusha_spartan_native::FutureRuntime<F, P, S>,
+        (Self, zk_spartan::native::Error),
+    >
+    where
+        P: 'static,
+    {
+        let reader =
+            match iroha_data_model::sumeragi_finality::SumeragiCommitVerifierV1::new(&self.genesis)
+            {
+                Ok(reader) => reader,
+                Err(error) => {
+                    return Err((self, zk_spartan::native::Error::Rejected(error.to_string())));
+                }
+            };
+        let parameters = match zk_spartan::native::AuthenticatedParameters::install(
+            bundle,
+            manifest,
+            signature,
+            self.installed.verifier().scheme(),
+            reader,
+        ) {
+            Ok(parameters) => parameters,
+            Err(error) => return Err((self, error)),
+        };
+        if !matches!(&self.custody, RuntimeCustodyV1::Exclusive(_)) {
+            return Err((
+                self,
+                zk_spartan::native::Error::Unavailable("exclusive Native installation custody"),
+            ));
+        }
+        let Self {
+            custody, originals, ..
+        } = self;
+        let RuntimeCustodyV1::Exclusive(provider) = custody else {
+            unreachable!("checked exclusive custody")
+        };
+        Ok(
+            crate::kagemusha_spartan_native::FutureRuntime::from_installed(
+                provider, parameters, originals,
+            ),
+        )
+    }
+
     /// Move exclusive custody into authenticated enrollment without rebuilding installed sources.
     /// Refusal returns the same runtime, including every provider and original-source owner.
     ///

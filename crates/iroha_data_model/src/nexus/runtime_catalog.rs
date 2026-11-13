@@ -465,7 +465,7 @@ pub fn try_dataspace_catalog_hash(catalog: &DataSpaceCatalog) -> Result<Hash, st
     })
 }
 
-fn version(value: u8) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn version(value: u8) -> Result<(), NexusCatalogValidationError> {
     if value == 1 {
         Ok(())
     } else {
@@ -481,7 +481,7 @@ fn nonzero(hash: Hash, field: &'static str) -> Result<(), NexusCatalogValidation
         Ok(())
     }
 }
-fn validate_alias(alias: &str) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn validate_alias(alias: &str) -> Result<(), NexusCatalogValidationError> {
     if alias.is_empty()
         || alias.trim() != alias
         || alias.len() > MAX_ALIAS_BYTES
@@ -564,14 +564,14 @@ fn validate_manifests(
     }
     Ok(())
 }
-fn count(len: usize) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn count(len: usize) -> Result<(), NexusCatalogValidationError> {
     if len > MAX_NEXUS_RUNTIME_CATALOG_ENTRIES {
         Err(NexusCatalogValidationError::BoundExceeded("entry count"))
     } else {
         Ok(())
     }
 }
-fn preflight(raw: &str, max: usize) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn preflight(raw: &str, max: usize) -> Result<(), NexusCatalogValidationError> {
     let limits = json::JsonPreflightLimits::new(
         max,
         128 * 1024,
@@ -588,7 +588,9 @@ fn preflight(raw: &str, max: usize) -> Result<(), NexusCatalogValidationError> {
         .map(|_| ())
         .map_err(NexusCatalogValidationError::Preflight)
 }
-fn bounded_json<T: JsonSerialize>(value: &T) -> Result<String, NexusCatalogValidationError> {
+pub(super) fn bounded_json<T: JsonSerialize>(
+    value: &T,
+) -> Result<String, NexusCatalogValidationError> {
     json::to_json_bounded(value, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
         .map_err(NexusCatalogValidationError::JsonEncoding)
 }
@@ -605,7 +607,7 @@ fn custom_parameter<T: JsonSerialize>(
 
 // Both production callers supply their exact validated_json result. Preserve the existing typed
 // parse and canonical custody: derive field order is not canonical Json object-key order.
-fn custom_parameter_from_validated_json(
+pub(super) fn custom_parameter_from_validated_json(
     id: CustomParameterId,
     encoded: &str,
 ) -> Result<CustomParameter, NexusCatalogValidationError> {
@@ -671,7 +673,7 @@ fn streamed_catalog_hash<T: norito::core::NoritoSerialize>(
     })
 }
 
-fn decode_payload<T: JsonDeserializeOwned>(
+pub(super) fn decode_payload<T: JsonDeserializeOwned>(
     payload: &Json,
 ) -> Result<T, NexusCatalogValidationError> {
     preflight(payload.get(), MAX_NEXUS_RUNTIME_CATALOG_BYTES)?;

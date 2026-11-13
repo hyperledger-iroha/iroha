@@ -8,6 +8,8 @@ pub mod block_store;
 pub mod bodies;
 /// The certified-chain reader: committed blocks as their Kura frames certify them.
 pub mod certified_chain;
+/// Body-independent certified checkpoint ancestry, with an exact pinned hash journal.
+pub mod checkpoint_prefix;
 /// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
 pub mod commitment;
 /// QC-based consensus message types and helpers (single-chain).

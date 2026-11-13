@@ -35,7 +35,7 @@ fn quarantine_overflow_rejects_one_tx() {
     config.chain_id = chain_id;
     let quarantine_policy = PipelineValidityPolicyV1 {
         quarantine_max_txs_per_block: 1,
-        quarantine_tx_max_cycles: 0,
+        quarantine_tx_max_gas: 0,
         ..PipelineValidityPolicyV1::protocol_default()
     };
     quarantine_policy

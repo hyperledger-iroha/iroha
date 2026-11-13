@@ -95,14 +95,15 @@ impl Program {
     /// Parse only the original prepared artifact, never a caller instruction map.
     pub(super) fn new(contract: PreparedContract) -> Option<Self> {
         let metadata = contract.metadata();
-        if metadata.abi_version != 1 || metadata.mode & ivm::ivm_mode::ZK == 0 {
+        // Header admission makes the ZK trace bound nonzero; it is the sole
+        // cycle limit and every attempted instruction starts below it.
+        if metadata.abi_version != 1
+            || metadata.mode & ivm::ivm_mode::ZK == 0
+            || metadata.max_cycles == 0
+        {
             return None;
         }
-        let cycle_limit = if metadata.max_cycles == 0 {
-            ivm::zk::MAX_CYCLES
-        } else {
-            metadata.max_cycles
-        };
+        let cycle_limit = metadata.max_cycles;
         let first_pc =
             u32::try_from(contract.code_offset().checked_sub(contract.header_len())?).ok()?;
         let bytes = contract.artifact().get(contract.code_offset()..)?;
@@ -268,7 +269,7 @@ fn role(instruction: u32) -> Option<Role> {
         wide::control::JALR
             if wide::rd(instruction) == 0
                 && wide::rs1(instruction) == 1
-                && wide::imm8(instruction) == 0 =>
+                && wide::imm14(instruction) == 0 =>
         {
             Some(Role::Return)
         }
@@ -601,7 +602,7 @@ fn append_control_residues<'a>(
         (
             Space::Register,
             weighted(&|_, w| match role(w) {
-                Some(Role::Store) => F(wide::rd(w) as u64),
+                Some(Role::Store) => F(wide::store_base(w) as u64),
                 Some(Role::Load) => F(wide::rs1(w) as u64),
                 _ => F::ZERO,
             }),
@@ -619,7 +620,7 @@ fn append_control_residues<'a>(
             Space::Register,
             weighted(&|_, w| {
                 if role(w) == Some(Role::Store) {
-                    F(wide::rs1(w) as u64)
+                    F(wide::store_value(w) as u64)
                 } else {
                     F::ZERO
                 }
@@ -633,8 +634,9 @@ fn append_control_residues<'a>(
     out.push(p[MEMORY_BASE][BEFORE_TAG]);
     for (slot, register) in [(MEMORY_BASE, false), (STORE_VALUE, true)] {
         let zero = select(&|_, w| match (role(w), register) {
-            (Some(Role::Store), true) | (Some(Role::Load), false) => wide::rs1(w) == 0,
-            (Some(Role::Store), false) => wide::rd(w) == 0,
+            (Some(Role::Store), true) => wide::store_value(w) == 0,
+            (Some(Role::Store), false) => wide::store_base(w) == 0,
+            (Some(Role::Load), false) => wide::rs1(w) == 0,
             _ => false,
         });
         for field in (BEFORE..BEFORE + 4).chain([BEFORE_TAG]) {
@@ -646,7 +648,7 @@ fn append_control_residues<'a>(
         out.push(p[RETURN_REGISTER][BEFORE + i].sub(limb(row, 8, i)));
         let immediate = weighted(&|_, w| {
             if matches!(role(w), Some(Role::Store | Role::Load)) {
-                constant_limb(i64::cast_unsigned(i64::from(wide::imm8(w))), i)
+                constant_limb(i64::cast_unsigned(i64::from(wide::imm14(w))), i)
             } else {
                 F::ZERO
             }
@@ -831,7 +833,7 @@ fn append_control_residues<'a>(
                         if matches!(wide::opcode(w), wide::control::JALS | wide::control::JMP) {
                             i64::from(wide::imm24(w))
                         } else {
-                            i64::from(wide::imm16(w))
+                            i64::from(wide::jal_offset(w))
                         };
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
@@ -844,7 +846,7 @@ fn append_control_residues<'a>(
                     // not halt, even when their predicate is true.
                     let fallthrough = constant_limb(pc + 4, i);
                     let target =
-                        constant_limb(pc.wrapping_add_signed(i64::from(wide::imm8(w)) * 4), i);
+                        constant_limb(pc.wrapping_add_signed(i64::from(wide::imm14(w)) * 4), i);
                     fallthrough.add(scalar::branch_taken(row).mul(target.sub(fallthrough)))
                 }
                 _ => F::ZERO,

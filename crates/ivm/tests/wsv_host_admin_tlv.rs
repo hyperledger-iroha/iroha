@@ -45,13 +45,13 @@ fn register_peer_then_unregister() {
     let p = make_tlv(PointerType::Json as u16, &peer_payload);
     vm.memory.preload_input(0, &p).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_unreg = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_PEER as u8]);
+    let prog_unreg = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_PEER]);
     vm.load_program(&prog_unreg).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     // Register peer
     vm.memory.preload_input(0, &p).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_reg = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_PEER as u8]);
+    let prog_reg = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_PEER]);
     vm.load_program(&prog_reg).unwrap();
     vm.run().expect("register peer");
     if let Some(any) = vm.host_mut_any() {
@@ -81,7 +81,7 @@ fn create_enable_disable_remove_trigger() {
     let tr_bad = make_tlv(PointerType::Json as u16, br#"{"type":"data"}"#);
     vm.memory.preload_input(0, &tr_bad).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_ct = assemble_syscalls(&[syscalls::SYSCALL_CREATE_TRIGGER as u8]);
+    let prog_ct = assemble_syscalls(&[syscalls::SYSCALL_CREATE_TRIGGER]);
     vm.load_program(&prog_ct).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
     // Valid create (with name)
@@ -99,7 +99,7 @@ fn create_enable_disable_remove_trigger() {
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, 0); // disable
-    let prog_set = assemble_syscalls(&[syscalls::SYSCALL_SET_TRIGGER_ENABLED as u8]);
+    let prog_set = assemble_syscalls(&[syscalls::SYSCALL_SET_TRIGGER_ENABLED]);
     vm.load_program(&prog_set).unwrap();
     vm.run().expect("disable trigger");
     if let Some(any) = vm.host_mut_any() {
@@ -109,7 +109,7 @@ fn create_enable_disable_remove_trigger() {
     // Remove trigger t1
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog_rm = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_TRIGGER as u8]);
+    let prog_rm = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_TRIGGER]);
     vm.load_program(&prog_rm).unwrap();
     vm.run().expect("remove trigger");
     if let Some(any) = vm.host_mut_any() {

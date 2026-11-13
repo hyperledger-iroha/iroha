@@ -37,15 +37,15 @@ impl Assembler {
     fn rr(&mut self, opcode: u8, dst: u8, a: u8, b: u8) {
         self.code.push(enc::encode_rr(opcode, dst, a, b));
     }
-    fn ri(&mut self, dst: u8, a: u8, imm: i8) {
+    fn ri(&mut self, dst: u8, a: u8, imm: i16) {
         self.code
             .push(enc::encode_ri(op::arithmetic::ADDI, dst, a, imm));
     }
-    fn load(&mut self, dst: u8, base: u8, offset: i8) {
+    fn load(&mut self, dst: u8, base: u8, offset: i16) {
         self.code
             .push(enc::encode_load(op::memory::LOAD64, dst, base, offset));
     }
-    fn store(&mut self, base: u8, src: u8, offset: i8) {
+    fn store(&mut self, base: u8, src: u8, offset: i16) {
         self.code
             .push(enc::encode_store(op::memory::STORE64, base, src, offset));
     }
@@ -67,9 +67,9 @@ impl Assembler {
         for (at, opcode, a, b, name, jump) in self.fixups {
             let delta = self.labels[name] as isize - at as isize;
             self.code[at] = if jump {
-                enc::encode_jump(opcode, 0, i16::try_from(delta).expect("jump bound"))
+                enc::encode_jump(opcode, 0, i32::try_from(delta).expect("jump bound"))
             } else {
-                enc::encode_branch(opcode, a, b, i8::try_from(delta).expect("branch bound"))
+                enc::encode_branch(opcode, a, b, i16::try_from(delta).expect("branch bound"))
             };
         }
         let mut bytes = ProgramMetadata {

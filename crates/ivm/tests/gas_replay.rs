@@ -8,10 +8,7 @@ fn gas_used_for_program(program: &[u8], gas_limit: u64) -> u64 {
 }
 #[test]
 fn gas_replays_consistently_across_vms() {
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 32,
-        ..ivm::ProgramMetadata::default()
-    };
+    let meta = ivm::ProgramMetadata::default();
     // Encode a small program: ADD + MUL + HALT to exercise multiple cost tiers.
     let mut program = meta.encode();
     program.extend_from_slice(

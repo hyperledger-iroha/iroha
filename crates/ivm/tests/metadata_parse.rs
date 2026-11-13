@@ -1,18 +1,11 @@
 //! Program metadata parsing tests for literal sections.
 use ivm::{HEADER_SIZE, ProgramMetadata};
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-fn build_header(
-    version_major: u8,
-    mode: u8,
-    vector_length: u8,
-    max_cycles: u64,
-    abi_version: u8,
-) -> Vec<u8> {
+fn build_header(version_major: u8, mode: u8, max_cycles: u64, abi_version: u8) -> Vec<u8> {
     ProgramMetadata {
         version_major,
         version_minor: 1,
         mode,
-        vector_length,
         max_cycles,
         abi_version,
     }
@@ -20,7 +13,7 @@ fn build_header(
 }
 #[test]
 fn parse_accepts_version_1_and_abi_v1() {
-    let hdr = build_header(1, 0, 0, 0, 1);
+    let hdr = build_header(1, 0, 0, 1);
     let bytes = [hdr.as_slice(), &[1, 2, 3, 4]].concat();
     let parsed = ProgramMetadata::parse(&bytes).expect("parse ok");
     let meta = parsed.metadata;
@@ -28,7 +21,6 @@ fn parse_accepts_version_1_and_abi_v1() {
     assert_eq!(meta.version_major, 1);
     assert_eq!(meta.version_minor, 1);
     assert_eq!(meta.mode, 0);
-    assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 0);
     assert_eq!(meta.abi_version, 1);
     assert_eq!(off, HEADER_SIZE);
@@ -36,15 +28,15 @@ fn parse_accepts_version_1_and_abi_v1() {
 #[test]
 fn parse_rejects_unknown_major_and_mode_bits() {
     // Unsupported majors
-    let mut hdr = build_header(0, 0, 0, 0, 1);
+    let mut hdr = build_header(0, 0, 0, 1);
     let bytes = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
     // Unknown major
-    hdr = build_header(2, 0, 0, 0, 1);
+    hdr = build_header(2, 0, 0, 1);
     let bytes = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
     // Unknown mode bit (0x80) should be rejected
-    hdr = build_header(1, 0x80, 0, 0, 1);
+    hdr = build_header(1, 0x80, 0, 1);
     let bytes2 = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes2).is_err());
 }
@@ -53,14 +45,14 @@ fn parse_rejects_short_or_bad_magic() {
     // Too short
     assert!(ProgramMetadata::parse(&[0u8; 8]).is_err());
     // Bad magic
-    let mut bad = build_header(1, 0, 0, 0, 1);
+    let mut bad = build_header(1, 0, 0, 1);
     bad[0..4].copy_from_slice(b"BAD\0");
     let bytes = [bad.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
 #[test]
 fn parse_skips_literal_section_when_present() {
-    let mut bytes = build_header(1, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 1);
     // Literal table header: magic + count (2 entries)
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(2u32).to_le_bytes());
@@ -80,7 +72,7 @@ fn parse_skips_literal_section_when_present() {
 }
 #[test]
 fn parse_rejects_literal_padding() {
-    let mut bytes = build_header(1, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 1);
     bytes.extend_from_slice(&[0u8; 4]);
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(1u32).to_le_bytes());
@@ -92,7 +84,7 @@ fn parse_rejects_literal_padding() {
 }
 #[test]
 fn parse_rejects_noncanonical_literal_post_padding() {
-    let mut bytes = build_header(1, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 1);
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(1u32).to_le_bytes());
     bytes.extend_from_slice(&(2u32).to_le_bytes());
@@ -105,7 +97,7 @@ fn parse_rejects_noncanonical_literal_post_padding() {
 }
 #[test]
 fn parse_rejects_nonzero_literal_post_padding() {
-    let mut bytes = build_header(1, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 1);
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(1u32).to_le_bytes());
     bytes.extend_from_slice(&(3u32).to_le_bytes());
@@ -118,7 +110,7 @@ fn parse_rejects_nonzero_literal_post_padding() {
 }
 #[test]
 fn parse_rejects_oversized_literal_post_padding() {
-    let mut bytes = build_header(1, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 1);
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(1u32).to_le_bytes());
     bytes.extend_from_slice(&(4u32).to_le_bytes());

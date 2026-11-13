@@ -39,7 +39,9 @@ mod epoch_graph;
 mod execution;
 #[cfg(test)]
 pub(crate) use execution::authenticate_successor_context;
-pub(crate) use execution::{compare_successor_context, require_successor_cut};
+pub(crate) use execution::{
+    compare_portable_successor_context, compare_successor_context, require_successor_cut,
+};
 mod retained;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) mod test_support;

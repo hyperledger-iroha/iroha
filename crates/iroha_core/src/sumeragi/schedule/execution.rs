@@ -246,6 +246,14 @@ pub fn authenticate_successor_context(
 ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
     require_successor_cut(state, header)?;
     let height = header.height().get();
+    if state.kura().checkpoint_prefix_height() == Some(height - 1) {
+        let portable = crate::sumeragi::certified_chain::portable_checkpoint_for_state(state)
+            .map_err(|error| error.map_rejection(ScheduleError::from))?
+            .ok_or_else(|| {
+                ScheduleError::Epoch("original portable predecessor disappeared".into())
+            })?;
+        return compare_portable_successor_context(state, header, expected, &portable);
+    }
     // Canonical committed reads exclude differences in local QC signer subsets.
     let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)
         .map_err(|error| error.map_rejection(ScheduleError::from))?;
@@ -301,14 +309,66 @@ pub fn compare_successor_context(
     parent: &crate::sumeragi::certified_chain::CommittedBlock,
     instance: iroha_sumeragi::types::Hash32,
 ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
+    compare_successor_context_values(
+        state,
+        header,
+        expected,
+        parent.core_hash(),
+        parent.result(),
+        instance,
+    )
+}
+
+/// Compare only a separately verified portable parent, never a caller-authored parent DTO.
+pub(crate) fn compare_portable_successor_context(
+    state: &(impl StateReadOnly + ?Sized),
+    header: &iroha_data_model::block::BlockHeader,
+    expected: &GlobalThresholdBeaconPulseContextV1,
+    portable: &iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1,
+) -> Result<(), ExecutionAttemptError<ScheduleError>> {
+    let parent = portable.checkpoint();
+    let tip = state.native_execution_tip().ok_or_else(|| {
+        ScheduleError::Epoch("portable parent lacks native execution identity".into())
+    })?;
+    if parent.header().height().get().checked_add(1) != Some(header.height().get())
+        || header.prev_block_hash() != Some(parent.header().hash())
+        || tip.height() != parent.header().height().get()
+        || tip.iroha_hash() != parent.header().hash()
+        || tip.core_hash() != parent.core_hash()
+        || tip.result() != parent.result()
+        || tip.root_scope() != parent.root_scope()
+    {
+        return Err(ScheduleError::Epoch(
+            "portable successor differs from the exact original predecessor".into(),
+        )
+        .into());
+    }
+    compare_successor_context_values(
+        state,
+        header,
+        expected,
+        parent.core_hash(),
+        parent.result(),
+        portable.successor_header().instance,
+    )
+}
+
+fn compare_successor_context_values(
+    state: &(impl StateReadOnly + ?Sized),
+    header: &iroha_data_model::block::BlockHeader,
+    expected: &GlobalThresholdBeaconPulseContextV1,
+    parent_hash: iroha_sumeragi::types::Hash32,
+    parent_result: iroha_sumeragi::types::Hash32,
+    instance: iroha_sumeragi::types::Hash32,
+) -> Result<(), ExecutionAttemptError<ScheduleError>> {
     let height = header.height().get();
     let current = &state.world().consensus_schedule().ready(height)?.epoch;
     expected
         .validate()
         .map_err(|error| ScheduleError::Epoch(error.into()))?;
     if expected.instance != instance.0
-        || expected.parent_consensus_hash != parent.core_hash().0
-        || expected.parent_result != parent.result().0
+        || expected.parent_consensus_hash != parent_hash.0
+        || expected.parent_result != parent_result.0
         || expected.epoch != current.authorization.epoch
         || expected.epoch_context_id != current.context_id().map_err(ScheduleError::Epoch)?
     {

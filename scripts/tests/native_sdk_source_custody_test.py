@@ -12,6 +12,35 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import native_sdk_source_custody as custody
 
 
+def test_only_exact_device_fixture_cargo_output_is_pruned(tmp_path):
+    root = tmp_path / 'worktree'
+    package = root / 'experiments/kagemusha-spartan'
+    fixture = package / 'device/runtime'
+    metadata = {'target_directory': str(root / 'target/native-host')}
+    assert custody._source_directories(
+        ['src', 'target', 'include'], fixture, package, root, metadata
+    ) == ['include', 'src']
+    # A Rust source namespace named target and other unrecognized nested target
+    # paths remain captured; the rule does not erase source by basename.
+    for owner in (fixture / 'src', package / 'other-fixture'):
+        assert custody._source_directories(
+            ['src', 'target'], owner, package, root, metadata
+        ) == ['src', 'target']
+
+
+def test_only_exact_experiment_artifact_output_is_pruned(tmp_path):
+    root = tmp_path / 'worktree'
+    package = root / 'experiments/kagemusha-spartan'
+    metadata = {'target_directory': str(root / 'target/native-host')}
+    assert custody._source_directories(
+        ['src', 'output', 'device'], package, package, root, metadata
+    ) == ['device', 'src']
+    for owner in (package / 'src', package / 'device', root / 'crates/another'):
+        assert custody._source_directories(
+            ['output', 'src'], owner, package, root, metadata
+        ) == ['output', 'src']
+
+
 def custom_build_fixture(tmp_path, stem):
     """Retain inert Cargo alias, exact rustc owner and emitted output rule."""
     owner = tmp_path / 'build' / 'dependency-0123456789abcdef'

@@ -40,7 +40,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         id: "invocation_entry",
         path: INTERPRETER,
         function: RUN,
-        summary: "from function entry to the loop: checks the shared cycle allowance, admits the register logger and trace storage, refuses a non-ZK run that still holds private state, clears the previous invocation's protected call state and enters root-call initialization. A refused shared allowance is an initialization trap; a closed allowance, stale logger custody, stale private state and refused logger or trace storage produce local deferrals, never deterministic contract faults",
+        summary: "from function entry to the loop: admits the register logger and trace storage, refuses a non-ZK run that still holds private state, clears the previous invocation's protected call state and enters root-call initialization. Stale logger custody, stale private state and refused logger or trace storage produce local deferrals, never deterministic contract faults",
         obligations: &[
             Obligation::Initialization,
             Obligation::PrivateMasking,
@@ -87,7 +87,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         id: "step_preamble",
         path: INTERPRETER,
         function: RUN,
-        summary: "between loop entry and dispatch, before every step: completes the previous step's shared cycle reservation, publishes trace cycles, stops on halt, traps at end of code without a terminator and at the cycle limit, fetches the instruction, rejects an unadmitted opcode, prices the step, traps on an unaffordable debit, reserves shared cycles and debits base gas",
+        summary: "between loop entry and dispatch, before every step: publishes trace cycles, stops on halt, traps at end of code without a terminator and, in ZK mode only, at the trace bound, fetches the instruction, rejects an unadmitted opcode or a set reserved bit, prices the step, traps on an unaffordable debit and debits base gas",
         obligations: &[
             Obligation::Fetch,
             Obligation::Faults,
@@ -118,7 +118,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         id: "terminal",
         path: INTERPRETER,
         function: RUN,
-        summary: "after the loop: completes the last shared cycle reservation, pads a ZK run to the cycle horizon with one gas unit per padded cycle and traps when padding gas or shared cycles run out, then returns the recorded contract abort, a failed assertion, an incomplete root result table under protected return integrity, or a refused shared cycle allowance",
+        summary: "after the loop: pads a ZK run to its trace bound with one gas unit per padded cycle and traps when padding gas runs out, then returns the recorded contract abort, a failed assertion, or an incomplete root result table under protected return integrity",
         obligations: &[
             Obligation::Copyback,
             Obligation::Faults,

@@ -33,7 +33,7 @@ fn program(body: &[u32], call_slot: usize, roles: &[CallTypeNodeV1]) -> Program 
     let offset = if wide::opcode(body[call_slot]) == wide::control::JALS {
         i64::from(wide::imm24(body[call_slot]))
     } else {
-        i64::from(wide::imm16(body[call_slot]))
+        i64::from(wide::jal_offset(body[call_slot]))
     };
     let target = (call_slot as u64 * 4)
         .checked_add_signed(offset * 4)
@@ -698,7 +698,7 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             wide::arithmetic::ADDI,
             11,
             0,
-            i8::try_from(roles.len()).expect("bounded fixture value"),
+            i16::try_from(roles.len()).expect("bounded fixture value"),
         ),
         enc::encode_ri(wide::arithmetic::ADDI, 12, 31, 32),
     ];
@@ -707,7 +707,7 @@ fn native_case(jals: bool, roles: &[CallTypeNodeV1], values: &[u64], gas: u64) -
             wide::memory::STORE64,
             31,
             2 + u8::try_from(i).expect("bounded fixture value"),
-            i8::try_from(i * 8).expect("bounded fixture value"),
+            i16::try_from(i * 8).expect("bounded fixture value"),
         ));
     }
     let call_slot = body.len();

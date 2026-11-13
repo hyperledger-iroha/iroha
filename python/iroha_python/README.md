@@ -2606,8 +2606,12 @@ with NoritoRpcClient(config) as rpc:
 
 Callers may supply non-authentication headers and query parameters, but every
 route must be an origin-relative path. Pass bearer and API tokens explicitly
-on `NoritoRpcConfig`; they are redacted from its representation. The pytest
-suite (`tests/norito_rpc_test.py`) provides additional usage examples.
+on `NoritoRpcConfig`; they are redacted from its representation. A non-success
+status raises `NoritoRpcError` with `status`; when its bounded error body is
+Torii's canonical error envelope, `code`, `error_message` and `details` carry the
+envelope's code, exact message and decoded details, such as a queue rejection's
+`reject_code` or a 429/503 `retry_after_seconds` (otherwise `None`). The pytest suite
+(`tests/norito_rpc_test.py`) provides additional usage examples.
 
 ### Norito RPC smoke tests
 

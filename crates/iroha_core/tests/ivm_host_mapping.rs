@@ -83,17 +83,14 @@ fn make_header() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000_000,
+        max_cycles: 0,
         abi_version: 1,
     }
     .encode()
 }
 fn scall_program(syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(syscall)
-        .to_le_bytes(),
-    );
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut program = make_header();
     program.extend_from_slice(&code);

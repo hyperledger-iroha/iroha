@@ -66,16 +66,18 @@ pub(super) fn assert_metadata(before: &CompileOutput, after: &CompileOutput) {
 #[test]
 fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_growth() {
     let registers = [2, 3, 4, 5, 6, 7, 8, 9, 23, 24];
+    // The first saved slot beyond the signed 14-bit displacement of SP.
+    let base = usize::try_from(IMM14_MAX).unwrap() + 1;
     for restore in [false, true] {
         let mut scalar = Vec::new();
         let scalar_fixups = LiteralFixups::default();
         with_scalar_frame_emission(|| {
-            emit_saved_registers(&mut scalar, &scalar_fixups, &registers, 256, restore)
+            emit_saved_registers(&mut scalar, &scalar_fixups, &registers, base, restore)
         })
         .unwrap();
         let mut windows = Vec::new();
         let window_fixups = LiteralFixups::default();
-        emit_saved_registers(&mut windows, &window_fixups, &registers, 256, restore).unwrap();
+        emit_saved_registers(&mut windows, &window_fixups, &registers, base, restore).unwrap();
         let opcode = if restore {
             instruction::wide::memory::LOAD64
         } else {
@@ -94,7 +96,7 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
         assert_eq!(scalar_fixups.borrow().len(), registers.len());
         assert_eq!(window_fixups.borrow().len(), 1);
         assert_eq!(scalar.len() - windows.len(), (registers.len() - 1) * 8);
-        let window_anchor = 256 - i64::from(WIDE_IMM_MIN);
+        let window_anchor = i64::try_from(base).unwrap() - i64::from(IMM14_MIN);
         let fixups = window_fixups.borrow();
         assert_eq!(fixups[0].0, 0);
         assert_eq!(fixups[0].1, LITERAL_SHIFT_REG);
@@ -122,7 +124,8 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
             .enumerate()
             .map(|(index, register)| {
                 let relative =
-                    i16::try_from(256 + index * 8).unwrap() - i16::try_from(window_anchor).unwrap();
+                    i16::try_from(i64::try_from(base + index * 8).unwrap() - window_anchor)
+                        .unwrap();
                 if restore {
                     encode_load64_rv(*register, 27, relative).unwrap()
                 } else {
@@ -136,7 +139,9 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
             "every exact slot, source/destination register and memory-access order"
         );
     }
-    for base in [0, 104, 112, 120] {
+    // Three direct slots, or three slots straddling the displacement limit with one or two
+    // large slots: fewer than four large accesses never open a window.
+    for base in [0, base - 24, base - 16, base - 8] {
         let mut scalar = Vec::new();
         let a = LiteralFixups::default();
         with_scalar_frame_emission(|| {

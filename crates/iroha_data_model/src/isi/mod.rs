@@ -311,6 +311,7 @@ impl_direct_instruction_box!(
     crate::isi::game_partition::ImportGameUnitV1,
     crate::isi::game_partition::ReserveGameUnitImportV1,
     crate::isi::game_partition::RequestGameUnitExportV1,
+    crate::isi::runtime_retirement::RetireRuntimeDefinitionV1,
     crate::isi::game_partition::ExportReservedGameUnitV1,
     crate::isi::game_partition::ImportReservedGameUnitV1,
     crate::isi::game_partition::AcknowledgeGameUnitImportV1,
@@ -1452,6 +1453,10 @@ pub fn decode_instruction_from_pair(
 /// Every [`InstructionBox`] decoder uses this, so a block decodes alike on every release whatever
 /// instructions it carries; execution refuses an envelope whose interface is not active.
 ///
+/// Inside the trigger lifecycle scanner's validation scope a nested instruction takes the same
+/// canonical lifecycle decoder as a top-level one ([`decode_instruction_from_pair`]): its frame
+/// is charged to the scanner's cumulative allowance and an unregistered wire ID is refused.
+///
 /// # Errors
 /// - a wire ID that is not well formed: malformed envelope framing on every release;
 /// - a registered, non-tolerant wire ID whose frame fails to decode;
@@ -1461,6 +1466,9 @@ pub fn decode_instruction_envelope(
     wire_id: &str,
     frame: &[u8],
 ) -> Result<InstructionBox, norito::Error> {
+    if lifecycle_instruction_validation_active() {
+        return registry::decode_lifecycle_frame(wire_id, frame);
+    }
     let entry = {
         let registry = instruction_registry();
         registry.entry_for_wire_id(wire_id).copied()
@@ -2321,6 +2329,8 @@ pub mod game;
 pub mod game_partition;
 /// Generic native NFT sales.
 pub mod nft_market;
+/// Permanent definition-code exclusion and certified floor receipts.
+pub mod runtime_retirement;
 pub use game::*;
 pub use zk::*;
 isi_box! {

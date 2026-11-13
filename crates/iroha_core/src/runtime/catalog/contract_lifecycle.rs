@@ -4,9 +4,9 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub(super) struct Composition {
-    host: DefinitionId,
-    registry: DefinitionId,
-    addition: AdditionDefinitions,
+    pub(super) host: DefinitionId,
+    pub(super) registry: DefinitionId,
+    pub(super) addition: AdditionDefinitions,
 }
 fn failure(reason: impl Into<String>) -> CatalogError {
     CatalogError::Addition {
@@ -60,7 +60,9 @@ impl ReleaseCatalog {
             };
             implementation.entrypoint =
                 EntrypointV1::Instructions(sorted(interfaces.values().copied().collect()));
-            implementation.host_profile = Some(host);
+            // This is the native kernel handler. The independently selected IVM host profile
+            // authenticates its contract caller; it is not the execution engine of this handler.
+            implementation.host_profile = None;
             implementation.services_profile = services;
             implementation.reads = owner.reads;
             implementation.writes = owner.writes;

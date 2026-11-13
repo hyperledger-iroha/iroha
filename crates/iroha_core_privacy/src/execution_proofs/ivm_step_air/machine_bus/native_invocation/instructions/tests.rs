@@ -12,6 +12,14 @@ pub(in super::super) fn artifact_with_literals(
     frame: u32,
     literals: &[u64],
 ) -> PreparedContract {
+    ivm::prepare_contract(artifact_bytes_with_literals(body, frame, literals).into()).unwrap()
+}
+/// Unprepared artifact bytes, so admission refusals stay observable.
+pub(in super::super) fn artifact_bytes_with_literals(
+    body: &[u32],
+    frame: u32,
+    literals: &[u64],
+) -> Vec<u8> {
     let original = private_dispatch::tests::contract(&[], 64, ivm::ivm_mode::ZK);
     let mut interface = original.contract_interface().clone();
     interface.callables[0].frame_bytes = frame;
@@ -43,7 +51,7 @@ pub(in super::super) fn artifact_with_literals(
     }
     bytes.extend(body.iter().flat_map(|word| word.to_le_bytes()));
     bytes.extend(crate::ivm_test_support::unit_return());
-    ivm::prepare_contract(bytes.into()).unwrap()
+    bytes
 }
 pub(super) fn native(artifact: PreparedContract) -> (NativeInvocation, AllocationBudget) {
     let budget = AllocationBudget::new(128 * 1024 * 1024);

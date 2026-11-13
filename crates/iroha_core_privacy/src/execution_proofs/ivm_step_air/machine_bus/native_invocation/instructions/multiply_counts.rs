@@ -138,7 +138,7 @@ fn native_products_match_independent_full_width_signed_and_unsigned_arithmetic()
             (0, 4, 5),
             (4, 4, 4),
             (6, 0, 5),
-            (0, 255, 0),
+            (0, 31, 0),
         ] {
             let mut body = Vec::new();
             for opcode in PRODUCTS {
@@ -198,7 +198,7 @@ fn native_counts_cover_every_bit_and_zero_with_full_sixty_four_results() {
                 4,
                 u16::try_from(index).expect("bounded fixture value"),
             ));
-            body.extend(COUNTS.map(|opcode| enc::encode_rr(opcode, 6, 4, 255)));
+            body.extend(COUNTS.map(|opcode| enc::encode_rr(opcode, 6, 4, 0)));
         }
         let (native, budget) = native(artifact_with_literals(&body, 0, inputs));
         let instructions = Instructions::new(&native, &root(&native), &budget).unwrap();
@@ -210,7 +210,7 @@ fn native_counts_cover_every_bit_and_zero_with_full_sixty_four_results() {
                 check_expression(
                     &native,
                     index * 4 + offset + 1,
-                    enc::encode_rr(opcode, 6, 4, 255),
+                    enc::encode_rr(opcode, 6, 4, 0),
                     input,
                     0,
                 );
@@ -223,51 +223,35 @@ fn native_counts_cover_every_bit_and_zero_with_full_sixty_four_results() {
 }
 
 #[test]
-fn ignored_count_rs2_bytes_preserve_actual_packet_history_and_atomic_aliases() {
+fn count_rs2_fields_are_reserved_and_aliases_keep_actual_packet_history() {
     for opcode in COUNTS {
-        for (destination, first) in [(6, 4), (4, 4), (0, 4), (6, 0), (0, 255)] {
+        for (destination, first) in [(6, 4), (4, 4), (0, 4), (6, 0), (0, 31)] {
             let left = if first == 0 { 0 } else { 0x8000_1234_0000_0000 };
-            let make = |unused| {
-                let words = [
+            let words = |unused| {
+                [
                     enc::encode_literal(wide::memory::LDI64, first.max(4), 0),
                     enc::encode_rr(opcode, destination, first, unused),
-                ];
-                native(artifact_with_literals(&words, 0, &[left]))
+                ]
             };
-            let (reference, reference_budget) = make(0);
+            let (reference, reference_budget) =
+                native(artifact_with_literals(&words(0), 0, &[left]));
             let reference_instructions =
                 Instructions::new(&reference, &root(&reference), &reference_budget).unwrap();
-            assert!(check(&reference_instructions, &reference, 1));
-            for unused in [4, 5, 127, 128, 255] {
-                let (candidate, budget) = make(unused);
-                let instructions =
-                    Instructions::new(&candidate, &root(&candidate), &budget).unwrap();
-                for window in 0..INSTRUCTION_WINDOWS {
-                    assert!(check(&instructions, &candidate, window), "window {window}");
-                }
-                check_expression(
-                    &candidate,
-                    1,
-                    enc::encode_rr(opcode, destination, first, unused),
-                    left,
-                    0,
+            for window in 0..INSTRUCTION_WINDOWS {
+                assert!(
+                    check(&reference_instructions, &reference, window),
+                    "window {window}"
                 );
-                // Same ordinal and code prefix mean identical actual clocks.
-                // Compare original cells directly; no normalization/reclocking
-                // or replacement packet owner is constructed.
-                for clock in instruction_clocks(1).unwrap() {
-                    assert_eq!(
-                        Fields::native(&reference.packets()[clock as usize]).0,
-                        Fields::native(&candidate.packets()[clock as usize]).0
-                    );
-                }
-                assert_eq!(
-                    reference_instructions.rows.as_slice()[1].0,
-                    instructions.rows.as_slice()[1].0
+            }
+            check_expression(&reference, 1, words(0)[1], left, 0);
+            // Unary words reserve bits 13..0; admission rejects every nonzero rs2.
+            for unused in [4, 5, 31] {
+                assert!(
+                    ivm::prepare_contract(
+                        artifact_bytes_with_literals(&words(unused), 0, &[left]).into()
+                    )
+                    .is_err()
                 );
-                drop(instructions);
-                drop(candidate);
-                assert_eq!(budget.reserved_bytes(), 0);
             }
             drop(reference_instructions);
             drop(reference);

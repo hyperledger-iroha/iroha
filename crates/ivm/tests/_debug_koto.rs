@@ -1,5 +1,5 @@
 //! Debug-oriented opcode inspection for selected Kotodama snippets.
-use ivm::{encoding, instruction::wide};
+use ivm::encoding;
 use kotodama_lang::compiler::{Compiler, CompilerMode, CompilerOptions};
 #[test]
 fn debug_create_nfts_and_set_detail_words() {
@@ -17,7 +17,6 @@ fn debug_create_nfts_and_set_detail_words() {
         i += 4;
     }
     // Print the set of SCALL words we’re looking for
-    let scall = wide::system::SCALL;
     let want = [
         encoding::wide::encode_scall(ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS),
         encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
@@ -33,7 +32,7 @@ fn debug_create_nfts_and_set_detail_words() {
     let mut scall_seen: Vec<u32> = words
         .iter()
         .copied()
-        .filter(|w| (w & 0xFF00_0000) == ((scall as u32) << 24))
+        .filter(|w| ivm::instruction::wide::opcode(*w) == ivm::instruction::wide::system::SCALL)
         .collect();
     scall_seen.sort_unstable();
     scall_seen.dedup();

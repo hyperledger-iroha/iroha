@@ -33,7 +33,7 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
 }
 
 #[test]
-fn native_private_isqrt_boundaries_tags_aliases_zero_and_unused_operand_match() {
+fn native_private_isqrt_boundaries_tags_aliases_and_zero_match() {
     let mut values = vec![0, 1, 2, 3, u64::MAX, 1 << 63];
     for root in [
         2_u64,
@@ -53,8 +53,8 @@ fn native_private_isqrt_boundaries_tags_aliases_zero_and_unused_operand_match() 
         for tag in [false, true] {
             for (rd, rs) in [(4, 2), (2, 2), (0, 2), (4, 0), (0, 0)] {
                 checked(
-                    enc::encode_rr(wide::arithmetic::ISQRT, rd, rs, 255),
-                    &[(2, value, tag), (4, 91, !tag), (255, u64::MAX, !tag)],
+                    enc::encode_rr(wide::arithmetic::ISQRT, rd, rs, 0),
+                    &[(2, value, tag), (4, 91, !tag), (31, u64::MAX, !tag)],
                 );
             }
         }
@@ -77,8 +77,8 @@ fn set_destination(fixture: &mut ScalarFixture, value: u64) {
 #[test]
 fn private_isqrt_rejects_coherent_smaller_root_with_exact_square_plus_remainder() {
     let (program, mut forged) = checked(
-        enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
-        &[(2, 25, true), (255, u64::MAX, false)],
+        enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 0),
+        &[(2, 25, true), (31, u64::MAX, false)],
     );
     // 25=4*4+9 still holds, but 9>2*4. Rebuild every affected digit,
     // product, correction, remainder, destination and carry coherently.
@@ -111,7 +111,7 @@ fn private_isqrt_rejects_ceil_substituted_source_tag_and_carry_cells() {
     for value in [0, 2, 26, u64::MAX] {
         for tag in [false, true] {
             let (program, fixture) = checked(
-                enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
+                enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 0),
                 &[(2, value, tag)],
             );
             let root = packet::half(&fixture.0.packets.fields[SCALAR_DESTINATION], AFTER, 0);
@@ -163,8 +163,8 @@ fn private_isqrt_rejects_ceil_substituted_source_tag_and_carry_cells() {
 
 #[test]
 fn private_isqrt_binds_six_gas_six_cycles_and_native_last_attempt_limit() {
-    let instruction = enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255);
-    let inputs = [(2, u64::MAX, true), (255, 17, false)];
+    let instruction = enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 0);
+    let inputs = [(2, u64::MAX, true), (31, 17, false)];
     let (program, fixture) = checked(instruction, &inputs);
     let p = &fixture.0.packets.fields;
     let gas = packet::half(&p[GAS_DEBIT], BEFORE, 0);
@@ -227,15 +227,15 @@ fn private_isqrt_binds_six_gas_six_cycles_and_native_last_attempt_limit() {
 #[test]
 fn private_isqrt_mixed_original_records_preserve_continuity_and_canonical_padding() {
     let instructions = [
-        enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 0),
         enc::encode_rr(wide::arithmetic::ADD, 4, 4, 3),
-        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 5, 0, 127),
-        enc::encode_rr(wide::arithmetic::ISQRT, 5, 5, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 5, 5, 0),
     ];
     let (program, recorder, _) = shifts::capture(
         &instructions,
-        &[(2, u64::MAX, true), (3, 17, true), (255, 99, false)],
+        &[(2, u64::MAX, true), (3, 17, true), (31, 99, false)],
         100,
         64,
     );

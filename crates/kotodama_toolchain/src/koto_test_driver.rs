@@ -455,7 +455,7 @@ enum FailureKind {
     PermissionDenied,
     /// Checked arithmetic, conversion, or decimal division faulted.
     NumericFault,
-    /// Execution ran out of gas or cycles.
+    /// Execution ran out of gas or exceeded a ZK artifact's trace bound.
     GasExhausted,
     /// Call arguments did not match the target's argument schema.
     Arguments,
@@ -4512,7 +4512,8 @@ fn classify_vm_error(
 /// `help:` line where the source has a direct remedy.
 ///
 /// Faults that only a malformed program can raise (an unknown rounding or failure mode, a
-/// nonzero reserved register) are not source-visible errors and are reported by their ABI tag.
+/// nonzero reserved register, an overflowing 64-bit register operation) are not source-visible
+/// errors and are reported by their ABI tag.
 fn numeric_fault_failure(fault: ivm_abi::numeric::NumericFaultV1) -> TestFailure {
     use ivm_abi::numeric::NumericFaultV1 as Fault;
     const DIV_ROUND_HELP: &str = "help: choose a result scale and rounding with `div_round`";
@@ -4544,6 +4545,18 @@ fn numeric_fault_failure(fault: ivm_abi::numeric::NumericFaultV1) -> TestFailure
                 FailureKind::NumericFault,
                 format!(
                     "a numeric instruction violated its VM contract (ABI fault {})",
+                    fault.tag()
+                ),
+            )
+            .detail("help: this is a toolchain defect; report it with a minimal reproducer");
+        }
+        // Source numerics never reach 64-bit register arithmetic; only compiler-owned
+        // bookkeeping does, so its overflow is a toolchain defect.
+        Fault::RegisterIntegerOverflow => {
+            return TestFailure::new(
+                FailureKind::NumericFault,
+                format!(
+                    "a compiler-owned 64-bit register operation overflowed (ABI fault {})",
                     fault.tag()
                 ),
             )

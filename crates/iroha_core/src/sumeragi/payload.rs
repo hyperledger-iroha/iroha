@@ -341,6 +341,9 @@ pub(crate) fn recheck_sccp_forgery_for_proposal(
 
     let committed_time_ms = crate::smartcontracts::isi::sccp::hold::committed_time_ms(view)
         .map_err(|error| PayloadError::SignatureCustodyInvariant(error.to_string()))?;
+    let next_height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     loop {
         // Empty and ordinary selections need no extra original-history or pairing work.
         if !selected.iter().any(|transaction| {
@@ -348,6 +351,7 @@ pub(crate) fn recheck_sccp_forgery_for_proposal(
                 view.world(),
                 transaction.entrypoint(),
                 committed_time_ms,
+                next_height,
             ) == Some(admission::SccpExemptClassV1::ForgeryEvidence)
         }) {
             return Ok(());
@@ -383,6 +387,7 @@ pub(crate) fn recheck_sccp_forgery_for_proposal(
                     view.world(),
                     transaction.entrypoint(),
                     committed_time_ms,
+                    next_height,
                 ) != Some(admission::SccpExemptClassV1::ForgeryEvidence)
             {
                 return true;
@@ -889,8 +894,12 @@ pub fn select(
             future_input = true;
             continue;
         }
-        let class =
-            exempt_class_of_entrypoint(view.world(), transaction.entrypoint(), committed_time_ms);
+        let class = exempt_class_of_entrypoint(
+            view.world(),
+            transaction.entrypoint(),
+            committed_time_ms,
+            height,
+        );
         if keepalive::payload(transaction.entrypoint())
             .is_some_and(|payload| keepalive::count(&payload.instructions) != 0)
             && newest_keepalive != Some(transaction.hash_as_entrypoint())

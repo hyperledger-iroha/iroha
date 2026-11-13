@@ -641,13 +641,10 @@ fn deferred_host_setup_charges_a_representative_contract_identically() {
         ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
     ]
     .into_iter()
-    .flat_map(|number| {
-        ivm::encoding::wide::encode_scall(number)
-        .to_le_bytes()
-    })
+    .flat_map(|number| ivm::encoding::wide::encode_scall(number).to_le_bytes())
     .chain(ivm::encoding::wide::encode_halt().to_le_bytes())
     .collect::<Vec<_>>();
-    let program = build_program(&code, 0);
+    let program = build_program(&code);
     let authority = seeded_account(FIXTURE_ACCOUNTS + 1);
     for epoch in [2, 3, 4] {
         // The host as hydrated before: the complete account list and every

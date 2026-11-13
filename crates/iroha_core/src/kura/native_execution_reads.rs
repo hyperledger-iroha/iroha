@@ -620,6 +620,9 @@ impl Kura {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
         let slot = store.read_block_index(position)?;
+        if store.valid_checkpoint_omission(height, &slot) {
+            return Ok(None);
+        }
         let wire_len = slot.length;
         if wire_len == 0 || wire_len > STRICT_INIT_MAX_BLOCK_BYTES {
             return Err(Error::CorruptedBlockLength {

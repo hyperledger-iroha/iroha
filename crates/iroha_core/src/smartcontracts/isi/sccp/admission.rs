@@ -268,34 +268,46 @@ pub fn exempt_shape(payload: &TransactionPayload) -> Option<SccpExemptClassV1> {
 }
 
 /// Return the exempt class of a block or queue entry point against the committed parent World
-/// `world`: the [`super::fees::exempt_class`] of the signed transaction of an external or
-/// sealed-reveal entry point, and `None` for a sealed commitment, which executes nothing.
+/// `world` for the candidate block at `next_height`: the [`super::fees::exempt_class`] of the
+/// signed transaction of an external or sealed-reveal entry point, and `None` for a sealed
+/// commitment, which executes nothing.
 #[must_use]
 pub fn exempt_class_of_entrypoint(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     entrypoint: &TransactionEntrypoint,
     committed_time_ms: Option<u64>,
+    next_height: u64,
 ) -> Option<SccpExemptClassV1> {
     exempt_class_of_entrypoint_from(
         &super::eligibility::Current(world),
         entrypoint,
         committed_time_ms,
+        |time_ms| {
+            super::parliament_iface::governance_due(world, committed_time_ms, next_height, time_ms)
+        },
     )
 }
 
+/// [`exempt_class_of_entrypoint`] over exact borrowed facts, with Parliament's terms of a
+/// keepalive supplied by `governance` ([`super::fees::exempt_class_from`]).
 pub(crate) fn exempt_class_of_entrypoint_from(
     source: &(impl super::eligibility::EligibilityRead + ?Sized),
     entrypoint: &TransactionEntrypoint,
     committed_time_ms: Option<u64>,
+    governance: impl FnOnce(u64) -> Result<bool, super::keepalive::DueWorkUnavailable>,
 ) -> Option<SccpExemptClassV1> {
     match entrypoint {
-        TransactionEntrypoint::External(transaction) => {
-            super::fees::exempt_class_from(source, transaction.payload(), committed_time_ms)
-        }
+        TransactionEntrypoint::External(transaction) => super::fees::exempt_class_from(
+            source,
+            transaction.payload(),
+            committed_time_ms,
+            governance,
+        ),
         TransactionEntrypoint::SealedReveal(reveal) => super::fees::exempt_class_from(
             source,
             reveal.signed_transaction().payload(),
             committed_time_ms,
+            governance,
         ),
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => {
             None
@@ -356,7 +368,7 @@ impl<T: StateReadOnly + ?Sized> SccpAdmissionView for T {
     reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
 )]
 pub fn classify(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     view: &(impl SccpAdmissionView + ?Sized),
     next_block_height: u64,
     transaction: &SignedTransaction,
@@ -368,7 +380,9 @@ pub fn classify(
     let committed_time_ms = view
         .sccp_committed_time_ms()
         .map_err(|error| SccpAdmissionRejectV1::new(error.to_string()))?;
-    let Some(class) = super::fees::exempt_class(world, payload, committed_time_ms) else {
+    let Some(class) =
+        super::fees::exempt_class(world, payload, committed_time_ms, next_block_height)
+    else {
         return Ok(None);
     };
     match class {
@@ -1031,13 +1045,13 @@ mod tests {
         let mut block = state.block(header(2));
         let mut stx = block.transaction();
         assert_eq!(
-            super::super::fees::exempt_class(&*stx.world, tx.payload(), None),
+            super::super::fees::exempt_class(&*stx.world, tx.payload(), None, 0),
             None
         );
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         // This is shape eligibility only; malformed DATA still needs ingress and execution.
         assert_eq!(
-            super::super::fees::exempt_class(&*stx.world, tx.payload(), None),
+            super::super::fees::exempt_class(&*stx.world, tx.payload(), None, 0),
             Some(SccpExemptClassV1::ForgeryEvidence)
         );
         for instructions in [
@@ -1123,13 +1137,13 @@ mod tests {
         let advance = signed(0x63, vec![keeper_advance(false).into()]);
         let external = TransactionEntrypoint::External(advance.clone());
         assert_eq!(
-            exempt_class_of_entrypoint(&*stx.world, &external, None),
+            exempt_class_of_entrypoint(&*stx.world, &external, None, 0),
             None,
             "nothing is eligible without SCCP"
         );
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         assert_eq!(
-            exempt_class_of_entrypoint(&*stx.world, &external, None),
+            exempt_class_of_entrypoint(&*stx.world, &external, None, 0),
             Some(SccpExemptClassV1::KeeperAdvance {
                 network: SccpNetworkV1::EthereumMainnet
             })
@@ -1139,7 +1153,8 @@ mod tests {
             exempt_class_of_entrypoint(
                 &*stx.world,
                 &TransactionEntrypoint::SealedReveal(reveal),
-                None
+                None,
+                0
             ),
             Some(SccpExemptClassV1::KeeperAdvance {
                 network: SccpNetworkV1::EthereumMainnet
@@ -1150,7 +1165,8 @@ mod tests {
             exempt_class_of_entrypoint(
                 &*stx.world,
                 &TransactionEntrypoint::External(sample_signed_transaction()),
-                None
+                None,
+                0
             ),
             None
         );
@@ -1159,7 +1175,8 @@ mod tests {
             exempt_class_of_entrypoint(
                 &*stx.world,
                 &TransactionEntrypoint::External(backfill),
-                None
+                None,
+                0
             ),
             None,
             "a Backfill pays and is not counted"

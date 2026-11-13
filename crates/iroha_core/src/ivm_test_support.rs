@@ -20,7 +20,7 @@ pub fn unit_return() -> [u8; 16] {
         wide::encode_store(memory::STORE64, 12, 0, 0),
         wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
         wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
-        wide::encode_rr(control::JALR, 0, 1, 0),
+        wide::encode_ri(control::JALR, 0, 1, 0),
     ];
     let mut code = [0; 16];
     for (slot, instruction) in code.as_chunks_mut::<4>().0.iter_mut().zip(instructions) {

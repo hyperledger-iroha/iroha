@@ -999,7 +999,7 @@ where
         ];
         if self.total {
             pv.extend((0..5).map(|_| vec![Fb::<C>::ZERO; n_p]));
-            for i in 0..n_p {
+            for i in 0..np {
                 let x = pv[0][i];
                 let y = pv[1][i];
                 pv[5][i] = if x == Fb::<C>::ZERO {
@@ -1164,6 +1164,7 @@ where
             .map(|i| self.inputs.get(i).and_then(|p| p.2).map(|r| self.pt_src(r)))
             .collect();
         w.import(points, vec![o(0), o(1)], back);
+        self.build_claim_canonical(w, gfam, shared_a);
         // Additions.
         let na = self.adds.len();
         let rho_a = bits_for(na);
@@ -1517,6 +1518,108 @@ where
             squeeze_full,
             validity,
         }
+    }
+
+    /// Canonical coordinates are essential for Receive's iff comparison of
+    /// original/corrected inherited claims. A field join alone admits x+p and
+    /// could incorrectly turn a valid incoming claim into a failed comparison.
+    fn build_claim_canonical(&self, w: &mut Wiring<C::Base>, gfam: usize, shared: usize) {
+        type Fb<C> = <C as PastaCurve>::Base;
+        if self.claim_limbs.is_empty() {
+            return;
+        }
+        let count = 2 * self.claim_limbs.len();
+        let rho = bits_for(count);
+        let n = 1usize << rho;
+        let widths = [128usize, 127, 128, 127];
+        let chunks = widths.map(chunk_ws);
+        let mut starts = [0usize; 4];
+        let mut cells = 5;
+        for j in 0..4 {
+            starts[j] = cells;
+            cells += chunks[j].len();
+        }
+        let mut values = vec![vec![Fb::<C>::ZERO; n]; cells];
+        let pm1 = modulus::<Fb<C>>() - 1u32;
+        let low_mask = (num_bigint::BigUint::from(1u32) << 128) - 1u32;
+        let pm_low = &pm1 & &low_mask;
+        let pm_high = &pm1 >> 128;
+        let mut lo_map = vec![None; n];
+        let mut hi_map = vec![None; n];
+        for (j, (point, limbs)) in self.claim_limbs.iter().enumerate() {
+            for coordinate in 0..2 {
+                let i = 2 * j + coordinate;
+                let value = if coordinate == 0 {
+                    self.inputs[*point].0
+                } else {
+                    self.inputs[*point].1
+                };
+                let x = to_big(value);
+                let d = &pm1 - &x;
+                let parts = [&x & &low_mask, &x >> 128, &d & &low_mask, &d >> 128];
+                for k in 0..4 {
+                    values[k][i] = big(&parts[k]);
+                    for (c, v) in chunk_vals::<Fb<C>>(&parts[k], &chunks[k])
+                        .into_iter()
+                        .enumerate()
+                    {
+                        values[starts[k] + c][i] = v;
+                    }
+                }
+                values[4][i] = big(&((&parts[0] + &parts[2]) >> 128));
+                lo_map[i] = Some(limbs[2 * coordinate]);
+                hi_map[i] = Some(limbs[2 * coordinate + 1]);
+            }
+        }
+        let o = |k| own::<Fb<C>>(k, n);
+        let mut rows = vec![
+            lin_row(plus(&o(0), &link(shared, 0, lo_map, -Fb::<C>::ONE)), n),
+            lin_row(plus(&o(1), &link(shared, 0, hi_map, -Fb::<C>::ONE)), n),
+            lin_row(
+                plus(
+                    &plus(&o(0), &o(2)),
+                    &plus(
+                        &constant(vec![-big::<Fb<C>>(&pm_low); n]),
+                        &scaled(&o(4), -p2::<Fb<C>>(128)),
+                    ),
+                ),
+                n,
+            ),
+            lin_row(
+                plus(
+                    &plus(&o(1), &o(3)),
+                    &plus(&o(4), &constant(vec![-big::<Fb<C>>(&pm_high); n])),
+                ),
+                n,
+            ),
+            [o(4), o(4), o(4)],
+        ];
+        let mut lookups = Vec::new();
+        let mut cell_widths = vec![128, 127, 128, 127, 1];
+        for k in 0..4 {
+            rows.push(lin_row(
+                plus(
+                    &o(k),
+                    &scaled(&rec(starts[k], &chunks[k], n), -Fb::<C>::ONE),
+                ),
+                n,
+            ));
+            for (j, width) in chunks[k].iter().enumerate() {
+                range_lk(&mut lookups, starts[k] + j, *width, n);
+                cell_widths.push(*width as u16);
+            }
+        }
+        w.push(Array {
+            name: "canonical claim coordinate limbs",
+            family: gfam,
+            rho,
+            r_count: count,
+            fixed: false,
+            lookups,
+            widths: cell_widths,
+            rows,
+            values,
+        });
     }
 
     /// One squeeze array: `s0 = c1 + 2^126 c2 + 2^252 c3` (or `lo + 2^128 hi`

@@ -71,7 +71,7 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 4,
+        max_cycles: 0,
         abi_version,
     };
     let mut artifact = meta.encode();
@@ -80,7 +80,7 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
@@ -88,16 +88,14 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         ivm::verify_contract_artifact(&artifact).expect("canonical manifest test contract");
     (artifact, verified.manifest)
 }
-fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
+fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes(),
-    );
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     for instruction in [
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         code.extend_from_slice(&instruction.to_le_bytes());
     }
@@ -105,7 +103,7 @@ fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 5,
+        max_cycles: 0,
         abi_version,
     };
     let mut out = meta.encode();
@@ -113,12 +111,10 @@ fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u
     out.extend_from_slice(&code);
     out
 }
-fn unlisted_syscall_number() -> u8 {
-    (0u8..=u8::MAX)
-        .find(|number| {
-            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
-        })
-        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+fn unlisted_syscall_number() -> u32 {
+    (0u32..=0xff)
+        .find(|number| !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, *number))
+        .expect("ABI v1 should leave at least one low syscall number unmapped")
 }
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))

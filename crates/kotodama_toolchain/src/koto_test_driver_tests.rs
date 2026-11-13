@@ -3973,7 +3973,7 @@ fn numeric_faults_name_their_numeric_error_variant() {
         "{}",
         internal.render()
     );
-    for tag in 1..=13 {
+    for tag in 1..=14 {
         let fault = NumericFaultV1::from_tag(tag).expect("defined tag");
         let rendered = numeric_fault_failure(fault).render();
         assert!(
@@ -3981,6 +3981,13 @@ fn numeric_faults_name_their_numeric_error_variant() {
             "no Rust debug formatting: {rendered}"
         );
     }
+    assert_eq!(NumericFaultV1::from_tag(15), None);
+    let overflow = numeric_fault_failure(NumericFaultV1::RegisterIntegerOverflow);
+    assert!(
+        overflow.message.contains("ABI fault 14") && overflow.render().contains("toolchain defect"),
+        "{}",
+        overflow.render()
+    );
 }
 #[test]
 fn typed_argument_errors_pair_undeclared_keys_with_parameters() {

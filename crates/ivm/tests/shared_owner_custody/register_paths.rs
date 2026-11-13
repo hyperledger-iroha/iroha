@@ -18,7 +18,7 @@ fn all_register_paths_include_cold_dirty_rebuilds_without_any_heap_request() {
     original.set_limit_bytes(0);
     let _scope = ObserveLog;
     observe_log_requests();
-    for index in 0..256 {
+    for index in 0..ivm::parallel::REGISTER_COUNT {
         let value = if index == 0 {
             0
         } else {
@@ -29,7 +29,10 @@ fn all_register_paths_include_cold_dirty_rebuilds_without_any_heap_request() {
         // a second clean path can allocate a temporary canonical proof or Vec.
         vm.registers.set(index, value);
         vm.registers.set_tag(index, tag);
-        let (root, path): (HashOf<MerkleTree<[u8; 32]>>, [[u8; 32]; 8]) =
+        let (root, path): (
+            HashOf<MerkleTree<[u8; 32]>>,
+            [[u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
+        ) =
             vm.registers.merkle_root_and_path(index).unwrap();
         assert_eq!(vm.registers.merkle_path(index).unwrap(), path);
         assert_eq!(vm.registers.merkle_root(), root);

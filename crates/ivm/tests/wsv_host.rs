@@ -93,7 +93,7 @@ fn test_balance_syscall_permission() {
         .expect("allocate asset definition id");
     vm.set_register(10, account_ptr);
     vm.set_register(11, asset_ptr);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));
@@ -161,7 +161,7 @@ fn test_transfer_syscall_permission() {
     // Every definition modeled by the fixture host has Global policy, so the
     // transfer names the global bucket with a null scope.
     vm.set_register(14, 0);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));
@@ -217,7 +217,7 @@ fn test_mint_syscall_permission() {
     let amount_tlv = make_quantity_tlv(20_u64);
     let amount_ptr = vm.alloc_input_tlv(&amount_tlv).expect("alloc amount tlv");
     vm.set_register(12, amount_ptr); // amount
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));

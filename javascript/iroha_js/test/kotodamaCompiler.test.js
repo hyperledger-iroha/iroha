@@ -377,7 +377,7 @@ function compilerArtifactFixture({
   );
   const header = concatBytes(
     Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x01]),
-    u64Le(1_000_000),
+    u64Le((features & 0x01) === 0 ? 0 : 1_000_000),
     Uint8Array.from([1]),
     Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => headerAbiByte),
   );

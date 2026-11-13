@@ -101,7 +101,7 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
         ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }

@@ -55,6 +55,30 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Original portable checkpoint proof-file custody: the ordered file digest binds canonical certificates, proposal prefix rows and parent DA bundles, not serialized State; every frame still requires the signed-genesis-rooted finality verifier before admitting omitted bodies",
+        literals: &[r"iroha-checkpoint-prefix-files-v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Exact native module and instruction wire names for selected contract lifecycle, captured game transfers and permanent retirement; names select definitions or layouts and grant no State authority",
+        literals: &[
+            r"iroha.runtime.contract_lifecycle.v1",
+            r"iroha.runtime.native_game_capture.v1",
+            r"iroha.runtime.obligation.contract.register.v1",
+            r"iroha.runtime.retirement.finalize.v1",
+            r"iroha.runtime.retirement.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Immutable selected game and retirement service semantics; these bytes identify native implementation closures and do not summarize live State",
+        literals: &[
+            r"iroha:runtime:native-game-capture:v1:source-intent-destination-reservation-export-import-ack-preexport-certified-cancel",
+            r"iroha:runtime:retirement:v1:published-history-code-needed-highwater-permanent-exclusion-effective-floor-empty-live-closure-retained-readers",
+        ],
+    },
+    OtherDomains {
         usage: Use::Record,
         reason: "Selected native AMX service semantics and exact original decision/settlement identities, not a State root",
         literals: &[
@@ -241,11 +265,18 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Name,
         reason: "Exact wire identities of the native game-partition instructions, including their built-in dispatch entries. They select instruction layouts; neither the identifiers nor their registration compute a digest or grant the instruction authority",
         literals: &[
+            r"iroha.game_partition.acknowledge_import.v1",
             r"iroha.game_partition.advance.v1",
+            r"iroha.game_partition.cancel_export_request.v1",
+            r"iroha.game_partition.cancel_import_reservation.v1",
             r"iroha.game_partition.export.v1",
+            r"iroha.game_partition.export_reserved.v1",
             r"iroha.game_partition.import.v1",
+            r"iroha.game_partition.import_reserved.v1",
             r"iroha.game_partition.install.v1",
             r"iroha.game_partition.register_peer.v1",
+            r"iroha.game_partition.request_export.v1",
+            r"iroha.game_partition.reserve_import.v1",
             r"iroha.game_partition.seed.v1",
         ],
     },
@@ -603,7 +634,13 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"\xd5iroha:parliament:timed-ovn:casting-contexts:v1",
             r"\xd7iroha:fastpq:ordinary-source-statements:v1",
             r"\xd8iroha:sccp:state-delta:v1",
+            r"iroha/game-partition/cancel-intent/v1/",
+            r"iroha/game-partition/export-intent/v1/",
             r"iroha/game-partition/export/v1/",
+            r"iroha/game-partition/import-ack/v1/",
+            r"iroha/game-partition/reservation/v1/",
+            r"iroha/game-partition/reserved-export/v1/",
+            r"iroha:runtime:retirement:v1\0",
         ],
     },
     OtherDomains {
@@ -1110,6 +1147,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.staking.public_lane_peer_binding.v1",
             r"iroha.validation_fee.payout_lifecycle.seal.v1",
             r"iroha.validation_fee.policy.parliament.v1",
+            r"iroha/game-reserved-export/v1",
+            r"iroha/game-reserved-transfer/v1",
             r"iroha/game-unit-export/v1",
             r"iroha/game-unit/v1",
             r"iroha/sumeragi/amx/transaction/v1",

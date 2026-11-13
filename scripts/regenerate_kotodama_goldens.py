@@ -46,8 +46,11 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 
-MAX_CYCLES = 1_000_000
-HEADER_SIZE = 49
+HEADER_SIZE = 48
+HEADER_BUDGET_OFFSET = 7
+HEADER_ABI_VERSION_OFFSET = 15
+# ZK goldens pin the compiler's default trace bound; ordinary artifacts carry none.
+ZK_TRACE_CYCLES = 1_000_000
 ZK_MODE_BIT = 0x01
 # ZK is the only IVM ABI v1 execution-mode bit.
 KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT
@@ -607,18 +610,21 @@ def validate_artifact(path: Path, mode: str, expected_abi_hash: bytes) -> None:
         raise GoldenError(f"{path} is not an IVM artifact")
     if artifact[4:6] != b"\x01\x01":
         raise GoldenError(f"{path} does not use canonical IVM 1.1")
-    if artifact[16] != 1:
+    if artifact[HEADER_ABI_VERSION_OFFSET] != 1:
         raise GoldenError(f"{path} does not use ABI v1")
-    if len(expected_abi_hash) != 32 or artifact[17:HEADER_SIZE] != expected_abi_hash:
+    abi_hash = artifact[HEADER_ABI_VERSION_OFFSET + 1 : HEADER_SIZE]
+    if len(expected_abi_hash) != 32 or abi_hash != expected_abi_hash:
         raise GoldenError(f"{path} does not authenticate the compiler ABI hash")
-    if struct.unpack_from("<Q", artifact, 8)[0] != MAX_CYCLES:
-        raise GoldenError(f"{path} does not embed the {MAX_CYCLES}-cycle ceiling")
     header_mode = artifact[6]
     if header_mode & ~KNOWN_CONTRACT_MODE_BITS:
         raise GoldenError(f"{path} contains unknown execution-mode bits")
-    if artifact[7] != 0:
-        raise GoldenError(f"{path} contains a noncanonical vector-length override")
     is_zk = bool(header_mode & ZK_MODE_BIT)
+    # The cycle field is the ZK trace bound: nonzero exactly for ZK artifacts.
+    trace_bound = struct.unpack_from("<Q", artifact, HEADER_BUDGET_OFFSET)[0]
+    if trace_bound != (ZK_TRACE_CYCLES if is_zk else 0):
+        raise GoldenError(
+            f"{path} must declare the {ZK_TRACE_CYCLES}-cycle trace bound exactly in ZK mode"
+        )
     if is_zk != (mode == "zk"):
         raise GoldenError(f"{path} has the wrong ZK execution bit for mode {mode}")
     if artifact[HEADER_SIZE : HEADER_SIZE + 4] != b"CNTR":
@@ -862,11 +868,9 @@ def build_command(
         "release",
         "--target-dir",
         str(stage),
-        "--max-cycles",
-        str(MAX_CYCLES),
     ]
     if mode == "zk":
-        command.append("--zk")
+        command.extend(["--zk", "--zk-trace-cycles", str(ZK_TRACE_CYCLES)])
     command.extend(path.as_posix() for path in sources)
     return command
 

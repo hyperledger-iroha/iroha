@@ -35,6 +35,7 @@ mod panic_recovery;
 mod peers_gossiper_topology_sync;
 /// `--check-replay`: replay a copy of the stopped node's store with this build.
 mod replay_check;
+mod runtime_checkpoint_delivery;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -875,6 +876,9 @@ fn startup_beep(enable_beep: bool) -> bool {
 }
 /// Iroha server CLI
 #[derive(clap::Args, Clone, Debug)]
+#[command(group(clap::ArgGroup::new("runtime_checkpoint_operation")
+    .args(["export_runtime_checkpoint", "receive_runtime_checkpoint_from"])
+    .multiple(false)))]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is an independent command-line switch"
@@ -911,6 +915,28 @@ pub struct StartupArgs {
     /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
     #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
     pub check_replay: bool,
+    /// After matched replay, export an existing checkpoint at H with certified prefix rows,
+    /// full signed genesis and H+1. The fresh output contains no transaction bodies 2..=H.
+    #[arg(long, value_name = "HEIGHT", requires_all = ["check_replay", "runtime_checkpoint_output"], conflicts_with_all = ["rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request", "world_payout_export_request", "ironwood_context_export_request"])]
+    pub export_runtime_checkpoint: Option<u64>,
+    /// Receive an immutable checkpoint package from a Torii origin, then authenticate its
+    /// complete State and replay H+1 on a copy using this configuration's pinned genesis.
+    #[arg(long, value_name = "URL", requires = "runtime_checkpoint_output", conflicts_with_all = ["check_replay", "check_config", "check_storage", "managed_listeners", "rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request", "world_payout_export_request", "ironwood_context_export_request"])]
+    pub receive_runtime_checkpoint_from: Option<String>,
+    /// Optional owner-private API-token file for the receive endpoint's additional token gate.
+    #[arg(
+        long,
+        value_name = "PRIVATE_FILE",
+        requires = "receive_runtime_checkpoint_from"
+    )]
+    pub runtime_checkpoint_api_token_file: Option<PathBuf>,
+    /// Fresh private output outside node/configuration stores for a transferable checkpoint.
+    #[arg(
+        long,
+        value_name = "NEW_DIRECTORY",
+        requires = "runtime_checkpoint_operation"
+    )]
+    pub runtime_checkpoint_output: Option<PathBuf>,
     /// After successful `--check-replay`, execute this canonical signed repair transaction on
     /// the temporary State and discard its entire overlay. Never signs or publishes a block.
     #[arg(long, value_name = "SIGNED_TRANSACTION", requires_all = ["check_replay", "repair_execution_time_ms"])]
@@ -923,6 +949,9 @@ pub struct StartupArgs {
     /// overlay. Uses throwaway keys; never reads a validator key for it, signs or publishes a block.
     #[arg(long, value_name = "POOL_JSON", requires = "check_replay", conflicts_with_all = ["rehearse_sorafs_repair", "runtime_addition_review_request"])]
     pub rehearse_taira_activation: Option<PathBuf>,
+    /// Exercise an unsigned native sponsor Stage input before and after the discarded activation.
+    #[arg(long, value_name = "PUBLIC_STAGE_JSON", requires_all = ["check_replay", "rehearse_taira_activation"], conflicts_with_all = ["rehearse_sorafs_repair", "runtime_addition_review_request", "world_payout_export_request"])]
+    pub rehearse_taira_sponsor_stage: Option<PathBuf>,
     /// After matched `--check-replay`, inspect SoraFS authority upgrade inputs at the exact
     /// historical cut asserted by this closed JSON request. Inspect only: no draft or signing.
     #[arg(long, value_name = "REQUEST_JSON", requires_all = ["check_replay", "runtime_addition_review_output"], conflicts_with = "rehearse_sorafs_repair")]
@@ -940,6 +969,12 @@ pub struct StartupArgs {
     /// Fresh private output directory outside node/config stores. Manifest is published last.
     #[arg(long, value_name = "NEW_DIRECTORY", requires_all = ["check_replay", "world_payout_export_request"])]
     pub world_payout_export_output: Option<PathBuf>,
+    /// Retain operator-only Ironwood State originals after a complete matched replay at C.
+    #[arg(long, value_name = "REQUEST_JSON", requires_all = ["check_replay", "ironwood_context_export_output"], conflicts_with_all = ["world_payout_export_request", "rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request"])]
+    pub ironwood_context_export_request: Option<PathBuf>,
+    /// Fresh restricted directory under the original operator's private evidence parent.
+    #[arg(long, value_name = "NEW_DIRECTORY", requires_all = ["check_replay", "ironwood_context_export_request"])]
+    pub ironwood_context_export_output: Option<PathBuf>,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -4660,6 +4695,20 @@ impl Iroha {
                 emergency_fast,
             )
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+        let runtime_checkpoint_package = if config.torii.runtime_checkpoint.package_dir.is_some() {
+            let source_config = config.torii.runtime_checkpoint.clone();
+            let source_chain = state.chain_id_ref().clone();
+            let source_network = *state.network_id_ref();
+            let minimum_height = state.kura().history_boundary().map(|boundary| boundary.height);
+            tokio::task::spawn_blocking(move || {
+                runtime_checkpoint_delivery::load(&source_config, &source_chain, source_network, minimum_height)
+            })
+            .await
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
+        } else {
+            None
+        };
         let (private_settlement_availability_signer, private_settlement_phase_signer) =
             private_settlement_signers_from_node_key(&config.common.key_pair)?;
         // Keep the late by-value builder scratch in a separate synchronous call frame
@@ -4681,6 +4730,11 @@ impl Iroha {
                 ),
             )
             .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(package) = runtime_checkpoint_package {
+            runtime_deps.with_runtime_checkpoint_package(package)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = runtime_deps
             .with_private_settlement_availability_signer(private_settlement_availability_signer)
             .with_private_settlement_phase_signer(private_settlement_phase_signer);
@@ -8396,7 +8450,55 @@ fn run_main_with_config_guard(
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
     }
+    if let Some(endpoint) = &args.startup.receive_runtime_checkpoint_from {
+        let output = args
+            .startup
+            .runtime_checkpoint_output
+            .as_deref()
+            .ok_or_else(|| {
+                Report::new(MainError::CheckReplay).attach("checkpoint receive output is required")
+            })?;
+        return replay_check::run_runtime_checkpoint_receive(
+            &config,
+            endpoint,
+            args.startup.runtime_checkpoint_api_token_file.as_deref(),
+            output,
+            args.config.as_deref(),
+        );
+    }
     if args.startup.check_replay {
+        if let Some(height) = args.startup.export_runtime_checkpoint {
+            let output = args
+                .startup
+                .runtime_checkpoint_output
+                .as_deref()
+                .ok_or_else(|| {
+                    Report::new(MainError::CheckReplay)
+                        .attach("checkpoint export output is required")
+                })?;
+            return replay_check::run_runtime_checkpoint_export(
+                &config,
+                height,
+                output,
+                args.config.as_deref(),
+            );
+        }
+        if let Some(request) = &args.startup.ironwood_context_export_request {
+            let output = args
+                .startup
+                .ironwood_context_export_output
+                .as_deref()
+                .ok_or_else(|| {
+                    Report::new(MainError::CheckReplay)
+                        .attach("Ironwood replay export output is required")
+                })?;
+            return replay_check::run_ironwood_replay_export(
+                &config,
+                request,
+                output,
+                args.config.as_deref(),
+            );
+        }
         if let Some(request) = &args.startup.world_payout_export_request {
             let output = args
                 .startup
@@ -8436,7 +8538,11 @@ fn run_main_with_config_guard(
             return replay_check::run_check_repair_rehearsal(&config, path, time);
         }
         if let Some(path) = &args.startup.rehearse_taira_activation {
-            return replay_check::run_check_activation_rehearsal(&config, path);
+            return replay_check::run_check_activation_rehearsal(
+                &config,
+                path,
+                args.startup.rehearse_taira_sponsor_stage.as_deref(),
+            );
         }
         return replay_check::run_check_replay(&config);
     }
@@ -11357,6 +11463,109 @@ mod tests {
         #[allow(unused_imports)]
         use super::*;
         #[test]
+        fn runtime_checkpoint_receive_requires_fresh_output_and_excludes_other_startup_actions() {
+            let valid = [
+                "iroha3d",
+                "--receive-runtime-checkpoint-from",
+                "https://peer.example",
+                "--runtime-checkpoint-output",
+                "/private/checkpoint",
+            ];
+            let parsed = Args::try_parse_from(valid).unwrap();
+            assert_eq!(
+                parsed.startup.receive_runtime_checkpoint_from.as_deref(),
+                Some("https://peer.example")
+            );
+            assert!(!parsed.startup.check_replay);
+            let mut with_token = valid.to_vec();
+            with_token.extend(["--runtime-checkpoint-api-token-file", "/private/token"]);
+            assert!(Args::try_parse_from(with_token).is_ok());
+            assert!(
+                Args::try_parse_from([
+                    "iroha3d",
+                    "--runtime-checkpoint-api-token-file",
+                    "/private/token",
+                ])
+                .is_err()
+            );
+            assert!(
+                Args::try_parse_from([
+                    "iroha3d",
+                    "--receive-runtime-checkpoint-from",
+                    "https://peer.example",
+                ])
+                .is_err()
+            );
+            for other in ["--check-replay", "--check-config", "--check-storage"] {
+                let mut conflict = valid.to_vec();
+                conflict.push(other);
+                assert_eq!(
+                    Args::try_parse_from(conflict).unwrap_err().kind(),
+                    clap::error::ErrorKind::ArgumentConflict
+                );
+            }
+            let mut conflict = valid.to_vec();
+            conflict.extend(["--export-runtime-checkpoint", "2", "--check-replay"]);
+            assert_eq!(
+                Args::try_parse_from(conflict).unwrap_err().kind(),
+                clap::error::ErrorKind::ArgumentConflict
+            );
+        }
+        #[test]
+        fn runtime_checkpoint_export_requires_replay_and_fresh_output_argument() {
+            let valid = [
+                "iroha3d",
+                "--check-replay",
+                "--export-runtime-checkpoint",
+                "2",
+                "--runtime-checkpoint-output",
+                "/private/checkpoint",
+            ];
+            let parsed = Args::try_parse_from(valid).unwrap();
+            assert_eq!(parsed.startup.export_runtime_checkpoint, Some(2));
+            assert_eq!(
+                parsed.startup.runtime_checkpoint_output,
+                Some(PathBuf::from("/private/checkpoint"))
+            );
+            for invalid in [
+                vec![
+                    "iroha3d",
+                    "--export-runtime-checkpoint",
+                    "2",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+                vec![
+                    "iroha3d",
+                    "--check-replay",
+                    "--export-runtime-checkpoint",
+                    "2",
+                ],
+                vec![
+                    "iroha3d",
+                    "--check-replay",
+                    "--runtime-checkpoint-output",
+                    "/private/checkpoint",
+                ],
+            ] {
+                assert_eq!(
+                    Args::try_parse_from(invalid).unwrap_err().kind(),
+                    clap::error::ErrorKind::MissingRequiredArgument
+                );
+            }
+            let mut conflict = valid.to_vec();
+            conflict.extend([
+                "--rehearse-sorafs-repair",
+                "/private/repair.to",
+                "--repair-execution-time-ms",
+                "1000",
+            ]);
+            assert_eq!(
+                Args::try_parse_from(conflict).unwrap_err().kind(),
+                clap::error::ErrorKind::ArgumentConflict
+            );
+        }
+        #[test]
         fn managed_listener_arguments_require_the_original_pair() {
             for args in [
                 vec!["iroha3d", "--managed-listeners", "/private/listeners"],
@@ -12827,13 +13036,20 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    export_runtime_checkpoint: None,
+                    receive_runtime_checkpoint_from: None,
+                    runtime_checkpoint_api_token_file: None,
+                    runtime_checkpoint_output: None,
                     rehearse_sorafs_repair: None,
                     rehearse_taira_activation: None,
+                    rehearse_taira_sponsor_stage: None,
                     repair_execution_time_ms: None,
                     runtime_addition_review_request: None,
                     runtime_addition_review_output: None,
                     world_payout_export_request: None,
                     world_payout_export_output: None,
+                    ironwood_context_export_request: None,
+                    ironwood_context_export_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12918,13 +13134,20 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    export_runtime_checkpoint: None,
+                    receive_runtime_checkpoint_from: None,
+                    runtime_checkpoint_api_token_file: None,
+                    runtime_checkpoint_output: None,
                     rehearse_sorafs_repair: None,
                     rehearse_taira_activation: None,
+                    rehearse_taira_sponsor_stage: None,
                     repair_execution_time_ms: None,
                     runtime_addition_review_request: None,
                     runtime_addition_review_output: None,
                     world_payout_export_request: None,
                     world_payout_export_output: None,
+                    ironwood_context_export_request: None,
+                    ironwood_context_export_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

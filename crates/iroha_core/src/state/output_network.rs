@@ -41,7 +41,7 @@ enum QuarantineAdmission {
 
 struct FrozenQuarantinePolicy {
     max_sources: usize,
-    max_cycles: u64,
+    max_gas: u64,
 }
 
 pub(super) struct FrozenNetworkSources<'source> {
@@ -248,7 +248,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         }
         let quarantine_policy = FrozenQuarantinePolicy {
             max_sources: self.state.pipeline.quarantine_max_txs_per_block,
-            max_cycles: self.state.pipeline.quarantine_tx_max_cycles,
+            max_gas: self.state.pipeline.quarantine_tx_max_gas,
         };
         let mut order = Vec::new();
         let mut reveal_positions = Vec::new();
@@ -332,7 +332,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             .ok_or("Network execution has no frozen quarantine policy")?
             .quarantine_policy;
         if policy.max_sources != self.state.pipeline.quarantine_max_txs_per_block
-            || policy.max_cycles != self.state.pipeline.quarantine_tx_max_cycles
+            || policy.max_gas != self.state.pipeline.quarantine_tx_max_gas
         {
             return Err("Network quarantine policy changed after source admission".into());
         }
@@ -452,6 +452,7 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
             input,
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(state)
                 .map_err(|error| error.to_string())?,
+            |_| Ok(state.governance_due_applied()),
         ) == Some(crate::smartcontracts::isi::sccp::admission::SccpExemptClassV1::ForgeryEvidence);
     let requires_keepalive_success = crate::smartcontracts::isi::sccp::keepalive::payload(input)
         .is_some_and(|payload| {

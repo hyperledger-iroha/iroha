@@ -1880,7 +1880,34 @@ mod tests {
     }
     /// Assemble a minimal contract with a complete typed Unit return.
     pub(super) fn minimal_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
+        minimal_program_with(ivm::ProgramMetadata::default(), 0, "iroha-core-cache-tests")
+    }
+    /// The same contract under a distinct compiler fingerprint, hence a distinct artifact hash.
+    pub(super) fn minimal_program_variant(variant: u64) -> Vec<u8> {
+        minimal_program_with(
+            ivm::ProgramMetadata::default(),
+            0,
+            &format!("iroha-core-cache-tests-{variant}"),
+        )
+    }
+    /// The same contract as a ZK-mode artifact declaring the trace bound `max_cycles`.
+    fn minimal_zk_program(max_cycles: u64) -> Vec<u8> {
+        minimal_program_with(
+            ivm::ProgramMetadata {
+                mode: ivm::ivm_mode::ZK,
+                max_cycles,
+                ..ivm::ProgramMetadata::default()
+            },
+            ivm::CONTRACT_FEATURE_BIT_ZK,
+            "iroha-core-cache-tests",
+        )
+    }
+    fn minimal_program_with(
+        header: ivm::ProgramMetadata,
+        features_bitmap: u64,
+        compiler_fingerprint: &str,
+    ) -> Vec<u8> {
+        let mut program = header.encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
             enum_types: Vec::new(),
@@ -1892,9 +1919,9 @@ mod tests {
                 results: ivm::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "CacheFixture".to_owned(),
-            compiler_fingerprint: "iroha-core-cache-tests".to_owned(),
+            compiler_fingerprint: compiler_fingerprint.to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
+            features_bitmap,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -1923,18 +1950,14 @@ mod tests {
             ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
         ] {
             program.extend_from_slice(&word.to_le_bytes());
         }
         program
     }
     pub(super) fn minimal_generic_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 10_000,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
@@ -2060,11 +2083,7 @@ mod tests {
     }
     #[test]
     fn generic_summary_rejects_disallowed_syscalls_during_preparation() {
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 10_000,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_scall(0x00ff_ffff).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         assert!(
@@ -2095,11 +2114,7 @@ mod tests {
             ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
         ] {
-            let mut program = ivm::ProgramMetadata {
-                max_cycles: 10_000,
-                ..ivm::ProgramMetadata::default()
-            }
-            .encode();
+            let mut program = ivm::ProgramMetadata::default().encode();
             program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let error = IvmCache::new()
@@ -2119,11 +2134,7 @@ mod tests {
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
         ] {
-            let mut program = ivm::ProgramMetadata {
-                max_cycles: 10_000,
-                ..ivm::ProgramMetadata::default()
-            }
-            .encode();
+            let mut program = ivm::ProgramMetadata::default().encode();
             program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             IvmCache::new()
@@ -2383,8 +2394,7 @@ mod tests {
             .expect("outer contract summary");
         let nested_cache = outer_summary.prepared_contract_cache();
         let before_nested = nested_cache.stats();
-        let mut nested_program = minimal_program();
-        nested_program[8..16].copy_from_slice(&17u64.to_le_bytes());
+        let nested_program = minimal_program_variant(17);
         let nested_hash = ivm::contract_code_hash(&nested_program);
         let first = nested_cache
             .get_or_prepare(nested_hash, &nested_program)
@@ -2709,11 +2719,9 @@ mod tests {
     fn evicted_prepared_artifact_does_not_retain_an_active_nested_runtime() {
         const GAS_LIMIT: u64 = 10_000;
         const HEAP_LIMIT: u64 = 96;
-        let mut first_program = minimal_program();
-        first_program[8..16].copy_from_slice(&23u64.to_le_bytes());
+        let first_program = minimal_program_variant(23);
         let first_hash = ivm::contract_code_hash(&first_program);
-        let mut second_program = minimal_program();
-        second_program[8..16].copy_from_slice(&29u64.to_le_bytes());
+        let second_program = minimal_program_variant(29);
         let second_hash = ivm::contract_code_hash(&second_program);
         let cache = PreparedContractCache::with_capacity(1);
         let first = cache
@@ -2889,11 +2897,9 @@ mod tests {
     #[test]
     fn prepared_store_evicts_lru_and_rejects_hash_mismatches() {
         let _retention = default_retention();
-        let mut first_program = minimal_program();
-        first_program[8..16].copy_from_slice(&23u64.to_le_bytes());
+        let first_program = minimal_program_variant(23);
         let first_hash = ivm::contract_code_hash(&first_program);
-        let mut second_program = minimal_program();
-        second_program[8..16].copy_from_slice(&29u64.to_le_bytes());
+        let second_program = minimal_program_variant(29);
         let second_hash = ivm::contract_code_hash(&second_program);
         let cache = PreparedContractCache::with_capacity(1);
         assert!(matches!(
@@ -2939,12 +2945,10 @@ mod tests {
     #[test]
     fn metadata_cache_distinguishes_header_changes() {
         let mut cache = IvmCache::with_capacity(4);
-        // Same body but different metadata (max_cycles) must not share cache entries.
-        let mut program = minimal_program();
-        program[8..16].copy_from_slice(&1u64.to_le_bytes());
+        // Same body but a different header (the ZK trace bound) must not share cache entries.
+        let program = minimal_zk_program(1);
         let summary1 = cache.summarize_program(&program).expect("first summary");
-        let mut program2 = program.clone();
-        program2[8..16].copy_from_slice(&2u64.to_le_bytes());
+        let program2 = minimal_zk_program(2);
         let summary2 = cache.summarize_program(&program2).expect("second summary");
         assert_ne!(summary1.meta_hash, summary2.meta_hash);
         let stats = cache.stats();
@@ -2964,9 +2968,7 @@ mod tests {
     #[test]
     fn runtime_stack_limit_tracks_gas_limit() {
         let mut cache = IvmCache::with_capacity(1);
-        let mut program = minimal_program();
-        program[8..16].copy_from_slice(&14u64.to_le_bytes());
-        program[16] = 1; // abi_version
+        let program = minimal_program();
         let summary = cache.summarize_program(&program).expect("summary");
         let gas_limit = 100_000;
         let vm = cache
@@ -2984,16 +2986,14 @@ mod tests {
         let _retention = default_retention();
         let mut cache = IvmCache::with_capacity(1);
         let gas_limit = 50_000;
-        let mut program1 = minimal_program();
-        program1[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let program1 = minimal_program_variant(1);
         let summary1 = cache.summarize_program(&program1).expect("summary1");
         {
             let _runtime = cache
                 .checkout_runtime(&summary1, &program1, gas_limit, HEAP_LIMIT)
                 .expect("runtime1");
         }
-        let mut program2 = minimal_program();
-        program2[8..16].copy_from_slice(&2u64.to_le_bytes());
+        let program2 = minimal_program_variant(2);
         let summary2 = cache.summarize_program(&program2).expect("summary2");
         let summary1_key = SummaryKey::new(summary1.code_hash);
         let summary2_key = SummaryKey::new(summary2.code_hash);
@@ -3151,6 +3151,7 @@ impl IvmCache {
 #[cfg(test)]
 mod named_profile_tests {
     use super::*;
+    use mv::storage::StorageReadOnly as _;
     fn artifact() -> Vec<u8> {
         let bytes = super::tests::minimal_program();
         let parsed = ivm::ProgramMetadata::parse(&bytes).unwrap();
@@ -3217,17 +3218,15 @@ mod named_profile_tests {
         );
         let view = state.view();
         let query = QueryStateRef::View(&view);
-        assert_eq!(
-            query.prepare_contract_cache_hit(&cache, hash).unwrap_err(),
-            ivm::VMError::PermissionDenied
-        );
+        assert!(matches!(
+            query.prepare_contract_cache_hit(&cache, hash),
+            Err(ivm::VMError::PermissionDenied)
+        ));
         let cold = PreparedContractCache::with_capacity(4);
-        assert_eq!(
-            query
-                .prepare_contract_cache_miss(&cold, artifact_id)
-                .unwrap_err(),
-            ivm::VMError::PermissionDenied
-        );
+        assert!(matches!(
+            query.prepare_contract_cache_miss(&cold, artifact_id),
+            Err(ivm::VMError::PermissionDenied)
+        ));
         assert_eq!(
             original.syscall_policy(),
             ivm::SyscallPolicy::AbiV1RuntimeLifecycle

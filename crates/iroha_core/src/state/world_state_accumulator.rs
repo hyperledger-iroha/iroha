@@ -61,7 +61,9 @@ use norito::codec::Encode;
 /// Number of 16-bit lanes of the accumulator (`LtHash16`, 2 KiB of state).
 pub const LANES: usize = 1024;
 const LANE_BYTES: usize = 2 * LANES;
+#[cfg(test)]
 const SCHEMA_FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
+#[cfg(test)]
 const SCHEMA_SELECTION: &[u8] = b"iroha:world-state:schema:selection:v1\0";
 const PROFILE: &[u8] = b"iroha:world-state:profile:lthash16:v1\0";
 const TABLE: u8 = 0;
@@ -365,17 +367,8 @@ pub fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, String> {
             selection.commitment_profile
         ));
     }
-    let mut schema = Hash::new_from_chunks(&[SCHEMA_SELECTION, &selection.commitment_profile.0]);
-    for storage in &selection.installed_storage {
-        schema = Hash::new_from_chunks(&[SCHEMA_FIELD, schema.as_ref(), &storage.0]);
-    }
-    let count = u64::try_from(selection.installed_storage.len())
-        .map_err(|_| "installed storage count exceeds u64")?;
-    Ok(Hash::new_from_chunks(&[
-        SCHEMA_SELECTION,
-        schema.as_ref(),
-        &count.to_le_bytes(),
-    ]))
+    iroha_data_model::sumeragi_finality::world_state_selection_schema_v1(selection)
+        .map_err(|error| error.to_string())
 }
 
 /// Whether each canonical slot's storage is installed by `selection`.

@@ -85,6 +85,71 @@ pub(crate) fn governance_due_on_global_root(
     next_height: u64,
     time_ms: u64,
 ) -> Result<bool, super::keepalive::DueWorkUnavailable> {
+    let Some(pulse_available) = pulse_availability(world, next_height)? else {
+        return Ok(false);
+    };
+    crate::governance::parliament_anonymous::world_pass::parliament_due(
+        world,
+        next_height,
+        time_ms,
+        committed_time_ms,
+        pulse_available,
+    )
+    .map_err(|_| super::keepalive::DueWorkUnavailable)
+}
+
+/// The least block time at which [`governance_due`] holds for the candidate block at
+/// `next_height` on the committed parent `world`, whose block time is `committed_time_ms`:
+/// Parliament's next-governance-progress time (design §9). `Some(0)` is work due at any
+/// time; `None` means that only a committed pulse or a transaction can make Parliament work
+/// due, which is never an invented deadline. A root that is not the global chain, or whose
+/// selection does not install the family, has none.
+///
+/// # Errors
+/// As [`governance_due_on_global_root`].
+pub(crate) fn next_governance_progress_at_ms(
+    world: &impl WorldReadOnly,
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+) -> Result<Option<u64>, super::keepalive::DueWorkUnavailable> {
+    if crate::sumeragi::lanes::routing::committed_root_scope(world)
+        != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    {
+        return Ok(None);
+    }
+    next_governance_progress_on_global_root(world, committed_time_ms, next_height)
+}
+
+/// [`next_governance_progress_at_ms`] on the global chain's committed parent `world`: the
+/// least time at which [`governance_due_on_global_root`] holds for `next_height`.
+///
+/// # Errors
+/// As [`governance_due_on_global_root`].
+pub(crate) fn next_governance_progress_on_global_root(
+    world: &impl WorldReadOnly,
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+) -> Result<Option<u64>, super::keepalive::DueWorkUnavailable> {
+    let Some(pulse_available) = pulse_availability(world, next_height)? else {
+        return Ok(None);
+    };
+    crate::governance::parliament_anonymous::world_pass::parliament_next_due_ms(
+        world,
+        next_height,
+        committed_time_ms,
+        pulse_available,
+    )
+    .map_err(|_| super::keepalive::DueWorkUnavailable)
+}
+
+/// Parliament's view of an exact pulse slot for the candidate block at `next_height` on the
+/// global chain's committed parent `world`, or `None` when its selection does not install
+/// the family. A slot below `next_height` is available once its pulse is committed; the slot
+/// of `next_height` itself when consensus requires the native pulse at that height (K4).
+fn pulse_availability<'world, W: WorldReadOnly>(
+    world: &'world W,
+    next_height: u64,
+) -> Result<Option<impl Fn(u64) -> bool + 'world>, super::keepalive::DueWorkUnavailable> {
     use mv::storage::StorageReadOnly as _;
 
     // SPEC: §13.4 HC804 — a root without the family has no Parliament due work.
@@ -92,7 +157,7 @@ pub(crate) fn governance_due_on_global_root(
         .map_err(|_| super::keepalive::DueWorkUnavailable)?
         || cfg!(all(test, sumeragi_core_mutation = "HC804"));
     if !installed {
-        return Ok(false);
+        return Ok(None);
     }
     let carried = world
         .consensus_schedule()
@@ -114,22 +179,15 @@ pub(crate) fn governance_due_on_global_root(
         .map(|(_, pulse)| {
             iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id)
         });
-    crate::governance::parliament_anonymous::world_pass::parliament_due(
-        world,
-        next_height,
-        time_ms,
-        committed_time_ms,
-        |slot| {
-            (slot == next_height && carried)
-                || session.is_some_and(|session| {
-                    world
-                        .global_beacon_pulse_slots()
-                        .get(&(session, slot))
-                        .is_some()
-                })
-        },
-    )
-    .map_err(|_| super::keepalive::DueWorkUnavailable)
+    Ok(Some(move |slot| {
+        (slot == next_height && carried)
+            || session.is_some_and(|session| {
+                world
+                    .global_beacon_pulse_slots()
+                    .get(&(session, slot))
+                    .is_some()
+            })
+    }))
 }
 
 /// Borrowed original parent draw. The external owner enforces the 8 MiB / 65,536
@@ -232,6 +290,11 @@ mod tests {
                 governance_due(&block.world, Some(0), height, time),
                 Ok(false),
                 "a root that does not install the anonymous family has no Parliament due work"
+            );
+            assert_eq!(
+                next_governance_progress_at_ms(&block.world, Some(time), height),
+                Ok(None),
+                "nor a next-governance-progress time"
             );
         }
     }

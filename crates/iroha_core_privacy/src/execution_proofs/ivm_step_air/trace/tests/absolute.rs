@@ -3,15 +3,9 @@
 use super::div_rem::attempted;
 use super::*;
 
-fn single(
-    value: u64,
-    gas: u64,
-    rd: u8,
-    rs1: u8,
-    rs2: u8,
-) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
+fn single(value: u64, gas: u64, rd: u8, rs1: u8) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     attempted(
-        &[enc::encode_rr(wide::arithmetic::ABS, rd, rs1, rs2)],
+        &[enc::encode_rr(wide::arithmetic::ABS, rd, rs1, 0)],
         1,
         &[(6, value), (7, 0xdead_beef), (8, 91)],
         gas,
@@ -19,7 +13,7 @@ fn single(
 }
 
 #[test]
-fn absolute_matches_interpreter_full_width_aliases_r0_and_unused_source() {
+fn absolute_matches_interpreter_full_width_aliases_and_r0() {
     for value in [
         0,
         1,
@@ -30,16 +24,9 @@ fn absolute_matches_interpreter_full_width_aliases_r0_and_unused_source() {
         0xffff_ffff_0000_0001,
         0x1_0000_0000,
     ] {
-        for (rd, rs1, rs2) in [
-            (8, 6, 7),
-            (6, 6, 7),
-            (7, 6, 7),
-            (0, 6, 7),
-            (8, 0, 7),
-            (8, 6, 0),
-        ] {
+        for (rd, rs1) in [(8, 6), (6, 6), (7, 6), (0, 6), (8, 0), (7, 7)] {
             for gas in [0, 1, 2, 1 << 32] {
-                let (segment, records) = single(value, gas, rd, rs1, rs2);
+                let (segment, records) = single(value, gas, rd, rs1);
                 let input = u64::cast_signed(segment.before.registers[usize::from(rs1)]);
                 let expected = if gas == 0 {
                     Err(SegmentOutcome::OutOfGas)
@@ -47,7 +34,7 @@ fn absolute_matches_interpreter_full_width_aliases_r0_and_unused_source() {
                     input
                         .checked_abs()
                         .map(i64::cast_unsigned)
-                        .ok_or(SegmentOutcome::AssertionFailed)
+                        .ok_or(SegmentOutcome::NumericFault)
                 };
                 assert_eq!(
                     segment.outcome,
@@ -89,7 +76,7 @@ fn absolute_rejects_mutated_magnitude_source_gas_and_outcome_witnesses() {
         (i64::cast_unsigned(i64::MIN), 1),
         (i64::cast_unsigned(i64::MIN), 0),
     ] {
-        let (segment, records) = single(value, gas, 8, 6, 7);
+        let (segment, records) = single(value, gas, 8, 6);
         let rows = segment.witness_rows(&records).unwrap();
         assert_rows(&segment, &rows);
         for column in (ABSOLUTE..ROW_WIDTH)
@@ -109,7 +96,7 @@ fn absolute_rejects_mutated_magnitude_source_gas_and_outcome_witnesses() {
         }
         for outcome in [
             SegmentOutcome::Continue,
-            SegmentOutcome::AssertionFailed,
+            SegmentOutcome::NumericFault,
             SegmentOutcome::OutOfGas,
         ] {
             if outcome == segment.outcome {
@@ -117,7 +104,7 @@ fn absolute_rejects_mutated_magnitude_source_gas_and_outcome_witnesses() {
             }
             let mut fixed = segment.fixed_row(0);
             fixed[OUT_OF_GAS] = F(u64::from(outcome == SegmentOutcome::OutOfGas));
-            fixed[ASSERTION_FAILED] = F(u64::from(outcome == SegmentOutcome::AssertionFailed));
+            fixed[NUMERIC_FAULT] = F(u64::from(outcome == SegmentOutcome::NumericFault));
             assert!(
                 residues(&segment, &rows[0], &rows[1], &fixed)
                     .unwrap()
@@ -130,10 +117,10 @@ fn absolute_rejects_mutated_magnitude_source_gas_and_outcome_witnesses() {
 
 fn maximum_segment(tail_value: u64, tail_gas: u64) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let mut body = vec![
-        enc::encode_rr(wide::arithmetic::ABS, 8, 6, 255),
+        enc::encode_rr(wide::arithmetic::ABS, 8, 6, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 2, 2, -1),
         enc::encode_branch(wide::control::BNE, 2, 0, -2),
-        enc::encode_rr(wide::arithmetic::ABS, 9, 7, 255),
+        enc::encode_rr(wide::arithmetic::ABS, 9, 7, 0),
     ];
     let cost = body[..3]
         .iter()
@@ -151,7 +138,7 @@ fn maximum_segment(tail_value: u64, tail_gas: u64) -> (ScalarSegment, Vec<Diagno
             (2, 21),
             (6, i64::cast_unsigned(-17_i64)),
             (7, tail_value),
-            (255, u64::MAX),
+            (31, u64::MAX),
         ],
         cost + tail_gas,
     );
@@ -169,8 +156,8 @@ fn absolute_maximum_segments_fit_existing_security_caps_and_keep_degree_four() {
     ] {
         let (segment, records) = maximum_segment(value, gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_356);
-        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.base_width_v1(), 908);
+        assert_eq!(segment.profile_constraint_count_v1(), 2_025);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
         assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -188,8 +175,8 @@ fn absolute_maximum_segments_fit_existing_security_caps_and_keep_degree_four() {
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_153_152);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
+        assert_eq!(bound, 3_149_632);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 1_044_672);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xac + u8::from_le_bytes(
@@ -217,7 +204,7 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
         let (segment, records) = maximum_segment(value, gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_153_152);
+        assert!(proof.len() <= 3_149_632);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         for changed_field in 0..3 {
             let mut after = segment.after;
@@ -238,7 +225,7 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
         }
         if segment.outcome.trapped() {
             let other = if segment.outcome == SegmentOutcome::OutOfGas {
-                SegmentOutcome::AssertionFailed
+                SegmentOutcome::NumericFault
             } else {
                 SegmentOutcome::OutOfGas
             };
@@ -256,7 +243,7 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
         let mut artifact = segment.contract.artifact().to_vec();
         let offset = segment.contract.code_offset() + 12;
         artifact[offset..offset + 4]
-            .copy_from_slice(&enc::encode_rr(wide::arithmetic::NEG, 9, 7, 255).to_le_bytes());
+            .copy_from_slice(&enc::encode_rr(wide::arithmetic::NEG, 9, 7, 0).to_le_bytes());
         let changed = ScalarSegment::new(
             ivm::prepare_contract(Arc::from(artifact)).unwrap(),
             segment.steps,

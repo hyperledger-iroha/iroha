@@ -157,7 +157,7 @@ fn gcd_modes_fetch_magnitudes_division_and_terminal_cannot_be_forged() {
         (1, MULTIPLY + multiply::PRODUCT + 7),
         (1, MULTIPLY + multiply::CARRY),
         (1, BRANCH + branch::BORROW + 3),
-        (45, 2 * 255),
+        (45, 2 * 31),
         (45, PC),
         (45, GAS),
         (45, CYCLES),
@@ -265,7 +265,7 @@ fn gcd_cycle_limit_allows_last_crossing_and_rejects_a_later_attempt() {
         enc::encode_rr(wide::arithmetic::GCD, 8, 6, 7),
         enc::encode_ri(wide::arithmetic::ADDI, 9, 0, 1),
     ];
-    let prepared = contract_with_cycle_policy(&body, 11, 0);
+    let prepared = contract_with_cycle_policy(&body, 11, ivm::ivm_mode::ZK);
     let mut vm = IVM::new(1_000);
     vm.load_prepared(&prepared).unwrap();
     vm.set_register(6, F91);
@@ -346,9 +346,9 @@ fn gcd_both_schedules_preserve_query_cap_geometry_and_native_degree_four() {
     );
     assert_rows(&plain, &plain.witness_rows(&records).unwrap());
     for segment in [plain, expanded] {
-        assert_eq!(segment.base_width_v1(), 1_356);
+        assert_eq!(segment.base_width_v1(), 908);
         assert_eq!(segment.profile_fixed_width_v1(), 10);
-        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.profile_constraint_count_v1(), 2_025);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
         assert_eq!(protocol.parameters.query_count, 136);
@@ -365,7 +365,7 @@ fn gcd_both_schedules_preserve_query_cap_geometry_and_native_degree_four() {
         .unwrap();
         assert_eq!(
             maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-            4_153_152
+            3_149_632
         );
         assert_eq!(
             measured_maximum_affine_degree_v1(
@@ -385,7 +385,7 @@ fn native_stark_proves_maximum_gcd_microsteps_and_rejects_boundary_and_schedule_
     let (segment, records) = maximum();
     let columns = segment.columns(&records).unwrap();
     let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-    assert!(proof.len() <= 4_153_152);
+    assert!(proof.len() <= 3_149_632);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for field in 0..4 {
         let mut after = segment.after;

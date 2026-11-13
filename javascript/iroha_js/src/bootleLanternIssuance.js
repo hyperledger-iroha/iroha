@@ -397,14 +397,15 @@ async function decodeErrorResponse(response, operation) {
   try {
     validateResponseHeaders(response, operation, body.length, true);
     // A canonical envelope must still name exactly this status's code as both
-    // its code and message; any other envelope is an invalid response.
+    // its code and message and carry no details; any other envelope is an
+    // invalid response.
     const envelope = response.status === 406
       ? decodeCanonicalJsonErrorEnvelope(body)
       : decodeCanonicalNoritoErrorEnvelope(body, `${ISSUANCE_CONTEXT_V1} error envelope`);
     if (
       envelope.code !== code ||
       envelope.message !== code ||
-      Object.hasOwn(envelope, "details")
+      envelope.details !== null
     ) {
       throw new Error("error envelope does not match its HTTP status");
     }

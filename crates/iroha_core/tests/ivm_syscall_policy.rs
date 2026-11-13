@@ -7,31 +7,27 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
 use std::{num::NonZeroU64, sync::Arc};
-fn program_with_scall(sys: u8) -> Vec<u8> {
+fn program_with_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(u32::from(sys)).to_le_bytes(),
-    );
+    code.extend_from_slice(&encoding::wide::encode_scall(sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut out = meta.encode();
     out.extend_from_slice(&code);
     out
 }
-fn unlisted_syscall_number() -> u8 {
-    (0u8..=u8::MAX)
-        .find(|number| {
-            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
-        })
-        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+fn unlisted_syscall_number() -> u32 {
+    (0u32..=0xff)
+        .find(|number| !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, *number))
+        .expect("ABI v1 should leave at least one low syscall number unmapped")
 }
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
@@ -61,13 +57,13 @@ fn deny_unlisted_syscall_in_current() {
         .load_program(&prog)
         .expect_err("strict program loading must reject an unknown syscall");
     assert!(
-        matches!(err, ivm::VMError::UnknownSyscall(__actual_error_field) if __actual_error_field == (u32::from(unlisted_syscall_number())))
+        matches!(err, ivm::VMError::UnknownSyscall(__actual_error_field) if __actual_error_field == unlisted_syscall_number())
     );
 }
 #[test]
 fn allow_forwarded_alloc_in_current() {
     // ALLOC is forwarded by CoreHost and should be permitted.
-    let prog = program_with_scall(ivm_sys::SYSCALL_ALLOC as u8);
+    let prog = program_with_scall(ivm_sys::SYSCALL_ALLOC);
     let mut vm = IVM::new(u64::MAX);
     let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority));

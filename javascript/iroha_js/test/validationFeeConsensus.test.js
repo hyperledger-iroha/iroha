@@ -13,8 +13,9 @@ import {
 } from "../src/validationFeeConsensus.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
-import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
 import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
+import { errorEnvelopeFrame } from "./helpers/toriiErrorEnvelope.js";
 
 const binding = Object.freeze({
   schema: "iroha.validation-fee-ledger-binding.v1",
@@ -662,6 +663,36 @@ test("Torii validation-fee proof pages accept an exact-bound streamed response",
   assert.equal(page.projection.evaluated_block_height, 127n);
   assert.equal(streamed.streamState.cancelled, false);
   assert.equal(streamed.streamState.released, true);
+});
+
+test("Torii validation-fee proof failures surface a Norito error envelope's code and message", async () => {
+  const code = "validation_fee_checkpoint_unknown";
+  const message = "the trusted checkpoint is not a promoted validation-fee checkpoint";
+  const frame = errorEnvelopeFrame(code, message);
+  await assert.rejects(
+    fetchProofPage(proofPageClient(new Response(frame, {
+      status: 409,
+      headers: { "Content-Type": "application/x-norito" },
+    }))),
+    (error) => {
+      assert.ok(error instanceof ToriiHttpError, String(error));
+      assert.equal(error.status, 409);
+      assert.equal(error.code, code);
+      assert.equal(error.errorMessage, message);
+      assert.equal(error.bodyText, null);
+      return true;
+    },
+  );
+  // A Norito body that is not a canonical envelope keeps the opaque failure.
+  const corrupted = Buffer.from(frame);
+  corrupted[31] ^= 1;
+  await assert.rejects(
+    fetchProofPage(proofPageClient(new Response(corrupted, {
+      status: 409,
+      headers: { "Content-Type": "application/x-norito" },
+    }))),
+    (error) => error instanceof ToriiHttpError && error.code === null && error.errorMessage === null,
+  );
 });
 
 test("Torii validation-fee proof pages reject malformed and noncanonical Content-Length values", async () => {

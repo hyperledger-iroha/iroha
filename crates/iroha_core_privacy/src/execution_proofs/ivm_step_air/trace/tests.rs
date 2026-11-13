@@ -29,11 +29,25 @@ use ivm::{
     host::DefaultHost,
 };
 
+/// Canonical register-form word: unary formats reserve the rs2 field, so it is zero.
+fn register_word(opcode: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
+    let unary = wide::operand_format(opcode) == Some(wide::OperandFormat::Register2);
+    enc::encode_rr(opcode, rd, rs1, if unary { 0 } else { rs2 })
+}
+
 fn contract(body: &[u32]) -> PreparedContract {
     contract_with_cycle_policy(body, 0, 0)
 }
 
 fn contract_with_cycle_policy(body: &[u32], max_cycles: u64, mode: u8) -> PreparedContract {
+    try_contract_with_cycle_policy(body, max_cycles, mode).expect("admitted V1 scalar fixture")
+}
+
+fn try_contract_with_cycle_policy(
+    body: &[u32],
+    max_cycles: u64,
+    mode: u8,
+) -> Result<PreparedContract, ivm::ContractArtifactError> {
     use iroha_data_model::smart_contract::{
         entrypoint::{EntrypointValueTypeNodeV1, EntrypointValueTypeV1},
         manifest::EntryPointKind,
@@ -84,7 +98,7 @@ fn contract_with_cycle_policy(body: &[u32], max_cycles: u64, mode: u8) -> Prepar
     program.extend_from_slice(&interface.encode_section());
     program.extend(body.iter().flat_map(|word| word.to_le_bytes()));
     program.extend_from_slice(&crate::ivm_test_support::unit_return());
-    ivm::prepare_contract(Arc::from(program)).expect("admitted V1 scalar fixture")
+    ivm::prepare_contract(Arc::from(program))
 }
 
 fn recorded(
@@ -130,7 +144,7 @@ fn mixed() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let body = [
         enc::encode_ri(wide::arithmetic::ADDI, 2, 0, 3),
         enc::encode_rr(wide::arithmetic::ADD, 3, 3, 4),
-        enc::encode_ri(wide::arithmetic::ROTL_IMM, 3, 3, -1),
+        enc::encode_ri(wide::arithmetic::ROTL_IMM, 3, 3, 63),
         enc::encode_rr(wide::arithmetic::XOR, 3, 3, 5),
         enc::encode_ri(wide::arithmetic::ADDI, 2, 2, -1),
         enc::encode_branch(wide::control::BNE, 2, 0, -4),
@@ -145,7 +159,7 @@ fn mixed() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
             (4, u64::MAX),
             (5, 0xa5a5_ffff_1234_5678),
             (7, u64::MAX),
-            (255, u64::MAX),
+            (31, u64::MAX),
         ],
         u64::MAX,
     )
@@ -260,15 +274,19 @@ fn scalar_segment_all_families_immediates_aliases_zero_register_and_full_amounts
             assert_rows(&segment, &segment.witness_rows(&records).unwrap());
         }
     }
-    for opcode in [
+    for (opcode, values) in [
         wide::arithmetic::ADDI,
         wide::arithmetic::ANDI,
         wide::arithmetic::ORI,
         wide::arithmetic::XORI,
-        wide::arithmetic::ROTL_IMM,
-        wide::arithmetic::ROTR_IMM,
-    ] {
-        for value in [i8::MIN, -1, 0, 63, 64, i8::MAX] {
+    ]
+    .map(|opcode| (opcode, [wide::IMM14_MIN, -1, 0, 63, 64, wide::IMM14_MAX]))
+    .into_iter()
+    .chain(
+        [wide::arithmetic::ROTL_IMM, wide::arithmetic::ROTR_IMM]
+            .map(|opcode| (opcode, [0, 1, 31, 32, 62, 63])),
+    ) {
+        for value in values {
             let (segment, records) = recorded(
                 &[enc::encode_ri(opcode, 6, 6, value)],
                 1,
@@ -308,8 +326,8 @@ fn scalar_segment_rejects_forged_fetch_sources_writes_padding_and_bank_witnesses
         (0, FETCH + 1),
         (0, FETCH + MAX_WORDS - 1),
         (0, PC),
-        (2, 2 * 255),
-        (2, 2 * 255 + 1),
+        (2, 2 * 31),
+        (2, 2 * 31 + 1),
         (2, 0),
         (2, RESULT),
         (2, ALU),
@@ -323,7 +341,7 @@ fn scalar_segment_rejects_forged_fetch_sources_writes_padding_and_bank_witnesses
         (2, CYCLES),
         (2, CYCLE_DIGITS),
         (2, CYCLE_CARRY),
-        (segment.steps, 2 * 255),
+        (segment.steps, 2 * 31),
         (segment.steps, FETCH),
     ] {
         let mut forged = base.clone();
@@ -342,7 +360,7 @@ fn scalar_segment_rejects_forged_fetch_sources_writes_padding_and_bank_witnesses
     // An extra write in padding must fail even away from the end-boundary row.
     let last = base.last().unwrap();
     let mut hidden_write = last.clone();
-    hidden_write[2 * 255] = F::ZERO;
+    hidden_write[2 * 31] = F::ZERO;
     assert!(
         residues(
             &segment,
@@ -461,10 +479,10 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
     bad[1].instruction = Some(enc::encode_rr(wide::arithmetic::SUB, 3, 3, 4));
     assert!(segment.witness_rows(&bad).is_err());
     bad = records.clone();
-    bad[1].before.registers[255] ^= 1;
+    bad[1].before.registers[31] ^= 1;
     assert!(segment.witness_rows(&bad).is_err());
     bad = records.clone();
-    bad[1].after.tags[255] = true;
+    bad[1].after.tags[31] = true;
     assert!(segment.witness_rows(&bad).is_err());
     bad = records.clone();
     bad[1].before.cycles += 1;
@@ -474,7 +492,7 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
         (
             {
                 let mut x = segment.before;
-                x.registers[255] ^= 1;
+                x.registers[31] ^= 1;
                 x
             },
             segment.after,
@@ -503,7 +521,7 @@ fn scalar_segment_native_layout_fits_envelope_and_dynamic_degree_is_four() {
     let (segment, _) = mixed();
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
-    assert_eq!(segment.base_width_v1(), 1_356);
+    assert_eq!(segment.base_width_v1(), 908);
     let layout = AggregateProofLayoutV1::new(
         protocol.parameters,
         vec![AggregateTraceGroupLayoutV1 {
@@ -515,7 +533,7 @@ fn scalar_segment_native_layout_fits_envelope_and_dynamic_degree_is_four() {
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_153_152);
+    assert_eq!(bound, 3_149_632);
     assert!(bound <= protocol.parameters.maximum_proof_bytes);
     assert_eq!(
         measured_maximum_affine_degree_v1(
@@ -539,7 +557,7 @@ fn native_stark_proves_mixed_scalar_segment_and_rejects_changed_boundaries_and_a
         (
             {
                 let mut x = segment.before;
-                x.registers[255] ^= 1;
+                x.registers[31] ^= 1;
                 x
             },
             segment.after,
@@ -649,14 +667,32 @@ fn scalar_segment_caps_and_counter_carries_are_explicit() {
 }
 
 #[test]
-fn scalar_segment_enforces_artifact_and_normalized_zk_cycle_limits() {
+fn scalar_segment_enforces_only_the_zk_header_trace_bound() {
     let body = [enc::encode_ri(wide::arithmetic::ADDI, 6, 6, 1)];
     let (unbounded, records) = recorded(&body, 1, &[(6, 9)], 1_000);
     assert_eq!(unbounded.cycle_limit(), 0);
+    // Gas is the only budget of a non-ZK artifact: any start cycle is admitted.
+    let mut late = records.clone();
+    late[0].before.cycles = u64::MAX - 1;
+    late[0].after.cycles = u64::MAX;
+    let late_segment = ScalarSegment::new(
+        unbounded.contract.clone(),
+        1,
+        &late[0].before,
+        &late[0].after,
+        SegmentOutcome::Continue,
+    )
+    .unwrap();
+    assert_eq!(late_segment.cycle_limit(), 0);
+    assert_rows(&late_segment, &late_segment.witness_rows(&late).unwrap());
+    // `max_cycles` is nonzero exactly for ZK artifacts; no default bound exists.
+    for (max_cycles, mode) in [(7, 0), (0, ivm::ivm_mode::ZK)] {
+        assert!(try_contract_with_cycle_policy(&body, max_cycles, mode).is_err());
+    }
     for (max_cycles, mode, expected_limit) in [
-        (7, 0, 7),
-        (0, ivm::ivm_mode::ZK, ivm::zk::MAX_CYCLES),
+        (1, ivm::ivm_mode::ZK, 1),
         (7, ivm::ivm_mode::ZK, 7),
+        (1 << 40, ivm::ivm_mode::ZK, 1 << 40),
     ] {
         let contract = contract_with_cycle_policy(&body, max_cycles, mode);
         let first_pc = (contract.code_offset() - contract.header_len()) as u64;
@@ -737,7 +773,7 @@ fn comparison_mix() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         enc::encode_rr(wide::arithmetic::XOR, 22, 6, 7),
         enc::encode_branch(wide::control::BEQ, 20, 0, 2),
         enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
-        enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 7, -1),
+        enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 7, 63),
     ];
     recorded(
         &body,
@@ -866,8 +902,8 @@ fn scalar_comparisons_mixed_with_branches_keep_degree_four_and_the_same_native_e
     assert_eq!(segment.after.registers[21], 1);
     assert_eq!(segment.after.registers[6], i64::cast_unsigned(i64::MIN));
     assert_eq!(segment.after.registers[7], i64::MAX as u64);
-    assert_eq!(segment.base_width_v1(), 1_356);
-    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+    assert_eq!(segment.base_width_v1(), 908);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_025);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     let layout = AggregateProofLayoutV1::new(
@@ -882,7 +918,7 @@ fn scalar_comparisons_mixed_with_branches_keep_degree_four_and_the_same_native_e
     .unwrap();
     assert_eq!(
         maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-        4_153_152
+        3_149_632
     );
     assert_eq!(
         measured_maximum_affine_degree_v1(

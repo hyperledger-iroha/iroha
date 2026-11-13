@@ -23,7 +23,7 @@ fn replay_inputs(chain: &crate::sumeragi::test_chain::CertifiedTestChain) -> Pre
         events,
         genesis: None,
         genesis_account: chain.genesis_account().clone(),
-        consensus_mode: chain.validated_genesis().consensus_metadata().mode,
+        consensus_mode: chain.validated_genesis().consensus_metadata().mode.into(),
     }
 }
 

@@ -53,7 +53,7 @@ fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 0,
         abi_version: 1,
     }
     .encode();
@@ -298,15 +298,14 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut program = meta.encode();

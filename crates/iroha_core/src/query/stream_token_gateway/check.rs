@@ -38,7 +38,7 @@ use super::{
 };
 use crate::{
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
-    sumeragi::certified_chain::committed_block,
+    sumeragi::certified_chain::committed_identity,
 };
 use TransitionError as Error;
 
@@ -153,7 +153,7 @@ fn roles(
 }
 
 fn floor(state: &impl StateReadOnly, floor: Floor) -> Result<(), Error> {
-    let block = committed_block(state, floor.height).map_err(|_| Error::Unavailable)?;
+    let block = committed_identity(state, floor.height).map_err(|_| Error::Unavailable)?;
     if *block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id {
         return Err(Error::BindingMismatch);
     }

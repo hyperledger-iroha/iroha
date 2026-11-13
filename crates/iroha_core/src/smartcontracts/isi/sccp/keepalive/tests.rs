@@ -108,6 +108,12 @@ fn keepalive_progress_keeps_reconciliation_due_after_degraded_heartbeats_stop() 
     assert_eq!(due(&block, None, 2, reconciliation - 1), Ok(false));
     assert_eq!(due(&block, None, 2, reconciliation), Ok(true));
     assert_eq!(next_progress_at_ms(&World::new().view(), None, 2), None);
+    // A World that is no global chain with the anonymous family has no Parliament deadline.
+    assert_eq!(next_governance_at_ms(&block, None, 2), Ok(None));
+    assert_eq!(
+        next_governance_at_ms(&World::new().view(), Some(0), 2),
+        Ok(None)
+    );
 }
 
 #[test]
@@ -365,11 +371,11 @@ fn scheduled_time_carrier_uses_exact_parent_without_sccp_or_client_work() {
             .is_some()
     );
     assert_eq!(
-        super::super::fees::exempt_class(&view, &payload(100), Some(0)),
+        super::super::fees::exempt_class(&view, &payload(100), Some(0), 0),
         Some(SccpExemptClassV1::Keepalive)
     );
     assert_eq!(
-        super::super::fees::exempt_class(&view, &payload(100), Some(101)),
+        super::super::fees::exempt_class(&view, &payload(100), Some(101), 0),
         None,
         "a rejected one-shot without retry cannot continue creating blocks"
     );

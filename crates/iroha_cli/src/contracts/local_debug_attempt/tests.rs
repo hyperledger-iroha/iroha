@@ -45,7 +45,6 @@ fn vm() -> IVM {
     let code: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
     vm.load_code(&code).unwrap();
     vm.set_zk_mode(false).unwrap();
-    vm.set_max_cycles(0);
     vm
 }
 

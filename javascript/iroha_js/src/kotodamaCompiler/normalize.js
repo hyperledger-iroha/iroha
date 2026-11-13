@@ -127,9 +127,10 @@ const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
 // IVM ABI v1 authenticates the syscall descriptor directly in the fixed
 // header: 16 execution bytes (magic[0..4], version 1.1 at [4] and [5], mode
-// [6], little-endian u64 budget [7..15], ABI version [15]) followed by the
-// canonical 32-byte ABI hash.
+// [6], little-endian u64 ZK trace bound [7..15], ABI version [15]) followed by
+// the canonical 32-byte ABI hash.
 const IVM_EXECUTION_HEADER_BYTES = 16;
+const IVM_HEADER_BUDGET_OFFSET = 7;
 const IVM_HEADER_ABI_VERSION_OFFSET = 15;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
@@ -758,6 +759,16 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   }
   if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x01) !== 0) {
     rejectAt(label, " has unsupported IVM execution metadata");
+  }
+  // The budget field is the ZK trace bound: nonzero exactly when the ZK bit is set.
+  let traceBoundIsZero = true;
+  for (let offset = IVM_HEADER_BUDGET_OFFSET; offset < IVM_HEADER_ABI_VERSION_OFFSET; offset += 1) {
+    if (bytes[offset] !== 0) {
+      traceBoundIsZero = false;
+    }
+  }
+  if (traceBoundIsZero === ((bytes[6] & 0x01) !== 0)) {
+    rejectAt(label, " must declare an IVM trace bound exactly when ZK mode is set");
   }
   if (bytes[IVM_HEADER_ABI_VERSION_OFFSET] !== 1) {
     rejectAt(label, " must use IVM ABI version 1");

@@ -1474,3 +1474,70 @@ async fn signed_snapshot_without_the_sccp_envelope_is_rejected() {
         "a snapshot must carry its SCCP envelope"
     );
 }
+#[tokio::test]
+async fn signed_snapshot_restore_retains_dataspace_retirement_record() {
+    use iroha_data_model::nexus::{DataSpaceRetirementsV1, RetiredDataSpaceV1};
+    let tmp_root = tempdir().unwrap();
+    let store_dir = tmp_root.path().join("snapshot");
+    let state = state_factory();
+    let owner = state
+        .world
+        .accounts
+        .view()
+        .iter()
+        .next()
+        .map(|(account_id, _)| account_id.clone())
+        .expect("snapshot fixture account");
+    let record = DataSpaceRetirementsV1::default()
+        .with_retirement(RetiredDataSpaceV1 {
+            dataspace_id: iroha_data_model::sns::dataspace_id_for_alias("cbsi").unwrap(),
+            alias: "cbsi".into(),
+            owner,
+            ownership_generation: 1,
+            lanes: vec![LaneId::new(6)],
+            retirement_height: 12_700,
+        })
+        .unwrap();
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(record.clone().into_custom_parameter().unwrap()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("fund the retirement record parameter");
+        parameters.commit();
+    }
+    let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
+        .expect("a retirement record survives restart reconstruction");
+    let key_pair = checked_random_snapshot_keypair();
+    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+    let restored = try_read_snapshot(
+        &state.ivm_execution_budget(),
+        &store_dir,
+        &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        &state.chain_id,
+        &state.network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+    )
+    .expect("signed restore keeps the protected retirement record");
+    assert_eq!(
+        crate::state::dataspace_retirement::retirements(restored.world.parameters.view().get())
+            .expect("restored record decodes"),
+        Some(record)
+    );
+    assert_eq!(
+        canonical_state_snapshot_bytes_for_tests(&restored),
+        canonical_state_snapshot_bytes_for_tests(&state),
+    );
+}

@@ -1246,8 +1246,8 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str, world_ho
         raise RuntimeError(
             f"{world_path}: the NPoS cadence rejection must keep its one stable message"
         )
-    equal(world, "    fn parliament_sortition_pulse_epoch_length_v1(", world_path, """
-        fn parliament_sortition_pulse_epoch_length_v1(
+    equal(world, "    pub(crate) fn parliament_sortition_pulse_epoch_length_v1(", world_path, """
+        pub(crate) fn parliament_sortition_pulse_epoch_length_v1(
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<u64, Error> {
             let no_native_cadence = || {
@@ -2369,6 +2369,10 @@ def require_publication_kura_cleanup(publication: str) -> None:
     # terminal writer is released, and before any original Kura notice.
     terminal = ('letterminal=original.poisoned||original.published;self.publication=Some(original);'
                 'ifterminal{mv::BlockRetirement::release_writers(self);'
+                # A published block's prepared runtime checkpoint publishes once its writers are released.
+                'ifself.publication.as_ref().is_some_and(|publication|publication.published)'
+                '&&letSome(checkpoint)=self.publication.as_mut().expect("publication").runtime_checkpoint.take()'
+                '{checkpoint.publish();}'
                 'drop(self.publication.as_mut().expect("publication").retired_keyed.take(),);}'
                 + notices + 'result}')
     if (engine.count(".retire_notices()") != 2 or engine.count(notices) != 2 or engine.count(unwind) != 1
@@ -2620,9 +2624,14 @@ def require_parliament_commit_publication(state: str) -> None:
         "letmutoriginal=self.publication.take().unwrap_or_else(||StatePublication::new(self.state_ref,self.pipeline.state_capture));",
         "iforiginal.published{self.publication=Some(original);returnStatePublicationOutcome::Published;}",
         "iforiginal.poisoned{self.publication=Some(original);returnStatePublicationOutcome::RecoveryRequired(TransactionsBlockError::PublicationRecoveryRequired,);}",
-        "letresult=self.attempt_original_publication(&mutoriginal);",
-        "iforiginal.fields_frozen&&!original.irreversible{self.recover_original_publication_fields();self.retire_original_publication_notices();}",
+        "letmutresult=self.attempt_original_publication(&mutoriginal);",
+        "iforiginal.fields_frozen&&!original.irreversible{self.recover_original_publication_fields();self.retire_original_publication_notices();"
+        "ifmatches!(result,Err(TransactionsBlockError::CheckpointDeferred(_)))&&letSome(checkpoint)=original.runtime_checkpoint.as_ref()"
+        "&&letErr(reason)=checkpoint.request(){result=Err(TransactionsBlockError::CheckpointDeferred(reason));}}",
         "self.publication=Some(original);ifterminal{mv::BlockRetirement::release_writers(self);"
+        "ifself.publication.as_ref().is_some_and(|publication|publication.published)"
+        "&&letSome(checkpoint)=self.publication.as_mut().expect(\"publication\").runtime_checkpoint.take()"
+        "{checkpoint.publish();}"
         "drop(self.publication.as_mut().expect(\"publication\").retired_keyed.take(),);}"
         "self.publication.as_mut().expect(\"retainedoriginalpublication\").geometry_cleanup.retire_notices();result",
         '#[cfg(feature="telemetry")]lettelemetry_origin=this.committed_telemetry_origin().map_err(|_|TransactionsBlockError::WorldCommitPreparation)?;',
@@ -2721,6 +2730,7 @@ def require_parliament_commit_publication(state: str) -> None:
         "*fields_frozen=true;}if!*runtime_checkpoint_prepared{"
         "*runtime_checkpoint=state_ref.runtime_checkpoint_capture.prepare(this)?;"
         "*runtime_checkpoint_prepared=true;}"
+        "ifletSome(checkpoint)=runtime_checkpoint.as_ref(){checkpoint.durability()?;}"
         "ifkeyed_cut.is_none()&&letSome(execution)=&this.keyed_execution{",
         "*keyed_cut=Some(published);}"
         "letStateBlockFields{canonical_runtime,native_execution_tip,"
@@ -2859,9 +2869,6 @@ impl<'state> StateBlock<'state> {
                 state_ref.telemetry.record_citizens_total(citizens_total);
             }
         }
-        if let Some(checkpoint) = runtime_checkpoint.take() {
-            checkpoint.publish()?;
-        }
         tiered_snapshot.take().expect("original prepared tiered snapshot").publish(state_ref);
         {
             state_ref.enforce_nexus_storage_budget(block_height);
@@ -2881,7 +2888,7 @@ impl<'state> StateBlock<'state> {
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "ee81e0b63a5a3bafc522e52e51ec82f5c256addf23b0d077bac9d5ed2ba2893b":
+    if rust_token_digest(original_attempt) != "0151c2d761e7d12ae7cce57ea9d3cf5c34eb1eebbbb44595e27d284449b3fd65":
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
 
 

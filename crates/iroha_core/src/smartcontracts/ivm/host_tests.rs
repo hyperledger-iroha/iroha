@@ -958,15 +958,23 @@ fn dispatch_call_contract_syscall(
     payload: &Json,
     gas_limit: u64,
 ) -> ContractCallOutcome {
-    dispatch_call_contract_syscall_with_cycle_budget(
-        state,
-        outer_authority,
-        caller_contract,
-        nested_contract,
-        entrypoint,
-        payload,
-        (gas_limit, None),
-    )
+    install_nested_dispatch_fixture(state, outer_authority, caller_contract);
+    let view = state.view();
+    let mut host = CoreHostImpl::new(outer_authority.clone());
+    host.set_query_state(&view);
+    host.set_durable_state_snapshot_from_world(view.world());
+    let mut vm = IVM::new(gas_limit.max(1_000_000));
+    bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
+    let registers = store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, payload);
+    for (index, value) in registers.iter().enumerate() {
+        vm.set_register(18 + index, *value);
+    }
+    let target_ptr = registers[0];
+    vm.set_register(14, target_ptr);
+    vm.set_gas_limit(gas_limit);
+    let result = vm.run_with_host(&mut host);
+    let durable_state_overlay = host.drain_durable_state_overlay();
+    (result, vm, durable_state_overlay, target_ptr)
 }
 fn install_nested_dispatch_fixture(state: &State, authority: &AccountId, caller: &ContractAddress) {
     use ivm::{encoding::wide, instruction::wide::arithmetic};
@@ -979,7 +987,7 @@ fn install_nested_dispatch_fixture(state: &State, authority: &AccountId, caller:
         );
     }
     code.extend_from_slice(&wide::encode_scall(ivm_sys::SYSCALL_CALL_CONTRACT).to_le_bytes());
-    let program = build_authenticated_test_contract_program(&code, 0, false);
+    let program = build_authenticated_test_contract_program(&code, false);
     rebind_test_contract_program(state, authority, caller, program);
 }
 
@@ -1024,36 +1032,6 @@ fn rebind_test_contract_program(
     activate_instance(authority, caller.clone(), revision, hash, &mut tx).unwrap();
     tx.apply();
     block.commit_world_overlay_for_testing().unwrap();
-}
-fn dispatch_call_contract_syscall_with_cycle_budget(
-    state: &State,
-    outer_authority: &AccountId,
-    caller_contract: &ContractAddress,
-    nested_contract: &ContractAddress,
-    entrypoint: &str,
-    payload: &Json,
-    (gas_limit, cycle_budget): (u64, Option<&ivm::VmCycleBudget>),
-) -> ContractCallOutcome {
-    install_nested_dispatch_fixture(state, outer_authority, caller_contract);
-    let view = state.view();
-    let mut host = CoreHostImpl::new(outer_authority.clone());
-    host.set_query_state(&view);
-    host.set_durable_state_snapshot_from_world(view.world());
-    let mut vm = IVM::new(gas_limit.max(1_000_000));
-    bind_nested_caller(&mut host, &mut vm, &view, outer_authority, caller_contract);
-    let registers = store_typed_contract_call(&mut vm, state, nested_contract, entrypoint, payload);
-    for (index, value) in registers.iter().enumerate() {
-        vm.set_register(18 + index, *value);
-    }
-    let target_ptr = registers[0];
-    vm.set_register(14, target_ptr);
-    vm.set_gas_limit(gas_limit);
-    let result = match cycle_budget {
-        Some(budget) => vm.run_with_host_and_cycle_budget(&mut host, budget),
-        None => vm.run_with_host(&mut host),
-    };
-    let durable_state_overlay = host.drain_durable_state_overlay();
-    (result, vm, durable_state_overlay, target_ptr)
 }
 fn install_typed_view_fixture(
     state: &State,
@@ -2501,7 +2479,7 @@ fn unaffordable_proof_instruction_preserves_queue_and_verification_latch() {
         ]
         .concat();
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_authenticated_test_contract_program(&code, 0, true))
+    vm.load_program(&build_authenticated_test_contract_program(&code, true))
         .expect("load proof instruction program");
     let instruction_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(14, instruction_ptr);
@@ -2723,7 +2701,7 @@ fn execute_instruction_syscall_accepts_code_literal_ballot_instruction() {
             ivm::instruction::wide::arithmetic::ADDI,
             11,
             0,
-            i8::try_from(ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT)
+            i16::try_from(ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT)
                 .expect("operation tag fits in ADDI immediate"),
         )
         .to_le_bytes(),
@@ -2845,7 +2823,7 @@ fn create_nfts_for_all_preflights_exact_gas_before_queue_mutation() {
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&build_program(&code, 0))
+    vm.load_program(&build_program(&code))
         .expect("load create-NFTs program");
     vm.set_gas_limit(20);
     let error = vm
@@ -3148,7 +3126,7 @@ fn transfer_asset_scoped_vm_completes_below_generic_response_quote() {
         host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
+        vm.load_program(&build_authenticated_test_contract_program(&code, false))
             .expect("load authenticated scoped-transfer probe");
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -3235,7 +3213,7 @@ fn transfer_asset_scoped_vm_debits_exact_gas_before_queue_mutation() {
         host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(gas_before_syscall + available);
-        vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
+        vm.load_program(&build_authenticated_test_contract_program(&code, false))
             .expect("load authenticated exact-budget scoped-transfer probe");
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -4721,7 +4699,7 @@ fn typed_contract_call_rejects_private_witness_callee_before_execution() {
         1,
     );
     let syscall = ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT);
-    let program = build_authenticated_test_contract_program(&syscall.to_le_bytes(), 0, true);
+    let program = build_authenticated_test_contract_program(&syscall.to_le_bytes(), true);
     assert_eq!(
         ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
             .unwrap()
@@ -5086,7 +5064,7 @@ include!("host/nested_contract_state_and_rollback_tests.rs");
 include!("host/attachment_lifecycle_tests.rs");
 include!("host/x509_attachment_tests.rs");
 include!("host/nested_return_funding_tests.rs");
-include!("host/shared_vm_cycle_budget_tests.rs");
+include!("host/nested_call_gas_tests.rs");
 #[test]
 fn dispatched_call_contract_spends_reserved_gas_and_returns_output() {
     let authority: AccountId = fixture_account("alice");
@@ -9426,7 +9404,6 @@ fn state_get_preflights_gas_before_world_state_output() {
         [ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_STATE_GET).to_le_bytes()].concat();
     vm.load_program(&build_authenticated_test_contract_program_with_states(
         &code,
-        0,
         false,
         vec![ivm::EmbeddedStateDescriptor {
             name: path.to_string(),
@@ -10922,7 +10899,7 @@ fn input_publish_tlv_is_forwarded_to_default_host() {
         encoding::wide::encode_halt().to_le_bytes(),
     ]
     .concat();
-    let program = build_program(&code, 0);
+    let program = build_program(&code);
     vm.load_program(&program).unwrap();
     // Prepare a TLV in INPUT region and set x10 to its pointer (source)
     let payload = b"hello".to_vec();
@@ -11252,7 +11229,7 @@ fn get_public_input_preflights_exact_gas_before_guest_output() {
         &encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    vm.load_program(&build_program(&code, 0))
+    vm.load_program(&build_program(&code))
         .expect("load public-input program");
     vm.set_register(10, name_ptr);
     vm.set_register(11, 0xfeed);
@@ -11394,7 +11371,34 @@ fn runtime_obligation_host_refuses_baseline_missing_authority_and_other_subject(
 fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     bind_test_contract_runtime(&mut host, 872);
-    let mut vm = runtime_obligation_profile_vm(0);
+    let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
+            host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ..Default::default()
+        },
+    );
+    let program = compiler
+        .compile_source(
+            "seiyaku GasBoundary { kotoage fn call(bytes request) authorize(anyone) { \
+             ledger::runtime::register_obligation(request); } }",
+        )
+        .expect("compile genuine named-profile bridge");
+    let metadata =
+        ivm::ProgramMetadata::parse_for_policy(&program, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
+            .unwrap();
+    let syscall_word =
+        encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
+            .to_le_bytes();
+    let syscall_offset = program[metadata.code_offset..]
+        .chunks_exact(4)
+        .position(|word| word == syscall_word)
+        .expect("compiled bridge instruction")
+        * 4;
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program_for_policy(&program, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
+        .unwrap();
+    vm.set_program_counter((metadata.prefix_len() + syscall_offset) as u64)
+        .expect("actual admitted syscall boundary");
     let request = runtime_registration_request();
     let pointer = store_tlv(
         &mut vm,
@@ -11406,10 +11410,64 @@ fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
         11,
         ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
     );
-    assert!(matches!(
-        host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-        Err(ivm::VMError::OutOfGas)
-    ));
+    // Direct low-level host calls intentionally have no reserved gas. Exercise the real
+    // VM dispatcher, which must reserve the complete syscall cost before guest-visible work.
+    vm.set_gas_limit(20);
+    let error = vm
+        .run_with_host(&mut host)
+        .expect_err("original gas cannot fund the bridge");
+    assert!(matches!(error, ivm::VMError::OutOfGas), "{error:?}");
     assert_eq!(vm.register(10), pointer);
     assert!(host.queued.is_empty());
+}
+
+#[test]
+fn runtime_obligation_host_output_refusal_preserves_original_pointer_and_queue() {
+    for complete in [false, true] {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        bind_test_contract_runtime(&mut host, 873);
+        host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
+        let (request, tag) = if complete {
+            (
+                iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1 {
+                    owner: host
+                        .current_contract_runtime_context
+                        .as_ref()
+                        .unwrap()
+                        .contract_subject
+                        .clone(),
+                }
+                .into(),
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
+            )
+        } else {
+            (
+                runtime_registration_request(),
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+            )
+        };
+        let mut vm = runtime_obligation_profile_vm(1_000_000);
+        let pointer = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&request).unwrap(),
+        );
+        vm.set_register(10, pointer);
+        vm.set_register(11, tag);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+            Err(ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Items,
+                attempted: 1,
+                limit: 0,
+            })
+        ));
+        assert_eq!(
+            vm.register(10),
+            pointer,
+            "refused effect has no queue-success return"
+        );
+        assert_eq!(vm.register(11), tag);
+        assert!(host.queued.is_empty());
+    }
 }

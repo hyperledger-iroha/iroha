@@ -24,8 +24,10 @@ pub(crate) mod lifecycle_support;
 pub mod migration;
 pub(crate) mod native_amx_capture;
 pub(crate) mod native_escrow_capture;
+pub(crate) mod native_game_capture;
 pub(crate) mod obligations;
 pub(crate) mod restricted_dataspace_read;
+pub(crate) mod retirement;
 pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
@@ -96,7 +98,9 @@ pub fn activate_additions_for_testing(
         || through == catalog::additions::DEFERRED_CONSENT.module
         || through == catalog::additions::NATIVE_ESCROW_CAPTURE.module
         || through == catalog::additions::NATIVE_AMX_CAPTURE.module
+        || through == catalog::additions::NATIVE_GAME_CAPTURE.module
         || through == catalog::additions::CONTRACT_LIFECYCLE.module
+        || through == catalog::additions::RUNTIME_RETIREMENT.module
     {
         &catalog.additions[last..=last]
     } else {

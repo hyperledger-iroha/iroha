@@ -8,7 +8,7 @@ import queue
 import re
 import threading
 import time
-from typing import Any, Callable, Mapping, Optional, TypeVar
+from typing import Any, Callable, Mapping, Optional, Tuple, TypeVar
 from urllib.parse import urlsplit
 
 import requests
@@ -23,10 +23,13 @@ TRANSACTION_SUBMISSION_ROUTE_V1 = "/v1/pipeline/transactions"
 TRANSACTION_SUBMISSION_TIMEOUT_SECONDS_V1 = 30.0
 TRANSACTION_SUBMISSION_MAX_RESPONSE_BYTES_V1 = 1024 * 1024
 TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1 = 512
+#: Error bodies up to this size are offered to an injected error-envelope decoder.
+TRANSACTION_SUBMISSION_ERROR_ENVELOPE_MAX_BYTES_V1 = 64 * 1024
 
 __all__ = [
     "AmbiguousTransactionSubmissionError",
     "TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1",
+    "TRANSACTION_SUBMISSION_ERROR_ENVELOPE_MAX_BYTES_V1",
     "TRANSACTION_SUBMISSION_MAX_RESPONSE_BYTES_V1",
     "TRANSACTION_SUBMISSION_ROUTE_V1",
     "TRANSACTION_SUBMISSION_TIMEOUT_SECONDS_V1",
@@ -71,6 +74,9 @@ _DEFINITIVE_REJECTION_CODES_V1: Mapping[int, frozenset[str]] = {
 _HTTP_ADAPTER_SEND = requests.adapters.HTTPAdapter.send
 _HTTP_ADAPTER_CLOSE = requests.adapters.HTTPAdapter.close
 _VerifiedReceipt = TypeVar("_VerifiedReceipt")
+# ``(code, message, details)`` of Torii's canonical error envelope.
+_ErrorEnvelope = Tuple[str, str, Optional[Mapping[str, Any]]]
+_ErrorEnvelopeDecoder = Callable[[Optional[str], bytes], Optional[_ErrorEnvelope]]
 
 
 class _TransactionSubmissionDispatchSlot:
@@ -100,8 +106,23 @@ class _TransactionSubmissionDispatchSlot:
 _TRANSACTION_SUBMISSION_DISPATCH_SLOT = _TransactionSubmissionDispatchSlot()
 
 
+def _envelope_fields(
+    envelope: Optional[_ErrorEnvelope],
+) -> tuple[Optional[str], Optional[str], Optional[dict[str, Any]]]:
+    if envelope is None:
+        return None, None, None
+    code, message, details = envelope
+    return code, message, None if details is None else dict(details)
+
+
 class TransactionSubmissionHttpError(RuntimeError):
-    """A definitive non-202 HTTP response to one transaction submission."""
+    """A definitive non-202 HTTP response to one transaction submission.
+
+    When an injected decoder classified the body as Torii's canonical error
+    envelope, ``code``, ``error_message`` and ``details`` carry its code, exact
+    message and decoded details and ``body_preview`` is ``None``; otherwise
+    the three are ``None`` and ``body_preview`` keeps a printable prefix.
+    """
 
     def __init__(
         self,
@@ -111,17 +132,21 @@ class TransactionSubmissionHttpError(RuntimeError):
         reject_code: Optional[str],
         body_preview: Optional[str],
         body_truncated: bool,
+        envelope: Optional[_ErrorEnvelope] = None,
     ) -> None:
         self.hash_hex = hash_hex
         self.status_code = status_code
         self.reject_code = reject_code
         self.body_preview = body_preview
         self.body_truncated = body_truncated
+        self.code, self.error_message, self.details = _envelope_fields(envelope)
         message = (
             f"transaction submission for {hash_hex} requires HTTP 202; received HTTP {status_code}"
         )
         if reject_code is not None:
             message += f" (reject_code={reject_code})"
+        if self.code is not None:
+            message += f"; error={self.code}: {self.error_message}"
         if body_preview is not None:
             suffix = "..." if body_truncated else ""
             message += f"; body={body_preview}{suffix}"
@@ -140,7 +165,13 @@ class TransactionSubmissionNotDispatchedError(TimeoutError):
 
 
 class AmbiguousTransactionSubmissionError(RuntimeError):
-    """One dispatch began without authoritative admission evidence."""
+    """One dispatch began without authoritative admission evidence.
+
+    A decoded error envelope (``code``, ``error_message``, ``details``) is
+    diagnostic only, exactly like ``body_preview``: Torii's queue rejections
+    and HTTP 429/503 responses name a reject code and retry delay, but they do
+    not make the outcome definitive.
+    """
 
     def __init__(
         self,
@@ -151,6 +182,7 @@ class AmbiguousTransactionSubmissionError(RuntimeError):
         body_preview: Optional[str],
         body_truncated: bool,
         cause_kind: Optional[str] = None,
+        envelope: Optional[_ErrorEnvelope] = None,
     ) -> None:
         self.hash_hex = hash_hex
         self.status_code = status_code
@@ -158,6 +190,7 @@ class AmbiguousTransactionSubmissionError(RuntimeError):
         self.body_preview = body_preview
         self.body_truncated = body_truncated
         self.cause_kind = cause_kind
+        self.code, self.error_message, self.details = _envelope_fields(envelope)
         message = (
             f"transaction {hash_hex} had one dispatch attempt, but its admission outcome is unknown"
         )
@@ -165,6 +198,8 @@ class AmbiguousTransactionSubmissionError(RuntimeError):
             message += f" after HTTP {status_code}"
         if reject_code is not None:
             message += f" (reject_code={reject_code})"
+        if self.code is not None:
+            message += f"; error={self.code}: {self.error_message}"
         if body_preview is not None:
             suffix = "..." if body_truncated else ""
             message += f"; body={body_preview}{suffix}"
@@ -305,15 +340,54 @@ def _read_bounded_body(
     return bytes(body), False
 
 
-def _body_preview(response: Any, deadline: float) -> tuple[Optional[str], bool]:
-    body, truncated = _read_bounded_body(
-        response,
-        TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1,
-        deadline,
+def _decoded_error_envelope(
+    decode_error_envelope: _ErrorEnvelopeDecoder,
+    content_type: Optional[str],
+    body: bytes,
+) -> Optional[_ErrorEnvelope]:
+    """Return the decoder's ``(code, message, details)``; anything else is no envelope."""
+
+    try:
+        envelope = decode_error_envelope(content_type, body)
+    except Exception:
+        return None
+    if (
+        type(envelope) is not tuple
+        or len(envelope) != 3
+        or type(envelope[0]) is not str
+        or type(envelope[1]) is not str
+        or not (envelope[2] is None or isinstance(envelope[2], Mapping))
+    ):
+        return None
+    return envelope
+
+
+def _error_body(
+    response: Any,
+    deadline: float,
+    decode_error_envelope: Optional[_ErrorEnvelopeDecoder],
+) -> tuple[Optional[str], bool, Optional[_ErrorEnvelope]]:
+    """Classify a non-202 body: a decoded envelope, or a printable preview."""
+
+    limit = (
+        TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1
+        if decode_error_envelope is None
+        else TRANSACTION_SUBMISSION_ERROR_ENVELOPE_MAX_BYTES_V1
     )
-    text = body.decode("utf-8", "replace")
+    body, truncated = _read_bounded_body(response, limit, deadline)
+    if decode_error_envelope is not None and not truncated:
+        envelope = _decoded_error_envelope(
+            decode_error_envelope,
+            _response_header(response, "Content-Type", strict=False),
+            body,
+        )
+        if envelope is not None:
+            return None, False, envelope
+    preview = body[:TRANSACTION_SUBMISSION_BODY_PREVIEW_BYTES_V1]
+    truncated = truncated or len(body) > len(preview)
+    text = preview.decode("utf-8", "replace")
     text = "".join(character if character.isprintable() else "�" for character in text).strip()
-    return (text or None), truncated
+    return (text or None), truncated, None
 
 
 def _close_response(response: Any) -> None:
@@ -372,6 +446,7 @@ class _DispatchOutcome:
         "body_preview",
         "body_truncated",
         "cause_kind",
+        "envelope",
         "kind",
         "reject_code",
         "status_code",
@@ -387,6 +462,7 @@ class _DispatchOutcome:
         body_preview: Optional[str] = None,
         body_truncated: bool = False,
         cause_kind: Optional[str] = None,
+        envelope: Optional[_ErrorEnvelope] = None,
     ) -> None:
         self.kind = kind
         self.status_code = status_code
@@ -395,6 +471,7 @@ class _DispatchOutcome:
         self.body_preview = body_preview
         self.body_truncated = body_truncated
         self.cause_kind = cause_kind
+        self.envelope = envelope
 
 
 def _dispatch_and_collect_submission(
@@ -411,6 +488,7 @@ def _dispatch_and_collect_submission(
     response_lock: threading.Lock,
     shared_state: dict[str, Any],
     outcomes: queue.Queue[_DispatchOutcome],
+    decode_error_envelope: Optional[_ErrorEnvelopeDecoder] = None,
 ) -> None:
     response = None
     status_code: Optional[int] = None
@@ -473,15 +551,16 @@ def _dispatch_and_collect_submission(
             return
 
         try:
-            preview, truncated = _body_preview(response, deadline)
+            preview, truncated, envelope = _error_body(response, deadline, decode_error_envelope)
         except BaseException:
-            preview, truncated = None, False
+            preview, truncated, envelope = None, False, None
         outcome = _DispatchOutcome(
             "response",
             status_code=status_code,
             reject_code=reject_code,
             body_preview=preview,
             body_truncated=truncated,
+            envelope=envelope,
         )
     except BaseException as error:
         outcome = _DispatchOutcome(
@@ -535,6 +614,7 @@ def submit_transaction_once_v1(
     verify_receipt: Callable[[bytes, str, str], _VerifiedReceipt],
     headers: Optional[Mapping[str, str]] = None,
     timeout: float = TRANSACTION_SUBMISSION_TIMEOUT_SECONDS_V1,
+    decode_error_envelope: Optional[_ErrorEnvelopeDecoder] = None,
 ) -> _VerifiedReceipt:
     """Authenticate, dispatch once, and return only native-verified receipt evidence.
 
@@ -542,6 +622,13 @@ def submit_transaction_once_v1(
     inspector and verifier are trusted local code and must themselves be bounded. Submissions
     are process-wide single-flight: if the operating system never returns an in-flight network
     call, reconcile its hash and restart the process before submitting another transaction.
+
+    Torii answers this Norito negotiation with a binary error envelope. An injected
+    ``decode_error_envelope(content_type, body)`` (such as ``iroha_python``'s
+    ``decode_typed_error_envelope_v1``) classifies a complete non-202 body of at most
+    :data:`TRANSACTION_SUBMISSION_ERROR_ENVELOPE_MAX_BYTES_V1` bytes; its
+    ``(code, message, details)`` populates the raised error instead of the lossy preview.
+    It never changes whether the outcome is definitive or ambiguous.
     """
 
     body, timeout_seconds = _validate_submission_inputs(
@@ -553,6 +640,8 @@ def submit_transaction_once_v1(
         raise TypeError("inspect_transaction_submission must be callable")
     if not callable(verify_receipt):
         raise TypeError("verify_receipt must be callable")
+    if decode_error_envelope is not None and not callable(decode_error_envelope):
+        raise TypeError("decode_error_envelope must be callable")
     if (
         type(expected_receipt_signer) is not str
         or not expected_receipt_signer
@@ -617,6 +706,7 @@ def submit_transaction_once_v1(
                 "response_lock": response_lock,
                 "shared_state": shared_state,
                 "outcomes": outcomes,
+                "decode_error_envelope": decode_error_envelope,
             },
             name="iroha-transaction-submission-v1",
             daemon=True,
@@ -667,6 +757,7 @@ def submit_transaction_once_v1(
                 body_preview=outcome.body_preview,
                 body_truncated=outcome.body_truncated,
                 cause_kind=outcome.cause_kind,
+                envelope=outcome.envelope,
             ) from None
         assert outcome.status_code is not None
         raise TransactionSubmissionHttpError(
@@ -675,6 +766,7 @@ def submit_transaction_once_v1(
             reject_code=outcome.reject_code,
             body_preview=outcome.body_preview,
             body_truncated=outcome.body_truncated,
+            envelope=outcome.envelope,
         ) from None
     except queue.Empty:
         dispatch_started = _cancel_submission_worker(

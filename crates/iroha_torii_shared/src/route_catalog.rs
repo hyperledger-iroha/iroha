@@ -2748,6 +2748,18 @@ pub mod sumeragi {
         "/v1/game-partitions/{world}/exports/{receipt}/proof",
     )
     .with_projections(RouteProjections::SDK);
+    /// Discover one selected game transfer; this response grants no import or release authority.
+    pub const GAME_PARTITION_TRANSFER_STATE: RouteDescriptor = public_get(
+        "game_partition.transfer.read",
+        "/v1/game-partitions/{world}/transfers/{transfer}/state",
+    )
+    .with_projections(RouteProjections::SDK);
+    /// Read the exact original certified intent, reservation, export, import or cancellation.
+    pub const GAME_PARTITION_TRANSFER_PROOF: RouteDescriptor = public_get(
+        "game_partition.transfer_proof.read",
+        "/v1/game-partitions/{world}/transfers/{transfer}/proof/{kind}",
+    )
+    .with_projections(RouteProjections::SDK);
     /// Read the off-chain signing key an account registered, so verifiers of its off-chain
     /// signatures check them against committed state (`specs/account_signing_keys.md`).
     pub const ACCOUNT_SIGNING_KEY: RouteDescriptor = public_get(
@@ -2816,6 +2828,8 @@ pub mod sumeragi {
         PRIVATE_DATASPACE_RECORD_PROOF,
         GAME_PARTITION_STATE,
         GAME_PARTITION_EXPORT_PROOF,
+        GAME_PARTITION_TRANSFER_STATE,
+        GAME_PARTITION_TRANSFER_PROOF,
         ACCOUNT_SIGNING_KEY,
         SNS_DATASPACE_LEASE,
         PRIVATE_ROOT_REGISTRATION,
@@ -3014,6 +3028,33 @@ pub mod runtime_governance {
     /// and startup floors, and the checkpoints this node holds.
     pub const RUNTIME_BOUNDARIES: RouteDescriptor =
         operator_get("operator.runtime.boundary.list", "/v1/runtime/boundaries");
+    /// Descriptor of the one immutable exported checkpoint package configured on this node.
+    pub const RUNTIME_CHECKPOINT_PACKAGE: RouteDescriptor = operator_get(
+        "operator.runtime.checkpoint.package",
+        "/v1/runtime/checkpoint/package",
+    )
+    .with_private_no_store();
+    /// Metadata of an artifact in that package's closed inventory.
+    pub const RUNTIME_CHECKPOINT_ARTIFACT: RouteDescriptor = operator_post(
+        "operator.runtime.checkpoint.artifact",
+        "/v1/runtime/checkpoint/artifact",
+    )
+    .with_effect(RouteEffect::ReadOnly)
+    .with_private_no_store();
+    /// One bounded exact byte range of an original package artifact.
+    pub const RUNTIME_CHECKPOINT_RANGE: RouteDescriptor = operator_post(
+        "operator.runtime.checkpoint.range",
+        "/v1/runtime/checkpoint/range",
+    )
+    .with_effect(RouteEffect::ReadOnly)
+    .with_private_no_store();
+    /// Revalidate all original source artifacts after delivery.
+    pub const RUNTIME_CHECKPOINT_FINISH: RouteDescriptor = operator_post(
+        "operator.runtime.checkpoint.finish",
+        "/v1/runtime/checkpoint/finish",
+    )
+    .with_effect(RouteEffect::ReadOnly)
+    .with_private_no_store();
     /// Sign this node's statement of the adoption record it derives from its own store.
     pub const RUNTIME_BOUNDARY_ANCHOR_ATTEST: RouteDescriptor = operator_post(
         "operator.runtime.boundary.anchor.attest",
@@ -3241,6 +3282,10 @@ pub mod runtime_governance {
         RUNTIME_CONTAINMENTS,
         RUNTIME_MIGRATION_DRAFT,
         RUNTIME_BOUNDARIES,
+        RUNTIME_CHECKPOINT_PACKAGE,
+        RUNTIME_CHECKPOINT_ARTIFACT,
+        RUNTIME_CHECKPOINT_RANGE,
+        RUNTIME_CHECKPOINT_FINISH,
         RUNTIME_BOUNDARY_ANCHOR_ATTEST,
         RUNTIME_BOUNDARY_FLOOR_ATTEST,
         MINISTRY_AGENDA_DRAFT,

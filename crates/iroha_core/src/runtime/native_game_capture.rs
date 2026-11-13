@@ -34,7 +34,7 @@ pub(crate) fn enabled(selection: &RootSelectionV1) -> Result<bool, String> {
 }
 
 fn wires(role: Role) -> Vec<String> {
-    match role {
+    let mut wires = match role {
         Role::Destination => vec![
             ImportReservedGameUnitV1::WIRE_ID.into(),
             CancelReservedGameUnitImportV1::WIRE_ID.into(),
@@ -44,7 +44,25 @@ fn wires(role: Role) -> Vec<String> {
             CancelGameUnitExportRequestV1::WIRE_ID.into(),
             AcknowledgeGameUnitImportV1::WIRE_ID.into(),
         ],
+    };
+    wires.sort();
+    wires
+}
+
+fn validate_capture(role: Role, capture: &CompletionCaptureV1) -> Result<(), Error> {
+    capture.validate().map_err(refused)?;
+    let mut expected = wires(role);
+    expected.sort();
+    if !capture.host_profiles.is_empty()
+        || !capture
+            .terminal_effects()
+            .eq(expected.iter().map(String::as_str))
+    {
+        return Err(refused(
+            "native transfer capture differs from its exact role closure",
+        ));
     }
+    Ok(())
 }
 
 fn ensure_execution(
@@ -74,27 +92,57 @@ pub(crate) fn prepare(
             "destination-reserved transfer service is not selected",
         ));
     }
-    let mut capture = CompletionCaptureV1::capture(
-        tx.world.runtime_selection.canonical(),
-        &PublishedDefinitions(&tx.world.runtime_definitions),
+    let opening_wire = match role {
+        Role::Source => RequestGameUnitExportV1::WIRE_ID,
+        Role::Destination => ReserveGameUnitImportV1::WIRE_ID,
+    };
+    let canonical = tx.world.runtime_selection.canonical();
+    let binding = canonical
+        .bindings
+        .iter()
+        .find(|binding| binding.wire_id == opening_wire)
+        .ok_or_else(|| refused("native game opening is not selected"))?;
+    for id in [binding.interface, binding.implementation] {
+        if let Some(restriction) = super::blocking_restriction(canonical, &id, tx.block_height()) {
+            return Err(
+                iroha_data_model::runtime::lifecycle::RuntimeRejectionV1::DefinitionRestricted {
+                    definition: id,
+                    restriction,
+                }
+                .into(),
+            );
+        }
+    }
+    let definitions = PublishedDefinitions(&tx.world.runtime_definitions);
+    let mut native_selection = canonical.clone();
+    native_selection.active.retain(|id| {
+        !matches!(
+            definitions.definition(id),
+            Some(iroha_data_model::runtime::definition::DefinitionDescriptorV1::HostProfile(_))
+        )
+    });
+    let capture = CompletionCaptureV1::capture(
+        &native_selection,
+        &definitions,
         &wires(role),
         tx.block_height(),
     )
     .map_err(refused)?;
     // Reservation, proof validation and ACK perform no contract calls. Retaining unrelated
     // host profiles would give this native completion authority it does not need.
-    capture.host_profiles.clear();
+    validate_capture(role, &capture)?;
     ensure_execution(&tx.world, &capture)?;
     Ok(capture)
 }
 
 /// Verify the native handler is running the exact original completion before any writes.
 pub(crate) fn guard(tx: &StateTransaction<'_, '_>, row: &Record) -> Result<(), Error> {
-    row.validate().map_err(refused)?;
+    row.validate_shape().map_err(refused)?;
     let capture = row
         .capture
         .as_ref()
         .ok_or_else(|| refused("transfer has already completed"))?;
+    validate_capture(row.role, capture)?;
     ensure_execution(&tx.world, capture)
 }
 
@@ -140,13 +188,20 @@ pub(crate) fn prepare_execution(
     let Some(row) = tx.world.runtime_game_transfers.get(&id) else {
         return Ok(None);
     };
-    row.validate().map_err(refused)?;
+    row.validate_shape().map_err(refused)?;
     if row.role != role {
         return Err(refused("completion addresses the other root's custody"));
     }
+    if let Some(capture) = &row.capture {
+        validate_capture(row.role, capture)?;
+    }
     Ok(row.capture.as_ref().map(|capture| NativeExecution {
         capture: capture.clone(),
-        step: Step::Complete,
+        step: if instruction.as_any().is::<ExportReservedGameUnitV1>() {
+            Step::Continue
+        } else {
+            Step::Complete
+        },
     }))
 }
 
@@ -179,6 +234,11 @@ pub(crate) fn check_capacity_after(
         })
         .map(|(_, row)| &row.intent.unit)
         .collect();
+    if candidate.imported.len() + reservations.len() > GAME_PARTITION_MAX_RECEIPTS {
+        return Err(refused(
+            "import receipt capacity is held by original reservations",
+        ));
+    }
     if candidate.units.len() + reservations.len() > GAME_PARTITION_MAX_UNITS {
         return Err(refused(
             "active capacity is held by original import reservations",
@@ -328,9 +388,7 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
             Role::Destination => {} // Exact certified source cancellation released the reservation.
         }
         if let Some(capture) = &row.capture {
-            if !capture.host_profiles.is_empty() {
-                return Err(refused("native transfer captures unrelated host authority"));
-            }
+            validate_capture(row.role, capture)?;
             capture
                 .execution_selection(
                     world.runtime_selection(),
@@ -393,10 +451,12 @@ pub(crate) fn check_transition(
         .iter()
         .find(|a| a.module == super::catalog::additions::NATIVE_GAME_CAPTURE.module)
         .and_then(|a| a.storage.get("world.runtime_game_transfers"));
-    if storage.is_none_or(|storage| {
-        after_enabled != after.installed_storage.binary_search(storage).is_ok()
-    }) {
-        return Err("native game service and transfer table must be selected together".into());
+    if let Some(storage) = storage {
+        if after_enabled != after.installed_storage.binary_search(storage).is_ok() {
+            return Err("native game service and transfer table must be selected together".into());
+        }
+    } else if before_enabled || after_enabled {
+        return Err("native game service has no compiled transfer table".into());
     }
     if !before_enabled
         && after_enabled
@@ -433,4 +493,20 @@ pub(crate) fn check_transition(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_release_without_game_capture_does_not_block_unrelated_transitions() {
+        crate::runtime::catalog::test_catalog::with_additions(&[], || {
+            let world = crate::state::World::new();
+            let view = world.view();
+            let selection = view.runtime_selection();
+            assert!(!enabled(selection).unwrap());
+            assert_eq!(check_transition(&view, selection, selection), Ok(()));
+        });
+    }
 }

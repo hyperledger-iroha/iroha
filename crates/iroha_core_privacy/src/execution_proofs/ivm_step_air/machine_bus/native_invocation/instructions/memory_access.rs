@@ -71,7 +71,7 @@ impl MemoryAccesses {
                         .try_into()
                         .unwrap(),
                 );
-                value(&base.0).wrapping_add_signed(i64::from(ivm::instruction::wide::imm8(word)))
+                value(&base.0).wrapping_add_signed(i64::from(ivm::instruction::wide::imm14(word)))
             } else {
                 0
             };

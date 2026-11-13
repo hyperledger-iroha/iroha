@@ -152,6 +152,14 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     fenced = true; closed = true
     return enrollment
   }
+  /// Authenticate the future experimental program set before its separate account admission.
+  public func installSpartan(programBundle: Data, signedManifest: Data, signature: Data) throws -> KagemushaSpartanRuntimeV1 {
+    condition.lock(); defer { condition.unlock() }
+    guard !fenced, admission.canTransferToEnrollment else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
+    let selected = try runtime.installSpartan(programBundle: programBundle, signedManifest: signedManifest, signature: signature)
+    fenced = true; closed = true
+    return selected
+  }
   /// Retry ordinary refusal with the same original frames, Native Pending and exact signature.
   /// Explicit Task cancellation retires custody; successful admission transfers it once.
   public func open(originals: KagemushaWalletOpenOriginalsV1,

@@ -2,9 +2,9 @@
 
 use super::*;
 
-fn jump(opcode: u8, displacement: i16) -> u32 {
+fn jump(opcode: u8, displacement: i32) -> u32 {
     match opcode {
-        wide::control::JMP => enc::encode_offset24(opcode, i32::from(displacement)),
+        wide::control::JMP => enc::encode_offset24(opcode, displacement),
         wide::control::JAL => enc::encode_jump(opcode, 0, displacement),
         _ => unreachable!("pure direct jump fixture"),
     }
@@ -13,31 +13,27 @@ fn jump(opcode: u8, displacement: i16) -> u32 {
 fn unary_control_mix() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     recorded(
         &[
-            enc::encode_rr(wide::arithmetic::NEG, 20, 254, 255),
-            enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
+            enc::encode_rr(wide::arithmetic::NEG, 20, 30, 0),
+            enc::encode_rr(wide::arithmetic::NEG, 6, 6, 0),
             jump(wide::control::JMP, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
-            enc::encode_rr(wide::arithmetic::NOT, 7, 6, 255),
+            enc::encode_rr(wide::arithmetic::NOT, 7, 6, 0),
             jump(wide::control::JAL, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
-            enc::encode_rr(wide::arithmetic::NOT, 21, 20, 20),
+            enc::encode_rr(wide::arithmetic::NOT, 21, 20, 0),
             enc::encode_rr(wide::arithmetic::SLT, 22, 6, 7),
-            enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 7, -1),
+            enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 7, 63),
             jump(wide::control::JMP, 1),
             enc::encode_ri(wide::arithmetic::ADDI, 24, 23, -1),
         ],
         10,
-        &[
-            (6, i64::cast_unsigned(i64::MIN)),
-            (255, u64::MAX),
-            (254, 19),
-        ],
+        &[(6, i64::cast_unsigned(i64::MIN)), (31, u64::MAX), (30, 19)],
         u64::MAX,
     )
 }
 
 #[test]
-fn unary_ops_match_interpreter_wrapping_extrema_aliases_and_unused_fields() {
+fn unary_ops_match_interpreter_wrapping_extrema_aliases_and_r0() {
     for opcode in [wide::arithmetic::NEG, wide::arithmetic::NOT] {
         for value in [
             0,
@@ -47,11 +43,11 @@ fn unary_ops_match_interpreter_wrapping_extrema_aliases_and_unused_fields() {
             i64::MAX as u64,
             1 << 32,
         ] {
-            for (rd, src, unused) in [(8, 6, 255), (6, 6, 6), (0, 6, 255), (8, 0, 6), (0, 0, 0)] {
+            for (rd, src) in [(8, 6), (6, 6), (0, 6), (8, 0), (0, 0), (31, 6)] {
                 let (segment, records) = recorded(
-                    &[enc::encode_rr(opcode, rd, src, unused)],
+                    &[enc::encode_rr(opcode, rd, src, 0)],
                     1,
-                    &[(6, value), (255, !value)],
+                    &[(6, value), (31, !value)],
                     1_000,
                 );
                 let source = records[0].before.registers[usize::from(src)];
@@ -80,7 +76,7 @@ fn unary_gas_boundaries_keep_full_width_words_distinct_from_the_field_modulus() 
     // These are explicit later-segment boundaries, not root setup budgets.
     // A full Goldilocks modulus and its neighbours remain distinct gas words.
     let (segment, records) = recorded(
-        &[enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255)],
+        &[enc::encode_rr(wide::arithmetic::NOT, 6, 6, 0)],
         1,
         &[(6, 91)],
         1_000,
@@ -119,7 +115,7 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
                     enc::encode_ri(wide::arithmetic::ADDI, 7, 7, 1),
                 ],
                 1,
-                &[(6, 91), (7, 37), (255, u64::MAX)],
+                &[(6, 91), (7, 37), (31, u64::MAX)],
                 1_000,
             );
             assert_eq!(
@@ -140,14 +136,14 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
                 jump(opcode, -1),
             ],
             3,
-            &[(6, 91), (255, u64::MAX)],
+            &[(6, 91), (31, u64::MAX)],
             1_000,
         );
         assert_eq!(records[1].after.pc + 4, records[1].before.pc);
         assert_eq!(records[1].after.registers, records[1].before.registers);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
     }
-    for displacement in [i16::MIN, -1, 0, i16::MAX] {
+    for displacement in [wide::JAL_OFFSET_MIN, -1, 0, wide::JAL_OFFSET_MAX] {
         assert!(
             matches!(family(enc::encode_jump(wide::control::JAL, 0, displacement)), Some(Family::Jump(bytes)) if bytes == i64::from(displacement) * 4)
         );
@@ -157,7 +153,7 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
             matches!(family(enc::encode_offset24(wide::control::JMP, displacement)), Some(Family::Jump(bytes)) if bytes == i64::from(displacement) * 4)
         );
     }
-    for rd in [1, 2, 255] {
+    for rd in [1, 2, 31] {
         assert!(family(enc::encode_jump(wide::control::JAL, rd, 1)).is_none());
     }
     for opcode in [
@@ -183,8 +179,8 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
 #[test]
 fn unary_and_direct_control_coherent_false_boundaries_fail_air() {
     for word in [
-        enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
-        enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255),
+        enc::encode_rr(wide::arithmetic::NEG, 6, 6, 0),
+        enc::encode_rr(wide::arithmetic::NOT, 6, 6, 0),
         jump(wide::control::JMP, 2),
         jump(wide::control::JAL, 2),
     ] {
@@ -195,7 +191,7 @@ fn unary_and_direct_control_coherent_false_boundaries_fail_air() {
                 enc::encode_ri(wide::arithmetic::ADDI, 8, 8, 0),
             ],
             1,
-            &[(6, i64::cast_unsigned(i64::MIN)), (255, 37)],
+            &[(6, i64::cast_unsigned(i64::MIN)), (31, 37)],
             1_000,
         );
         for mutation in 0..6 {
@@ -204,7 +200,7 @@ fn unary_and_direct_control_coherent_false_boundaries_fail_air() {
             match mutation {
                 0 => after.registers[6] ^= 1,
                 1 => after.registers[6] ^= 1 << 32,
-                2 => after.registers[255] ^= 1,
+                2 => after.registers[31] ^= 1,
                 3 => after.gas_remaining -= 1,
                 4 => {
                     after.pc = if matches!(family(word), Some(Family::Jump(_))) {
@@ -234,8 +230,8 @@ fn unary_and_direct_control_coherent_false_boundaries_fail_air() {
 #[test]
 fn unary_and_direct_control_reject_every_interior_profile_column_mutation() {
     for word in [
-        enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
-        enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255),
+        enc::encode_rr(wide::arithmetic::NEG, 6, 6, 0),
+        enc::encode_rr(wide::arithmetic::NOT, 6, 6, 0),
         jump(wide::control::JMP, -1),
         jump(wide::control::JAL, -1),
     ] {
@@ -246,7 +242,7 @@ fn unary_and_direct_control_reject_every_interior_profile_column_mutation() {
                 enc::encode_ri(wide::arithmetic::ADDI, 25, 25, 0),
             ],
             3,
-            &[(6, i64::cast_unsigned(i64::MIN)), (255, u64::MAX)],
+            &[(6, i64::cast_unsigned(i64::MIN)), (31, u64::MAX)],
             1_000,
         );
         assert_eq!(records[1].instruction, Some(word));
@@ -277,8 +273,8 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
     assert_eq!(segment.after.registers[7], i64::MAX as u64);
     assert_eq!(segment.after.registers[20], 19_u64.wrapping_neg());
     assert_eq!(segment.after.registers[21], 18);
-    assert_eq!(segment.base_width_v1(), 1_356);
-    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+    assert_eq!(segment.base_width_v1(), 908);
+    assert_eq!(segment.profile_constraint_count_v1(), 2_025);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xd7; 32],
@@ -302,7 +298,7 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
     .unwrap();
     assert_eq!(
         maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap(),
-        4_153_152
+        3_149_632
     );
 }
 
@@ -342,8 +338,8 @@ fn native_stark_proves_unary_direct_mix_and_binds_unary_results_and_jump_artifac
 #[test]
 fn coherent_unary_banks_and_result_cannot_replace_the_canonical_source_read() {
     for opcode in [wide::arithmetic::NEG, wide::arithmetic::NOT] {
-        let word = enc::encode_rr(opcode, 6, 6, 255);
-        let (segment, records) = recorded(&[word], 1, &[(6, 11), (255, 37)], 1_000);
+        let word = enc::encode_rr(opcode, 6, 6, 0);
+        let (segment, records) = recorded(&[word], 1, &[(6, 11), (31, 37)], 1_000);
         let selected = family(word).unwrap();
         let Family::Alu(operation) = selected else {
             unreachable!()

@@ -31,7 +31,7 @@ fn capture(
 }
 
 fn first_branch(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFixture) {
-    let prefix = usize::try_from((-i16::from(wide::imm8(instruction))).max(0)).unwrap();
+    let prefix = usize::try_from((-wide::imm14(instruction)).max(0)).unwrap();
     let mut body = vec![enc::encode_ri(wide::arithmetic::ADDI, 0, 0, 0); prefix];
     body.push(instruction);
     let (program, recorder, _later_outcome) = capture(&body, inputs, 16, 32);
@@ -82,14 +82,14 @@ fn native_private_fetch_branches_cover_all_predicates_offsets_aliases_and_r0() {
                 );
             }
         }
-        for (left, right) in [(2, 2), (0, 0), (0, 3), (2, 0), (255, 254)] {
+        for (left, right) in [(2, 2), (0, 0), (0, 3), (2, 0), (31, 30)] {
             first_branch(
                 enc::encode_branch(opcode, left, right, 2),
                 &[
                     (2, u64::MAX, false),
                     (3, 1, false),
-                    (255, i64::cast_unsigned(i64::MIN), false),
-                    (254, i64::MAX as u64, false),
+                    (31, i64::cast_unsigned(i64::MIN), false),
+                    (30, i64::MAX as u64, false),
                 ],
             );
         }
@@ -288,9 +288,9 @@ fn canonical_preparation_rejects_branch_targets_outside_original_instruction_bou
         ivm::ivm_mode::ZK,
     );
     // The current qualification image has at most 64 words. Neither signed
-    // imm8 extreme can have an in-image target; code_end is not a boundary.
+    // 14-bit offset extreme can have an in-image target; code_end is not a boundary.
     for opcode in OPCODES {
-        for offset in [i8::MIN, -1, 5, i8::MAX] {
+        for offset in [wide::IMM14_MIN, -1, 5, wide::IMM14_MAX] {
             let mut invalid = artifact.artifact().to_vec();
             invalid[artifact.code_offset()..artifact.code_offset() + 4]
                 .copy_from_slice(&enc::encode_branch(opcode, 0, 0, offset).to_le_bytes());

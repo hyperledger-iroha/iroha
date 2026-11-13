@@ -358,6 +358,38 @@ commitment or services changes and executor replacement still require draining l
 These connected source paths require the current candidate's signed-root, resource-refusal and
 transition regressions before qualification.
 
+### Captured native game transfers
+
+The independent `iroha.runtime.native_game_capture.v1` addition installs
+`world.runtime_game_transfers` together with its native transfer service. It composes with the
+game-partition and lifecycle additions; activation refuses existing export/import receipts rather
+than inventing reservations or original completion authority for earlier transfers.
+
+The source first records an export intent and locks its exact unit. A certified intent admits a
+destination reservation, which holds both unit and receipt capacity and captures the destination's
+completion graph. Only the certified reservation permits source removal. The destination imports
+the certified export and emits an acknowledgement; the source releases its capture only after
+verifying that acknowledgement. Each remote step verifies the registered peer's finality and the
+exact original ordinary-write inclusion. Permanent export tombstones, import receipts and transfer
+identities prevent replay and duplicate custody. The native service retains no unrelated IVM host
+profile. Source export is a continuation; cancellation, import and acknowledgement are completions.
+
+Before export, the owner can cancel the original locked request. Its certified cancellation is the
+only cancellation authority for the destination reservation. A new request needs a fresh nonce;
+there is no timeout or owner refund after irreversible source removal. Partition mutations preserve
+reserved capacity and original source locks. Restore checks those correspondences and retained
+capture definitions, while transitions cannot strand a live transfer or discard its permanent
+proof and tombstone table. The older unreserved export/import handlers refuse under this service.
+
+`GET /v1/game-partitions/{world}/transfers/{transfer}/state` provides discovery.
+`GET /v1/game-partitions/{world}/transfers/{transfer}/proof/{kind}` returns original archived
+proofs for `intent`, `reservation`, `export`, `import` or `cancellation`. Discovery is not finality
+authority, and an unavailable original archive produces no substitute proof. Both routes use the
+ordinary authenticated, admitted query path and JSON/Norito response negotiation.
+
+The connected two-root, cancellation, substitution, resource-refusal and restore regressions
+still require current-candidate qualification before live activation.
+
 ### Registered obligations
 
 An account registers an obligation with the kernel (design §7.2;
@@ -542,6 +574,69 @@ authenticated checkpoint refuses a store with a boundary instead of copying and 
   policy, anchor, floors and history boundary, and the upgrade checkpoint and checkpoints the
   node holds.
 
+### Portable checkpoint transfer
+
+`snapshot::transfer::export_checkpoint` copies one retained signed checkpoint and exports its
+certified ancestry into a new private directory. The stopped-store entry point is
+`iroha3d --config <file> --check-replay --export-runtime-checkpoint <H>
+--runtime-checkpoint-output <new-directory>`; export follows a successful native replay. The
+package contains `snapshots/`, `kura/` and the last-written `checkpoint-transfer.json` inventory.
+It preserves the snapshot signature and reports its public verification key. The joining node
+configures those two stores and that key, keeps its independently pinned genesis, and starts in
+Strict mode. The inventory grants no finality or State authority.
+
+The bounded delivery source is `snapshot::transfer::transport::ExportedCheckpoint`. Its fixed
+artifact indices name only that package's snapshot files, canonical journals and certified prefix
+frames, plus the original configured lane-catalog baseline journal. Bootstrap establishes this
+journal before writing canonical bodies; receiving startup compares it with its own configured
+catalog and refuses a mismatch. The closed inventory contains H + 16 artifacts. A package
+descriptor binds the chain, network, height, generation time, chunk bound and
+ordered SHA-256 inventory. The provider retains charged original file snapshots and checks each
+reopened source; delivery uses a constant number of file descriptors. The receiver admits its
+inventory and buffers before creating a fresh private directory, checks lengths and digests,
+rechecks the actual sealed destination bytes, and publishes the original transfer marker last.
+Substitution, truncation, an unavailable source or original resource refusal cannot complete it.
+
+`[torii.runtime_checkpoint]` selects an optional already-exported `package_dir`. Without it the
+delivery routes have no source. The node opens the configured package against its own chain and
+network and rejects one below its authenticated startup floor. The operator-authenticated routes
+are `GET /v1/runtime/checkpoint/package` and `POST /v1/runtime/checkpoint/{artifact,range,finish}`.
+Every POST binds the exact inventory digest and accepts at most 1 KiB; ranges use artifact indices
+and offsets, never caller-provided paths. Each response also checks the node's current floor, so
+later floor advancement makes a stale package unavailable. Normal query admission and response
+custody bound retained bytes through HTTP drain.
+
+The file-configured limits are `max_artifacts`, `max_total_bytes`, `max_artifact_bytes`,
+`chunk_bytes` and `source_memory_bytes`; their defaults are 1,048,576 artifacts, 64 GiB total,
+16 GiB per artifact, 1 MiB chunks and 256 MiB source memory. The fixed chunk ceiling is 4 MiB.
+`request_timeout_ms` defaults to 30 seconds and `transfer_timeout_ms` to a single 30-minute
+receive deadline. These settings bound local transport, not chain execution or finality.
+
+`iroha3d --config <file> --receive-runtime-checkpoint-from <Torii-origin>
+--runtime-checkpoint-output <new-directory>` uses the configured node key for operator signatures.
+An optional `--runtime-checkpoint-api-token-file` supplies the remote API-token gate from a bounded
+owner-private runtime file. The command does not infer credentials from the local server allowlist.
+It checks a copy of the received stores through normal Strict restoration, requires snapshot H and
+matched actual H+1 replay, and compares the claimed H hash and P_H with original certified history
+before reporting success. It changes neither the input node configuration nor the source stores.
+
+The sparse Kura store retains full genesis and actual H+1. Bodies 2 through H are absent. For
+every height 2 through H+1, `PortablePrefixFrameV1` carries the original exact-quorum certificate,
+signed availability metadata and the minimal original systematic RS16 rows needed to decode
+the canonical proposal header. Its successor authenticates the executed parent header, core
+result and committee progression; the final successor binds the complete published State P_H.
+Exact parent DA bundles reproduce the historical query indexes under their authenticated header
+commitments. The verifier binds every parent hash to the snapshot's journal and verifies the
+complete prefix before startup accepts an omitted body. These observations never manufacture a
+native full-body receipt, transaction proof or body for an omitted height.
+
+Kura stages bounded private proof files and bootstrap images, records a recoverable intent and
+publishes the durable count last. Strict reopening verifies the entire portable prefix before
+ordinary journal reconciliation. The original proof files remain bound during reads; local
+decoder and allocation refusals retain their original retry owners. Complete-State authentication
+and native execution of the retained H+1 remain required after snapshot decoding. Current-candidate
+transfer, sparse-store restart, DA reconstruction and native catch-up qualification remain open.
+
 ### Checkpoint production and retention
 
 A checkpoint at height `h` is the published State after block `h`, where `h` is the first block
@@ -601,6 +696,42 @@ snapshot alone grants neither authority nor permission to discard earlier bodies
 The startup re-validation of the signed genesis execution policy stays after an anchor is
 ratified. It is the only guard on the validity inputs a node still takes from its
 configuration; it goes when those inputs are committed State (ZK delivery F.4).
+
+## Permanent definition retirement
+
+The independent `iroha.runtime.retirement.v1` addition selects the native `runtime_retirement`
+service and installs `world.runtime_retirements`. It requires the governed startup-floor storage
+to be installed first. Its first block conservatively records every already-published definition;
+later blocks advance a definition's last-required height only while selected execution or a live
+completion closure needs it. Retained disabled descriptors alone do not advance that height.
+The table, its original rollback cut and its canonical complete-State proofs retain these rows.
+
+`RetireRuntimeDefinitionV1` (`iroha.runtime.retirement.finalize.v1`) can publish an ordinary-write
+receipt only for an already-published native implementation that governance has disabled, whose
+live execution and completion dependencies have drained, and whose effective startup floor is
+strictly above its last-required height. The census retains `governed_excluded_at` from the exact
+successful disable/deactivation transition, because deactivation removes the selection's transient
+restriction. A never-active published definition without that explicit authorization cannot be
+retired. Reactivation before finalization clears the pending authorization; the final receipt
+prevents later reactivation. The receipt binds the signed-genesis network, root scope,
+consensus instance, definition, history and exclusion heights, floor and carrier height. Its
+exclusion is permanent: a later change set cannot re-enable the definition or discard the history
+service/storage. A refresh preserves the exclusion and last-required height. Restoring either the
+current or rollback cut checks the receipt against the authenticated root and that cut's height.
+
+`runtime::retirement` verifies exact ordinary-write inclusion under native finality for the parent
+and every child in the parent's authenticated permanent private-root registry. A missing child
+receipt blocks coverage. A child proof must match the registry's original genesis authority and
+exact current certified cursor; a proof cannot nominate its own committee or root. This is
+statement coverage, not permission to remove source. The current producer does not emit claims
+about unknown definitions, and the independently signed child-admin upgrade corridor remains
+unimplemented. Stored-value codecs, checkpoint readers, proof verifiers and descriptors stay live.
+Exact native-code coverage additionally requires receipts for every compiled alias and every alias
+retained in the parent State that shares the module and archived reference-source identity. A
+single retired ID cannot hide a live service-composed alias. This still does not prove the absence
+of unknown aliases retained only by a child root, or shared Rust dependencies. Current-candidate
+tests, authenticated child-local alias coverage, reviewed source ownership and a real oldest-floor
+restart after source removal remain qualification work.
 
 ## Notice policy
 
@@ -827,15 +958,18 @@ from snapshots; Strict start on stores holding a660d601da triggers and a
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
 
-- **Obligations:** qualify the selected native escrow and AMX captures and the selected contract
-  kernel bridge; register in-flight game-unit exports with a captured closure;
+- **Obligations:** qualify the selected native escrow, AMX and game captures and the selected contract
+  kernel bridge, including the two-root reservation/export/import/acknowledgement protocol;
   narrower authenticated dynamic-call manifests. Registered account/contract obligations now
   execute captured bindings, but replacing root-wide profiles still requires draining them.
 - **Migrations:** storage capabilities and generic carriers.
 - **Checkpoints:** qualify original-image replay across pre-acknowledgement crashes, interrupted
-  staging and repeated startup, including typed resource retries and pending-spool crash recovery; starting a node from a
-  transferred checkpoint without the block bodies below it (a body-independent certified prefix,
-  sparse Kura history and peer transfer); the deletion guard and the retirement rehearsal.
+  staging and repeated startup, including typed resource retries and pending-spool crash recovery;
+  qualify the connected portable export, sparse Kura restore, authenticated DA projections and
+  native successor replay without earlier block bodies; qualify bounded peer delivery and copied
+  received-store replay; qualify permanent
+  retirement history and authenticated every-root receipts, then the source-deletion guard and
+  oldest-floor retirement rehearsal.
 - **Taira's anchor:** Taira's validators run a release with these records, a change set
   activates `iroha.runtime.lifecycle.v1` (its Ironwood with Time composition, after Taira's Time
   and Ironwood activation), each validator signs the record against its own store, and any

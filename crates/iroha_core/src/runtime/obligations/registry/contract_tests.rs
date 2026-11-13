@@ -11,6 +11,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    Registrable,
     account::{Account, AccountDetails, AccountValue},
     block::BlockHeader,
     isi::{Log, runtime_obligation::RegisterContractRuntimeObligationV1},

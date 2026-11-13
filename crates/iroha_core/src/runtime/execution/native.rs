@@ -11,7 +11,7 @@ use super::NativeExecution;
 use crate::{
     runtime::{
         change_set::PublishedDefinitions, native_amx_capture, native_escrow_capture,
-        obligations::Step,
+        native_game_capture, obligations::Step,
     },
     state::StateTransaction,
 };
@@ -51,6 +51,11 @@ pub(crate) fn with_native_obligation<T>(
     let native = match native {
         Some(native) => Some(native),
         None => native_amx_capture::prepare_execution(transaction, instruction)
+            .map_err(ValidationFail::InstructionFailed)?,
+    };
+    let native = match native {
+        Some(native) => Some(native),
+        None => native_game_capture::prepare_execution(transaction, instruction)
             .map_err(ValidationFail::InstructionFailed)?,
     };
     match native {

@@ -4,20 +4,18 @@ mod contract_deployment;
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
-use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
 use std::num::NonZeroU64;
+/// Gas the caller signs for one sample invocation; the artifact derives no budget.
+const SAMPLE_GAS_LIMIT: u64 = 20_000_000;
 fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent> {
-    let parsed =
-        ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
-    let gas_limit = gas_limit_for_meta(&parsed.metadata)
-        .map_err(|error| eyre::eyre!("invalid IVM cycle limit: {error:?}"))?;
+    ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
     Ok(FeePaymentIntent::authority(
         Vec::new(),
-        NonZeroU64::new(gas_limit),
+        NonZeroU64::new(SAMPLE_GAS_LIMIT),
     ))
 }
 /// Deploy the exact sample and delegate only its declared invocation and metadata effect.

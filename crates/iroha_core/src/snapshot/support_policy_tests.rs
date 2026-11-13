@@ -246,7 +246,7 @@ fn native_snapshot_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
     .expect("original signed native genesis")
 }
 
-fn authenticate_native_snapshot(source: &State, restored: &mut State) {
+pub(crate) fn authenticate_native_snapshot(source: &State, restored: &mut State) {
     restored.set_gov(source.gov.clone());
     restored.set_pipeline(iroha_config::parameters::actual::Pipeline::default());
     assert!(restored.authenticate_restored_keyed_state().unwrap());
@@ -1536,6 +1536,6 @@ fn seed_snapshot_genesis_resolver_checkpoint(state: &State) {
     world.commit();
 }
 
-fn snapshot_read_budget_for_testing() -> AllocationBudget {
+pub(crate) fn snapshot_read_budget_for_testing() -> AllocationBudget {
     AllocationBudget::new(iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get())
 }

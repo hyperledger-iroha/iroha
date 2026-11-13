@@ -242,7 +242,10 @@ mod tests {
             let store = wide::encode_store(isa::memory::STORE64, 29, 7, imm);
             assert_eq!(isa::store_base(store), 29);
             assert_eq!(isa::store_value(store), 7);
-            assert_eq!(wide::decode_store(store), (isa::memory::STORE64, 29, 7, imm));
+            assert_eq!(
+                wide::decode_store(store),
+                (isa::memory::STORE64, 29, 7, imm)
+            );
             let branch = wide::encode_branch(isa::control::BLT, 3, 4, imm);
             assert_eq!(wide::decode_branch(branch), (isa::control::BLT, 3, 4, imm));
             for word in [ri, store, branch] {

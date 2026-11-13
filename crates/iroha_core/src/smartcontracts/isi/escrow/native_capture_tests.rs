@@ -14,7 +14,8 @@ fn native_capture_funded_escrow_completes_through_executor_after_compiled_rebind
     let state = state_with_parties(&seller, &buyer, &court, &asset, Quantity::from(100_u32));
     activate_additions_for_testing(&state.world, NATIVE_ESCROW_CAPTURE.module).unwrap();
     let mut block = state.block(block_header(&state, 1000));
-    let mut tx = block.transaction();
+    let mut tx =
+        block.transaction_for_fastpq_testing(Hash::new(b"captured-native-escrow-invocation"));
     let id = fixture_escrow_id("captured-executor");
     let executor = tx.world.executor.clone();
     executor
@@ -151,7 +152,8 @@ fn native_capture_acceptance_cannot_borrow_a_registered_completion_exemption() {
     activate_additions_for_testing(&state.world, RUNTIME_LIFECYCLE.module).unwrap();
     activate_additions_for_testing(&state.world, NATIVE_ESCROW_CAPTURE.module).unwrap();
     let mut block = state.block(block_header(&state, 1000));
-    let mut tx = block.transaction();
+    let mut tx =
+        block.transaction_for_fastpq_testing(Hash::new(b"captured-native-escrow-invocation"));
     let id = fixture_escrow_id("capture-accept");
     let executor = tx.world.executor.clone();
     executor

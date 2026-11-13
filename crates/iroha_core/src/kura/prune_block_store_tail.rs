@@ -24,7 +24,10 @@ impl BlockStore {
     }
     fn maybe_fail_prune_after_stage(fail_stage: usize, stage: usize) {
         #[cfg(test)]
-        assert!(fail_stage != stage, "injected block-store prune crash after stage {stage}");
+        assert!(
+            fail_stage != stage,
+            "injected block-store prune crash after stage {stage}"
+        );
         #[cfg(not(test))]
         let _ = (fail_stage, stage);
     }
@@ -33,6 +36,13 @@ impl BlockStore {
         self.prune_durable(height, fail_stage)
     }
     fn prune_durable(&mut self, height: u64, fail_stage: usize) -> Result<()> {
+        if self
+            .checkpoint_prefix
+            .as_ref()
+            .is_some_and(|proof| height <= proof.checkpoint().header().height().get())
+        {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
         self.invalidate_data_mmap();
         let logical_count = self.read_index_count_from_len()?;
         let durable_count = self.read_durable_index_count()?;

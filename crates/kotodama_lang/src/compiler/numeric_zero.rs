@@ -107,16 +107,11 @@ impl Block {
             | m::LDLIT
             | m::LDI64 => self.clear_written(instruction::wide::rd(word)),
             m::STORE64 => {} // Stores do not write a scalar register.
-            s::SCALL | s::SYSTEM => {
-                let number = if opcode == s::SCALL {
-                    word & 0xff
-                } else {
-                    word & 0x00ff_ffff
-                };
+            s::SCALL => {
                 // These exact sole-kernel operations write only r10/r11 (the
                 // comparisons only r10), including recoverable arithmetic faults.
                 // No other host syscall is inferred to preserve r12–r14.
-                if !preserves_inputs(number) {
+                if !preserves_inputs(instruction::wide::syscall_number(word)) {
                     self.zero = 0;
                 }
             }

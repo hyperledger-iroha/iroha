@@ -91,7 +91,11 @@ impl DeltaTraceLog {
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
         self.validate_scope(scope)?;
-        if self.pending.is_some() || rows == 0 || first_changes > REGISTER_COUNT || repeated_changes > REGISTER_COUNT {
+        if self.pending.is_some()
+            || rows == 0
+            || first_changes > REGISTER_COUNT
+            || repeated_changes > REGISTER_COUNT
+        {
             return Err(VMError::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
             ));

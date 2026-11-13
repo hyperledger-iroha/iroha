@@ -1,6 +1,6 @@
 //! Public-session security diagnostics for Kotodama V1 `Secret<T>` flows.
 use kotodama_lang::{
-    compiler::{CompilerOptions, DEFAULT_MAX_CYCLES},
+    compiler::CompilerOptions,
     diagnostic::{DiagnosticBundle, DiagnosticPhase, Severity},
     session::{CompileRequest, CompilerSession},
 };
@@ -17,7 +17,6 @@ include!(concat!(env!("OUT_DIR"), "/kotodama_secret_reject_cases.rs"));
 fn zk_session() -> CompilerSession {
     CompilerSession::new(CompilerOptions {
         force_zk: true,
-        max_cycles: DEFAULT_MAX_CYCLES,
         ..CompilerOptions::default()
     })
 }

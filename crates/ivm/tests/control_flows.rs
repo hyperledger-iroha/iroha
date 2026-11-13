@@ -9,7 +9,7 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     assemble(&bytes)
 }
-fn enc_branch(op: u8, rs1: u8, rs2: u8, offset_words: i8) -> u32 {
+fn enc_branch(op: u8, rs1: u8, rs2: u8, offset_words: i16) -> u32 {
     encoding::wide::encode_branch(op, rs1, rs2, offset_words)
 }
 #[test]

@@ -204,6 +204,19 @@ pub trait BlockStore: BodyReader {
     /// # Errors
     /// I/O, corruption and resource refusal remain errors, never missing entries.
     fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>>;
+    /// Optional independently authenticated ascending startup header window.
+    /// Portable checkpoints can retain these headers without a block body or `SyncEntry`.
+    /// `None` keeps the ordinary complete-entry walk; `Some` must cover every requested height.
+    ///
+    /// # Errors
+    /// Original proof, source or resource refusal; never fabricate available payload custody.
+    fn startup_headers(
+        &self,
+        _first: u64,
+        _last: u64,
+    ) -> Result<Option<Vec<iroha_sumeragi::message::BlockHeader>>, Attempt<io::Error>> {
+        Ok(None)
+    }
     /// Resolve the exact authenticated historical schedule independently of stored bytes.
     ///
     /// # Errors

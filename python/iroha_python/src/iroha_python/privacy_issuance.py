@@ -365,12 +365,13 @@ def _decode_error_response_v1(
             retry_after_seconds=retry_after_seconds,
         )
         # A canonical envelope must still name exactly this status's code as both
-        # its code and message; any other envelope is an invalid response.
+        # its code and message and carry no details; any other envelope is an
+        # invalid response.
         if status == 406:
-            code, message = decode_json_error_envelope_v1(body)
+            code, message, details = decode_json_error_envelope_v1(body)
         else:
-            code, message = decode_norito_error_envelope_v1(body)
-        if code != expected_code or message != expected_code:
+            code, message, details = decode_norito_error_envelope_v1(body)
+        if code != expected_code or message != expected_code or details is not None:
             raise ValueError("error envelope does not match its HTTP status")
     except BootleLanternIssuanceClientErrorV1:
         raise

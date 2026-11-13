@@ -516,6 +516,28 @@ mod addition_tests {
             expected.extend(composition.replacements.values().copied());
             expected.extend(composition.addition.definitions());
         }
+        for composition in catalog.native_amx_capture_compositions.values() {
+            expected.insert(composition.services);
+            expected.extend(composition.replacements.values().copied());
+            expected.extend(composition.addition.definitions());
+        }
+        for composition in catalog.native_game_capture_compositions.values() {
+            expected.insert(composition.services);
+            expected.extend(composition.replacements.values().copied());
+            expected.extend(composition.addition.definitions());
+            for prerequisite in &composition.prerequisites {
+                expected.extend(prerequisite.definitions());
+            }
+        }
+        for composition in catalog.retirement_compositions.values() {
+            expected.insert(composition.services);
+            expected.extend(composition.replacements.values().copied());
+            expected.extend(composition.addition.definitions());
+        }
+        for composition in catalog.contract_lifecycle_compositions.values() {
+            expected.extend([composition.host, composition.registry]);
+            expected.extend(composition.addition.definitions());
+        }
         // The typed committed parameters are published, never part of a founded selection.
         expected.extend(catalog.parameter_definitions());
         // The keyed State profile publishes storage for the State-level owners it adopts, its

@@ -71,7 +71,7 @@ fn local_resources_of(pipeline: &Pipeline) -> String {
         ivm_max_decoded_instructions: _,
         ivm_max_decoded_bytes: _,
         quarantine_max_txs_per_block: _,
-        quarantine_tx_max_cycles: _,
+        quarantine_tx_max_gas: _,
         query_default_cursor_mode,
         query_max_fetch_size: _,
         query_stored_min_gas_units: _,
@@ -153,7 +153,7 @@ fn divergent_node_pipeline(base: &Pipeline) -> Pipeline {
     node.ivm_max_decoded_instructions = 1;
     node.ivm_max_decoded_bytes = 1;
     node.quarantine_max_txs_per_block = 9;
-    node.quarantine_tx_max_cycles = 9;
+    node.quarantine_tx_max_gas = 9;
     node.query_max_fetch_size = 1;
     node.query_stored_min_gas_units = 77;
     node.amx_per_dataspace_budget_ms = 1;
@@ -410,19 +410,10 @@ fn install_node_pipeline_keeps_local_resources_and_ignores_validity_values() {
         policy_of(&state.pipeline_snapshot()),
         PipelineValidityPolicyV1::protocol_default()
     );
+    // The ZK trace-bound ceiling is the committed policy value alone; fuel does not narrow it.
     assert_eq!(
         state.ivm_admission_cycle_limit().get(),
-        PipelineValidityPolicyV1::protocol_default()
-            .ivm_max_cycles_upper_bound
-            .min(
-                state
-                    .view()
-                    .world()
-                    .parameters()
-                    .smart_contract()
-                    .fuel()
-                    .get()
-            )
+        PipelineValidityPolicyV1::protocol_default().ivm_max_cycles_upper_bound
     );
     // The stateless cache follows the node's own setting.
     assert_eq!(
@@ -465,15 +456,7 @@ fn committed_policy_decides_every_view_and_block_under_divergent_node_configurat
         drop(block);
         assert_eq!(
             state.ivm_admission_cycle_limit().get(),
-            policy.ivm_max_cycles_upper_bound.min(
-                state
-                    .view()
-                    .world()
-                    .parameters()
-                    .smart_contract()
-                    .fuel()
-                    .get()
-            )
+            policy.ivm_max_cycles_upper_bound
         );
     }
     assert_eq!(

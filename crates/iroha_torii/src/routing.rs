@@ -43819,7 +43819,7 @@ pub mod validation_fee_torii_ingress_tests {
             wide::encode_store(memory::STORE64, 12, 0, 0),
             wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
             wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
-            wide::encode_rr(control::JALR, 0, 1, 0),
+            wide::encode_ri(control::JALR, 0, 1, 0),
         ]
         .into_iter()
         .flat_map(u32::to_le_bytes)
@@ -43845,7 +43845,7 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 4,
+            max_cycles: 0,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -43926,7 +43926,7 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 4,
+            max_cycles: 0,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -58705,20 +58705,12 @@ instructions: Vec<InstructionBox>,
         tx_instructions,
     }))
 }
-fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
-    let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_scall(u32::from(opcode))
-            .to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ivm::ProgramMetadata {
-        max_cycles: max_cycles.get(),
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
-    blob.extend_from_slice(&code);
+/// One `SCALL` and `HALT` under the default non-ZK header, which declares no trace bound:
+/// gas, supplied when the trigger fires, is the program's only execution budget.
+fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
+    let mut blob = ivm::ProgramMetadata::default().encode();
+    blob.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
+    blob.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     IvmBytecode::from_compiled(blob)
 }
 fn build_billing_trigger(
@@ -58726,7 +58718,6 @@ fn build_billing_trigger(
     authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
-    max_cycles: NonZeroU64,
 ) -> Trigger {
     use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
     let schedule = Schedule {
@@ -58743,7 +58734,6 @@ fn build_billing_trigger(
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-            max_cycles,
         )),
         Repeats::Exactly(1),
         authority,
@@ -58753,16 +58743,11 @@ fn build_billing_trigger(
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
 }
-fn build_usage_trigger(
-    trigger_id: TriggerId,
-    authority: AccountId,
-    max_cycles: NonZeroU64,
-) -> Trigger {
+fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
-            max_cycles,
         )),
         Repeats::Indefinitely,
         authority.clone(),
@@ -58908,16 +58893,11 @@ pub async fn handle_post_v1_subscription_create(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
-            state.ivm_admission_cycle_limit(),
         ),
     )));
     if let Some(ref usage_trigger_id) = usage_trigger_id {
         instructions.push(InstructionBox::from(Register::trigger(
-            build_usage_trigger(
-                usage_trigger_id.clone(),
-                authority.clone(),
-                state.ivm_admission_cycle_limit(),
-            ),
+            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
         )));
     }
     let provider_usage_grant_included = usage_trigger_id.is_some()
@@ -59125,7 +59105,6 @@ pub async fn handle_post_v1_subscription_resume(
             authority.clone(),
             subscription_id.clone(),
             next_charge_ms,
-            state.ivm_admission_cycle_limit(),
         ),
     )));
     subscription_action_draft_response(
@@ -59353,7 +59332,6 @@ pub async fn handle_post_v1_subscription_charge_now(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
-            state.ivm_admission_cycle_limit(),
         ),
     )));
     subscription_action_draft_response(

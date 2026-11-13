@@ -7,19 +7,19 @@ fn push_word(code: &mut Vec<u8>, word: u32) {
 fn halt(code: &mut Vec<u8>) {
     push_word(code, encoding::wide::encode_halt());
 }
-fn store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i8) {
+fn store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i16) {
     push_word(
         code,
         encoding::wide::encode_store(instruction::wide::memory::STORE64, base, rs, imm),
     );
 }
-fn load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i8) {
+fn load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i16) {
     push_word(
         code,
         encoding::wide::encode_load(instruction::wide::memory::LOAD64, rd, base, imm),
     );
 }
-fn addi(code: &mut Vec<u8>, rd: u8, rs: u8, imm: i8) {
+fn addi(code: &mut Vec<u8>, rd: u8, rs: u8, imm: i16) {
     push_word(
         code,
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs, imm),

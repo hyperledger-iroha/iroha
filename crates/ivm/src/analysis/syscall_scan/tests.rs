@@ -1,7 +1,7 @@
 //! Classifiers preserve executable order and the canonical decoder boundary.
 
 use super::*;
-use crate::{encoding::wide as enc, instruction::wide};
+use crate::encoding::wide as enc;
 
 #[test]
 fn borrowed_scan_preserves_repeated_full_width_ids_and_sorted_first_selection() {

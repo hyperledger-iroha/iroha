@@ -1027,6 +1027,7 @@ mod tests {
                 )),
             },
             torii: Torii {
+                runtime_checkpoint: Default::default(),
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
                 cors: iroha_config::parameters::actual::ToriiCors::default(),
                 max_content_len: 1_048_576u64.into(),
@@ -1460,8 +1461,8 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
                 quarantine_max_txs_per_block:
                     iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-                quarantine_tx_max_cycles:
-                    iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+                quarantine_tx_max_gas:
+                    iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_GAS,
                 query_default_cursor_mode:
                     iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
                 query_max_fetch_size:

@@ -42,6 +42,9 @@ struct Rows {
     /// The time of the parent block, when the next block has one: the height-progress
     /// ticket is due from it.
     parent_time_ms: Option<u64>,
+    /// The `(height, time)` of every block whose next due time disagreed with the due
+    /// predicate; tests assert it stays empty after their own checks.
+    next_due_disagreements: Vec<(u64, u64)>,
 }
 
 fn header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -138,14 +141,25 @@ impl Rows {
         let state = self.state();
         let mut block = state.block(header(height, timestamp_ms));
         // Tables that disagree have no due answer; the pass reports them.
-        let due = parliament_due(
-            &block.world,
-            height,
-            timestamp_ms,
-            self.parent_time_ms,
-            |slot| pulse_at(slot).is_some(),
-        )
+        let due_at = |time_ms| {
+            parliament_due(&block.world, height, time_ms, self.parent_time_ms, |slot| {
+                pulse_at(slot).is_some()
+            })
+        };
+        let due = due_at(timestamp_ms).ok();
+        let next = parliament_next_due_ms(&block.world, height, self.parent_time_ms, |slot| {
+            pulse_at(slot).is_some()
+        })
         .ok();
+        if let (Some(due), Some(next)) = (due, next) {
+            let exact = next.is_none_or(|next| {
+                due_at(next).ok() == Some(true)
+                    && (next == 0 || due_at(next - 1).ok() == Some(false))
+            });
+            if due != next.is_some_and(|next| next <= timestamp_ms) || !exact {
+                self.next_due_disagreements.push((height, timestamp_ms));
+            }
+        }
         let report = run_parliament_pass(&mut block, pulse_at, self.parent_time_ms)?;
         if let Some(due) = due {
             assert_eq!(
@@ -194,6 +208,15 @@ impl Rows {
         let state = self.state();
         let block = state.block(header(1, 1));
         open_casting_windows(&*block.world.parliament_anonymous_boards)
+    }
+
+    /// Every block so far had Parliament work due exactly from its next due time on.
+    fn assert_next_due_agreed(&self) {
+        assert!(
+            self.next_due_disagreements.is_empty(),
+            "the next due time agrees with the due predicate: {:?}",
+            self.next_due_disagreements
+        );
     }
 
     /// The earliest due time of the attempt's live lifecycle items.
@@ -396,6 +419,7 @@ fn a_carried_pulse_draws_its_generation_once_and_a_missing_pulse_is_not_due() {
         .expect("the pass");
     assert_eq!(again.processed, 0);
     assert_eq!(rows.attempt(), &driver.state);
+    rows.assert_next_due_agreed();
 }
 
 #[test]
@@ -494,6 +518,56 @@ fn a_jury_ballot_runs_from_reflection_to_its_closure_in_world() {
     // A terminal attempt has no due item.
     let after = rows.block(height + 1, closing_ms + 1);
     assert!(!after.governance_due_applied());
+    rows.assert_next_due_agreed();
+}
+
+#[test]
+fn the_next_due_time_is_the_earliest_time_parliament_work_falls_due() {
+    let next = |rows: &Rows, height: u64, parent_time_ms: Option<u64>, pulse: bool| {
+        let state = rows.state();
+        let block = state.block(header(height, 1));
+        parliament_next_due_ms(&block.world, height, parent_time_ms, |_| pulse)
+            .expect("a due answer")
+    };
+    // No attempt: no time makes Parliament work due.
+    assert_eq!(next(&Rows::default(), 2, Some(1), true), None);
+
+    // A deliberating jury: the earliest live lifecycle item.
+    let (rows, height) = jury_in_deliberation();
+    assert_eq!(next(&rows, height + 1, None, false), Some(rows.next_due()));
+
+    // A generation awaiting its slot: the ticket from the parent cadence, unless the slot's
+    // pulse is available, which makes the draw due at any time.
+    let mut driver = Driver::new(RiskTierV1::Standard, 40);
+    driver.qualify();
+    driver.register_initial();
+    let rows = Rows::of(&driver, &Vec::new());
+    let slot = driver.state.awaiting_slots()[0];
+    let cadence = block_cadence_ms(&rows);
+    let lifecycle = rows
+        .attempt()
+        .lifecycle_items()
+        .expect("items")
+        .first()
+        .map(|item| item.due_ms);
+    let parent_ms = driver.now_ms;
+    let ticket = parent_ms + cadence;
+    let early_parent_ms = lifecycle.map_or(parent_ms, |due| {
+        due.checked_sub(cadence + 1)
+            .expect("lifecycle deadlines lie past one cadence")
+    });
+    assert_eq!(
+        next(&rows, driver.height + 1, Some(early_parent_ms), false),
+        Some(early_parent_ms + cadence),
+        "the height-progress ticket is the next due time"
+    );
+    assert_eq!(
+        next(&rows, driver.height + 1, Some(parent_ms), false),
+        Some(lifecycle.map_or(ticket, |due| due.min(ticket)))
+    );
+    assert_eq!(next(&rows, slot, Some(parent_ms), true), Some(0));
+    // Past its slot without the pulse the generation leaves no ticket.
+    assert_eq!(next(&rows, slot + 1, Some(parent_ms), false), lifecycle);
 }
 
 #[test]
@@ -561,6 +635,7 @@ fn a_full_casting_set_defers_the_opening_without_a_position() {
         })
     );
     assert_eq!(real(&rows).opening_at_ms, Some(opening_at));
+    rows.assert_next_due_agreed();
 }
 
 #[test]
@@ -723,6 +798,8 @@ fn the_height_progress_ticket_is_due_from_the_parent_cadence_and_ends_at_its_slo
         !missed.block(slot + 1, now_ms).governance_due_applied(),
         "a slot that passed without its pulse leaves no height-progress ticket"
     );
+    rows.assert_next_due_agreed();
+    missed.assert_next_due_agreed();
 }
 
 #[test]
@@ -819,7 +896,8 @@ fn an_item_whose_rows_do_not_fit_the_partition_stays_due() {
 fn the_dispatch_runs_parliament_only_on_a_root_that_installs_the_family() {
     use crate::{
         smartcontracts::isi::sccp::parliament_iface::{
-            governance_due, governance_due_on_global_root,
+            governance_due, governance_due_on_global_root, next_governance_progress_at_ms,
+            next_governance_progress_on_global_root,
         },
         state::governance_start::run_on_global_chain,
     };
@@ -841,6 +919,15 @@ fn the_dispatch_runs_parliament_only_on_a_root_that_installs_the_family() {
         assert_eq!(
             governance_due(&block.world, None, height, now_ms),
             Ok(false)
+        );
+        // The keeper's deadline is the qualification start's due time, the creation time.
+        assert_eq!(
+            next_governance_progress_on_global_root(&block.world, None, height),
+            Ok(installed.then_some(CREATED_MS))
+        );
+        assert_eq!(
+            next_governance_progress_at_ms(&block.world, None, height),
+            Ok(None)
         );
         let mut calls = 0;
         run_on_global_chain::<()>(&mut block, |_| {

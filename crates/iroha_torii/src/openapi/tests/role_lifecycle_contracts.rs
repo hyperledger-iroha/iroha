@@ -114,9 +114,7 @@ fn role_aggregate_schemas_bound_aliases_and_preserve_metric_value_types() {
 
     let document = canonical_document();
     let schemas = component_schemas(&document);
-    // `norito::json!` takes one token per object value, so the path is bound first.
-    let maximum = u64::MAX;
-    let count = norito::json!({"type": "integer", "minimum": 0, "maximum": maximum});
+    let count = norito::json!({"type": "integer", "minimum": 0, "maximum": (u64::MAX)});
     for (name, metric) in [
         ("AccountRoleAggregateRow", count.clone()),
         (

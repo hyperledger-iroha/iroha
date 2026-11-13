@@ -615,7 +615,7 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
-fn strict_snapshot_read_for_custody_test<F>(
+pub(crate) fn strict_snapshot_read_for_custody_test<F>(
     store: &Path,
     source: &State,
     kura: &Arc<Kura>,

@@ -62,14 +62,14 @@ mod tests {
     use super::{NumericFaultV1, PointerAbiFaultV1, RoundingModeV1};
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
-        for tag in 1..=13 {
+        for tag in 1..=14 {
             assert_eq!(
                 NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag),
                 Some(tag)
             );
         }
         assert_eq!(NumericFaultV1::from_tag(0), None);
-        assert_eq!(NumericFaultV1::from_tag(14), None);
+        assert_eq!(NumericFaultV1::from_tag(15), None);
     }
     #[test]
     fn rounding_tags_are_complete_and_stable() {

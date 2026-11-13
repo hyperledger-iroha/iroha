@@ -59,6 +59,9 @@ mod confidential_policy_tests;
 #[path = "table_capture/contract_subject_tests.rs"]
 mod contract_subject_tests;
 #[cfg(test)]
+#[path = "table_capture/native_game_tests.rs"]
+mod native_game_tests;
+#[cfg(test)]
 #[path = "table_capture/native_test_support.rs"]
 mod native_test_support;
 #[path = "table_capture/native_world.rs"]
@@ -66,6 +69,9 @@ mod native_world;
 #[cfg(test)]
 #[path = "table_capture/proof_status_tests.rs"]
 mod proof_status_tests;
+#[cfg(test)]
+#[path = "table_capture/runtime_retirement_tests.rs"]
+mod runtime_retirement_tests;
 #[cfg(test)]
 #[path = "table_capture/sorafs_authority_tests.rs"]
 mod sorafs_authority_tests;
@@ -279,6 +285,11 @@ capture_world_table_once!(
     capture_runtime_game_transfers_once,
     runtime_game_transfers,
     "world.runtime_game_transfers"
+);
+capture_world_table_once!(
+    capture_runtime_retirements_once,
+    runtime_retirements,
+    "world.runtime_retirements"
 );
 capture_world_table_once!(
     capture_runtime_escrow_captures_once,
@@ -944,6 +955,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_runtime_deferred_consents_once::MATERIALIZER,
     capture_runtime_amx_captures_once::MATERIALIZER,
     capture_runtime_game_transfers_once::MATERIALIZER,
+    capture_runtime_retirements_once::MATERIALIZER,
     capture_runtime_escrow_captures_once::MATERIALIZER,
     capture_runtime_migrations_once::MATERIALIZER,
     capture_runtime_boundaries_once::MATERIALIZER,
@@ -1413,6 +1425,7 @@ mod tests {
             "world.runtime_deferred_consents",
             "world.runtime_amx_captures",
             "world.runtime_game_transfers",
+            "world.runtime_retirements",
             "world.runtime_escrow_captures",
             "world.runtime_migrations",
             "world.runtime_boundaries",

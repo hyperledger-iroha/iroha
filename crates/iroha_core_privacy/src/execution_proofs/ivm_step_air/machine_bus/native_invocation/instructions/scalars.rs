@@ -23,15 +23,13 @@ const OPCODES: [u8; 17] = [
     wide::arithmetic::MAX,
 ];
 
-fn instruction(opcode: u8, destination: u8, right: u8, immediate: i8) -> u32 {
+fn instruction(opcode: u8, destination: u8, right: u8, immediate: i16) -> u32 {
     match opcode {
         wide::arithmetic::ADDI
         | wide::arithmetic::ANDI
         | wide::arithmetic::ORI
         | wide::arithmetic::XORI => enc::encode_ri(opcode, destination, 4, immediate),
-        wide::arithmetic::NEG | wide::arithmetic::NOT => {
-            enc::encode_rr(opcode, destination, 4, 255)
-        }
+        wide::arithmetic::NEG | wide::arithmetic::NOT => enc::encode_rr(opcode, destination, 4, 0),
         _ => enc::encode_rr(opcode, destination, 4, right),
     }
 }
@@ -39,7 +37,7 @@ fn instruction(opcode: u8, destination: u8, right: u8, immediate: i8) -> u32 {
 // Expected expression values are a test oracle only. Neither Source nor witness
 // construction receives this function or any expected native result.
 fn expected(instruction: u32, left: u64, right: u64) -> u64 {
-    let immediate = i64::cast_unsigned(i64::from(wide::imm8(instruction)));
+    let immediate = i64::cast_unsigned(i64::from(wide::imm14(instruction)));
     match wide::opcode(instruction) {
         wide::arithmetic::ADD => left.wrapping_add(right),
         wide::arithmetic::SUB => left.wrapping_sub(right),
@@ -78,10 +76,10 @@ fn value(packet: &ivm::execution_packets::NativePacket, after: bool) -> u64 {
 #[test]
 fn every_public_expression_uses_full_words_original_sources_and_atomic_alias_writes() {
     let inputs = [
-        (0, u64::MAX, i8::MIN),
+        (0, u64::MAX, wide::IMM14_MIN),
         (u64::MAX, 1, -1),
         (i64::cast_unsigned(i64::MIN), i64::MAX as u64, 0),
-        (0xffff_ffff_0000_0001, 0, i8::MAX),
+        (0xffff_ffff_0000_0001, 0, wide::IMM14_MAX),
     ];
     for (left, right, immediate) in inputs {
         for (destination, second) in [(6, 5), (4, 5), (5, 5), (0, 5), (4, 4), (6, 0)] {
@@ -158,15 +156,15 @@ fn every_public_expression_uses_full_words_original_sources_and_atomic_alias_wri
 
 #[test]
 fn zero_and_maximum_register_sources_do_not_disappear_when_destination_is_r0() {
-    let mut body = vec![enc::encode_literal(wide::memory::LDI64, 255, 0)];
+    let mut body = vec![enc::encode_literal(wide::memory::LDI64, 31, 0)];
     for opcode in OPCODES {
         let word = match opcode {
             wide::arithmetic::ADDI
             | wide::arithmetic::ANDI
             | wide::arithmetic::ORI
             | wide::arithmetic::XORI => enc::encode_ri(opcode, 0, 0, -1),
-            wide::arithmetic::NEG | wide::arithmetic::NOT => enc::encode_rr(opcode, 0, 255, 255),
-            _ => enc::encode_rr(opcode, 0, 0, 255),
+            wide::arithmetic::NEG | wide::arithmetic::NOT => enc::encode_rr(opcode, 0, 31, 0),
+            _ => enc::encode_rr(opcode, 0, 0, 31),
         };
         body.push(word);
     }

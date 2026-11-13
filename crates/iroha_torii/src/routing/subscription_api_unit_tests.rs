@@ -53,16 +53,26 @@ fn subscription_status_uses_the_shared_collection_filter() {
     let limits = crate::collections::Limits::from_page_limits(50, 200);
     let query = ListQuery::new().filter(field("status").eq("past_due"));
     let prepared = crate::collections::prepare(
-        &crate::collections::specs::SUBSCRIPTIONS, "", &query, &limits,
-    ).unwrap();
+        &crate::collections::specs::SUBSCRIPTIONS,
+        "",
+        &query,
+        &limits,
+    )
+    .unwrap();
     let matching = norito::json!({"status": "past_due"});
     let active = norito::json!({"status": "active"});
     assert!(prepared.matches(matching.as_object().unwrap()));
     assert!(!prepared.matches(active.as_object().unwrap()));
     let invalid = ListQuery::new().filter(field("retired_status").eq("past_due"));
-    assert!(crate::collections::prepare(
-        &crate::collections::specs::SUBSCRIPTIONS, "", &invalid, &limits,
-    ).is_err());
+    assert!(
+        crate::collections::prepare(
+            &crate::collections::specs::SUBSCRIPTIONS,
+            "",
+            &invalid,
+            &limits,
+        )
+        .is_err()
+    );
 }
 #[test]
 fn subscription_plan_from_metadata_roundtrips() {
@@ -165,16 +175,15 @@ fn network_time_ms_is_nonzero() {
 }
 #[test]
 fn ivm_syscall_program_emits_bytecode() {
-    let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
-    let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
+    let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
     assert!(!program.as_ref().is_empty());
     assert_eq!(
         ivm::ProgramMetadata::parse(program.as_ref())
             .expect("generated subscription program metadata")
             .metadata
             .max_cycles,
-        configured_limit.get(),
-        "Torii must embed the live admission ceiling, not a compiled default"
+        0,
+        "a non-ZK program declares no trace bound; gas is its only budget"
     );
     let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
         .summarize_executable(program.as_ref())
@@ -195,7 +204,6 @@ fn build_billing_trigger_attaches_metadata_and_schedule() {
         authority.clone(),
         subscription_id.clone(),
         55,
-        defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
     );
     assert_eq!(trigger.id(), &trigger_id);
     let meta = trigger.metadata();
@@ -221,11 +229,7 @@ fn build_usage_trigger_uses_execute_filter() {
     use iroha_data_model::events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter};
     let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
     let authority = ALICE_ID.clone();
-    let trigger = build_usage_trigger(
-        trigger_id.clone(),
-        authority.clone(),
-        defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-    );
+    let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
     match trigger.action().filter() {
         EventFilterBox::ExecuteTrigger(filter) => {
             let expected = ExecuteTriggerEventFilter::new()

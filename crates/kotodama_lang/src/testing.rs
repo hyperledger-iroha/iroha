@@ -70,6 +70,7 @@ rejection_traps! {
     InvalidMetadata => InvalidMetadata, UnsupportedProgramVersion => UnsupportedProgramVersion,
     UnsupportedProgramFeatureBits => UnsupportedProgramFeatureBits,
     UnsupportedProgramAbiVersion => UnsupportedProgramAbiVersion,
+    MissingMaxCycles => MissingMaxCycles, MaxCyclesWithoutZk => MaxCyclesWithoutZk,
     ArtifactAbiHashMismatch => ArtifactAbiHashMismatch,
     GenericSyscallNotAllowed => GenericSyscallNotAllowed,
     MissingHalt => MissingHalt, RuntimePermissionDenied => PermissionDenied,

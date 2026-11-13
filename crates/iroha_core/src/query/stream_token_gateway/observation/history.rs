@@ -349,7 +349,7 @@ fn prepare_targets(
         return Err(Error::Authority.into());
     }
     let tip = u64::try_from(view.block_hashes().len()).map_err(|_| Error::Finality)?;
-    let now_ms = crate::sumeragi::certified_chain::committed_block(view, tip)
+    let now_ms = crate::sumeragi::certified_chain::committed_identity(view, tip)
         .map_err(|error| error.map_rejection(|_| Error::Finality))?
         .block_time_ms();
     let mut targets = Targets::new();
@@ -726,6 +726,8 @@ fn authenticate_target(
     exact_source(target, policies, entry, prepared, block.block_time_ms())
 }
 
+// The enclosing observation operation retains original-pool refund notifications from
+// before view acquisition until this borrowed cut, the view and any publication lease drop.
 pub(super) fn authenticate<'view, 'state, 'bound>(
     view: &'view StateView<'state>,
     prepared: &PreparedStreamTokenGatewayCheckV1,

@@ -69,15 +69,20 @@ fn test_arithmetic_operations() {
     vm.load_program(&prog_tmp).unwrap();
     vm.run().expect("DIV negative failed");
     assert_eq!(vm.register(3) as i64, -5);
-    // 4c. Division by zero triggers AssertionFailed
+    // 4c. Division by zero traps with the numeric DivisionByZero fault
     vm.set_register(1, 10);
     vm.set_register(2, 0);
     let prog_tmp = assemble_words(&[div_word, HALT_WORD]);
     vm.load_program(&prog_tmp).unwrap();
     let result = vm.run();
     assert!(
-        matches!(result, Err(VMError::AssertionFailed)),
-        "Expected AssertionFailed on div by zero"
+        matches!(
+            result,
+            Err(VMError::NumericFault(
+                ivm::numeric::NumericFaultV1::DivisionByZero
+            ))
+        ),
+        "Expected DivisionByZero on div by zero, got {result:?}"
     );
     // 5. Test that x0 stays 0 (writes to x0 are ignored)
     vm.set_register(1, 42);
@@ -143,7 +148,12 @@ fn math_helpers_min_max_abs_divceil_gcd_mean() {
         HALT_WORD,
     ]);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(VMError::AssertionFailed)));
+    assert!(matches!(
+        vm.run(),
+        Err(VMError::NumericFault(
+            ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
+        ))
+    ));
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     // GCD(48, 18) = 6
     vm.set_register(1, 48);

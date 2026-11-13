@@ -562,7 +562,7 @@ mod tests {
         let abi = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
         assert_eq!(
             abi,
-            "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7"
+            "bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849"
         );
         println!(
             "Ironwood wire_schema_hash={} ivm_abi={abi}",

@@ -103,7 +103,7 @@ pub(super) fn gas_witness(gas: u64) -> ([F; absolute::WIDTH], [F; mean::GAS_WIDT
 pub(super) struct Selection {
     pub(super) fetched: F,
     pub(super) out_of_gas: F,
-    pub(super) assertion_failed: F,
+    pub(super) numeric_fault: F,
     pub(super) entry: F,
     pub(super) work: F,
     pub(super) commit: F,
@@ -139,7 +139,7 @@ pub(super) fn append_residues(
     let Selection {
         fetched,
         out_of_gas,
-        assertion_failed,
+        numeric_fault,
         entry,
         work,
         commit,
@@ -270,7 +270,8 @@ pub(super) fn append_residues(
     out.push(fetched.mul(delta.mul(gas_bank[0])));
     out.push(fetched.mul(gas_bank[0].mul(gas_bank[1])));
     out.push(fetched.mul(gas_bank[0].sub(out_of_gas)));
-    out.push(fetched.mul(assertion_failed));
+    // GCD is total; only gas exhaustion can trap it.
+    out.push(fetched.mul(numeric_fault));
     for (index, value) in absolute_bank.iter().copied().enumerate() {
         if index != GAS_DIGIT_THREE {
             out.push(fetched.mul(value));

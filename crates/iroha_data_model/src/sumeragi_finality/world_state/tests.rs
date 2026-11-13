@@ -93,7 +93,7 @@ fn world_original_accepts_262144_entries_and_refuses_262145_below_the_byte_limit
     };
     assert_eq!(
         error.to_string(),
-        "World snapshot entries or schema exceed their bound"
+        "current finality: World snapshot entries or schema exceed their bound"
     );
 }
 
@@ -160,7 +160,7 @@ fn world_original_accepts_exactly_32_mib_and_refuses_one_extra_canonical_byte() 
     };
     assert_eq!(
         error.to_string(),
-        "World snapshot original exceeds its byte bound"
+        "current finality: World snapshot original exceeds its byte bound"
     );
 }
 

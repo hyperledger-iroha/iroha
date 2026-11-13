@@ -49,12 +49,9 @@ const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(300);
 const SOURCE: &str = include_str!("../../crates/ivm/examples/tides_partition_fixture/contract.ko");
 
 fn artifact() -> Result<Vec<u8>> {
-    kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
-        max_cycles: 1_000_000,
-        ..Default::default()
-    })
-    .compile_source(SOURCE)
-    .map_err(|error| eyre!("compile Tides fixture: {error}"))
+    kotodama_lang::compiler::Compiler::new()
+        .compile_source(SOURCE)
+        .map_err(|error| eyre!("compile Tides fixture: {error}"))
 }
 
 fn block_gas_parameter() -> Parameter {
@@ -194,8 +191,8 @@ fn tides_fixture_has_bounded_real_ivm_entrypoints() -> Result<()> {
     let code = artifact()?;
     let verified = ivm::verify_contract_artifact(&code)?;
     ensure!(
-        verified.metadata.max_cycles == 1_000_000,
-        "fixture must retain its cycle bound"
+        verified.metadata.max_cycles == 0,
+        "a non-ZK fixture declares no trace bound; gas is its only budget"
     );
     for name in [
         "hajimari",
@@ -309,7 +306,7 @@ async fn run() -> Result<()> {
         });
     let code = artifact()?;
     println!(
-        "TIDES_NATIVE_DEPLOYED_ARTIFACT bytes={} sha256={} max_cycles=1000000",
+        "TIDES_NATIVE_DEPLOYED_ARTIFACT bytes={} sha256={}",
         code.len(),
         hex::encode(sha2::Sha256::digest(&code))
     );

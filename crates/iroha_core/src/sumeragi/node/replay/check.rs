@@ -320,8 +320,10 @@ pub enum ReplayCheckError {
 /// Copy the store `source` holds into a fresh directory in the system temporary directory and
 /// open the copy as temporary staging: a Strict Kura under `configured_lane_catalog` that removes
 /// the copy when dropped. Every regular file and directory is copied except the store-root lock,
-/// so blocks, native execution context records, lane stores and lane geometry journals come
-/// along. Keep `source` open in emergency-Fast mode while copying: its store-root lock keeps a
+/// so blocks, native execution context records, lane stores, lane geometry journals, and
+/// portable checkpoint proofs and original bootstrap images come along. Sparse index slots
+/// remain unavailable bodies; Strict opening re-verifies their copied proofs. Keep `source`
+/// open in emergency-Fast mode while copying: its store-root lock keeps a
 /// node from starting on the original, and nothing in the original is written. The copy keeps
 /// `config` except that it opens in Strict mode, without a disk budget or debug block output.
 /// `progress` receives the bytes copied so far.

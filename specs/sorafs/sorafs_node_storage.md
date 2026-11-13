@@ -883,7 +883,9 @@ same immutable State view, durable finalized ancestry, admission, permission,
 assignment revision and exact completion payload. Expiration checks use both
 finalized consensus time and local UTC; completion epochs remain consensus-bound.
 
-Complete publisher staging is the initial source. Optional
+Complete publisher staging is the initial source. While a payload is still being staged,
+the outbox persists the next poll and the number of actual source failures. A timed-out
+fetch or a rejected payload consumes the configured retry budget. Optional
 `native_source_origins` maps canonical provider-id hex to explicit HTTPS origins;
 only numeric loopback HTTP origins are permitted for local networks. Redirects,
 environment proxies and encoded HTTP response bodies are disabled.

@@ -8,15 +8,17 @@
 //! destination when false. POPCNT/CLZ/CTZ share the existing Boolean source
 //! bits and one zero-prefix bank. MUL/MULHU/MULHSU/MULH reuse that workspace
 //! for exact product digits with bounded carries and signed corrections. DIV/DIVU/
-//! REM/REMU and signed ABS include exact last-attempt gas/arithmetic traps before
-//! invocation cleanup. ABS rejects `i64::MIN` after the one-unit gas debit.
+//! REM/REMU and signed ABS include exact last-attempt gas and numeric-fault traps
+//! (zero divisor, signed overflow) before invocation cleanup. ABS traps
+//! `i64::MIN` as a numeric fault after the one-unit gas debit.
 //! MEAN computes the signed 65-bit sum and truncates toward zero, charging two
-//! gas units and completing three cycles. Final-attempt cycle admission follows
-//! the interpreter pre-dispatch limit, including a completed last-step crossing.
+//! gas units and completing three cycles. A ZK artifact's final-attempt cycle
+//! admission follows the interpreter pre-dispatch trace bound, including a
+//! completed last-step crossing; a non-ZK artifact has no cycle limit.
 //! ISQRT proves n=q²+r and 0<=r<=2q with a 32-bit root, charging six gas
 //! and cycles. `DIV_CEIL` proves the signed quotient plus its exact same-sign
 //! nonzero-remainder correction, charging twelve gas and cycles; OOG takes
-//! precedence over denominator-zero and signed-overflow traps. All use the
+//! precedence over the zero-divisor and signed-overflow numeric faults. All use the
 //! existing arithmetic workspaces. GCD uses five constrained mode cells and
 //! 93 physical rows per attempt whenever the complete authenticated code contains
 //! a GCD opcode (including unreachable words); other programs use one row per
@@ -25,8 +27,9 @@
 //! deployment authority, finality or invocation completion.
 //! There is no serialized statement or production verifier registration. The
 //! interpreter recorder provides untrusted witness material, never authority.
-//! Cycle admission uses the immutable artifact policy, including the default
-//! ZK limit. Host `set_max_cycles` overrides are outside this bounded relation.
+//! Cycle admission uses the immutable artifact header: `max_cycles` is the ZK
+//! trace bound, nonzero exactly for ZK artifacts, and gas bounds all execution.
+//! Host `set_max_cycles` overrides are outside this bounded relation.
 // TODO: Bind this substrate into the sole complete IVM invocation AIR only after
 // memory, host/state, private execution, call ownership and terminal relations exist.
 
@@ -58,7 +61,8 @@ use super::{
 const MAX_STEPS: usize = 64;
 const MAX_WORDS: usize = 64;
 const _: () = assert!(MAX_STEPS * gcd::STRIDE < TRACE_SIZE);
-const REGISTERS: usize = 256;
+const REGISTERS: usize = 32;
+const _: () = assert!(REGISTERS == ivm::parallel::REGISTER_COUNT);
 const REGISTER_WIDTH: usize = REGISTERS * 2;
 const PC: usize = REGISTER_WIDTH;
 const GAS: usize = PC + 1;
@@ -84,7 +88,7 @@ const TRANSITION: usize = 1;
 const FIRST: usize = 2;
 const END: usize = 3;
 const OUT_OF_GAS: usize = 4;
-const ASSERTION_FAILED: usize = 5;
+const NUMERIC_FAULT: usize = 5;
 const LAST_ATTEMPT: usize = 6;
 const SLOT_ENTRY: usize = 7;
 const SLOT_WORK: usize = 8;
@@ -138,7 +142,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-scalar-segment-fri-beta-v1",
     query_seed: b"ivm-scalar-segment-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:isqrt:root32:square-plus-remainder:strict-next-square:gas6-cycles6:div-ceil:signed-quotient:nonzero-same-sign-correction:gas12-cycles12:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:gcd:signed-input-unsigned-magnitude:euclid-exact-product-remainder:terminal-denominator-zero:fixed91-divisions:program-derived-stride=93-if-any-code-word-opcode-is-gcd-else-1:entry-work-commit:gas12-cycles12-once:no-internal-traps:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
+const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:32-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:signed-imm14:branch-off14-words:rotate-amount6:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:direct-jmp-off24-jal-rd0-off19:cmov-cmovi-signed-imm14:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:zk-last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:isqrt:root32:square-plus-remainder:strict-next-square:gas6-cycles6:div-ceil:signed-quotient:nonzero-same-sign-correction:gas12-cycles12:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-numeric-fault-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:zero-divisor-and-signed-overflow-numeric-fault:typed-last-attempt-outcome=continue-numeric-fault-out-of-gas:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit=zk-header-max-cycles:non-zk-unbounded:no-host-cycle-overrides:gcd:signed-input-unsigned-magnitude:euclid-exact-product-remainder:terminal-denominator-zero:fixed91-divisions:program-derived-stride=93-if-any-code-word-opcode-is-gcd-else-1:entry-work-commit:gas12-cycles12-once:no-internal-traps:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
 const BRANCH_OPS: [u8; 6] = [
     wide::control::BEQ,
     wide::control::BNE,
@@ -229,7 +233,7 @@ fn family(word: u32) -> Option<Family> {
         wide::arithmetic::CMOV => return Some(Family::Move(Operand::Register(wide::rs1(word)))),
         wide::arithmetic::CMOVI => {
             return Some(Family::Move(Operand::Constant(i64::cast_unsigned(
-                i64::from(wide::imm8(word)),
+                i64::from(wide::imm14(word)),
             ))));
         }
         wide::arithmetic::ABS => return Some(Family::Absolute),
@@ -240,7 +244,7 @@ fn family(word: u32) -> Option<Family> {
         // The admitted interpreter only changes PC for rd0. Linked calls own
         // protected return/call-table state and cannot enter this scalar cut.
         wide::control::JAL if wide::rd(word) == 0 => {
-            return Some(Family::Jump(i64::from(wide::imm16(word)) * 4));
+            return Some(Family::Jump(i64::from(wide::jal_offset(word)) * 4));
         }
         _ => {}
     }
@@ -296,7 +300,7 @@ fn immediate(word: u32) -> Option<u64> {
             wide::opcode(word),
             wide::arithmetic::ROTL_IMM | wide::arithmetic::ROTR_IMM
         )
-        .then(|| u64::from(i8::cast_unsigned(wide::imm8(word))))
+        .then(|| u64::from(wide::rotate_amount(word)))
     })
 }
 
@@ -371,7 +375,8 @@ fn signed(value: i64) -> F {
 #[repr(u8)]
 enum SegmentOutcome {
     Continue = 0,
-    AssertionFailed = 1,
+    /// Zero divisor or signed overflow of DIV/DIVU/REM/REMU/DIV_CEIL/ABS.
+    NumericFault = 1,
     OutOfGas = 2,
 }
 
@@ -383,7 +388,7 @@ impl SegmentOutcome {
     fn diagnostic(self) -> DiagnosticStepOutcome {
         match self {
             Self::Continue => DiagnosticStepOutcome::Completed,
-            Self::AssertionFailed => DiagnosticStepOutcome::Trapped(VmTrapKind::AssertionFailed),
+            Self::NumericFault => DiagnosticStepOutcome::Trapped(VmTrapKind::NumericFault),
             Self::OutOfGas => DiagnosticStepOutcome::Trapped(VmTrapKind::OutOfGas),
         }
     }
@@ -440,15 +445,16 @@ impl ScalarSegment {
         Ok(result)
     }
 
-    /// The same artifact-derived normalization used by IVM program installation.
+    /// The artifact header's ZK trace bound, or zero (no limit) without ZK mode.
+    /// Header admission makes `max_cycles` nonzero exactly for ZK artifacts.
     /// A future invocation owner must bind any host override as explicit context;
     /// this substrate never infers such authority from diagnostic snapshots.
     fn cycle_limit(&self) -> u64 {
         let metadata = self.contract.metadata();
-        if metadata.max_cycles == 0 && metadata.mode & ivm::ivm_mode::ZK != 0 {
-            ivm::zk::MAX_CYCLES
-        } else {
+        if metadata.mode & ivm::ivm_mode::ZK != 0 {
             metadata.max_cycles
+        } else {
+            0
         }
     }
 
@@ -587,7 +593,7 @@ impl ScalarSegment {
             F(u64::from(row == self.physical_steps())),
             F(u64::from(last && self.outcome == SegmentOutcome::OutOfGas)),
             F(u64::from(
-                last && self.outcome == SegmentOutcome::AssertionFailed,
+                last && self.outcome == SegmentOutcome::NumericFault,
             )),
             F(u64::from(last)),
             F(u64::from(active && stride > 1 && phase == 0)),
@@ -1047,7 +1053,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                 branch_selected = branch_selected.add(selected);
                 branch_selectors[index] = branch_selectors[index].add(selected);
                 displacement =
-                    displacement.add(selected.mul(signed(i64::from(wide::imm8(word)) * 4)));
+                    displacement.add(selected.mul(signed(i64::from(wide::imm14(word)) * 4)));
             }
             Family::Shift(index) => {
                 shift_selected = shift_selected.add(selected);
@@ -1115,7 +1121,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     let division_signed = division_selectors[0]
         .add(division_selectors[2])
         .add(ceiling_selected);
-    let trap = fixed[OUT_OF_GAS].add(fixed[ASSERTION_FAILED]);
+    let trap = fixed[OUT_OF_GAS].add(fixed[NUMERIC_FAULT]);
     cost = cost.mul(F::ONE.sub(fixed[OUT_OF_GAS]));
     let division_trap = trap.mul(division_selected);
     let taken = row[BRANCH + branch::TAKEN_BANK_OFFSET];
@@ -1334,7 +1340,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             signed: division_signed,
             ceiling: ceiling_selected,
             out_of_gas: fixed[OUT_OF_GAS].mul(division_selected),
-            assertion_failed: fixed[ASSERTION_FAILED].mul(division_selected),
+            numeric_fault: fixed[NUMERIC_FAULT].mul(division_selected),
         },
     );
     square_root::append_residues(
@@ -1346,7 +1352,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         (
             square_selected,
             fixed[OUT_OF_GAS].mul(square_selected),
-            fixed[ASSERTION_FAILED].mul(square_selected),
+            fixed[NUMERIC_FAULT].mul(square_selected),
         ),
     );
     ceiling::append_residues(
@@ -1362,7 +1368,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         &row[GAS_DIGITS..GAS_DIGITS + 32],
         absolute_selected,
         fixed[OUT_OF_GAS].mul(absolute_selected),
-        fixed[ASSERTION_FAILED].mul(absolute_selected),
+        fixed[NUMERIC_FAULT].mul(absolute_selected),
     );
     mean::append_residues(
         &mut out,
@@ -1374,7 +1380,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         (
             mean_selected,
             fixed[OUT_OF_GAS].mul(mean_selected),
-            fixed[ASSERTION_FAILED].mul(mean_selected),
+            fixed[NUMERIC_FAULT].mul(mean_selected),
         ),
     );
     gcd::append_residues(
@@ -1393,7 +1399,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         gcd::Selection {
             fetched: gcd_selected,
             out_of_gas: fixed[OUT_OF_GAS],
-            assertion_failed: fixed[ASSERTION_FAILED],
+            numeric_fault: fixed[NUMERIC_FAULT],
             entry: fixed[SLOT_ENTRY],
             work: fixed[SLOT_WORK],
             commit: fixed[SLOT_COMMIT],

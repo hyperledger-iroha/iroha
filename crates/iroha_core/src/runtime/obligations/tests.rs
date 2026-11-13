@@ -1071,3 +1071,64 @@ mod authority {
         );
     }
 }
+
+#[test]
+fn captured_game_work_blocks_executor_replacement_and_stranding_until_completion() {
+    use iroha_data_model::runtime::obligation::CompletionCaptureV1;
+    let catalog = release_catalog().unwrap();
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0x47; 32])),
+    );
+    let selected = catalog
+        .activation(
+            crate::runtime::catalog::additions::NATIVE_GAME_CAPTURE.module,
+            &catalog.baseline,
+            &catalog.definitions,
+            network,
+            50,
+            [1; 32],
+        )
+        .unwrap()
+        .apply(&catalog.baseline, &catalog.definitions)
+        .unwrap()
+        .selection;
+    let mut capture = CompletionCaptureV1::capture(
+        &selected,
+        &catalog.definitions,
+        &["iroha.game_partition.acknowledge_import.v1".to_owned()],
+        50,
+    )
+    .unwrap();
+    capture.host_profiles.clear();
+    let owner = capture.terminal[0].implementation;
+    let live = LiveObligations {
+        captured_game: vec![(capture, 1)],
+        ..LiveObligations::default()
+    };
+    assert!(
+        !live.is_empty(),
+        "executor replacement must retain pending game work"
+    );
+    assert_eq!(
+        stranded(&selected, &selected, &catalog.definitions, &live),
+        None
+    );
+    let mut disabled = selected.clone();
+    disabled.restrictions.push(RestrictionEntryV1 {
+        definition: owner,
+        restriction: RestrictionV1::Disabled(60),
+    });
+    disabled.restrictions.sort_by_key(|entry| entry.definition);
+    let rejection = stranded(&selected, &disabled, &catalog.definitions, &live)
+        .expect("the exact native acknowledgement implementation remains owed");
+    assert!(
+        rejection.contains("pending native game transfers"),
+        "{rejection}"
+    );
+    let completed = LiveObligations::default();
+    assert!(completed.is_empty());
+    assert_eq!(
+        stranded(&selected, &disabled, &catalog.definitions, &completed),
+        None
+    );
+}

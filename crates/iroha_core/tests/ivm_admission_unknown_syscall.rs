@@ -13,7 +13,7 @@ use iroha_data_model::{
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
-use ivm::{ProgramMetadata, encoding, instruction};
+use ivm::{ProgramMetadata, encoding};
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {
@@ -27,12 +27,10 @@ fn unknown_syscall_fixture_uses_checked_randomness() {
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
-fn unlisted_syscall_number() -> u8 {
-    (0u8..=u8::MAX)
-        .find(|number| {
-            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
-        })
-        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+fn unlisted_syscall_number() -> u32 {
+    (0u32..=0xff)
+        .find(|number| !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, *number))
+        .expect("ABI v1 should leave at least one low syscall number unmapped")
 }
 fn install_current_lane_manifest_registry(state: &State) {
     let nexus = state.nexus_snapshot();
@@ -59,16 +57,13 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     // Build a tiny program with an unknown syscall followed by HALT.
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(u32::from(unknown_syscall))
-            .to_le_bytes(),
-    );
+    code.extend_from_slice(&encoding::wide::encode_scall(unknown_syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut program = meta.encode();

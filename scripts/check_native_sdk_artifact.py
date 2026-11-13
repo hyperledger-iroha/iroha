@@ -82,6 +82,14 @@ APPROVED_PRIVACY_C_EXPORTS = (
 )
 KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_revision_v1",
+    "connect_norito_kagemusha_spartan_install_v1",
+    "connect_norito_kagemusha_spartan_begin_account_v1",
+    "connect_norito_kagemusha_spartan_authorize_account_v1",
+    "connect_norito_kagemusha_spartan_prepare_v1",
+    "connect_norito_kagemusha_spartan_execute_v1",
+    "connect_norito_kagemusha_spartan_output_v1",
+    "connect_norito_kagemusha_spartan_verify_payment_v1",
+    "connect_norito_kagemusha_spartan_discard_v1",
     "connect_norito_kagemusha_wallet_open_begin_v1",
     "connect_norito_kagemusha_wallet_open_finish_v1",
     "connect_norito_kagemusha_wallet_open_cancel_v1",
@@ -121,6 +129,14 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
 )
 KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_install",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_beginAccount",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_authorizeAccount",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_prepare",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_execute",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_output",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_verifyPayment",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_discard",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openBegin",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openFinish",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openCancel",
@@ -168,6 +184,7 @@ RETIRED_KAGEMUSHA_EXPORT_PREFIXES = (
     "Java_org_hyperledger_iroha_sdk_offline_Kagemusha",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Kagemusha",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_Kagemusha",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_",
 )
 STALE_PRIVACY_ABI_MARKER_RE = re.compile(

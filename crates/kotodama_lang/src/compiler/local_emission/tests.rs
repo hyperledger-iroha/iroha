@@ -318,10 +318,7 @@ fn syscalls_in(output: &CompileOutput) -> BTreeMap<u32, usize> {
     let mut calls = BTreeMap::new();
     for bytes in output.artifact[offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*bytes);
-        if matches!(
-            instruction::wide::opcode(word),
-            instruction::wide::system::SCALL | instruction::wide::system::SYSTEM
-        ) {
+        if instruction::wide::opcode(word) == instruction::wide::system::SCALL {
             *calls.entry(word).or_default() += 1;
         }
     }

@@ -156,9 +156,8 @@ fn vm_error_samples() -> Vec<VMError> {
         VMError::UnsupportedProgramVersion { major: 9, minor: 9 },
         VMError::UnsupportedProgramFeatureBits { bits: 0x80 },
         VMError::UnsupportedProgramAbiVersion { version: 9 },
-        VMError::ProgramVectorLengthTooLarge {
-            max_allowed: 1,
-        },
+        VMError::MissingMaxCycles,
+        VMError::MaxCyclesWithoutZk { max_cycles: 1 },
         VMError::ArtifactAbiHashMismatch {
             expected: [0; 32],
             actual: [1; 32],
@@ -169,6 +168,7 @@ fn vm_error_samples() -> Vec<VMError> {
         VMError::PermissionDenied,
         VMError::ReentrantCall,
         VMError::CallDepthExceeded,
+        VMError::ControlFlowViolation,
         VMError::PrivacyViolation,
         VMError::RegisterOutOfBounds,
         VMError::NoritoInvalid,
@@ -192,8 +192,8 @@ fn opcode_inventory_names_exactly_the_admitted_opcodes() {
     let admitted: Vec<u8> = (0..=u8::MAX)
         .filter(|opcode| wide::is_valid_opcode(*opcode))
         .collect();
-    assert_eq!(admitted.len(), 59, "the admitted opcode count changed");
-    assert_eq!(OPCODE_COUNT, 59);
+    assert_eq!(admitted.len(), 58, "the admitted opcode count changed");
+    assert_eq!(OPCODE_COUNT, 58);
     assert_eq!(
         OPCODES.iter().map(|entry| entry.opcode).collect::<Vec<_>>(),
         admitted,
@@ -210,7 +210,7 @@ fn opcode_inventory_names_exactly_the_admitted_opcodes() {
             wide::is_valid_opcode(opcode).then_some(opcode)
         );
     }
-    assert_eq!(summary().opcodes, 59);
+    assert_eq!(summary().opcodes, 58);
 }
 
 /// Compare the opcode constants declared by `source` with the inventory.
@@ -634,7 +634,7 @@ fn opcode_traps_and_obligation_profiles_are_consistent() {
             has(Obligation::Calls),
             matches!(
                 entry.pc,
-                PcTransition::DirectRelative16WithOptionalLink
+                PcTransition::DirectRelative19WithOptionalLink
                     | PcTransition::DirectRelative24AndLink
                     | PcTransition::IndirectMaskedOrProtectedReturn
             ),
@@ -1246,7 +1246,8 @@ fn every_vm_error_projects_only_completed_deterministic_faults() {
         "UnsupportedProgramVersion",
         "UnsupportedProgramFeatureBits",
         "UnsupportedProgramAbiVersion",
-        "ProgramVectorLengthTooLarge",
+        "MissingMaxCycles",
+        "MaxCyclesWithoutZk",
         "ArtifactAbiHashMismatch",
         "GenericSyscallNotAllowed",
     ];
@@ -1517,7 +1518,8 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
         VmTrapKind::UnsupportedProgramVersion,
         VmTrapKind::UnsupportedProgramFeatureBits,
         VmTrapKind::UnsupportedProgramAbiVersion,
-        VmTrapKind::ProgramVectorLengthTooLarge,
+        VmTrapKind::MissingMaxCycles,
+        VmTrapKind::MaxCyclesWithoutZk,
         VmTrapKind::ArtifactAbiHashMismatch,
     ] {
         assert_eq!(kind(prepare_only).origins(), [PrepareRejection]);
@@ -1593,12 +1595,11 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
             );
         }
     }
-    // A shared cycle allowance exhausted by an earlier run is refused at
-    // entry; the executor relabels a failed migration run outside any
-    // invocation.
+    // Only a ZK run reaches its trace bound, inside the loop; the executor
+    // relabels a failed migration run outside any invocation.
     assert_eq!(
         kind(VmTrapKind::ExceededMaxCycles).origins(),
-        [InitializationTrap, InterpreterTrap, OutsideInvocation]
+        [InterpreterTrap, OutsideInvocation]
     );
     assert_eq!(
         kind(VmTrapKind::AssertionFailed).origins(),
@@ -1777,8 +1778,7 @@ fn check_component_tokens(
         traps.extend(scan::tokens_after(&text, "VmTrapKind::"));
         ensure(
             scan::tokens_after(&text, "SYSCALL_").is_empty()
-                && !text.contains("wide::system::SCALL")
-                && !text.contains("wide::system::SYSTEM"),
+                && !text.contains("wide::system::SCALL"),
             || format!("{source} now references a syscall; record its relation and coverage"),
         )?;
     }
@@ -1833,16 +1833,16 @@ fn mutated_sources_fail_every_completeness_check() {
             "pub const MEAN: u8 = 0x2A;\n",
             "        pub const BRAND_NEW: u8 = 0x2B;\n",
         )),
-        "60 admitted opcode constants",
+        "59 admitted opcode constants",
     );
     rejects(
         check_opcode_constants(&remove_once(&instruction, "pub const MEAN: u8 = 0x2A;\n")),
-        "58 admitted opcode constants",
+        "57 admitted opcode constants",
     );
     rejects(
         check_opcode_constants(&insert_after(
             &instruction,
-            "pub const SYSTEM: u8 = 0x62;\n    }\n",
+            "pub const SCALL: u8 = 0x60;\n    }\n",
             "    pub mod extension {\n        pub const BRAND_NEW: u8 = 0x8F;\n    }\n",
         )),
         "an opcode constant lives outside the admitted opcode modules",
@@ -2358,10 +2358,6 @@ fn open_semantics_are_unique_and_still_evidenced() {
     // Node-local limits that change an outcome are open, not silently bound.
     for (id, needle) in [
         (
-            "shared_cycle_allowance_node_local",
-            "pipeline.quarantine_tx_max_cycles",
-        ),
-        (
             "host_output_limits_node_local",
             "pipeline.overlay_max_instructions",
         ),
@@ -2401,7 +2397,7 @@ fn open_semantics_are_unique_and_still_evidenced() {
 #[test]
 fn coverage_is_derived_from_components_and_never_complete() {
     let counts = summary();
-    assert_eq!(counts.opcodes_uncovered + counts.opcodes_component_only, 59);
+    assert_eq!(counts.opcodes_uncovered + counts.opcodes_component_only, 58);
     assert_eq!(counts.opcodes_component_only, 55);
     assert_eq!(counts.opcodes_uncovered, 4);
     assert_eq!(counts.components, COMPONENTS.len());
@@ -2427,7 +2423,7 @@ fn coverage_is_derived_from_components_and_never_complete() {
         .collect();
     assert_eq!(
         uncovered,
-        BTreeSet::from(["HALT", "LDLIT", "SCALL", "SYSTEM"]),
+        BTreeSet::from(["HALT", "LDLIT", "SCALL"]),
         "opcodes without any proof component"
     );
     for entry in OPCODES.iter() {
@@ -2614,7 +2610,7 @@ fn rendered_inventory_matches_the_tracked_artifact() {
     for file in VM_ERROR_PRODUCERS {
         assert!(rendered.contains(file.path), "{} is rendered", file.path);
     }
-    assert_eq!(rows("opcodes"), 59);
+    assert_eq!(rows("opcodes"), 58);
     assert_eq!(rows("syscalls"), syscalls::abi_syscall_list().len());
     assert_eq!(rows("host_private_syscalls"), HOST_PRIVATE_SYSCALLS.len());
     assert_eq!(rows("syscall_relations"), SyscallRelation::COUNT);
@@ -2653,7 +2649,7 @@ fn rendered_inventory_matches_the_tracked_artifact() {
     }
     assert_eq!(
         statuses,
-        59 + 4 * SYSCALLS.len()
+        58 + 4 * SYSCALLS.len()
             + TRAP_KINDS.len()
             + NUMERIC_FAULTS.len()
             + POINTER_ABI_FAULTS.len()

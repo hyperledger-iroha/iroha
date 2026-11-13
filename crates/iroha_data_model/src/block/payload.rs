@@ -111,7 +111,7 @@ mod model {
             not(any(test, feature = "transparent_api")),
             expect(
                 dead_code,
-                reason = "Owned for its destructor; only the transparent API attaches custody."
+                reason = "Client builds retain this drop-owning custody field; only the transparent API attaches custody."
             )
         )]
         pub(crate) lifecycle_custody: super::super::LifecycleOutputCustody,

@@ -50,7 +50,11 @@ impl PyFinalityPage {
     /// Finish a live read against this same verified page.
     #[expect(
         clippy::too_many_arguments,
+<<<<<<< HEAD
         reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+        reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
     )]
     fn verify_rows(
         &self,
@@ -145,7 +149,11 @@ pub(crate) fn ironwood_pool_rows_request_v1_py(pool_id_hex: &str) -> PyResult<St
 #[pyo3(name = "ironwood_balance_rows_request_v1")]
 #[expect(
     clippy::too_many_arguments,
+<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
 )]
 pub(crate) fn ironwood_balance_rows_request_v1_py(
     py: Python<'_>,
@@ -300,6 +308,8 @@ fn subset(
     })
 }
 
+type PyWarmRead = (PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>);
+
 struct WarmRead {
     plan: PyIronwoodReadPlan,
     missing: String,
@@ -317,7 +327,11 @@ type WarmRowsPy = (PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>)
 #[pyo3(name="ironwood_warm_rows_v1", signature=(plan, primary, supplement, verified, network_id_hex, chain_discriminant, pool_id_hex, asset_definition_id, payer_account_id, expected_schema))]
 #[expect(
     clippy::too_many_arguments,
+<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
 )]
 pub(crate) fn ironwood_warm_rows_v1_py(
     py: Python<'_>,
@@ -331,7 +345,11 @@ pub(crate) fn ironwood_warm_rows_v1_py(
     asset_definition_id: &str,
     payer_account_id: &str,
     expected_schema: &PyIronwoodStateSchema,
+<<<<<<< HEAD
 ) -> PyResult<WarmRowsPy> {
+=======
+) -> PyResult<PyWarmRead> {
+>>>>>>> origin/optimizations
     let read = py
         .detach(move || {
             plan.check(
@@ -428,7 +446,11 @@ pub(crate) fn ironwood_warm_rows_v1_py(
 #[pyo3(name = "verify_ironwood_state_rows_v1")]
 #[expect(
     clippy::too_many_arguments,
+<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
 )]
 pub(crate) fn verify_ironwood_state_rows_v1_py(
     py: Python<'_>,
@@ -466,6 +488,10 @@ pub(crate) fn verify_ironwood_state_rows_v1_py(
     })
     .map_err(NativeValidationError::into_py)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_ironwood_state_rows_v1(
     pool_rows: &[u8],
     balance_rows: &[u8],
@@ -485,6 +511,10 @@ fn verify_ironwood_state_rows_v1(
     verify_rows_at_page(&page, pool_rows, balance_rows, selection, expected_schema)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_rows_at_page(
     page: &VerifiedFinalityPage,
     pool_rows: &[u8],
@@ -527,7 +557,11 @@ fn verify_rows_at_page(
 #[pyo3(name = "verify_ironwood_payment_effect_from_rows_v1")]
 #[expect(
     clippy::too_many_arguments,
+<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+=======
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+>>>>>>> origin/optimizations
 )]
 pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     py: Python<'_>,
@@ -577,3 +611,52 @@ pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     })
     .map_err(NativeValidationError::into_py)
 }
+<<<<<<< HEAD
+=======
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
+fn verify_ironwood_payment_effect_from_rows_v1(
+    pool_rows: &[u8],
+    balance_rows: &[u8],
+    checkpoint_hex: &str,
+    proof_frames_hex: Vec<String>,
+    payment_proof_frames_hex: Vec<String>,
+    signed_transaction_versioned: &[u8],
+    network_id_hex: &str,
+    chain_discriminant: u16,
+    pool_id_hex: &str,
+    asset_definition_id: &str,
+    payer_account_id: &str,
+    expected_profile_digest_hex: &str,
+    expected_schema: &PyIronwoodStateSchema,
+    expected_amount_decimal: &str,
+) -> Result<String, NativeValidationError> {
+    let cut_json = verify_ironwood_state_rows_v1(
+        pool_rows,
+        balance_rows,
+        checkpoint_hex,
+        proof_frames_hex,
+        network_id_hex,
+        chain_discriminant,
+        pool_id_hex,
+        asset_definition_id,
+        payer_account_id,
+        expected_profile_digest_hex,
+        expected_schema,
+    )?;
+    verify_payment_from_context(
+        &cut_json,
+        payment_proof_frames_hex,
+        signed_transaction_versioned,
+        network_id_hex,
+        chain_discriminant,
+        pool_id_hex,
+        asset_definition_id,
+        payer_account_id,
+        expected_profile_digest_hex,
+        expected_amount_decimal,
+    )
+}
+>>>>>>> origin/optimizations

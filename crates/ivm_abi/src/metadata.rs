@@ -1781,11 +1781,7 @@ mod tests {
     use super::*;
     #[test]
     fn fixed_header_policy_errors_have_stable_precedence() {
-        let mut bytes = ProgramMetadata {
-            max_cycles: 1,
-            ..ProgramMetadata::default()
-        }
-        .encode();
+        let mut bytes = ProgramMetadata::default().encode();
         bytes[4] = 2;
         bytes[6] = 0x80;
         bytes[HEADER_ABI_VERSION_OFFSET] = 3;

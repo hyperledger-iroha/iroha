@@ -67,6 +67,7 @@ pub(crate) mod output_test_support;
 pub mod payload;
 mod prepared_signatures;
 mod proposal;
+mod proposal_prefix;
 mod shared;
 /// Canonical ordered block signatures and original-pool preparation.
 pub mod signatures;
@@ -83,6 +84,7 @@ pub use execution_context::{
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 pub use prepared_signatures::{PreparedSignatureBlockError, PreparedSignedBlockSignaturesDecode};
+pub use proposal_prefix::{MAX_PROPOSAL_PREFIX_BYTES, ParsedProposalPrefix, parse_proposal_prefix};
 pub use shared::{ReservedSharedSignedBlock, SharedBlockAdmissionError, SharedSignedBlock};
 pub use signatures::{BlockSignatureCustodyError, BlockSignatures, PreparedBlockSignatures};
 #[model]

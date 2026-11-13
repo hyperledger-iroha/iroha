@@ -447,83 +447,9 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
         }
     }
 
-    // Independently execute the compiled callable to identify the exact refused work.
-    // This host queues the native write but does not apply it to State.
-    fn second_entrypoint_return_work(program: &[u8]) -> (u64, u64, u64) {
-        let mut completed = None;
-        for limited in [false, true] {
-            let mut vm = ivm::IVM::new(GAS);
-            vm.load_program(program).unwrap();
-            vm.select_entrypoint("second").unwrap();
-            vm.set_trace_mode(ivm::TraceMode::PcOnly);
-            let interface = vm.contract_interface().unwrap();
-            let entry = interface
-                .entrypoints
-                .iter()
-                .find(|entry| entry.name == "second")
-                .unwrap();
-            let callable = interface
-                .callables
-                .iter()
-                .find(|callable| callable.entry_pc == entry.entry_pc)
-                .unwrap();
-            assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::new(ALICE_ID.clone());
-            if limited {
-                let (cycles, gas, trace): (u64, u64, Vec<u64>) = completed.take().unwrap();
-                let budget =
-                    ivm::VmCycleBudget::new(core::num::NonZeroU64::new(cycles - 1).unwrap());
-                assert!(matches!(
-                    (
-                        &(vm.run_with_host_and_cycle_budget(&mut host, &budget)),
-                        &(ivm::VMError::ExceededMaxCycles)
-                    ),
-                    (
-                        Err(ivm::VMError::ExceededMaxCycles),
-                        ivm::VMError::ExceededMaxCycles
-                    )
-                ));
-                assert_eq!(vm.get_cycle_count(), cycles - 1);
-                assert_eq!(budget.consumed(), cycles - 1);
-                assert!(budget.exhausted());
-                // Tracing records the fetched instruction before the cycle reservation.
-                assert_eq!(vm.trace_pcs(), trace);
-                assert_eq!(Some(&vm.pc()), trace.last());
-                let refused = vm.memory.load_u32(vm.pc()).unwrap();
-                assert_eq!(
-                    refused,
-                    ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0)
-                );
-                let refused_gas = gas - (GAS - vm.remaining_gas());
-                assert_eq!(
-                    refused_gas,
-                    ivm::gas::cost_of(refused).unwrap() + ivm::call_gas::NODE + ivm::call_gas::WORD,
-                    "return dispatch validates the Unit schema node and its result word"
-                );
-                return (cycles, gas, refused_gas);
-            }
-            vm.run_with_host(&mut host).unwrap();
-            assert_eq!(
-                (vm.call_result_word_count()).expect("completed fixture operation"),
-                1
-            );
-            assert_eq!(
-                (vm.public_call_result_word(0)).expect("completed fixture operation"),
-                0
-            );
-            completed = Some((
-                vm.get_cycle_count(),
-                GAS - vm.remaining_gas(),
-                vm.trace_pcs().to_vec(),
-            ));
-        }
-        unreachable!("the second run checks the exact return boundary")
-    }
-
     #[test]
-    fn signed_mixed_batch_contract_runs_share_one_exact_cycle_allowance() {
+    fn signed_mixed_batch_contract_runs_share_one_quarantine_gas_cap() {
         let mut cache = IvmCache::new();
-        let mut segment_cycles = Vec::new();
         let mut segment_gas = Vec::new();
         let mut successful_batch_gas = None;
         let authored_gas = isi_gas::meter_instructions(
@@ -537,9 +463,8 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
         )
         .expect("gas quote must complete for this fixture");
         assert!(authored_gas > 0);
-        let mut refused_return_gas = None;
         for case in 0..5 {
-            let (state, program, address, hash) = contract_fixture();
+            let (state, _program, address, hash) = contract_fixture();
             let call = |entrypoint: &str| ContractInvocation {
                 contract_address: address.clone(),
                 expected_code_hash: hash,
@@ -565,9 +490,11 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                     .into(),
                 )
             };
-            let total: u64 = segment_cycles.iter().sum();
+            // The quarantine cap narrows the one signed gas limit that the authored
+            // instructions and both contract runs of the batch draw from.
+            let total = authored_gas + segment_gas.iter().sum::<u64>();
             let cap = match case {
-                0..=2 => 1_000_000,
+                0..=2 => GAS,
                 3 => total,
                 _ => total - 1,
             };
@@ -591,27 +518,16 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            tx.pipeline.quarantine_tx_max_cycles = cap;
+            tx.pipeline.quarantine_tx_max_gas = cap;
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, &source, &mut cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection);
-            let cycles = tx
-                .completed_execution_cycles_for_tests()
-                .unwrap_or_else(|| panic!("signed contract execution did not finish: {result:?}"));
             assert!(!tx.execution_effect_limit_exceeded());
             if case < 2 {
                 result.unwrap();
-                assert!(cycles > 1);
-                if case == 1 {
-                    let (independent_cycles, independent_gas, return_gas) =
-                        second_entrypoint_return_work(&program);
-                    assert_eq!(cycles, independent_cycles);
-                    assert_eq!(tx.last_tx_gas_used, independent_gas);
-                    refused_return_gas = Some(return_gas);
-                }
-                segment_cycles.push(cycles);
+                assert!(tx.last_tx_gas_used > 0);
                 segment_gas.push(tx.last_tx_gas_used);
                 drop(tx);
                 continue;
@@ -633,24 +549,16 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                     .is_some()
             );
             if case == 4 {
-                assert_limit(
-                    &result.unwrap_err(),
-                    &format!("quarantine cycle budget exceeded: {cap}"),
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(&error, ValidationFail::IvmFault(fault)
+                        if fault.kind == iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas),
+                    "{error:?}"
                 );
-                assert_eq!(cycles, cap);
-                assert!(tx.last_tx_gas_used > segment_gas[0]);
-                // The final JALR and its Unit-result validation were refused before
-                // dispatch. All earlier VM work remains charged; the queued second
-                // native write never becomes an applied State effect.
-                assert_eq!(
-                    tx.last_tx_gas_used.checked_add(refused_return_gas.unwrap()),
-                    successful_batch_gas
-                );
-                assert_eq!(
-                    tx.last_tx_gas_used.checked_sub(authored_gas),
-                    Some(segment_gas.iter().sum::<u64>() - refused_return_gas.unwrap()),
-                    "failed batch retains exactly the independently completed VM work"
-                );
+                // The second run exhausts the capped allowance after the authored
+                // instructions and the first run; its consumed work stays charged.
+                assert!(tx.last_tx_gas_used > authored_gas + segment_gas[0]);
+                assert!(tx.last_tx_gas_used <= cap);
                 assert!(
                     tx.world
                         .account(&ALICE_ID)
@@ -659,21 +567,15 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                         .get("effect_second")
                         .is_none()
                 );
-                assert!(!tx.execution_effects_allow_apply());
                 drop(tx);
             } else {
                 result.unwrap();
-                assert_eq!(
-                    cycles, total,
-                    "Batch shares precisely the two actual VM runs"
-                );
                 if case == 2 {
                     successful_batch_gas = Some(tx.last_tx_gas_used);
                 }
                 assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
                 assert_eq!(
-                    tx.last_tx_gas_used.checked_sub(authored_gas),
-                    Some(segment_gas.iter().sum()),
+                    tx.last_tx_gas_used, total,
                     "successful batch adds only the authored native instruction gas to its two VM runs"
                 );
                 tx.apply();

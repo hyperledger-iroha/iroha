@@ -2,7 +2,7 @@
 
 use crate::{
     compiler::{CompilerOptions, state_operands::with_publication},
-    encoding, instruction,
+    encoding,
     ir::{DataRefKind, Instr, Temp},
     metadata::ProgramMetadata,
     session::{CompileOutput, CompileRequest, CompilerSession},

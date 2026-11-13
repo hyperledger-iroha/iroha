@@ -40282,6 +40282,182 @@
         ],
         "type": "object"
       },
+      "RuntimeCheckpointArtifactRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inventory_sha256": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "inventory_sha256",
+          "index"
+        ],
+        "type": "object"
+      },
+      "RuntimeCheckpointArtifactV1": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "length": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sha256": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "index",
+          "length",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "RuntimeCheckpointFinishRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "inventory_sha256": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "inventory_sha256"
+        ],
+        "type": "object"
+      },
+      "RuntimeCheckpointPackageDescriptorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_id": {
+            "type": "string"
+          },
+          "committed_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "inventory_sha256": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "max_chunk_bytes": {
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "total_bytes": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "chain_id",
+          "network_id",
+          "height",
+          "committed_ms",
+          "max_chunk_bytes",
+          "total_bytes",
+          "inventory_sha256"
+        ],
+        "type": "object"
+      },
+      "RuntimeCheckpointRangeRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inventory_sha256": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "length": {
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inventory_sha256",
+          "index",
+          "offset",
+          "length"
+        ],
+        "type": "object"
+      },
       "RuntimeCommitmentProfileDescriptorV1": {
         "additionalProperties": false,
         "description": "How State is committed.",
@@ -101023,6 +101199,495 @@
           "authentication": "operator_signature",
           "schemaVersion": 1,
           "stableRouteId": "operator.runtime.boundary.floor.attest"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/checkpoint/artifact": {
+      "post": {
+        "description": "Operator-authenticated transport DATA only. No request accepts a path or chooses State authority. The package is independently pinned to the node chain and genesis-derived network, and must remain at or above the current authenticated startup floor. The receiver must subsequently pass ordinary complete-State authentication and native H+1 replay. POST request bodies are limited to 1024 bytes; every POST pins the original inventory_sha256. Source changes or local capacity refuse delivery without publishing a receiver completion marker.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeCheckpointArtifactRequestV1"
+              }
+            }
+          },
+          "description": "Strict JSON, at most 1024 bytes. Unknown fields are rejected.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeCheckpointArtifactV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Pinned package metadata.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid inventory, index, range or independent package binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing operator authentication.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator signer is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 1024 bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No configured source, original source unavailable, or local capacity refused.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Read one fixed artifact description.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.checkpoint.artifact"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/checkpoint/finish": {
+      "post": {
+        "description": "Operator-authenticated transport DATA only. No request accepts a path or chooses State authority. The package is independently pinned to the node chain and genesis-derived network, and must remain at or above the current authenticated startup floor. The receiver must subsequently pass ordinary complete-State authentication and native H+1 replay. POST request bodies are limited to 1024 bytes; every POST pins the original inventory_sha256. Source changes or local capacity refuse delivery without publishing a receiver completion marker.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeCheckpointFinishRequestV1"
+              }
+            }
+          },
+          "description": "Strict JSON, at most 1024 bytes. Unknown fields are rejected.",
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Every original source artifact still matches the pinned package.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid inventory, index, range or independent package binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing operator authentication.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator signer is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 1024 bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No configured source, original source unavailable, or local capacity refused.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Recheck all original package artifacts after delivery.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.checkpoint.finish"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/checkpoint/package": {
+      "get": {
+        "description": "Operator-authenticated transport DATA only. No request accepts a path or chooses State authority. The package is independently pinned to the node chain and genesis-derived network, and must remain at or above the current authenticated startup floor. The receiver must subsequently pass ordinary complete-State authentication and native H+1 replay. POST request bodies are limited to 1024 bytes; every POST pins the original inventory_sha256. Source changes or local capacity refuse delivery without publishing a receiver completion marker.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeCheckpointPackageDescriptorV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Pinned package metadata.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid inventory, index, range or independent package binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing operator authentication.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator signer is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 1024 bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No configured source, original source unavailable, or local capacity refused.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Read the configured immutable checkpoint package descriptor.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.checkpoint.package"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/checkpoint/range": {
+      "post": {
+        "description": "Operator-authenticated transport DATA only. No request accepts a path or chooses State authority. The package is independently pinned to the node chain and genesis-derived network, and must remain at or above the current authenticated startup floor. The receiver must subsequently pass ordinary complete-State authentication and native H+1 replay. POST request bodies are limited to 1024 bytes; every POST pins the original inventory_sha256. Source changes or local capacity refuse delivery without publishing a receiver completion marker.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeCheckpointRangeRequestV1"
+              }
+            }
+          },
+          "description": "Strict JSON, at most 1024 bytes. Unknown fields are rejected.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 4194304,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Original bounded artifact bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid inventory, index, range or independent package binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing operator authentication.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator signer is not authorized.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 1024 bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No configured source, original source unavailable, or local capacity refused.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Read one bounded exact range of an original artifact.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.checkpoint.range"
         },
         "x-iroha-tool-effect": "operator"
       }

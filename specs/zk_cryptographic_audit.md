@@ -1008,6 +1008,68 @@ truncation and pre-copy input bounds. Encoding snapshots caller key bytes before
 admission and publication, preventing validation of one mutable value followed
 by publication of another. The complete Rust key validator remains mandatory.
 
+### ZK-AUDIT-36: Proof-managed note verifier checked the AIR only on queried rows
+
+Severity: Medium verifier-soundness margin gap. No forgery is demonstrated, and
+the estimated attack cost stays above 2^128 hash evaluations.
+
+Status: Remediated for the shared privacy-engine verifier (IVM private note,
+PQ-MASP and atomic private settlement). Open for the execution-proof fork,
+which no registered profile reaches.
+
+`verify_proof_managed_note_stark_v1` derived the DEEP point and bound every
+out-of-domain trace and composition opening to the committed polynomials
+through the DEEP quotient, but it never evaluated the AIR at that point. The
+constraint quotient was compared with recomputed residues only on the 136
+queried rows of the evaluation domain.
+
+A prover holding an invalid trace can commit honest low-degree columns and a
+composition that interpolates the invalid quotient on as many rows as its four
+18,432-coefficient chunks allow: 73,728 of 131,072. Every committed polynomial
+is then genuinely low degree, so FRI and the DEEP bindings pass on all queries,
+and each query passes the row check with probability 9/16. That is about
+2^-113 per attempt before the 20-bit grinding, below the profile's 128-bit
+non-grinding floor. The root-count bound for this term alone gives only about
+2^-74. The affine-batched FRI certificate does not cover it, because that
+certificate assumes the out-of-domain identity is checked.
+
+The verifier now evaluates every residue at the DEEP point from the bound
+openings and requires the opened composition chunks to recompose to the
+combined residues divided by `z^n - 1`. Fixed columns are evaluated at that
+point by the barycentric oracle that already serves the queried rows. Residue
+evaluators stay base-field: an opened Fp4 row is a cubic in the extension
+generator with base-field coefficient vectors, so a residue of declared total
+degree `d` is evaluated at `3d + 1` base-field nodes and interpolated at the
+generator, and one further node rejects an evaluator above the declared degree.
+The proof wire, transcript schedule and prover are unchanged; the row checks
+remain.
+
+The regressions
+`deep_point_relation_accepts_authenticated_openings_and_rejects_each_changed_value`,
+`verifier_checks_the_air_at_the_deep_point_before_any_opened_row`,
+`deep_point_relation_rejects_a_residue_above_the_declared_degree`,
+`deep_point_curve_interpolates_base_field_residues_at_extension_values` and
+`deep_point_row_equals_coefficient_horner_for_every_column_shape` pin the
+relation, its place in the verifier, the degree guard, the curve interpolation
+and the fixed-column evaluation. They exercise the mock profile; they do not
+construct a forged proof at production parameters.
+
+The other callers of `verify_opened_query_relations_with_deep_v1` were reviewed
+on the same source. The execution-proof fork
+(`crates/iroha_core_privacy/src/execution_proofs/stark/proof_managed_note_stark.rs`)
+has the same gap at the same parameters. Its only consumers are the
+classed-race reference proof, whose profile is not registered, and the
+unfinished IVM step chips, so no admission path reaches it. It must receive the
+same check before either is registered, and its constant comment still
+describes an out-of-domain query that its verifier does not perform. The two
+zk-X509 callers are test-only segment verifiers.
+
+The production zk-X509 main and CA-accumulator verifiers, ZK-ACE and the
+registered race engine (`iroha_execution_stark`) each evaluate their relation
+at the out-of-domain point. The `stark/fri` backend in `iroha_core_zk` uses no
+out-of-domain point and was not assessed here. Independent review of the joint
+round-by-round and Fiat--Shamir argument remains required.
+
 ## Dependency Assumptions
 
 - SHA-256 and Blake2 are collision resistant and implemented correctly.

@@ -103,7 +103,7 @@ fn verify_all(verifier: &SuffixVerifierV1<'_>, corpus: &Corpus, steps: &[StepOri
 
 #[expect(
     clippy::cast_precision_loss,
-    reason = "a printed estimate; every reported count is far below 2^52"
+    reason = "approximate performance projections retain the exact instruction count separately"
 )]
 fn report(interval: &Interval, count: usize) {
     // Projection conventions, not device measurements: the cost model's equal-throughput

@@ -1,7 +1,7 @@
 //! Signature verification helper and syscall tests using TLVs.
 use crate::common;
 use common::assemble;
-use ivm::{IVM, Memory, PointerType, VMError, encoding, instruction};
+use ivm::{IVM, Memory, PointerType, VMError, encoding};
 const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];

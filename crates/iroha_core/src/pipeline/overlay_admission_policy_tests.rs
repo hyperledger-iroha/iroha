@@ -42,11 +42,7 @@ fn generic_preparation_preserves_original_pool_refusal_in_overlay() {
     use crate::smartcontracts::ivm::cache::PreparedContractCache;
     use iroha_allocation::{AllocationBudget, AllocationRefusal};
 
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 10_000,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let budget = AllocationBudget::new(64 * 1024 * 1024);
     let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
@@ -78,40 +74,53 @@ fn generic_preparation_preserves_original_pool_refusal_in_overlay() {
 fn checked_keypair_preserves_default_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
 }
-#[test]
-fn pre_execution_cycle_ceiling_accepts_exact_bound() {
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 42,
+fn zk_meta(max_cycles: u64) -> ivm::ProgramMetadata {
+    ivm::ProgramMetadata {
+        mode: ivm::ivm_mode::ZK,
+        max_cycles,
         ..ivm::ProgramMetadata::default()
-    };
-    enforce_pre_execution_policy(
-        NonZeroU64::new(42).expect("test ceiling is non-zero"),
-        &meta,
-    )
-    .expect("artifact at the configured ceiling should be admitted");
+    }
 }
 #[test]
-fn header_policy_rejects_zero_cycle_limit() {
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 0,
+fn pre_execution_trace_ceiling_accepts_exact_bound() {
+    enforce_pre_execution_policy(
+        NonZeroU64::new(42).expect("test ceiling is non-zero"),
+        &zk_meta(42),
+    )
+    .expect("a ZK trace bound at the configured ceiling should be admitted");
+}
+#[test]
+fn pre_execution_policy_has_no_cycle_check_for_non_zk_artifacts() {
+    enforce_pre_execution_policy(
+        NonZeroU64::new(1).expect("test ceiling is non-zero"),
+        &ivm::ProgramMetadata::default(),
+    )
+    .expect("gas is the only budget of a non-ZK artifact");
+}
+#[test]
+fn header_policy_binds_the_trace_bound_to_zk_mode() {
+    assert!(matches!(
+        validate_header_policy(&zk_meta(0)),
+        Err(IvmAdmissionError::MissingMaxCycles)
+    ));
+    let bound_without_zk = ivm::ProgramMetadata {
+        max_cycles: 7,
         ..ivm::ProgramMetadata::default()
     };
     assert!(matches!(
-        validate_header_policy(&meta),
-        Err(IvmAdmissionError::MissingMaxCycles)
+        validate_header_policy(&bound_without_zk),
+        Err(IvmAdmissionError::MaxCyclesWithoutZk(7))
     ));
+    assert!(validate_header_policy(&ivm::ProgramMetadata::default()).is_ok());
+    assert!(validate_header_policy(&zk_meta(1)).is_ok());
 }
 #[test]
-fn pre_execution_cycle_ceiling_rejects_over_bound() {
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 43,
-        ..ivm::ProgramMetadata::default()
-    };
+fn pre_execution_trace_ceiling_rejects_over_bound() {
     let error = enforce_pre_execution_policy(
         NonZeroU64::new(42).expect("test ceiling is non-zero"),
-        &meta,
+        &zk_meta(43),
     )
-    .expect_err("artifact above the configured ceiling must fail closed");
+    .expect_err("a ZK trace bound above the configured ceiling must fail closed");
     assert!(matches!(
         error,
         OverlayBuildError::HeaderPolicy(
@@ -136,9 +145,5 @@ fn header_policy_rejects_retired_minor_before_other_policy_errors() {
     };
     assert!(matches!(validate_header_policy(&retired),
         Err(IvmAdmissionError::UnsupportedVersion(info)) if info.major == 1 && info.minor == 0));
-    let current = ivm::ProgramMetadata {
-        max_cycles: 1,
-        ..ivm::ProgramMetadata::default()
-    };
-    assert!(validate_header_policy(&current).is_ok());
+    assert!(validate_header_policy(&ivm::ProgramMetadata::default()).is_ok());
 }

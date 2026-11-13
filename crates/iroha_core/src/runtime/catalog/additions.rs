@@ -104,7 +104,16 @@ pub const ADDITIONS: &[Addition] = &[
     NATIVE_AMX_CAPTURE,
     NATIVE_GAME_CAPTURE,
     CONTRACT_LIFECYCLE,
+    RUNTIME_RETIREMENT,
 ];
+
+/// Permanent runtime history and certified exclusion receipts, independently governed.
+pub const RUNTIME_RETIREMENT: Addition = Addition {
+    module: "iroha.runtime.retirement.v1",
+    instructions: &["iroha.runtime.retirement.finalize.v1"],
+    rebinds: &[],
+    storage: &[StorageAddition::Table("world.runtime_retirements")],
+};
 
 /// Reserved native game transfers retain their original certified completion closure.
 pub const NATIVE_GAME_CAPTURE: Addition = Addition {

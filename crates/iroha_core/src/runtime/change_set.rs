@@ -456,13 +456,23 @@ pub fn activate_due(
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
             continue;
         };
+        let current = wtx.runtime_selection.get().clone();
         let applied = if ready(&record, id, height, now_ms, committee) {
-            let current = wtx.runtime_selection.get().clone();
             record
                 .change_set
                 .apply(&current, &PublishedDefinitions(&wtx.runtime_definitions))
                 .ok()
                 .filter(|applied| {
+                    // A permanent census cannot make a supported activation exceed its
+                    // unchanged capacity. Lapse before publishing any descriptor or cell.
+                    if let Err(reason) = super::retirement::check_publication_capacity(
+                        &*wtx,
+                        &applied.selection,
+                        &applied.published,
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     if let Err(reason) = check_transition_support(
                         &record.change_set,
                         &current,
@@ -541,6 +551,14 @@ pub fn activate_due(
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
                     }
+                    if let Err(reason) = super::native_game_capture::check_transition(&*wtx, &current, &applied.selection) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    if let Err(reason) = super::retirement::check_transition(&*wtx, &current, &applied.selection) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     if let Err(reason) = super::native_escrow_capture::check_transition(&*wtx, &current, &applied.selection) {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
@@ -589,6 +607,13 @@ pub fn activate_due(
             super::committed_policy::install(wtx, &applied.selection, catalog, height)?;
             *wtx.runtime_selection.get_mut() = applied.selection;
             install_cells(wtx, &record.change_set, catalog, height)?;
+            super::retirement::record_governed_exclusions(
+                wtx,
+                &current,
+                &record.change_set,
+                height,
+                now_ms,
+            )?;
             super::migration::activated(wtx, &record.change_set, height);
             record.status = ChangeSetStatusV1::Activated(height);
             RuntimeUpgradeEvent::Activated(RuntimeUpgradeActivated {
@@ -631,6 +656,7 @@ pub fn activate_due(
     .map_err(
         |reason| crate::state::StateStorageAdmissionError::UnsupportedRuntime { height, reason },
     )?;
+    super::retirement::record_block(wtx, height, now_ms)?;
     Ok(())
 }
 

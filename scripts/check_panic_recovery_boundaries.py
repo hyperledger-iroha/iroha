@@ -186,6 +186,8 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_tests.rs",
         "executor_formatting_tests.rs",
         "executor_custody_tests.rs",
+        "executor_restricted_dataspace_read_tests.rs",
+        "executor_content_publish_permission_tests.rs",
         "executor_privacy_occurrence_tests.rs",
         "executor_account_lineage_tests.rs",
         "executor_contract_deployment_tests.rs",

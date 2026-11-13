@@ -31,6 +31,8 @@ _crypto = load_crypto_extension()
 # extension cannot supply this API; do not substitute a Python fallback class.
 PublicFinalityReadError = _crypto.PublicFinalityReadError
 IronwoodStateSchemaV1 = _crypto.IronwoodStateSchemaV1
+VerifiedIronwoodWorldReplayContextV1 = _crypto.VerifiedIronwoodWorldReplayContextV1
+verify_ironwood_world_replay_v1 = _crypto.verify_ironwood_world_replay_v1
 StateProofSchemaV1 = _crypto.StateProofSchemaV1
 
 # Exact genesis-derived transaction domain. Construction is closed in the
@@ -243,6 +245,8 @@ __all__ = [
     "inspect_signed_privacy_orchard_note_action_v1",
     "inspect_signed_privacy_ironwood_note_action_v1",
     "IronwoodStateSchemaV1",
+    "VerifiedIronwoodWorldReplayContextV1",
+    "verify_ironwood_world_replay_v1",
     "StateProofSchemaV1",
     "verify_state_rows_v1",
     "verify_ironwood_state_rows_v1",

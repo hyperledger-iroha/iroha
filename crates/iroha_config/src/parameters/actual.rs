@@ -1,6 +1,7 @@
 //! "Actual" layer of Iroha configuration parameters. It contains strongly-typed validated
 //! structures in a way that is efficient for Iroha internally.
 use error_stack::{Report, ResultExt};
+mod runtime_checkpoint;
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, RamLfeSecret,
@@ -55,6 +56,7 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, XorQuantity},
     unique_vec::UniqueVec,
 };
+pub use runtime_checkpoint::ToriiRuntimeCheckpoint;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -6927,6 +6929,8 @@ pub struct Torii {
     pub max_content_len: Bytes,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     pub data_dir: PathBuf,
+    /// Optional immutable exported checkpoint provider and its finite local resources.
+    pub runtime_checkpoint: ToriiRuntimeCheckpoint,
     /// Optional key pair used to sign transaction submission receipts.
     pub receipt_signer: Option<KeyPair>,
     /// Optional per-authority query rate (tokens/sec). None disables limiting.
@@ -7148,6 +7152,7 @@ impl fmt::Debug for Torii {
             .field("address", &self.address)
             .field("max_content_len", &self.max_content_len)
             .field("data_dir", &self.data_dir)
+            .field("runtime_checkpoint", &self.runtime_checkpoint)
             .field(
                 "receipt_signer",
                 &RedactedSecret::present(self.receipt_signer.is_some()),

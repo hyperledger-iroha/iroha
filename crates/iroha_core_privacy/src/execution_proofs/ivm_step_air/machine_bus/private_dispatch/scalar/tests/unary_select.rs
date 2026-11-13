@@ -33,12 +33,15 @@ fn checked_native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, 
             expected(wide::opcode(instruction), left, right)
         }
     );
+    // Unary forms read no right register; MIN/MAX join both source tags.
+    let joined =
+        packets[SCALAR_LEFT][BEFORE_TAG] == F::ONE || packets[SCALAR_RIGHT][BEFORE_TAG] == F::ONE;
     assert_eq!(
         packets[SCALAR_DESTINATION][AFTER_TAG],
         if wide::rd(instruction) == 0 {
             F::ZERO
         } else {
-            packets[SCALAR_LEFT][BEFORE_TAG]
+            F(u64::from(joined))
         }
     );
     assert_eq!(
@@ -120,43 +123,48 @@ fn native_unary_full_words_tags_zero_and_read_before_write_aliases_match() {
             for value in values {
                 for rd in [0, 2, 4] {
                     checked_native(
-                        enc::encode_rr(opcode, rd, 2, 255),
-                        &[(2, value, tag), (4, 19, !tag), (255, 17, !tag)],
+                        enc::encode_rr(opcode, rd, 2, 0),
+                        &[(2, value, tag), (4, 19, !tag), (31, 17, !tag)],
                     );
                 }
             }
         }
         for rd in [0, 4] {
             checked_native(
-                enc::encode_rr(opcode, rd, 0, 255),
-                &[(4, 19, true), (255, u64::MAX, true)],
+                enc::encode_rr(opcode, rd, 0, 0),
+                &[(4, 19, true), (31, u64::MAX, true)],
             );
         }
     }
     // ABS has separate public-tag and overflow checks; it must not enter the
     // total-unary destination path even though its shared ALU performs SUB.
-    let absolute = enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255);
+    let absolute = enc::encode_rr(wide::arithmetic::ABS, 4, 2, 0);
     assert!(is_supported(absolute));
     assert!(!is_alu(absolute));
 }
 
 #[test]
-fn native_unary_ignores_every_rs2_byte_and_its_value_and_tag() {
+fn native_unary_rejects_every_rs2_field_and_ignores_other_registers() {
     for opcode in UNARY_OPS {
-        for raw in 0..=u8::MAX {
-            checked_native(
-                enc::encode_rr(opcode, 4, 2, raw),
-                &[(2, 0x8000_1234_5678_9abc, true), (255, 17, false)],
+        // Unary words reserve bits 13..0; admission rejects every nonzero rs2 field.
+        for raw in 1..32 {
+            assert!(
+                ivm::prepare_contract(super::super::super::tests::contract_artifact(
+                    &[enc::encode_rr(opcode, 4, 2, raw)],
+                    1_000,
+                    ivm::ivm_mode::ZK,
+                ))
+                .is_err()
             );
         }
-        let instruction = enc::encode_rr(opcode, 4, 2, 255);
-        let (program, first) = checked_native(instruction, &[(2, 17, true), (255, 0, false)]);
-        let (_, second) = checked_native(instruction, &[(2, 17, true), (255, u64::MAX, true)]);
+        let instruction = enc::encode_rr(opcode, 4, 2, 0);
+        let (program, first) = checked_native(instruction, &[(2, 17, true), (31, 0, false)]);
+        let (_, second) = checked_native(instruction, &[(2, 17, true), (31, u64::MAX, true)]);
         assert_eq!(first.0.row, second.0.row);
         assert_eq!(first.0.packets.fields, second.0.packets.fields);
         let mut extra = first.clone();
         extra.0.packets.fields[SCALAR_RIGHT] = event(
-            (Space::Register, 0, 255),
+            (Space::Register, 0, 31),
             0,
             0,
             false,
@@ -211,39 +219,21 @@ fn native_signed_min_max_full_words_ties_tags_aliases_and_zero_match() {
 }
 
 #[test]
-fn native_selection_mixed_tag_orders_trap_after_one_gas_without_commit() {
+fn native_selection_mixed_tag_orders_select_a_private_join_after_one_gas() {
     for opcode in SELECTION_OPS {
         for rd in [0, 4] {
             for left_tag in [false, true] {
                 let instruction = enc::encode_rr(opcode, rd, 2, 3);
-                let (_, recorder, outcome) = shifts::capture(
-                    &[instruction],
-                    &[(2, 17, left_tag), (3, 23, !left_tag)],
-                    100,
-                    32,
-                );
-                assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
-                assert_eq!(recorder.records().len(), 1);
-                let record = &recorder.records()[0];
-                assert_eq!(record.instruction, Some(instruction));
-                assert_eq!(record.opcode_gas, Some(1));
-                assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
-                assert_eq!(record.before.registers, record.after.registers);
-                assert_eq!(record.before.tags, record.after.tags);
-                assert_eq!(record.before.pc, record.after.pc);
-                assert_eq!(record.before.cycles, record.after.cycles);
-                assert_eq!(record.after.gas_remaining + 1, record.before.gas_remaining);
-                assert!(!record.after.halted);
-                let (program, mut forged) =
-                    checked_native(instruction, &[(2, 17, false), (3, 23, false)]);
-                for (slot, tag) in [(SCALAR_LEFT, left_tag), (SCALAR_RIGHT, !left_tag)] {
-                    forged.0.packets.fields[slot][BEFORE_TAG] = F(u64::from(tag));
-                    forged.0.packets.fields[slot][AFTER_TAG] = F(u64::from(tag));
-                }
+                // Whichever source the predicate selects, the destination is private.
+                let (program, fixture) =
+                    checked_native(instruction, &[(2, 17, left_tag), (3, 23, !left_tag)]);
+                let destination = &fixture.0.packets.fields[SCALAR_DESTINATION];
+                assert_eq!(destination[AFTER_TAG], F(u64::from(rd != 0)));
                 if rd != 0 {
-                    forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F(u64::from(left_tag));
+                    let mut forged = fixture.clone();
+                    forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F::ZERO;
+                    assert!(!forged.accepts(&program));
                 }
-                assert!(!forged.accepts(&program));
             }
         }
     }
@@ -252,7 +242,7 @@ fn native_selection_mixed_tag_orders_trap_after_one_gas_without_commit() {
 #[test]
 fn unary_routing_and_signed_selection_reject_coherent_arithmetic_forgeries() {
     for opcode in UNARY_OPS {
-        let instruction = enc::encode_rr(opcode, 4, 2, 255);
+        let instruction = enc::encode_rr(opcode, 4, 2, 0);
         let (program, fixture) = checked_native(instruction, &[(2, 17, true)]);
         let mut wrong = fixture.clone();
         replace_sources(&mut wrong, instruction, 17, 0);
@@ -265,7 +255,7 @@ fn unary_routing_and_signed_selection_reject_coherent_arithmetic_forgeries() {
             wide::arithmetic::NEG
         };
         let changed = Program::new(contract(
-            &[enc::encode_rr(replacement, 4, 2, 255)],
+            &[enc::encode_rr(replacement, 4, 2, 0)],
             1_000,
             ivm::ivm_mode::ZK,
         ))
@@ -294,7 +284,7 @@ fn unary_routing_and_signed_selection_reject_coherent_arithmetic_forgeries() {
         assert!(!boolean.accepts(&program));
     }
     for opcode in UNARY_OPS.into_iter().chain(SELECTION_OPS) {
-        let instruction = enc::encode_rr(opcode, 4, 2, 3);
+        let instruction = register_word(opcode, 4, 2, 3);
         let (program, mut reduced) = checked_native(
             instruction,
             &[(2, 0xffff_ffff_0000_0001, true), (3, 0, true)],
@@ -323,7 +313,7 @@ fn unary_routing_and_signed_selection_reject_coherent_arithmetic_forgeries() {
         replace_sources(&mut zero, instruction, left, right);
         replace_destination(&mut zero, expected(opcode, 1, 1));
         assert!(!zero.accepts(&program));
-        let instruction = enc::encode_rr(opcode, 2, 2, 3);
+        let instruction = register_word(opcode, 2, 2, 3);
         let (program, mut alias) = checked_native(instruction, &[(2, 17, true), (3, 23, true)]);
         for limb in 0..4 {
             alias.0.packets.fields[SCALAR_DESTINATION][BEFORE + limb] = constant_limb(23, limb);
@@ -335,7 +325,7 @@ fn unary_routing_and_signed_selection_reject_coherent_arithmetic_forgeries() {
 #[test]
 fn total_unary_selection_one_gas_boundaries_cycles_pc_and_false_halt_reject() {
     for opcode in UNARY_OPS.into_iter().chain(SELECTION_OPS) {
-        let instruction = enc::encode_rr(opcode, 4, 2, 3);
+        let instruction = register_word(opcode, 4, 2, 3);
         let inputs = [(2, i64::cast_unsigned(i64::MIN), true), (3, 1, true)];
         let root_gas = root_setup_gas();
         for gas in [0, root_result_table_gas()] {
@@ -417,14 +407,14 @@ fn total_unary_selection_one_gas_boundaries_cycles_pc_and_false_halt_reject() {
 #[test]
 fn consecutive_native_unary_selection_preserves_private_boundaries_and_protected_return() {
     let body = [
-        enc::encode_rr(wide::arithmetic::NEG, 4, 2, 255),
-        enc::encode_rr(wide::arithmetic::NOT, 4, 4, 255),
+        enc::encode_rr(wide::arithmetic::NEG, 4, 2, 0),
+        enc::encode_rr(wide::arithmetic::NOT, 4, 4, 0),
         enc::encode_rr(wide::arithmetic::MIN, 5, 4, 3),
         enc::encode_rr(wide::arithmetic::MAX, 4, 5, 2),
     ];
     let (program, recorder, outcome) = shifts::capture(
         &body,
-        &[(2, 17, true), (3, 23, true), (255, 0, false)],
+        &[(2, 17, true), (3, 23, true), (31, 0, false)],
         100,
         64,
     );

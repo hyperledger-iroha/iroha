@@ -544,7 +544,7 @@ fn bound_contract_validation_and_elections_invocation_diagnostic() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000,
+        max_cycles: 0,
         abi_version: 1,
     }
     .encode();

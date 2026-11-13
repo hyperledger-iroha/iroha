@@ -6,11 +6,10 @@ use crate::{
     encoding::wide::{encode_halt, encode_ri, encode_rr},
     host::DefaultHost,
     instruction::wide::arithmetic,
-    ivm::VmCycleBudget,
     zk,
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
-use std::{mem::size_of, num::NonZeroU64};
+use std::mem::size_of;
 
 const LIMIT: usize = 128 * 1024 * 1024;
 const GAS: u64 = 10_000;
@@ -45,12 +44,9 @@ fn delta_bytes(cycles: usize) -> usize {
         .unwrap();
     delta.allocated_bytes().unwrap()
 }
-fn allowance(cycles: u64) -> VmCycleBudget {
-    VmCycleBudget::new(NonZeroU64::new(cycles).unwrap())
-}
 
 #[test]
-fn refused_first_root_backing_preserves_instruction_gas_state_and_shared_allowance() {
+fn refused_first_root_backing_preserves_instruction_gas_and_state() {
     let original = AllocationBudget::new(LIMIT);
     let words = [encode_ri(arithmetic::ADDI, 7, 7, 1), encode_halt()];
     let mut vm = loaded(Some(&original), &words, 2);
@@ -65,9 +61,8 @@ fn refused_first_root_backing_preserves_instruction_gas_state_and_shared_allowan
     // The previous shell is genuinely borrowed: the next invocation needs its
     // replacement plus a complete root buffer, one byte beyond this limit.
     original.set_limit_bytes(baseline + shell + rows - 1);
-    let cycles = allowance(2);
     assert!(matches!(
-        vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &cycles),
+        vm.run_with_host(&mut DefaultHost::default()),
         Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
         if requested_bytes == rows
     ));
@@ -83,16 +78,14 @@ fn refused_first_root_backing_preserves_instruction_gas_state_and_shared_allowan
         &[1, 2, 3, 4]
     );
     assert!(vm.step_log().is_empty());
-    assert_eq!(cycles.consumed(), 0);
-    assert_eq!(cycles.remaining(), 2);
+    assert_eq!(vm.cycles, 0);
     assert_eq!(original.reserved_bytes(), baseline + shell);
     let event_rows = 4 * size_of::<zk::RegEvent>();
     original.set_limit_bytes(baseline + shell + rows + event_rows + delta_bytes(2));
-    vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &cycles)
-        .unwrap();
+    vm.run_with_host(&mut DefaultHost::default()).unwrap();
     assert_eq!(vm.register(7), 42);
     assert_eq!(vm.step_log().len(), 2);
-    assert_eq!(cycles.consumed(), 2);
+    assert_eq!(vm.cycles, 2);
     assert_eq!(
         original.reserved_bytes(),
         baseline + shell + rows + event_rows + delta_bytes(2)
@@ -113,14 +106,13 @@ fn twelve_cycle_instruction_admits_all_rows_before_overshooting_one_cycle_limit(
         vm.registers.set(6, 3);
         let baseline = original.reserved_bytes();
         let start = vm.pc;
-        let cycles = allowance(12);
         assert!(matches!(
-            vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &cycles),
+            vm.run_with_host(&mut DefaultHost::default()),
             Err(VMError::ExceededMaxCycles)
         ));
         assert_eq!(vm.pc, start + 4);
         assert_eq!(vm.cycles, 12);
-        assert_eq!(cycles.consumed(), 12);
+        assert_eq!(vm.cycles, 12);
         assert_eq!(vm.step_log().len(), 12);
         assert!(vm.step_log().iter().all(|row| row.pc == start + 4));
         assert_eq!(
@@ -140,7 +132,7 @@ fn twelve_cycle_instruction_admits_all_rows_before_overshooting_one_cycle_limit(
 }
 
 #[test]
-fn padding_refusal_precedes_cycle_gas_and_shared_allowance_then_exact_retry_matches() {
+fn padding_refusal_precedes_cycle_and_gas_then_exact_retry_matches() {
     let original = AllocationBudget::new(LIMIT);
     let words = [encode_halt()];
     let mut vm = loaded(Some(&original), &words, 9);
@@ -151,9 +143,8 @@ fn padding_refusal_precedes_cycle_gas_and_shared_allowance_then_exact_retry_matc
     let row = size_of::<zk::StepEntry>();
     let limit = baseline + shell + (4 + 9) * row + delta_bytes(1);
     original.set_limit_bytes(limit - 1);
-    let cycles = allowance(9);
     assert!(matches!(
-        vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &cycles),
+        vm.run_with_host(&mut DefaultHost::default()),
         Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
         if requested_bytes == 9 * row
     ));
@@ -162,22 +153,19 @@ fn padding_refusal_precedes_cycle_gas_and_shared_allowance_then_exact_retry_matc
     assert_eq!(vm.cycles, 1);
     assert_eq!(vm.gas_remaining, GAS);
     assert_eq!(vm.step_log().len(), 1);
-    assert_eq!(cycles.consumed(), 1);
-    assert_eq!(cycles.remaining(), 8);
+    assert_eq!(vm.cycles, 1);
     assert_eq!(
         original.reserved_bytes(),
         baseline + shell + 4 * row + delta_bytes(1)
     );
     original.set_limit_bytes(limit);
     vm.pc = pc;
-    let retry_cycles = allowance(9);
-    vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &retry_cycles)
-        .unwrap();
+    vm.run_with_host(&mut DefaultHost::default()).unwrap();
     assert_eq!(
         original.reserved_bytes(),
         baseline + shell + 9 * row + delta_bytes(9)
     );
-    assert_eq!(retry_cycles.consumed(), 9);
+    assert_eq!(vm.cycles, 9);
     let mut standalone = loaded(None, &words, 9);
     standalone
         .run_with_host(&mut DefaultHost::default())
@@ -199,14 +187,13 @@ fn known_padding_out_of_gas_keeps_its_existing_outcome_without_root_growth() {
     let shell = zk::SharedRegLog::allocation_layout().size();
     let rows = 4 * size_of::<zk::StepEntry>();
     original.set_limit_bytes(baseline + shell + rows + delta_bytes(1));
-    let cycles = allowance(9);
     assert!(matches!(
-        vm.run_with_host_and_cycle_budget(&mut DefaultHost::default(), &cycles),
+        vm.run_with_host(&mut DefaultHost::default()),
         Err(VMError::OutOfGas)
     ));
     assert_eq!(vm.cycles, 9);
     assert_eq!(vm.gas_remaining, 3);
-    assert_eq!(cycles.consumed(), 9);
+    assert_eq!(vm.cycles, 9);
     assert_eq!(vm.step_log().len(), 1);
     assert_eq!(
         original.reserved_bytes(),

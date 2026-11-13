@@ -68,10 +68,6 @@ impl SuffixRecoveryBodyV1 {
     /// Check the exact canonical body and all noncryptographic cross-object bindings.
     /// # Errors
     /// Incorrect identity, header, statement, proof, opening, output or state commitment.
-    #[expect(
-        clippy::suspicious_operation_groupings,
-        reason = "The header's source capsule is bound to this body's predecessor capsule digest; the body has no same-named field."
-    )]
     pub fn validate(&self) -> SuffixResult<()> {
         tag(self.version, self.discriminator, 10)?;
         for value in [
@@ -91,8 +87,9 @@ impl SuffixRecoveryBodyV1 {
             &self.authority_header,
             &self.scheme_id,
         )?;
+        let predecessor_capsule = self.predecessor_capsule_digest;
         if header.wallet_id != self.wallet_id
-            || header.source_capsule != self.predecessor_capsule_digest
+            || header.source_capsule != predecessor_capsule
             || header.statement != self.statement
             || header.sigma != self.step_proof
             || self.statement.operation_id(&self.wallet_id)? != self.operation_id

@@ -84,7 +84,7 @@ mod named_profile_tests {
                 .diagnostics
                 .is_empty()
         );
-        artifact[ivm::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+        artifact[ivm::HEADER_ABI_HASH_OFFSET] ^= 1;
         assert!(artifact_deployment_warnings(&artifact).is_err());
     }
 }

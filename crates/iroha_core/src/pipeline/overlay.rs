@@ -684,7 +684,7 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         ivm_max_decoded_instructions: defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
         ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
         quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-        quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+        quarantine_tx_max_gas: defaults::pipeline::QUARANTINE_TX_MAX_GAS,
         query_default_cursor_mode: QueryCursorMode::Ephemeral,
         query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
         query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
@@ -752,6 +752,11 @@ fn require_ivm_gas_limit(
         OverlayBuildError::GasLimit("missing gas limit in fee payment intent".to_owned())
     })
 }
+/// Narrow a signed gas limit by an optional per-transaction cap: `min(limit, cap)`.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn capped_gas_limit(limit: u64, cap: Option<u64>) -> u64 {
+    cap.map_or(limit, |cap| limit.min(cap))
+}
 /// Reject a proved replay whose metered gas exceeds the transaction gas limit.
 pub(crate) fn require_ivm_proved_gas_within_limit(
     tx: &SignedTransaction,
@@ -805,9 +810,8 @@ pub(crate) fn enforce_pre_execution_policy(
     ivm_max_cycles_upper_bound: NonZeroU64,
     meta: &ivm::ProgramMetadata,
 ) -> Result<(), OverlayBuildError> {
-    crate::smartcontracts::ivm::validate_cycle_ceiling(meta, ivm_max_cycles_upper_bound)
-        .map_err(OverlayBuildError::HeaderPolicy)?;
-    Ok(())
+    crate::smartcontracts::ivm::validate_zk_trace_bound(meta, ivm_max_cycles_upper_bound)
+        .map_err(OverlayBuildError::HeaderPolicy)
 }
 fn contract_registry_attempt_error(
     error: crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
@@ -2304,7 +2308,7 @@ fn execute_generic_program_overlay<R>(
     accounts: Arc<Vec<AccountId>>,
     streaming_meta: StreamingOverlayMetadata,
     zk_enabled: bool,
-    max_cycles: Option<u64>,
+    gas_cap: Option<u64>,
     capture_access_log: bool,
 ) -> Result<GenericOverlayExecution, OverlayBuildError>
 where
@@ -2319,14 +2323,8 @@ where
             IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
         ));
     }
-    let governed_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
-        &meta,
-        state_ro.pipeline().ivm_max_cycles_upper_bound,
-        state_ro.world().parameters().smart_contract().fuel(),
-    )
-    .map_err(OverlayBuildError::HeaderPolicy)?;
     enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
-    let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
+    let tx_gas_limit = capped_gas_limit(require_ivm_gas_limit(tx.fee_payment_intent())?, gas_cap);
     let amx_analysis = cached_generic_amx_analysis(ivm_cache, summary)?;
     #[cfg(test)]
     let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
@@ -2368,11 +2366,6 @@ where
         host = host.with_access_logging();
     }
     begin_overlay_access_log(&mut host, capture_access_log)?;
-    let effective_cycles = max_cycles.map_or_else(
-        || governed_cycles.get(),
-        |cap| cap.min(governed_cycles.get()),
-    );
-    vm.set_max_cycles(effective_cycles);
     vm.set_gas_limit(tx_gas_limit);
     vm.set_zk_trace_enabled(false);
     run_vm_with_host(&mut vm, &mut host)?;
@@ -2842,7 +2835,6 @@ where
                 tx,
                 proved,
                 &summary,
-                None,
                 &mut IvmProvedReplayWork::default(),
             )?;
             require_ivm_proved_gas_within_limit(tx, replay.gas_used)?;
@@ -3423,7 +3415,6 @@ where
                 tx,
                 proved,
                 &summary,
-                None,
                 &mut IvmProvedReplayWork::default(),
             )?;
             require_ivm_proved_gas_within_limit(tx, replay.gas_used)?;
@@ -3442,13 +3433,13 @@ where
 #[cfg(test)]
 /// Build a reference overlay under quarantine limits for regression tests.
 ///
-/// Applies per-transaction execution caps when running IVM bytecode to collect queued ISIs:
-/// - `max_cycles_cap`: if non-zero, caps VM cycles to `min(header.max_cycles, max_cycles_cap, upper_bound_cap)`.
-/// - `upper_bound_cap`: mandatory pipeline-wide upper bound on cycles.
+/// Runs IVM bytecode under the quarantine gas cap to collect queued ISIs: a non-zero
+/// `max_gas_cap` narrows the signed gas limit to `min(gas limit, max_gas_cap)`. Gas is the only
+/// execution budget; the quarantine lane admits no ZK-mode artifact.
 ///
 /// Host wall-clock time is intentionally not an admission input: peers with different hardware
 /// must accept or reject the same execution. Operators may still observe elapsed execution time
-/// through telemetry, while consensus resource enforcement remains cycle- and gas-bounded.
+/// through telemetry, while consensus resource enforcement remains gas-bounded.
 ///
 /// # Errors
 /// Returns an error if the IVM header fails policy checks or running the VM fails.
@@ -3457,7 +3448,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     tx: &SignedTransaction,
     accounts: &Arc<Vec<AccountId>>,
     state_ro: &(impl StateReadOnly + QueryStateSource),
-    (max_cycles_cap, upper_bound_cap): (u64, NonZeroU64),
+    max_gas_cap: u64,
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
     reused_argument_record: Option<&ivm::PreparedArgumentRecord>,
@@ -3525,12 +3516,11 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 ));
             }
             enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
-            let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
+            let tx_gas_limit = capped_gas_limit(
+                require_ivm_gas_limit(tx.fee_payment_intent())?,
+                NonZeroU64::new(max_gas_cap).map(NonZeroU64::get),
+            );
             validate_bound_contract_manifest(manifest, &summary)?;
-            let mut eff = meta.max_cycles.min(upper_bound_cap.get());
-            if max_cycles_cap > 0 {
-                eff = eff.min(max_cycles_cap);
-            }
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
             let lifecycle_transition = crate::executor::validate_prepared_contract_lifecycle_call(
                 state_ro.world(),
@@ -3615,7 +3605,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_state(state_ro)
                 .map_err(OverlayBuildError::IvmRun)?;
-            vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
             let returned_error = run_vm_with_host(&mut vm, &mut host)?;
@@ -3654,10 +3643,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             let summary = match admitted {
                 ExecutableProgramSummary::Contract(summary) => summary,
                 ExecutableProgramSummary::Generic(summary) => {
-                    let mut eff = summary.metadata.max_cycles.min(upper_bound_cap.get());
-                    if max_cycles_cap > 0 {
-                        eff = eff.min(max_cycles_cap);
-                    }
                     let execution = execute_generic_program_overlay(
                         tx,
                         state_ro,
@@ -3666,7 +3651,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                         Arc::clone(accounts),
                         streaming_meta,
                         false,
-                        Some(eff),
+                        NonZeroU64::new(max_gas_cap).map(NonZeroU64::get),
                         false,
                     )?;
                     return Ok(PreparedTxOverlay::new(
@@ -3686,11 +3671,10 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
-            let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
-            let mut eff = meta.max_cycles.min(upper_bound_cap.get());
-            if max_cycles_cap > 0 {
-                eff = eff.min(max_cycles_cap);
-            }
+            let tx_gas_limit = capped_gas_limit(
+                require_ivm_gas_limit(tx.fee_payment_intent())?,
+                NonZeroU64::new(max_gas_cap).map(NonZeroU64::get),
+            );
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -3790,7 +3774,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_chain_id(state_ro.chain_id());
             host.set_zk_snapshots_from_state(state_ro)
                 .map_err(OverlayBuildError::IvmRun)?;
-            vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm_with_host(&mut vm, &mut host)?;
@@ -4524,7 +4507,7 @@ mod tests_overlay_manifest {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 4,
+            max_cycles: 0,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -4661,13 +4644,18 @@ mod tests_overlay_manifest {
         );
     }
     fn minimal_contract_artifact_bytes(abi_version: u8, permission: Option<&str>) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 4,
-            abi_version,
-        };
+        minimal_contract_artifact_bytes_with_header(
+            ivm::ProgramMetadata {
+                abi_version,
+                ..ivm::ProgramMetadata::default()
+            },
+            permission,
+        )
+    }
+    fn minimal_contract_artifact_bytes_with_header(
+        meta: ivm::ProgramMetadata,
+        permission: Option<&str>,
+    ) -> Vec<u8> {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
             enum_types: Vec::new(),
@@ -4719,7 +4707,15 @@ mod tests_overlay_manifest {
     }
     #[test]
     fn warm_pre_execution_policy_does_not_rewalk_opcodes() {
-        let artifact = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
+        // The live ceiling bounds the trace of a ZK artifact; a non-ZK artifact has no cycle check.
+        let artifact = minimal_contract_artifact_bytes_with_header(
+            ivm::ProgramMetadata {
+                mode: ivm::ivm_mode::ZK,
+                max_cycles: 4,
+                ..ivm::ProgramMetadata::default()
+            },
+            Some("CanInvoke"),
+        );
         let code_hash = ivm::contract_code_hash(&artifact);
         let mut cache = IvmCache::with_capacity(2);
         cache
@@ -4734,10 +4730,10 @@ mod tests_overlay_manifest {
             .expect("warm summary lookup without artifact bytes");
         assert!(
             enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata).is_err(),
-            "a warm summary still rejects an insufficient live cycle ceiling"
+            "a warm summary still rejects an insufficient live trace ceiling"
         );
         enforce_pre_execution_policy(nonzero!(4_u64), &summary.metadata)
-            .expect("prepared metadata remains within the live cycle ceiling");
+            .expect("prepared metadata remains within the live trace ceiling");
         assert!(matches!(
             enforce_pre_execution_policy(nonzero!(3_u64), &summary.metadata),
             Err(OverlayBuildError::HeaderPolicy(
@@ -4748,22 +4744,20 @@ mod tests_overlay_manifest {
         assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
         assert_eq!(warm_stats.artifact_hashes, cold_stats.artifact_hashes);
         assert_eq!(warm_stats.preparations, cold_stats.preparations);
+        let non_zk = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
+        let non_zk = cache
+            .summarize_program_with_hash(ivm::contract_code_hash(&non_zk), &non_zk)
+            .expect("non-ZK artifact preparation");
+        enforce_pre_execution_policy(nonzero!(1_u64), &non_zk.metadata)
+            .expect("a non-ZK artifact has no cycle check");
     }
     fn minimal_generic_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 100,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     fn minimal_generic_program_with_syscall(syscall: u32) -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 100,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
@@ -5264,14 +5258,13 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
     ) {
         let block = execution_block(state);
         let accounts = block.accounts_snapshot();
-        let upper_bound = nonzero!(1_000_000_u64);
         let mut cache = IvmCache::new();
         ivm::reset_argument_record_decode_count();
         let prepared = build_overlay_for_transaction_quarantine(
             transaction,
             &accounts,
             &*block,
-            (0, upper_bound),
+            0,
             StreamingOverlayMetadata::default(),
             &mut cache,
             None,
@@ -5289,7 +5282,7 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
             transaction,
             &accounts,
             &*block,
-            (0, upper_bound),
+            0,
             StreamingOverlayMetadata::default(),
             &mut cache,
             Some(&retained),
@@ -5326,7 +5319,6 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let accounts = block.accounts_snapshot();
-        let upper_bound = nonzero!(1_000_000_u64);
         let mut cache = IvmCache::new();
         let outdated = build_prepared_overlay_for_transaction_with_accounts_zk(
             &raw_ivm,
@@ -5422,7 +5414,7 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
                 &raw_ivm,
                 &accounts,
                 &block,
-                (0, upper_bound),
+                0,
                 StreamingOverlayMetadata::default(),
                 &mut cache,
                 None,
@@ -7179,10 +7171,15 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
     if meta.abi_version != 1 {
         return Err(IvmAdmissionError::UnsupportedAbiVersion(meta.abi_version));
     }
-    if meta.max_cycles == 0 {
-        return Err(IvmAdmissionError::MissingMaxCycles);
+    // `max_cycles` is the ZK trace bound: non-zero exactly when the ZK bit is set. Gas, supplied
+    // by the caller, is the only execution budget.
+    match (meta.mode & ivm::ivm_mode::ZK != 0, meta.max_cycles) {
+        (true, 0) => Err(IvmAdmissionError::MissingMaxCycles),
+        (false, max_cycles) if max_cycles != 0 => {
+            Err(IvmAdmissionError::MaxCyclesWithoutZk(max_cycles))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 // (Chunking and limit enforcement driven by caller: see block.rs)
 #[cfg(test)]
@@ -7510,7 +7507,7 @@ mod tests {
         let compiler = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
-                max_cycles: 10_000,
+                zk_trace_cycles: core::num::NonZeroU64::new(10_000).expect("non-zero trace bound"),
                 ..kotodama_lang::compiler::CompilerOptions::default()
             },
         );
@@ -7601,7 +7598,6 @@ seiyaku ProtectedProved { permission CanWriteProved;
     }
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
-            max_cycles: 4,
             version_minor: 1,
             ..ivm::ProgramMetadata::default()
         };
@@ -7728,10 +7724,7 @@ seiyaku ProtectedProved { permission CanWriteProved;
         v
     }
     fn program_with_literals(code: &[u8], literals: &[Vec<u8>]) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            max_cycles: 10_000,
-            ..Default::default()
-        };
+        let meta = ivm::ProgramMetadata::default();
         let descriptor_bytes = literals
             .len()
             .checked_mul(core::mem::size_of::<u64>())
@@ -7859,7 +7852,7 @@ seiyaku ProtectedProved { permission CanWriteProved;
         let compiler = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
-                max_cycles: 10_000,
+                zk_trace_cycles: core::num::NonZeroU64::new(10_000).expect("non-zero trace bound"),
                 ..kotodama_lang::compiler::CompilerOptions::default()
             },
         );
@@ -8168,7 +8161,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         let literals = [descriptor_tlv, dsid_tlv];
         let mut code = Vec::new();
         let mut emit = |word: u32| code.extend_from_slice(&word.to_le_bytes());
-        for (index, register) in [40_u8, 41].into_iter().enumerate() {
+        for (index, register) in [20_u8, 21].into_iter().enumerate() {
             emit(encoding::wide::encode_literal(
                 instruction::wide::memory::LDLIT,
                 10,
@@ -8187,14 +8180,14 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
-            40,
+            20,
             0,
         ));
         emit(encoding::wide::encode_scall(ivm_sys::SYSCALL_AXT_BEGIN));
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
-            41,
+            21,
             0,
         ));
         emit(encoding::wide::encode_rr(
@@ -8207,7 +8200,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
-            41,
+            21,
             0,
         ));
         emit(encoding::wide::encode_scall(
@@ -8466,10 +8459,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let state = test_support::state_after_genesis_with_chain(world, ChainId::from("chain"));
-        let meta = ivm::ProgramMetadata {
-            max_cycles: 8,
-            ..ivm::ProgramMetadata::default()
-        };
+        let meta = ivm::ProgramMetadata::default();
         let mut program = meta.encode();
         program.extend_from_slice(
             &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
@@ -8932,7 +8922,6 @@ fn sha256_to_hash(bytes: &[u8]) -> Hash {
 #[cfg(test)]
 struct IvmTraceBundleV1 {
     register_trace: Vec<IvmRegisterStateV1>,
-    constraints: Vec<IvmConstraintV1>,
     memory_log: Vec<IvmMemEventV1>,
     register_log: Vec<IvmRegEventV1>,
     step_log: Vec<IvmStepEntryV1>,
@@ -8947,23 +8936,6 @@ struct IvmRegisterStateV1 {
     pc: u64,
     gpr: Vec<u64>,
     tags: Vec<u8>,
-}
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::pipeline::overlay::IvmConstraintV1")]
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-#[cfg(test)]
-enum IvmConstraintV1 {
-    Zero { reg: u16, cycle: u64 },
-    Eq { reg1: u16, reg2: u16, cycle: u64 },
-    Range { reg: u16, bits: u8, cycle: u64 },
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::pipeline::overlay::IvmMemEventV1")]
@@ -9130,7 +9102,6 @@ pub(crate) fn verify_ivm_proved_execution<R>(
     _tx: &SignedTransaction,
     _proved: &iroha_data_model::transaction::IvmProved,
     _summary: &ProgramSummary,
-    _cycle_budget: Option<&ivm::VmCycleBudget>,
     _work: &mut IvmProvedReplayWork,
 ) -> Result<IvmProvedReplay, OverlayBuildError>
 where
@@ -9156,11 +9127,6 @@ mod trace_frame_identity_tests {
                 pc: 4,
                 gpr: vec![0, 7],
                 tags: vec![0, 0],
-            }],
-            constraints: vec![IvmConstraintV1::Range {
-                reg: 1,
-                bits: 8,
-                cycle: 1,
             }],
             memory_log: Vec::new(),
             register_log: Vec::new(),

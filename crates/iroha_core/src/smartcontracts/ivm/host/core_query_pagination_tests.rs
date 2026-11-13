@@ -429,12 +429,12 @@ fn dispatched_failed_query_consumes_its_fail_closed_reserve() {
     host.set_query_state(&view);
     let code = [
         ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)
-        .to_le_bytes(),
+            .to_le_bytes(),
         ivm::encoding::wide::encode_halt().to_le_bytes(),
     ]
     .concat();
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_program(&code, 0))
+    vm.load_program(&build_program(&code))
         .expect("load query program");
     let request = QueryRequest::Continue(ForwardCursor {
         query: "ivm-cursor".to_owned(),

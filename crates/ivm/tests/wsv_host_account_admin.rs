@@ -66,7 +66,7 @@ fn add_signatory_syscall_updates_account() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acct.len() as u64 + 8);
-    let add_sig = assemble_syscalls(&[syscalls::SYSCALL_ADD_SIGNATORY as u8]);
+    let add_sig = assemble_syscalls(&[syscalls::SYSCALL_ADD_SIGNATORY]);
     load_and_run(&mut vm, &add_sig).expect("add signatory");
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
@@ -94,7 +94,7 @@ fn remove_signatory_syscall_updates_account() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acct.len() as u64 + 8);
-    let remove_sig = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_SIGNATORY as u8]);
+    let remove_sig = assemble_syscalls(&[syscalls::SYSCALL_REMOVE_SIGNATORY]);
     load_and_run(&mut vm, &remove_sig).expect("remove signatory");
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
@@ -116,7 +116,7 @@ fn set_account_quorum_syscall_updates_account() {
     vm.memory.preload_input(0, &acct).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, 2);
-    let set_quorum = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_QUORUM as u8]);
+    let set_quorum = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_QUORUM]);
     load_and_run(&mut vm, &set_quorum).expect("set quorum");
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
@@ -142,14 +142,14 @@ fn set_account_detail_with_permissions() {
     let dom = make_domain_tlv("wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let reg_domain = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
+    let reg_domain = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN]);
     load_and_run(&mut vm, &reg_domain).expect("register domain");
     let reg_acct = make_account_norito_tlv(&bob);
     vm.memory
         .preload_input(0, &reg_acct)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let reg_account = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
+    let reg_account = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT]);
     load_and_run(&mut vm, &reg_account).expect("register account");
     // Grant permissions to set account detail.
     {
@@ -177,7 +177,7 @@ fn set_account_detail_with_permissions() {
         12,
         Memory::INPUT_START + acct.len() as u64 + key.len() as u64 + 16,
     );
-    let set_detail = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8]);
+    let set_detail = assemble_syscalls(&[syscalls::SYSCALL_SET_ACCOUNT_DETAIL]);
     load_and_run(&mut vm, &set_detail).expect("set detail");
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");

@@ -24,7 +24,14 @@ fn logs(
         scope: Option<&iroha_allocation::AllocationScope<'_>>,
     ) {
         pcs.prepare(8, scope).unwrap();
-        deltas.prepare_batch(2, crate::parallel::REGISTER_COUNT, crate::parallel::REGISTER_COUNT - 1, scope).unwrap();
+        deltas
+            .prepare_batch(
+                2,
+                crate::parallel::REGISTER_COUNT,
+                crate::parallel::REGISTER_COUNT - 1,
+                scope,
+            )
+            .unwrap();
     }
     match original {
         Some(original) => original.with_deferred_refund_notifications(|scope| {
@@ -32,9 +39,9 @@ fn logs(
         }),
         None => prepare(&mut pcs, &mut deltas, None),
     }
-    let mut registers = [pc; 256];
+    let mut registers = [pc; crate::parallel::REGISTER_COUNT];
     registers[0] = 0;
-    let mut tags = [true; 256];
+    let mut tags = [true; crate::parallel::REGISTER_COUNT];
     tags[0] = false;
     pcs.record_reserved(pc);
     deltas.record_reserved(pc, registers, tags);
@@ -68,9 +75,9 @@ fn public_capacities_ignore_private_logical_change_counts() {
     assert_eq!(demand(&changed), same_bytes);
     assert_eq!(same.0.pcs.capacity(), 8);
     assert_eq!(same.0.rows.capacity(), 4);
-    assert_eq!(same.0.changes.capacity(), 511);
+    assert_eq!(same.0.changes.capacity(), 2 * crate::parallel::REGISTER_COUNT - 1);
     assert!(same.delta(1).unwrap().changes.is_empty());
-    assert_eq!(changed.delta(1).unwrap().changes.len(), 255);
+    assert_eq!(changed.delta(1).unwrap().changes.len(), crate::parallel::REGISTER_COUNT - 1);
     assert_eq!(same.delta(0), same_delta.entry(0));
     assert_eq!(changed.delta(1), changed_delta.entry(1));
     assert_ne!(same.pcs().as_ptr(), same_pc.as_slice().as_ptr());
@@ -267,7 +274,9 @@ fn capture_retains_unobserved_capacity_without_consuming_source_batch() {
     let mut delta = DeltaTraceLog::new(Some(&original));
     original.with_deferred_refund_notifications(|scope| {
         pcs.prepare(19, Some(scope)).unwrap();
-        delta.prepare_batch(3, crate::parallel::REGISTER_COUNT, 1, Some(scope)).unwrap();
+        delta
+            .prepare_batch(3, crate::parallel::REGISTER_COUNT, 1, Some(scope))
+            .unwrap();
     });
     let capture = RuntimeTraceCapture::try_capture(&pcs, &delta).unwrap();
     assert!(capture.pcs().is_empty());
@@ -378,8 +387,8 @@ fn actual_capture_destructor_erases_logical_descriptor_fields() {
         drop((pcs, delta));
         let entries = capture.0.rows.as_slice();
         let base = entries.as_ptr().cast::<u8>();
-        // All selected fields are nonzero: observed PC, physical start 256,
-        // and the private logical count 255.
+        // All selected fields are nonzero: observed PC, physical start
+        // REGISTER_COUNT, and the private logical count REGISTER_COUNT - 1.
         let entry = &entries[1];
         let spans = [
             ((&entry.pc as *const u64).cast::<u8>(), size_of::<u64>()),

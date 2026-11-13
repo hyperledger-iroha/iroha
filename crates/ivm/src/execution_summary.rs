@@ -44,7 +44,7 @@ pub struct ExecutionSummary {
     pub step_log_hash: [u8; 32],
     /// Cycles consumed at the time the summary was created.
     pub cycles: u64,
-    /// Maximum cycle bound active for this execution.
+    /// ZK trace bound active for this execution; zero outside ZK mode.
     pub max_cycles: u64,
     /// Gas consumed at the time the summary was created.
     pub gas_used: u64,

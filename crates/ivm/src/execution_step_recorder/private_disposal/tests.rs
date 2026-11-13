@@ -8,8 +8,8 @@ use std::alloc::Layout;
 
 fn state(value: u64) -> DiagnosticStepState {
     DiagnosticStepState {
-        registers: [value; 256],
-        tags: [true; 256],
+        registers: [value; crate::parallel::REGISTER_COUNT],
+        tags: [true; crate::parallel::REGISTER_COUNT],
         ..DiagnosticStepState::default()
     }
 }
@@ -114,8 +114,8 @@ fn replaced_terminal_snapshot_is_retained_then_erased_in_its_original_box() {
             padding_cycles: 3,
             outcome: Ok(()),
         });
-        assert_eq!(recorder.end().unwrap().state.registers, [value; 256]);
-        assert_eq!(recorder.end().unwrap().state.tags, [true; 256]);
+        assert_eq!(recorder.end().unwrap().state.registers, [value; crate::parallel::REGISTER_COUNT]);
+        assert_eq!(recorder.end().unwrap().state.tags, [true; crate::parallel::REGISTER_COUNT]);
         assert!(matches!(recorder.end().unwrap().outcome, Ok(())));
     }
     let base = (&raw const *recorder).cast::<u8>();

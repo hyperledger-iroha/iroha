@@ -38,7 +38,7 @@ fn typed_controlled_lock_calls_compile_to_four_distinct_effects() {
             words
                 .iter()
                 .filter(|word| {
-                    instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
+                    instruction::wide::opcode(**word) == instruction::wide::system::SCALL
                         && encoding::wide::decode_scall(**word) == syscall
                 })
                 .count(),

@@ -4,11 +4,13 @@
 //! (`.to`). It performs parsing, a lightweight semantic pass, IR lowering, simple register
 //! allocation, and final code generation with an IVM metadata header. ABI v1 and
 //! bounded-iteration policy are compiler-owned; callers may select only deployment policy such as
-//! ZK mode, cycle ceilings, safety profile, and production/test mode.
+//! ZK mode and its trace bound, the host profile, and production/test mode. Gas, supplied by the
+//! caller, is the only execution budget, so a non-ZK header carries no cycle bound.
 //!
-//! Kotodama targets the IVM bytecode format exclusively. All helpers in this
-//! module emit the canonical wide encoding introduced for the first release; no
-//! alternate instruction layouts are generated.
+//! Kotodama targets the IVM bytecode format exclusively. All helpers in this module emit the
+//! canonical encoding: signed 14-bit immediates, displacements and branch word offsets, 19-bit
+//! `JAL` and 24-bit `JMP`/`JALS` word offsets, and one 24-bit `SCALL`. Values outside a field are
+//! materialized through the literal table or relaxed transfers, never truncated.
 mod access_hint_normalization;
 #[cfg(test)]
 mod compact_call_schema;
@@ -43,6 +45,9 @@ use super::{
     ir::{self, Instr, Terminator},
     policy, regalloc,
     semantic::{self, TypedItem, TypedProgram},
+};
+use crate::instruction::wide::{
+    IMM14_MAX, IMM14_MIN, JAL_OFFSET_MAX, JAL_OFFSET_MIN, OFFSET24_MAX, OFFSET24_MIN,
 };
 use crate::{
     encoding, instruction,
@@ -90,12 +95,17 @@ use norito::json;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    num::NonZeroU64,
 };
-const WIDE_IMM_MIN: i32 = -128;
-const WIDE_IMM_MAX: i32 = 127;
 const LITERAL_SHIFT_REG: u8 = 26;
-/// Default hash-covered execution ceiling emitted for a Kotodama V1 artifact.
-pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+/// Default trace bound written into the header of a ZK-mode Kotodama V1 artifact.
+///
+/// It equals the protocol default `ivm_max_cycles_upper_bound`, so a default ZK build fits the
+/// default admission ceiling. A non-ZK artifact carries no cycle bound: gas, supplied by the
+/// caller, is its only execution budget.
+pub const DEFAULT_ZK_TRACE_CYCLES: NonZeroU64 = NonZeroU64::new(1_000_000).unwrap();
+// Every word-aligned `i16` byte offset accepted by `encode_branch_rv` is a 14-bit word offset.
+const _: () = assert!(i16::MIN / 4 == IMM14_MIN && i16::MAX / 4 == IMM14_MAX);
 const KOTODAMA_ABI_VERSION: u8 = 1;
 const COLLECTION_ITERATION_CAP: u8 = 64;
 const _: () = assert!(semantic::COLLECTION_ITERATION_LIMIT == COLLECTION_ITERATION_CAP as i64);
@@ -560,14 +570,15 @@ fn emit_get_private_input_arguments(
 fn push_syscall(code: &mut Vec<u8>, number: u32) {
     push_word(code, encoding::wide::encode_scall(number));
 }
-fn chunk_immediate(value: i64) -> i8 {
-    if value > WIDE_IMM_MAX as i64 {
-        WIDE_IMM_MAX as i8
-    } else if value < WIDE_IMM_MIN as i64 {
-        WIDE_IMM_MIN as i8
-    } else {
-        value as i8
-    }
+/// Narrow `value` to the signed 14-bit immediate, displacement and branch-offset field.
+fn fit_imm14(value: i64) -> Option<i16> {
+    i16::try_from(value)
+        .ok()
+        .filter(|value| (IMM14_MIN..=IMM14_MAX).contains(value))
+}
+fn chunk_immediate(value: i64) -> i16 {
+    fit_imm14(value.clamp(i64::from(IMM14_MIN), i64::from(IMM14_MAX)))
+        .expect("a clamped immediate fits the 14-bit field")
 }
 fn emit_addi_inplace(code: &mut Vec<u8>, reg: u8, mut value: i64) {
     while value != 0 {
@@ -576,7 +587,7 @@ fn emit_addi_inplace(code: &mut Vec<u8>, reg: u8, mut value: i64) {
             code,
             encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, reg, reg, chunk),
         );
-        value -= chunk as i64;
+        value -= i64::from(chunk);
     }
 }
 fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
@@ -600,10 +611,10 @@ fn emit_bounded_add(
     value: i64,
     literal_scratch: u8,
 ) -> Result<(), String> {
-    if ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&value) {
+    if let Some(immediate) = fit_imm14(value) {
         push_word(
             code,
-            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs1, value as i8),
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs1, immediate),
         );
         return Ok(());
     }
@@ -790,8 +801,10 @@ fn emit_load64(
     offset: i64,
     scratch: Option<u8>,
 ) -> Result<(), String> {
-    if rd != base && ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&offset) {
-        push_word(code, encode_load64_rv(rd, base, offset as i16)?);
+    if rd != base
+        && let Some(displacement) = fit_imm14(offset)
+    {
+        push_word(code, encode_load64_rv(rd, base, displacement)?);
         return Ok(());
     }
     let addr_reg = if rd == base {
@@ -813,8 +826,8 @@ fn emit_store64(
     offset: i64,
     scratch: u8,
 ) -> Result<(), String> {
-    if ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&offset) {
-        push_word(code, encode_store64_rv(base, rs, offset as i16)?);
+    if let Some(displacement) = fit_imm14(offset) {
+        push_word(code, encode_store64_rv(base, rs, displacement)?);
         return Ok(());
     }
     if scratch == base {
@@ -829,7 +842,7 @@ fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
 }
 /// Reuse a scratch base across consecutive words in a stack-resident ABI table.
 /// The caller reserves `register` until the table transfer is complete. A window
-/// spans all 32 aligned offsets representable by the signed byte immediate.
+/// spans all 2048 aligned offsets representable by the signed 14-bit displacement.
 struct StackTableWindow {
     register: u8,
     anchor: Option<i64>,
@@ -852,18 +865,18 @@ impl StackTableWindow {
         let sp = regalloc::SP_REG as u8;
         if let Some(anchor) = self.anchor {
             let relative = offset - anchor;
-            if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&relative) {
+            if fit_imm14(relative).is_some() {
                 return Ok((self.register, relative));
             }
-        } else if (i64::from(WIDE_IMM_MIN)..=i64::from(WIDE_IMM_MAX)).contains(&offset) {
+        } else if fit_imm14(offset).is_some() {
             return Ok((sp, offset));
         }
         let anchor = offset
-            .checked_sub(i64::from(WIDE_IMM_MIN))
+            .checked_sub(i64::from(IMM14_MIN))
             .ok_or("stack table window overflow")?;
         emit_bounded_add(code, fixups, self.register, sp, anchor, LITERAL_SHIFT_REG)?;
         self.anchor = Some(anchor);
-        Ok((self.register, i64::from(WIDE_IMM_MIN)))
+        Ok((self.register, i64::from(IMM14_MIN)))
     }
 }
 fn encode_nop() -> u32 {
@@ -887,13 +900,11 @@ fn transfer_offset(start: usize, target: usize, kind: &str) -> Result<i64, Strin
     Ok(off)
 }
 fn encode_long_transfer(op: u8, offset: i64, kind: &str) -> Result<u32, String> {
-    let offset_words = offset / 4;
-    if !(-0x80_0000..=0x7f_ffff).contains(&offset_words) {
-        return Err(format!(
-            "{kind} offset {offset} exceeds signed 24-bit word range"
-        ));
-    }
-    Ok(encoding::wide::encode_offset24(op, offset_words as i32))
+    let offset_words = i32::try_from(offset / 4)
+        .ok()
+        .filter(|words| (OFFSET24_MIN..=OFFSET24_MAX).contains(words))
+        .ok_or_else(|| format!("{kind} offset {offset} exceeds signed 24-bit word range"))?;
+    Ok(encoding::wide::encode_offset24(op, offset_words))
 }
 fn patch_jump_transfer(code: &mut [u8], start: usize, target: usize) -> Result<(), String> {
     let offset = transfer_offset(start, target, "jump")?;
@@ -1097,11 +1108,11 @@ fn scan_control_relocations(
             | instruction::wide::control::BGE
             | instruction::wide::control::BLTU
             | instruction::wide::control::BGEU => (
-                i64::from(instruction::wide::imm8(word)),
+                i64::from(instruction::wide::imm14(word)),
                 ControlRelocationKind::Conditional(word),
             ),
             instruction::wide::control::JAL => (
-                i64::from(instruction::wide::imm16(word)),
+                i64::from(instruction::wide::jal_offset(word)),
                 ControlRelocationKind::Transfer(if instruction::wide::rd(word) == 0 {
                     TransferKind::Jump
                 } else {
@@ -1305,10 +1316,9 @@ fn relax_control_transfers_with_trampolines(
             ControlRelocationKind::Conditional(word) => {
                 let target = offset_map.entry(relocation.target);
                 let byte_offset = transfer_offset(source, target, "conditional branch")?;
-                let word_offset = byte_offset / 4;
-                let word_offset = i8::try_from(word_offset).map_err(|_| {
+                let word_offset = fit_imm14(byte_offset / 4).ok_or_else(|| {
                     format!(
-                        "conditional branch at {source} exceeds signed 8-bit word range after trampoline relaxation"
+                        "conditional branch at {source} exceeds signed 14-bit word range after trampoline relaxation"
                     )
                 })?;
                 write_word(
@@ -1316,10 +1326,10 @@ fn relax_control_transfers_with_trampolines(
                     source,
                     encoding::wide::encode_branch(
                         instruction::wide::opcode(word),
-                        u8::try_from(instruction::wide::rd(word))
-                            .expect("decoded wide destination register fits u8"),
-                        u8::try_from(instruction::wide::rs1(word))
-                            .expect("decoded wide source register fits u8"),
+                        u8::try_from(instruction::wide::branch_lhs(word))
+                            .expect("decoded branch register fits u8"),
+                        u8::try_from(instruction::wide::branch_rhs(word))
+                            .expect("decoded branch register fits u8"),
                         word_offset,
                     ),
                 );
@@ -1723,8 +1733,10 @@ pub struct CompilerOptions {
     /// Exact named ABI V1 host profile required by the generated artifact.
     /// This compiler option grants no root permission; governance must select the same profile.
     pub host_policy: crate::SyscallPolicy,
-    /// Maximum execution cycles to encode in the artifact header.
-    pub max_cycles: u64,
+    /// Trace bound written into the header of a ZK-mode artifact: one built with `force_zk` or
+    /// using ZK operations. A non-ZK artifact always carries a zero bound because gas, supplied
+    /// by the caller, is the only execution budget and admission rejects a bound without ZK mode.
+    pub zk_trace_cycles: NonZeroU64,
     /// Chain discriminant used to validate and lower canonical account literals.
     ///
     /// Capturing this in compiler policy keeps offline builds deterministic and
@@ -1743,7 +1755,7 @@ impl Default for CompilerOptions {
         Self {
             force_zk: false,
             host_policy: crate::SyscallPolicy::AbiV1,
-            max_cycles: DEFAULT_MAX_CYCLES,
+            zk_trace_cycles: DEFAULT_ZK_TRACE_CYCLES,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             mode: CompilerMode::Production,
         }
@@ -1768,65 +1780,61 @@ pub fn encode_add(rd: u8, rs1: u8, rs2: u8) -> u32 {
 /// ```
 /// use kotodama_lang::compiler::encode_addi;
 /// let word = encode_addi(1, 1, 7).expect("addi"); // addi x1, x1, 7
-/// assert_eq!(word, 0x2001_0107);
+/// assert_eq!(word, 0x2008_4007);
 /// ```
 pub fn encode_addi(rd: u8, rs1: u8, imm: i16) -> Result<u32, String> {
-    if !(WIDE_IMM_MIN..=WIDE_IMM_MAX).contains(&(imm as i32)) {
+    if !(IMM14_MIN..=IMM14_MAX).contains(&imm) {
         return Err(format!(
-            "encode_addi immediate {imm} out of range; use emit_addi for chunked emission"
+            "encode_addi immediate {imm} exceeds the signed 14-bit field; use emit_addi for chunked emission"
         ));
     }
     Ok(encoding::wide::encode_ri(
         instruction::wide::arithmetic::ADDI,
         rd,
         rs1,
-        imm as i8,
+        imm,
     ))
 }
 /// Encode a 64-bit load (`rd <- [rs1 + imm]`) using the canonical wide layout.
 #[inline]
 pub fn encode_load64_rv(rd: u8, rs1: u8, imm: i16) -> Result<u32, String> {
-    if !(WIDE_IMM_MIN..=WIDE_IMM_MAX).contains(&(imm as i32)) {
+    if !(IMM14_MIN..=IMM14_MAX).contains(&imm) {
         return Err(format!(
-            "encode_load64_rv offset {imm} out of wide range; use emit_load64"
+            "encode_load64_rv displacement {imm} exceeds the signed 14-bit field; use emit_load64"
         ));
     }
     Ok(encoding::wide::encode_load(
         instruction::wide::memory::LOAD64,
         rd,
         rs1,
-        imm as i8,
+        imm,
     ))
 }
 /// Encode a 64-bit store (`[rs1 + imm] <- rs2`) using the canonical wide layout.
 #[inline]
 pub fn encode_store64_rv(rs1: u8, rs2: u8, imm: i16) -> Result<u32, String> {
-    if !(WIDE_IMM_MIN..=WIDE_IMM_MAX).contains(&(imm as i32)) {
+    if !(IMM14_MIN..=IMM14_MAX).contains(&imm) {
         return Err(format!(
-            "encode_store64_rv offset {imm} out of wide range; use emit_store64"
+            "encode_store64_rv displacement {imm} exceeds the signed 14-bit field; use emit_store64"
         ));
     }
     Ok(encoding::wide::encode_store(
         instruction::wide::memory::STORE64,
         rs1,
         rs2,
-        imm as i8,
+        imm,
     ))
 }
 /// Encode a branch using the canonical wide layout. `funct3` selects the branch condition.
-/// Encoding for B‑type branches (BEQ/BNE/BLT/BGE/BLTU/BGEU).
+/// Encoding for B‑type branches (BEQ/BNE/BLT/BGE/BLTU/BGEU). `imm` is a word-aligned byte
+/// offset; the encoded signed 14-bit word offset reaches every `i16` multiple of four.
 pub fn encode_branch_rv(funct3: u8, rs1: u8, rs2: u8, imm: i16) -> Result<u32, String> {
     if (imm & 0x3) != 0 {
         return Err(format!(
             "encode_branch_rv requires word-aligned offset, got {imm}"
         ));
     }
-    let offset_words = (imm / 4) as i32;
-    if !(WIDE_IMM_MIN..=WIDE_IMM_MAX).contains(&offset_words) {
-        return Err(format!(
-            "encode_branch_rv offset {imm} out of wide range; use emit_branch"
-        ));
-    }
+    let offset_words = imm / 4;
     let op = match funct3 {
         0x0 => instruction::wide::control::BEQ,
         0x1 => instruction::wide::control::BNE,
@@ -1838,14 +1846,10 @@ pub fn encode_branch_rv(funct3: u8, rs1: u8, rs2: u8, imm: i16) -> Result<u32, S
             return Err(format!("unsupported branch funct3 {other}"));
         }
     };
-    Ok(encoding::wide::encode_branch(
-        op,
-        rs1,
-        rs2,
-        offset_words as i8,
-    ))
+    Ok(encoding::wide::encode_branch(op, rs1, rs2, offset_words))
 }
 /// Encode a jump-and-link (`JAL`) in the canonical wide layout. Use `rd = 0` for a plain jump.
+/// `imm` is a word-aligned byte offset whose word count must fit the signed 19-bit field.
 pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
     if (imm % 4) != 0 {
         return Err(format!(
@@ -1853,13 +1857,15 @@ pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
         ));
     }
     let offset_words = imm / 4;
-    if !(-0x8000..=0x7fff).contains(&offset_words) {
-        return Err(format!("encode_jal offset {imm} exceeds 16-bit word range"));
+    if !(JAL_OFFSET_MIN..=JAL_OFFSET_MAX).contains(&offset_words) {
+        return Err(format!(
+            "encode_jal offset {imm} exceeds the signed 19-bit word range"
+        ));
     }
     Ok(encoding::wide::encode_jump(
         instruction::wide::control::JAL,
         rd,
-        offset_words as i16,
+        offset_words,
     ))
 }
 #[cfg(test)]
@@ -1956,9 +1962,7 @@ mod test_mode_tests {
                 .0
                 .iter()
                 .map(|chunk| u32::from_le_bytes(*chunk))
-                .filter(|word| {
-                    instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
-                })
+                .filter(|word| instruction::wide::opcode(*word) == instruction::wide::system::SCALL)
                 .map(encoding::wide::decode_scall)
                 .collect::<Vec<_>>();
             assert_eq!(
@@ -2076,7 +2080,7 @@ mod test_mode_tests {
         }
     }
     #[test]
-    fn decimal_operators_use_extended_nominal_syscalls() {
+    fn decimal_operators_use_nominal_numeric_syscalls() {
         let source = include_str!("compiler/fixtures/v1/c178.ko");
         let code = Compiler::new()
             .compile_source(source)
@@ -2089,7 +2093,7 @@ mod test_mode_tests {
             let encoded = encoding::wide::encode_scall(syscall).to_le_bytes();
             assert!(
                 code.windows(encoded.len()).any(|window| window == encoded),
-                "missing extended decimal syscall {syscall:#x}"
+                "missing decimal syscall {syscall:#x}"
             );
         }
     }
@@ -2234,7 +2238,7 @@ mod test_mode_tests {
         );
     }
     #[test]
-    fn quantity_div_round_uses_one_extended_nominal_syscall() {
+    fn quantity_div_round_uses_one_nominal_syscall() {
         let source = include_str!("compiler/fixtures/v1/c181.ko");
         let code = Compiler::new()
             .compile_source(source)
@@ -2246,7 +2250,7 @@ mod test_mode_tests {
                 .filter(|window| *window == encoded)
                 .count(),
             1,
-            "dynamic rounded division must lower to one extended quantity syscall"
+            "dynamic rounded division must lower to one quantity syscall"
         );
     }
     #[test]
@@ -2672,7 +2676,7 @@ mod test_mode_tests {
             })
             .unwrap_or_else(|| panic!("boolean branch; words={choose:08x?}"));
         assert_eq!(
-            instruction::wide::imm8(choose[branch_index]),
+            instruction::wide::imm14(choose[branch_index]),
             2,
             "the conditional must skip exactly one relaxed transfer"
         );
@@ -2683,7 +2687,7 @@ mod test_mode_tests {
         let ordered = function_words("ordered");
         assert!(
             ordered.iter().any(|word| {
-                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                instruction::wide::opcode(*word) == instruction::wide::system::SCALL
                     && encoding::wide::decode_scall(*word) == syscalls::SYSCALL_INT_LT
             }),
             "adaptive int comparison must use the exact INT_LT syscall"
@@ -2714,7 +2718,7 @@ mod test_mode_tests {
         );
         for (index, word) in fused_branches {
             assert_eq!(
-                instruction::wide::imm8(*word),
+                instruction::wide::imm14(*word),
                 2,
                 "the fused conditional must skip exactly one relaxed transfer"
             );
@@ -2853,7 +2857,7 @@ mod test_mode_tests {
                 }
                 conditional_count += 1;
                 assert_eq!(
-                    instruction::wide::imm8(*word),
+                    instruction::wide::imm14(*word),
                     2,
                     "{name} conditional must skip exactly one transfer: {words:08x?}"
                 );
@@ -3069,15 +3073,6 @@ impl Compiler {
                 None,
                 "the contract lifecycle host profile requires a deployable CNTR artifact"
                     .to_owned(),
-            ));
-        }
-        if self.opts.max_cycles == 0 {
-            return Err(native_diagnostic_bundle(
-                "K4001",
-                DiagnosticPhase::Artifact,
-                source_name,
-                None,
-                "the selected max_cycles ceiling must be greater than zero".to_owned(),
             ));
         }
         if typed.unit.kind != SourceUnitKind::Seiyaku {
@@ -4435,11 +4430,10 @@ impl Compiler {
                         }
                         Instr::Const { dest, value } => {
                             let (rd, spilled, imm) = dst_reg(dest);
-                            let imm_val = *value;
-                            if ((WIDE_IMM_MIN as i64)..=(WIDE_IMM_MAX as i64)).contains(&imm_val) {
-                                emit_addi(&mut code, rd, 0, imm_val);
+                            if let Some(immediate) = fit_imm14(*value) {
+                                push_word(&mut code, encode_addi(rd, 0, immediate)?);
                             } else {
-                                emit_i64_literal_load(&mut code, &fixups, rd, imm_val);
+                                emit_i64_literal_load(&mut code, &fixups, rd, *value);
                             }
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
@@ -7929,8 +7923,6 @@ impl Compiler {
                                 Instr::JsonGetBool { .. } => syscalls::SYSCALL_JSON_GET_BOOL,
                                 _ => unreachable!(),
                             };
-                            // `push_syscall` keeps the 8-bit form for the original
-                            // getters and uses the extended form above 0xFF.
                             push_syscall(&mut code, syscall);
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -8326,19 +8318,21 @@ impl Compiler {
         }
         // Build metadata and finalize program (with data appended).
         // Resolve mode bits from emitted operations and compiler-owned build policy.
-        let mode = if uses_zk_global || self.opts.force_zk {
-            metadata::mode::ZK
-        } else {
-            0
-        };
+        let zk_mode = uses_zk_global || self.opts.force_zk;
         let meta = ProgramMetadata {
             version_major: 1,
             // Every profile uses the sole current header. Test harnesses omit
             // CNTR and require the explicit compiler-owned test capability;
             // production artifacts embed their admitted contract interface.
             version_minor: 1,
-            mode,
-            max_cycles: self.opts.max_cycles,
+            mode: if zk_mode { metadata::mode::ZK } else { 0 },
+            // The header bound is the ZK trace bound only; gas, supplied by the
+            // caller, is the sole execution budget of every artifact.
+            max_cycles: if zk_mode {
+                self.opts.zk_trace_cycles.get()
+            } else {
+                0
+            },
             abi_version: KOTODAMA_ABI_VERSION,
         };
         // Build the packed typed-data section and its stable indexed table.
@@ -9069,7 +9063,8 @@ fn build_compile_report(
             bytecode_words,
             frame_bytes: seed.frame_bytes,
             jump_span_words: bytecode_words,
-            jump_range_risk: bytecode_words > i16::MAX as u32,
+            // An intra-function transfer beyond the direct `JAL` word range needs `JMP`/`JALS`.
+            jump_range_risk: i64::from(bytecode_words) > i64::from(JAL_OFFSET_MAX),
             source: Some(source),
         });
     }

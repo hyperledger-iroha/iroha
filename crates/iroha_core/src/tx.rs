@@ -3682,14 +3682,12 @@ impl StateBlock<'_> {
                 );
             }
         }
-        // Fuel (`max_cycles`) must be explicitly provided and bounded by both
-        // governance and the local deterministic execution ceiling.
-        let upper_bound = state_transaction.pipeline.ivm_max_cycles_upper_bound;
-        let params = state_transaction.world.parameters.get();
-        crate::smartcontracts::ivm::validate_cycle_limits(
+        // A ZK artifact's trace bound (`max_cycles`) must lie within the committed ceiling. Gas,
+        // supplied by the caller, is the only execution budget, so a non-ZK artifact has no
+        // cycle check.
+        crate::smartcontracts::ivm::validate_zk_trace_bound(
             &meta,
-            upper_bound,
-            params.smart_contract().fuel(),
+            state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
         .map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
@@ -3758,18 +3756,10 @@ impl StateBlock<'_> {
             debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
             let policy = ivm::SyscallPolicy::AbiV1;
             for op in decoded.iter() {
-                let opcode = ivm::instruction::wide::opcode(op.inst);
-                let number = if opcode == ivm::instruction::wide::system::SCALL {
-                    // SCALL immediate is an unsigned byte; reinterpret negative imm8 as its
-                    // 8-bit two's complement value to mirror VM execution semantics.
-                    Some(u32::from(
-                        ivm::instruction::wide::imm8(op.inst).to_ne_bytes()[0],
-                    ))
-                } else if opcode == ivm::instruction::wide::system::SYSTEM {
-                    Some(ivm::encoding::wide::decode_scall(op.inst))
-                } else {
-                    None
-                };
+                // `SCALL` is the sole syscall opcode; it carries a 24-bit syscall number.
+                let number = (ivm::instruction::wide::opcode(op.inst)
+                    == ivm::instruction::wide::system::SCALL)
+                    .then(|| ivm::instruction::wide::syscall_number(op.inst));
                 if let Some(number) = number
                     && !ivm::syscalls::is_syscall_allowed(policy, number)
                 {
@@ -9894,7 +9884,7 @@ pub mod tests {
         );
         let state = chain.state();
         // Bind an executable gas limit but omit the required PipelineGas charge limit.
-        let program = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let program = minimal_ivm_program(1);
         let tx = TransactionBuilder::new(
             chain.network_id(),
             authority_id.clone(),
@@ -9953,28 +9943,31 @@ pub mod tests {
     }
     const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-    /// Build a minimal valid IVM program: header (1.1, vector=4, `max_cycles=0`, abi=1) + HALT.
+    /// Build a minimal valid IVM program: the non-ZK 1.1 header (no trace bound) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut program = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 1_000,
+        minimal_ivm_program_with_header(ivm::ProgramMetadata {
             abi_version,
-        }
-        .encode();
-        program.extend_from_slice(&code);
+            ..ivm::ProgramMetadata::default()
+        })
+    }
+    /// Build `header` + HALT without applying the header rules, so admission sees `header` as is.
+    fn minimal_ivm_program_with_header(header: ivm::ProgramMetadata) -> Vec<u8> {
+        let mut program = header.encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
+    }
+    /// Build a minimal ZK-mode program declaring the trace bound `max_cycles`.
+    fn minimal_zk_ivm_program(abi_version: u8, max_cycles: u64) -> Vec<u8> {
+        minimal_ivm_program_with_header(ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            max_cycles,
+            abi_version,
+            ..ivm::ProgramMetadata::default()
+        })
     }
     /// Build a minimal self-describing view returning one initialized Unit table word.
     fn minimal_ivm_contract_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 1_000,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        let mut program = ivm::ProgramMetadata::default().encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
             enum_types: Vec::new(),
@@ -10011,31 +10004,19 @@ pub mod tests {
         program.extend_from_slice(&crate::ivm_test_support::unit_return());
         program
     }
-    /// Build a minimal program and override `max_cycles` in the header.
-    fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
-        let mut prog = minimal_ivm_program(abi_version);
-        // Overwrite bytes [8..16] with the desired max_cycles value
-        prog[8..16].copy_from_slice(&max_cycles.to_le_bytes());
-        prog
-    }
     #[track_caller]
     fn minimal_ivm_program_with_instruction_count(
         abi_version: u8,
-        max_cycles: u64,
         instruction_count: usize,
     ) -> Vec<u8> {
         assert!(instruction_count > 0, "instruction_count must be non-zero");
-        assert!(max_cycles > 0, "max_cycles must be non-zero");
         let mut code = Vec::with_capacity(instruction_count * core::mem::size_of::<u32>());
         for _ in 0..instruction_count {
             code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         }
         let mut program = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles,
             abi_version,
+            ..ivm::ProgramMetadata::default()
         }
         .encode();
         program.extend_from_slice(&code);
@@ -10089,38 +10070,15 @@ pub mod tests {
         );
         padded
     }
-    /// Build a minimal program that issues a single syscall followed by HALT.
-    fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes(),
-        );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    /// Build a minimal program that issues a single `SCALL` (24-bit number) followed by HALT.
+    fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {
         let mut program = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 1_000,
             abi_version,
+            ..ivm::ProgramMetadata::default()
         }
         .encode();
-        program.extend_from_slice(&code);
-        program
-    }
-    /// Build a minimal program that issues a single extended syscall followed by HALT.
-    fn minimal_ivm_program_with_syscallx(abi_version: u8, syscall: u32) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut program = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 1_000,
-            abi_version,
-        }
-        .encode();
-        program.extend_from_slice(&code);
+        program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     const TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -10669,9 +10627,9 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_max_cycles_structured_error() {
-        // Program with max_cycles above default config bound; expect structured error
-        let result = IvmAdmissionFixture::new()
-            .validate_program(minimal_ivm_program_with_max_cycles(1, 9_999_999));
+        // ZK program whose trace bound exceeds the default ceiling; expect a structured error.
+        let result =
+            IvmAdmissionFixture::new().validate_program(minimal_zk_ivm_program(1, 9_999_999));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(..),
@@ -10681,8 +10639,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_missing_max_cycles_rejected() {
-        let result =
-            IvmAdmissionFixture::new().validate_program(minimal_ivm_program_with_max_cycles(1, 0));
+        // A ZK header must declare its non-zero trace bound.
+        let result = IvmAdmissionFixture::new().validate_program(minimal_zk_ivm_program(1, 0));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
@@ -10691,55 +10649,34 @@ pub mod tests {
         }
     }
     #[test]
-    fn validate_ivm_max_cycles_exceeds_fuel_rejected() {
-        let mut fixture = IvmAdmissionFixture::new();
-        // Commit an upper bound above the fuel limit so the fuel check triggers first.
-        let mut pipeline = fixture.state.installed_pipeline().clone();
-        let fuel_limit = fixture
-            .state
-            .world
-            .parameters
-            .view()
-            .smart_contract()
-            .fuel()
-            .get();
-        pipeline.ivm_max_cycles_upper_bound =
-            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
-        fixture.state.set_pipeline(pipeline);
-        let result =
-            fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit + 1));
+    fn validate_ivm_non_zk_trace_bound_rejected() {
+        // `max_cycles` is the ZK trace bound alone; a non-ZK header declaring one is malformed.
+        let result = IvmAdmissionFixture::new().validate_program(minimal_ivm_program_with_header(
+            ivm::ProgramMetadata {
+                max_cycles: 1_000,
+                ..ivm::ProgramMetadata::default()
+            },
+        ));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(info),
-            ))) => {
-                assert_eq!(info.fuel_limit, fuel_limit);
-                assert_eq!(info.max_cycles, fuel_limit + 1);
-            }
-            other => panic!("Expected MaxCyclesExceedsFuel error, got {other:?}"),
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesWithoutZk(1_000),
+            ))) => {}
+            other => panic!("Expected MaxCyclesWithoutZk error, got {other:?}"),
         }
     }
-    /// The committed fuel is inclusive: a cycle ceiling equal to it passes admission, and
-    /// the next value is the first one refused (the test above).
+    /// Gas is the only execution budget: neither the committed trace ceiling nor the
+    /// governance fuel bounds a non-ZK program at admission.
     #[test]
-    fn validate_ivm_max_cycles_equal_to_fuel_is_admitted() {
+    fn validate_ivm_non_zk_program_has_no_cycle_check() {
         let mut fixture = IvmAdmissionFixture::new();
         let mut pipeline = fixture.state.installed_pipeline().clone();
-        let fuel_limit = fixture
-            .state
-            .world
-            .parameters
-            .view()
-            .smart_contract()
-            .fuel()
-            .get();
-        // Commit a ceiling above the fuel so only the fuel comparison decides.
         pipeline.ivm_max_cycles_upper_bound =
-            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
+            std::num::NonZeroU64::new(1).expect("test ceiling is non-zero");
         fixture.state.set_pipeline(pipeline);
-        let result = fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit));
+        let result = fixture.validate_program(minimal_ivm_program(1));
         assert!(
             result.is_ok(),
-            "a cycle ceiling equal to the fuel is admitted: {result:?}"
+            "a non-ZK program is admitted under any trace ceiling: {result:?}"
         );
     }
     #[test]
@@ -10750,8 +10687,7 @@ pub mod tests {
         pipeline.ivm_max_decoded_bytes =
             iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
         fixture.state.set_pipeline(pipeline);
-        let result =
-            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
+        let result = fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 4));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::DecodedInstructionCountExceeded(
@@ -10776,8 +10712,7 @@ pub mod tests {
             iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
         fixture.state.set_pipeline(pipeline);
 
-        let result =
-            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
+        let result = fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 4));
         assert!(
             result.is_ok(),
             "a process-local cache retention ceiling must not reject valid bytecode: {result:?}"
@@ -10790,8 +10725,7 @@ pub mod tests {
         pipeline.ivm_max_decoded_instructions = 0;
         pipeline.ivm_max_decoded_bytes = 8; // allow only two 4-byte instructions
         fixture.state.set_pipeline(pipeline);
-        let result =
-            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
+        let result = fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 4));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::DecodedCodeSizeExceeded(info),
@@ -10888,11 +10822,9 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_unknown_syscall_rejected_at_admission() {
-        let syscall = (0u8..=u8::MAX)
-            .find(|number| {
-                !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
-            })
-            .expect("ABI v1 should leave at least one u8 syscall number unmapped");
+        let syscall = (0u32..=0xff)
+            .find(|number| !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, *number))
+            .expect("ABI v1 should leave at least one low syscall number unmapped");
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
         let result = IvmAdmissionFixture::new()
             .validate_program(minimal_ivm_program_with_syscall(1, syscall));
@@ -10915,7 +10847,7 @@ pub mod tests {
             syscall
         ));
         let result = IvmAdmissionFixture::new()
-            .validate_program(minimal_ivm_program_with_syscallx(1, syscall));
+            .validate_program(minimal_ivm_program_with_syscall(1, syscall));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 let expected = format!("unknown syscall number 0x{syscall:02x}");
@@ -11071,7 +11003,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
-        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let prog = minimal_ivm_program(1);
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -11107,7 +11039,7 @@ pub mod tests {
     fn legacy_gas_limit_metadata_is_rejected_before_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         let (authority_id, kp) = gen_account_in("wonderland");
-        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let prog = minimal_ivm_program(1);
         let mut metadata = Metadata::default();
         metadata.insert("gas_limit".parse().unwrap(), Json::new(0_u64));
         let error = TransactionBuilder::new(
@@ -11131,7 +11063,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
-        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let prog = minimal_ivm_program(1);
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -11501,7 +11433,7 @@ pub mod tests {
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000)),
         )
         .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(minimal_ivm_program_with_max_cycles(1, 100)),
+            bytecode: IvmBytecode::from_compiled(minimal_ivm_program(1)),
             overlay: Vec::<InstructionBox>::new().into(),
             events_commitment: Hash::new(b"unimplemented execution events"),
             gas_policy_commitment: Hash::new(b"unimplemented execution gas"),
@@ -12794,17 +12726,14 @@ pub mod tests {
         // the actual committed pipeline policy frozen for this block.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
         let custom = CustomParameter::new(id, Json::new(0_u64));
-        // Build program with max_cycles = 2000
-        let result = fixture.validate_program_with(
-            minimal_ivm_program_with_max_cycles(1, 2_000),
-            None,
-            |block| {
+        // Build a ZK program with the trace bound 2000.
+        let result =
+            fixture.validate_program_with(minimal_zk_ivm_program(1, 2_000), None, |block| {
                 block
                     .world
                     .set_parameter_for_testing(Parameter::Custom(custom))
                     .expect("valid fixture parameters");
-            },
-        );
+            });
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(info),
@@ -12849,8 +12778,8 @@ pub mod tests {
             .world
             .set_parameter_for_testing(Parameter::Custom(custom))
             .expect("valid fixture parameters");
-        // Build program with max_cycles = 2000, below the bound
-        let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
+        // Build a ZK program with the trace bound 2000, below the committed ceiling.
+        let prog = minimal_zk_ivm_program(1, 2_000);
         let tx = TransactionBuilder::new(
             chain.network_id(),
             authority_id.clone(),
@@ -12862,7 +12791,17 @@ pub mod tests {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let result =
             execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
-        assert!(result.is_ok(), "max_cycles within bound should pass");
+        // The committed ceiling admits the trace bound; execution then requires a locally
+        // enabled ZK backend, which this fixture does not configure.
+        assert!(
+            matches!(
+                &result,
+                Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(bits),
+                ))) if *bits == ivm::ivm_mode::ZK
+            ),
+            "a trace bound within the committed ceiling passes admission: {result:?}"
+        );
     }
     mod time_trigger {
         use super::*;
@@ -13893,8 +13832,7 @@ pub mod tests {
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
             ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
         ] {
-            let syscall_u8 = u8::try_from(syscall).expect("contract-admin syscall fits SCALL");
-            let program = minimal_ivm_program_with_syscall(1, syscall_u8);
+            let program = minimal_ivm_program_with_syscall(1, syscall);
             let tx = TransactionBuilder::new(
                 test_network_id(),
                 authority.clone(),

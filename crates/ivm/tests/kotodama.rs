@@ -670,7 +670,6 @@ fn compile_emits_get_authority_syscall() {
         words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
         i += 4;
     }
-    let scall = instruction::wide::system::SCALL;
     let want = encoding::wide::encode_scall(syscalls::SYSCALL_GET_AUTHORITY);
     assert!(words.contains(&want), "GET_AUTHORITY syscall not found");
 }
@@ -685,7 +684,6 @@ fn compile_emits_current_time_syscall() {
         words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
         i += 4;
     }
-    let scall = instruction::wide::system::SCALL;
     let want = encoding::wide::encode_scall(syscalls::SYSCALL_CURRENT_TIME_MS);
     assert!(words.contains(&want), "CURRENT_TIME_MS syscall not found");
 }
@@ -825,8 +823,7 @@ fn compile_emits_zk_vrf_read_helpers() {
         ("ZK_VOTE_GET_TALLY", syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
         ("VRF_EPOCH_SEED", syscalls::SYSCALL_VRF_EPOCH_SEED),
     ] {
-        let want = encoding::wide::encode_scall(syscall as u32)
-            .to_le_bytes();
+        let want = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code_region.windows(want.len()).any(|window| window == want),
             "{name} syscall not found"
@@ -923,13 +920,12 @@ fn compile_emits_extended_hash_syscalls() {
         words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
         i += 4;
     }
-    let scall = instruction::wide::system::SCALL;
     for (name, syscall) in [
         ("BLAKE2B256_HASH", syscalls::SYSCALL_BLAKE2B256_HASH),
         ("KECCAK256_HASH", syscalls::SYSCALL_KECCAK256_HASH),
         ("IROHA_HASH", syscalls::SYSCALL_IROHA_HASH),
     ] {
-        let want = encoding::wide::encode_scall(syscall as u32);
+        let want = encoding::wide::encode_scall(syscall);
         assert!(words.contains(&want), "{name} syscall not found");
     }
 }
@@ -944,7 +940,6 @@ fn compile_emits_resolve_account_alias_syscall() {
         words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
         i += 4;
     }
-    let scall = instruction::wide::system::SCALL;
     let want = encoding::wide::encode_scall(syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS);
     assert!(
         words.contains(&want),
@@ -1000,15 +995,14 @@ fn compile_builtin_create_nfts_and_set_detail() {
     let (_meta, off) = parse_meta_offset(&code).unwrap();
     let code_bytes = &code[off..];
     // Expect SCALL encodings for our helper syscalls present
-    let scall = instruction::wide::system::SCALL;
     let _want = [
         encoding::wide::encode_scall(syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS),
         encoding::wide::encode_scall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
     ];
-    let imm_create = syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8;
-    let imm_detail = syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8;
-    let pat = |imm: u8| [imm, 0x00, 0x00, instruction::wide::system::SCALL];
-    let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
+    let imm_create = syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS;
+    let imm_detail = syscalls::SYSCALL_SET_ACCOUNT_DETAIL;
+    let pat = |number: u32| encoding::wide::encode_scall(number).to_le_bytes();
+    let has = |number: u32| code_bytes.windows(4).any(|w| w == pat(number));
     assert!(has(imm_create) && has(imm_detail));
 }
 #[test]
@@ -1023,15 +1017,14 @@ fn non_json_pointer_constructors_accept_string_variables() {
     // Expect SCALLs present for set detail and transfer domain
     let (_m, off) = parse_meta_offset(&code).unwrap();
     let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
+    let has = |number: u32| {
         bytes
             .windows(4)
-            .any(|w| w == encoding::wide::encode_scall(u32::from(imm)).to_le_bytes())
+            .any(|w| w == encoding::wide::encode_scall(number).to_le_bytes())
     };
     assert!(
-        has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8)
-            && has(syscalls::SYSCALL_TRANSFER_DOMAIN as u8),
+        has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+            && has(syscalls::SYSCALL_TRANSFER_DOMAIN),
         "expected set detail and transfer domain syscalls"
     );
 }
@@ -1055,10 +1048,10 @@ fn compile_typed_nft_syscalls() {
         .expect("compile typed NFT");
     let (_meta, off) = parse_meta_offset(&code).unwrap();
     let code_bytes = &code[off..];
-    let pat = |imm: u8| [imm, 0x00, 0x00, instruction::wide::system::SCALL];
-    let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
-    assert!(has(syscalls::SYSCALL_NFT_MINT_ASSET as u8));
-    assert!(has(syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8));
+    let pat = |number: u32| encoding::wide::encode_scall(number).to_le_bytes();
+    let has = |number: u32| code_bytes.windows(4).any(|w| w == pat(number));
+    assert!(has(syscalls::SYSCALL_NFT_MINT_ASSET));
+    assert!(has(syscalls::SYSCALL_NFT_TRANSFER_ASSET));
 }
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
@@ -1067,7 +1060,7 @@ fn compiler_owns_first_release_abi_metadata() {
         .expect("compile");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
-    assert_eq!(meta.vector_length, 0);
+    assert_eq!(meta.max_cycles, 0);
 }
 #[test]
 fn compile_emits_manifest_hashes() {
@@ -1343,16 +1336,16 @@ fn nested_ternary_types() {
 #[test]
 fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = include_str!("../fixtures/koto_v1/kotodama/057.ko");
+    // A non-ZK artifact carries no trace bound even when the option is set: gas is its only budget.
     let code = Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
-        max_cycles: 1234,
+        zk_trace_cycles: std::num::NonZeroU64::new(1234).expect("trace bound"),
         ..Default::default()
     })
     .compile_source(src)
     .expect("compile build-selected metadata");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
-    assert_eq!(meta.vector_length, 0);
-    assert_eq!(meta.max_cycles, 1234);
+    assert_eq!(meta.max_cycles, 0);
     assert_eq!(meta.mode, 0);
 }
 #[test]
@@ -1392,7 +1385,7 @@ fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
         })
         .expect("expected compact conditional branch");
     let branch_word = words[branch_index];
-    let imm = instruction::wide::imm8(branch_word);
+    let imm = instruction::wide::imm14(branch_word);
     assert_eq!(
         imm, 2,
         "BNE should skip the one-word else transfer and land on the one-word then transfer"
@@ -1866,14 +1859,13 @@ fn typed_vrf_syscalls_are_present() {
         .expect("compile vrf intrinsic");
     let (_meta, off) = parse_meta_offset(&code).unwrap();
     let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
+    let has = |number: u32| {
         bytes
             .windows(4)
-            .any(|w| w == encoding::wide::encode_scall(u32::from(imm)).to_le_bytes())
+            .any(|w| w == encoding::wide::encode_scall(number).to_le_bytes())
     };
-    assert!(has(syscalls::SYSCALL_VRF_VERIFY as u8));
-    assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
+    assert!(has(syscalls::SYSCALL_VRF_VERIFY));
+    assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH));
 }
 #[test]
 fn retired_axt_handle_intrinsics_are_rejected() {

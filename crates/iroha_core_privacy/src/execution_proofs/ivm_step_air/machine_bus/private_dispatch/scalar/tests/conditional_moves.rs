@@ -27,7 +27,7 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
     let value = if register_move {
         packet::half(&p[SCALAR_RIGHT], BEFORE, 0)
     } else {
-        i64::cast_unsigned(i64::from(wide::imm8(instruction)))
+        i64::cast_unsigned(i64::from(wide::imm14(instruction)))
     };
     assert_eq!(
         packet::half(&p[SCALAR_DESTINATION], AFTER, 0),
@@ -91,16 +91,20 @@ fn native_conditional_moves_bind_all_condition_bits_values_tags_aliases_and_r0()
 }
 
 #[test]
-fn native_conditional_immediates_cover_all_signed_bytes_and_preserve_untaken_destination() {
-    for raw in 0..=u8::MAX {
+fn native_conditional_immediates_cover_signed_14_bit_values_and_preserve_untaken_destination() {
+    for immediate in
+        (wide::IMM14_MIN..=wide::IMM14_MAX)
+            .step_by(64)
+            .chain([-1, 0, 1, wide::IMM14_MAX])
+    {
         for condition in [0, 1, 0xffff_ffff_0000_0001] {
             for rd in [0, 2, 4] {
                 checked(
-                    enc::encode_ri(wide::arithmetic::CMOVI, rd, 2, u8::cast_signed(raw)),
+                    enc::encode_ri(wide::arithmetic::CMOVI, rd, 2, immediate),
                     &[
                         (2, condition, false),
                         (4, 0x8000_ffff_0000_0001, true),
-                        (255, 17, true),
+                        (31, 17, true),
                     ],
                 );
             }

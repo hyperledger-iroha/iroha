@@ -12,6 +12,12 @@ use ivm::{
     host::DefaultHost,
 };
 
+/// Canonical register-form word: unary formats reserve the rs2 field, so it is zero.
+fn register_word(opcode: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
+    let unary = wide::operand_format(opcode) == Some(wide::OperandFormat::Register2);
+    enc::encode_rr(opcode, rd, rs1, if unary { 0 } else { rs2 })
+}
+
 /// Test-only scalar, branch and direct-jump workspace; packet backing erases on Drop.
 #[derive(Clone)]
 struct ScalarFixture(Fixture);
@@ -414,7 +420,7 @@ fn native_private_and_public_scalar_register_immediate_and_aliases_match() {
         wide::arithmetic::XORI,
     ] {
         for tag in [false, true] {
-            for immediate in [i8::MIN, -1, 0, 1, i8::MAX] {
+            for immediate in [wide::IMM14_MIN, -1, 0, 1, wide::IMM14_MAX] {
                 for rd in [0, 2, 4] {
                     native(
                         enc::encode_ri(opcode, rd, 2, immediate),
@@ -451,7 +457,11 @@ fn native_public_subset_rejects_shared_valid_private_scalars_and_unjoined_public
         (wide::arithmetic::CTZ, true),
         (wide::arithmetic::CMOV, false),
     ] {
-        let word = enc::encode_rr(opcode, 4, 2, 3);
+        let word = match wide::operand_format(opcode).expect("admitted scalar opcode") {
+            wide::OperandFormat::Register3 => enc::encode_rr(opcode, 4, 2, 3),
+            wide::OperandFormat::Register2 => enc::encode_rr(opcode, 4, 2, 0),
+            _ => enc::encode_ri(opcode, 4, 2, 3),
+        };
         let (program, fixture) = native(word, &[(2, u64::MAX, private), (3, 1, private)]);
         assert!(fixture.accepts(&program), "shared control {opcode:#x}");
         let mut residues = Vec::new();
@@ -502,7 +512,7 @@ fn native_private_comparison_tariffs_bind_two_gas_and_reject_coherent_other_debi
 }
 
 #[test]
-fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row() {
+fn native_mixed_tags_join_into_a_private_destination_and_bind_the_joined_tag() {
     for opcode in [
         wide::arithmetic::ADD,
         wide::arithmetic::SUB,
@@ -520,38 +530,58 @@ fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row()
         wide::arithmetic::MULHSU,
         wide::arithmetic::MULH,
         wide::arithmetic::MEAN,
+        wide::arithmetic::GCD,
+        wide::arithmetic::SLL,
+        wide::arithmetic::SRL,
+        wide::arithmetic::SRA,
+        wide::arithmetic::ROTL,
+        wide::arithmetic::ROTR,
     ] {
-        for rd in [0, 4] {
-            let instruction = enc::encode_rr(opcode, rd, 2, 3);
-            let artifact = contract(&[instruction], 1_000, ivm::ivm_mode::ZK);
-            let mut vm = IVM::new(100);
-            vm.load_prepared(&artifact).unwrap();
-            vm.set_register(2, 11);
-            vm.set_register(3, 23);
-            vm.registers.set_tag(2, true);
-            let budget = AllocationBudget::new(8 * std::mem::size_of::<DiagnosticStepRecord>());
-            let mut recorder = DiagnosticStepRecorder::try_new(8, &budget).unwrap();
-            assert!(matches!(
-                vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-                Err(ivm::VMError::PrivacyViolation)
-            ));
-            let record = &recorder.records()[0];
-            assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
-            assert_eq!(record.after.registers, record.before.registers);
-            let cost = ivm::gas::cost_of(instruction).unwrap();
-            assert_eq!(record.opcode_gas, Some(cost));
-            assert_eq!(
-                record.after.gas_remaining + cost,
-                record.before.gas_remaining
-            );
-            let (program, mut forged) = native(instruction, &[(2, 11, false), (3, 23, false)]);
-            forged.0.packets.fields[SCALAR_LEFT][BEFORE_TAG] = F::ONE;
-            forged.0.packets.fields[SCALAR_LEFT][AFTER_TAG] = F::ONE;
-            if rd != 0 {
-                forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F::ONE;
+        for (left_tag, right_tag) in [(true, false), (false, true), (true, true), (false, false)] {
+            let joined = left_tag || right_tag;
+            for rd in [0, 2, 3, 4] {
+                let instruction = enc::encode_rr(opcode, rd, 2, 3);
+                // Differently tagged operands complete natively; r4 starts with
+                // the opposite tag so an overwrite is always observable.
+                let (program, fixture) = native(
+                    instruction,
+                    &[(2, 11, left_tag), (3, 23, right_tag), (4, 19, !joined)],
+                );
+                let destination = &fixture.0.packets.fields[SCALAR_DESTINATION];
+                if rd == 0 {
+                    assert!(destination.iter().all(|cell| *cell == F::ZERO));
+                    continue;
+                }
+                assert_eq!(
+                    destination[AFTER_TAG],
+                    F(u64::from(joined)),
+                    "native join for opcode {opcode:#x}, tags ({left_tag}, {right_tag}), rd {rd}"
+                );
+                // Neither the retired left-tag rule nor any other destination
+                // tag satisfies the relation.
+                let mut forged = fixture.clone();
+                forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F(u64::from(!joined));
+                assert!(
+                    !forged.accepts(&program),
+                    "tampered tag for opcode {opcode:#x}, tags ({left_tag}, {right_tag}), rd {rd}"
+                );
             }
-            assert!(!forged.accepts(&program));
         }
+    }
+    // A unary or immediate right operand is not a register read: a private
+    // left source alone determines the destination tag.
+    for (instruction, private) in [
+        (enc::encode_ri(wide::arithmetic::ADDI, 4, 2, 5), true),
+        (enc::encode_ri(wide::arithmetic::XORI, 4, 2, -1), false),
+        (enc::encode_rr(wide::arithmetic::NOT, 4, 2, 0), true),
+        (enc::encode_ri(wide::arithmetic::ROTL_IMM, 4, 2, 7), false),
+    ] {
+        let (program, fixture) = native(instruction, &[(2, 11, private), (3, 23, !private)]);
+        let destination = &fixture.0.packets.fields[SCALAR_DESTINATION];
+        assert_eq!(destination[AFTER_TAG], F(u64::from(private)));
+        let mut forged = fixture.clone();
+        forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F(u64::from(!private));
+        assert!(!forged.accepts(&program));
     }
 }
 
@@ -563,11 +593,11 @@ fn every_scalar_original_field_and_workspace_mutation_rejects_except_prior_desti
         enc::encode_rr(wide::arithmetic::MULHSU, 3, 2, 3),
         enc::encode_rr(wide::arithmetic::MULH, 0, 2, 3),
         enc::encode_rr(wide::arithmetic::MEAN, 2, 2, 3),
-        enc::encode_rr(wide::arithmetic::ISQRT, 2, 2, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 2, 2, 0),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 2, 2, 3),
         enc::encode_rr(wide::arithmetic::GCD, 2, 2, 3),
-        enc::encode_rr(wide::arithmetic::NEG, 2, 2, 255),
-        enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
+        enc::encode_rr(wide::arithmetic::NEG, 2, 2, 0),
+        enc::encode_rr(wide::arithmetic::NOT, 4, 2, 0),
         enc::encode_rr(wide::arithmetic::MIN, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::MAX, 0, 2, 3),
         enc::encode_rr(wide::arithmetic::ADD, 4, 2, 3),
@@ -618,7 +648,7 @@ fn scalar_fetch_signed_immediate_alias_zero_and_tag_substitution_reject() {
         enc::encode_ri(wide::arithmetic::ADDI, 2, 2, 1),
         enc::encode_ri(wide::arithmetic::ADDI, 3, 2, -1),
         enc::encode_ri(wide::arithmetic::ANDI, 2, 2, -1),
-        enc::encode_rr(wide::arithmetic::ADD, 2, 2, 255),
+        enc::encode_rr(wide::arithmetic::ADD, 2, 2, 31),
     ] {
         let replaced = Program::new(contract(&[replacement], 1_000, ivm::ivm_mode::ZK)).unwrap();
         assert!(!fixture.accepts(&replaced));
@@ -696,18 +726,18 @@ fn composed_private_scalar_polynomials_have_degree_four() {
             enc::encode_rr(wide::arithmetic::DIVU, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::REM, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::REMU, 4, 2, 3),
-            enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::ABS, 4, 2, 0),
             enc::encode_rr(wide::arithmetic::MEAN, 4, 2, 3),
-            enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 0),
             enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::CMOV, 4, 2, 3),
             enc::encode_ri(wide::arithmetic::CMOVI, 4, 2, -1),
-            enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
-            enc::encode_rr(wide::arithmetic::NEG, 4, 2, 255),
-            enc::encode_rr(wide::arithmetic::POPCNT, 4, 2, 255),
-            enc::encode_rr(wide::arithmetic::CLZ, 4, 2, 255),
-            enc::encode_rr(wide::arithmetic::CTZ, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::NOT, 4, 2, 0),
+            enc::encode_rr(wide::arithmetic::NEG, 4, 2, 0),
+            enc::encode_rr(wide::arithmetic::POPCNT, 4, 2, 0),
+            enc::encode_rr(wide::arithmetic::CLZ, 4, 2, 0),
+            enc::encode_rr(wide::arithmetic::CTZ, 4, 2, 0),
             enc::encode_rr(wide::arithmetic::MUL, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::MULHU, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::MULHSU, 4, 2, 3),
@@ -731,8 +761,8 @@ fn composed_private_scalar_polynomials_have_degree_four() {
             enc::encode_rr(wide::arithmetic::SRA, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::ROTL, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::ROTR, 4, 2, 3),
-            enc::encode_ri(wide::arithmetic::ROTL_IMM, 4, 2, i8::MIN),
-            enc::encode_ri(wide::arithmetic::ROTR_IMM, 4, 2, -1),
+            enc::encode_ri(wide::arithmetic::ROTL_IMM, 4, 2, 32),
+            enc::encode_ri(wide::arithmetic::ROTR_IMM, 4, 2, 63),
         ],
         1_000,
         ivm::ivm_mode::ZK,
@@ -836,10 +866,14 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         wide::arithmetic::ABS,
         wide::arithmetic::ISQRT,
     ] {
-        let instruction = enc::encode_ri(opcode, 4, 2, -1);
+        let instruction = if is_rotate(enc::encode_rr(opcode, 0, 0, 0)) {
+            enc::encode_ri(opcode, 4, 2, 63)
+        } else {
+            enc::encode_rr(opcode, 4, 2, 0)
+        };
         let (_, fixture) = native(
             instruction,
-            &[(2, u64::MAX, !is_absolute(instruction)), (255, 17, false)],
+            &[(2, u64::MAX, !is_absolute(instruction)), (31, 17, false)],
         );
         assert!(accepts(&fixture, None));
         assert!(
@@ -911,7 +945,7 @@ fn consecutive_native_private_scalar_records_preserve_exact_register_and_control
         enc::encode_rr(wide::arithmetic::SUB, 2, 4, 2),
         enc::encode_ri(wide::arithmetic::XORI, 3, 2, -1),
         enc::encode_rr(wide::arithmetic::AND, 4, 3, 4),
-        enc::encode_ri(wide::arithmetic::ORI, 2, 4, i8::MIN),
+        enc::encode_ri(wide::arithmetic::ORI, 2, 4, wide::IMM14_MIN),
         enc::encode_rr(wide::arithmetic::OR, 3, 2, 3),
         enc::encode_ri(wide::arithmetic::ANDI, 4, 3, 127),
         enc::encode_ri(wide::arithmetic::ADDI, 4, 4, -1),

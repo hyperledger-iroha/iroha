@@ -177,7 +177,7 @@ pub const COMPONENTS: &[ProofComponent] = &[
     },
     ProofComponent {
         id: "public_scalar_segment",
-        summary: "Bounded public scalar segment with canonical artifact fetch, all 256 registers, gas, cycles and a typed final-attempt outcome.",
+        summary: "Bounded public scalar segment with canonical artifact fetch, all 32 registers, gas, cycles and a typed final-attempt outcome.",
         sources: &[
             "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace.rs",
             "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace/absolute.rs",
@@ -248,13 +248,13 @@ pub const COMPONENTS: &[ProofComponent] = &[
             "ROTL", "ROTL_IMM", "ROTR", "ROTR_IMM", "SEQ", "SLL", "SLT", "SLTU", "SNE", "SRA",
             "SRL", "SUB", "XOR",
         ],
-        traps: &[VmTrapKind::AssertionFailed, VmTrapKind::OutOfGas],
+        traps: &[VmTrapKind::NumericFault, VmTrapKind::OutOfGas],
         restrictions: &[
             "1..=64 attempted steps over code of at most 64 words between explicit public boundaries",
             "every register tag is public and zero; private values are outside the relation",
             "no call entry or return, memory, host effects, statement, finality or invocation completion",
-            "trap outcomes cover only the final attempted step: out of gas and arithmetic assertion",
-            "artifact cycle limit only; host cycle overrides are outside the relation",
+            "trap outcomes cover only the final attempted step: out of gas and register numeric faults",
+            "ZK-mode header trace bound only; host trace-bound overrides are outside the relation",
             "the interpreter step recorder supplies untrusted witness material, never authority",
         ],
         substrate: &[
@@ -278,7 +278,7 @@ pub const COMPONENTS: &[ProofComponent] = &[
             ),
             geometry(
                 "registers",
-                256,
+                32,
                 "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace.rs",
                 "REGISTERS",
             ),

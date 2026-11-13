@@ -152,15 +152,18 @@ fn bitwise_truth_tables_and_full_width_patterns_have_zero_air_residues() {
     }
 }
 
+/// Boundary and sign-change values of the signed 14-bit immediate field.
+const IMMEDIATES: [i16; 5] = [wide::IMM14_MIN, -1, 0, 1, wide::IMM14_MAX];
+
 #[test]
-fn immediate_operands_are_exact_signed_eight_bit_words() {
+fn immediate_operands_are_exact_signed_fourteen_bit_words() {
     for opcode in [
         wide::arithmetic::ADDI,
         wide::arithmetic::ANDI,
         wide::arithmetic::ORI,
         wide::arithmetic::XORI,
     ] {
-        for imm in [i8::MIN, -1, 0, 1, i8::MAX] {
+        for imm in IMMEDIATES {
             let word = ivm::encoding::wide::encode_ri(opcode, 3, 1, imm);
             assert_eq!(
                 immediate_operand(word),
@@ -174,7 +177,7 @@ fn immediate_operands_are_exact_signed_eight_bit_words() {
             };
             assert!(statement.validate().is_ok());
             for wrong in [
-                u64::from(i8::cast_unsigned(imm)),
+                u64::from(i16::cast_unsigned(imm) & 0x3fff),
                 i64::cast_unsigned(i64::from(imm)) ^ (1_u64 << 63),
             ] {
                 if wrong != statement.right {
@@ -219,7 +222,7 @@ fn immediate_alu_full_width_results_and_zero_register_shapes_satisfy_air() {
             i64::cast_unsigned(i64::MIN),
             0xaaaa_5555_ffff_0000,
         ] {
-            for imm in [i8::MIN, -1, 0, 1, i8::MAX] {
+            for imm in IMMEDIATES {
                 let right = i64::cast_unsigned(i64::from(imm));
                 let result = expected_result(semantic_opcode(opcode), left, right);
                 let instance = AluStepStatement {
@@ -248,7 +251,7 @@ fn immediate_alu_full_width_results_and_zero_register_shapes_satisfy_air() {
         wide::arithmetic::XORI,
     ] {
         for (rd, rs1) in [(3, 1), (1, 1), (4, 4), (3, 0), (0, 1), (0, 0)] {
-            for imm in [i8::MIN, -1, 0, 1, i8::MAX] {
+            for imm in IMMEDIATES {
                 let instance = diagnostic_immediate_statement(opcode, rd, rs1, imm);
                 assert_eq!(
                     instance.destination_after,
@@ -282,7 +285,7 @@ fn forged_immediate_operand_result_and_destination_fail_the_relation() {
         };
         assert!(forged_operand.validate().is_err());
         let changed_word = AluStepStatement {
-            word: ivm::encoding::wide::encode_ri(opcode, 4, 4, i8::MIN),
+            word: ivm::encoding::wide::encode_ri(opcode, 4, 4, wide::IMM14_MIN),
             ..instance
         };
         assert!(changed_word.validate().is_err());
@@ -318,7 +321,7 @@ fn diagnostic_statement(opcode: u8, rd: u8, rs1: u8, rs2: u8) -> AluStepStatemen
     diagnostic_step_statement(ivm::encoding::wide::encode_rr(opcode, rd, rs1, rs2))
 }
 
-fn diagnostic_immediate_statement(opcode: u8, rd: u8, rs1: u8, imm: i8) -> AluStepStatement {
+fn diagnostic_immediate_statement(opcode: u8, rd: u8, rs1: u8, imm: i16) -> AluStepStatement {
     diagnostic_step_statement(ivm::encoding::wide::encode_ri(opcode, rd, rs1, imm))
 }
 
@@ -361,7 +364,7 @@ fn diagnostic_step_statement(word: u32) -> AluStepStatement {
     let (rd, rs1, rs2) = (wide::rd(word), wide::rs1(word), wide::rs2(word));
     let left = step.before.registers[rs1];
     let right = immediate_operand(word).unwrap_or(step.before.registers[rs2]);
-    for index in 0..256 {
+    for index in 0..ivm::parallel::REGISTER_COUNT {
         if index != rd || rd == 0 {
             assert_eq!(step.before.registers[index], step.after.registers[index]);
             assert_eq!(step.before.tags[index], step.after.tags[index]);
@@ -679,6 +682,83 @@ fn invalid_opcode_secret_tag_and_unaligned_pc_are_not_profile_instances() {
 }
 
 #[test]
+fn destination_tag_is_the_join_of_register_sources_and_the_left_tag_for_immediates() {
+    // The public profile rejects private tags in `validate`; the polynomial
+    // relation alone still fixes the joined destination tag of every shape.
+    for (word, right, result, destination_after) in [
+        (
+            ivm::encoding::wide::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
+            2,
+            1,
+            1,
+        ),
+        (
+            ivm::encoding::wide::encode_ri(wide::arithmetic::ADDI, 3, 1, 5),
+            5,
+            4,
+            4,
+        ),
+        (
+            ivm::encoding::wide::encode_rr(wide::arithmetic::ADD, 0, 1, 2),
+            2,
+            1,
+            0,
+        ),
+    ] {
+        let register_right = immediate_operand(word).is_none();
+        for (left_tag, right_tag) in [(false, false), (true, false), (false, true), (true, true)] {
+            let joined = wide::rd(word) != 0 && (left_tag || (register_right && right_tag));
+            for result_tag in [false, true] {
+                let candidate = AluStepStatement {
+                    word,
+                    right,
+                    result,
+                    destination_after,
+                    left_tag,
+                    right_tag,
+                    result_tag,
+                    ..statement()
+                };
+                let accepted = residues(&candidate.witness(), &candidate.fixed())
+                    .unwrap()
+                    .iter()
+                    .all(|residual| *residual == F::ZERO);
+                assert_eq!(
+                    accepted,
+                    result_tag == joined,
+                    "word={word:#010x}, tags=({left_tag}, {right_tag}) -> {result_tag}"
+                );
+            }
+        }
+    }
+    // Aliased sources are one register read, so their tags cannot differ.
+    let aliased = ivm::encoding::wide::encode_rr(wide::arithmetic::ADD, 3, 1, 1);
+    for (left_tag, right_tag) in [(false, false), (true, false), (false, true), (true, true)] {
+        for result_tag in [false, true] {
+            let candidate = AluStepStatement {
+                word: aliased,
+                right: u64::MAX,
+                result: u64::MAX - 1,
+                destination_after: u64::MAX - 1,
+                left_tag,
+                right_tag,
+                result_tag,
+                ..statement()
+            };
+            let accepted = residues(&candidate.witness(), &candidate.fixed())
+                .unwrap()
+                .iter()
+                .all(|residual| *residual == F::ZERO);
+            assert_eq!(
+                accepted,
+                left_tag == right_tag && result_tag == left_tag,
+                "aliased tags ({left_tag}, {right_tag}) -> {result_tag}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_stark_checks_add_relation_and_statement_mutations() {
     let statement = statement();
     let adapter = AluStepAdapter(statement);
@@ -796,19 +876,19 @@ fn native_stark_checks_interpreter_immediate_arithmetic_and_bitwise_relations() 
     // Both semantic equations use the immediate decoded from the public word.
     // The other two bitwise-immediate selectors share the same Boolean chip.
     for opcode in [wide::arithmetic::ADDI, wide::arithmetic::XORI] {
-        let admitted = diagnostic_immediate_statement(opcode, 4, 4, i8::MIN);
+        let admitted = diagnostic_immediate_statement(opcode, 4, 4, wide::IMM14_MIN);
         let adapter = AluStepAdapter(admitted);
         let proof = prove_proof_managed_note_stark_v1(&adapter, &columns(admitted)).unwrap();
         verify_proof_managed_note_stark_v1(&adapter, &proof).unwrap();
 
         for invalid in [
             AluStepStatement {
-                right: i8::MAX as u64,
+                right: wide::IMM14_MAX as u64,
                 ..admitted
             },
             AluStepStatement {
-                word: ivm::encoding::wide::encode_ri(opcode, 4, 4, i8::MAX),
-                right: i8::MAX as u64,
+                word: ivm::encoding::wide::encode_ri(opcode, 4, 4, wide::IMM14_MAX),
+                right: wide::IMM14_MAX as u64,
                 ..admitted
             },
             AluStepStatement {

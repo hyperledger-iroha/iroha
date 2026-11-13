@@ -188,8 +188,8 @@ ABI_FIXTURE_JSON = "sdk/test/fixtures/artifact.json"
 
 
 def ivm_program(abi_hash: bytes, body: bytes = b"\x00" * 8) -> bytes:
-    """An IVM program image: the fixed 49-byte header ending in the ABI hash, then `body`."""
-    header = b"IVM\0" + bytes([1, 1, 0, 0]) + (1_000_000).to_bytes(8, "little") + b"\x01"
+    """An IVM program image: the fixed 48-byte header ending in the ABI hash, then `body`."""
+    header = b"IVM\0" + bytes([1, 1, 0]) + (0).to_bytes(8, "little") + b"\x01"
     return header + abi_hash + body
 
 

@@ -12,6 +12,24 @@ use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_data_model::sumeragi_finality::KeyedStateRoot;
 use iroha_sumeragi::types::Hash32;
 
+/// One authenticated result observed during restoration, with its authority source explicit.
+pub(in crate::state) enum RestoredCertifiedBlock<'a> {
+    /// Original complete native carrier and exact quorum.
+    Native(&'a CertifiedBlock),
+    /// Body-independent parent authenticated by the exact certified successor.
+    Portable(&'a iroha_data_model::sumeragi_finality::PortableCertifiedBlockV1),
+}
+
+impl RestoredCertifiedBlock<'_> {
+    /// Exact authenticated height, common to both sources.
+    pub(in crate::state) fn height(&self) -> u64 {
+        match self {
+            Self::Native(block) => block.height(),
+            Self::Portable(block) => block.header().height().get(),
+        }
+    }
+}
+
 /// Fixed execution identity retained by the original publication generation.
 /// This type deliberately has no decoder or public constructor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,7 +236,7 @@ impl NativeExecutionTipSnapshot {
         network: &iroha_data_model::NetworkId,
         hashes: &[HashOf<BlockHeader>],
         kura: &Kura,
-        observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+        observe: &mut dyn FnMut(RestoredCertifiedBlock<'_>) -> Result<(), TipRestoreError>,
     ) -> Result<RestoredNativeTip, TipRestoreError> {
         let height = u64::try_from(hashes.len()).map_err(|error| error.to_string())?;
         if height == 0 {
@@ -245,19 +263,45 @@ impl NativeExecutionTipSnapshot {
         let mut pinned = Vec::with_capacity(hashes.len() + 1);
         pinned.extend_from_slice(hashes);
         pinned.push(successor_hash);
+        let mut observer_error = None;
+        let portable =
+            kura.walk_checkpoint_prefix(chain_id, *network, hashes, &mut |block| match observe(
+                RestoredCertifiedBlock::Portable(block),
+            ) {
+                Ok(()) => Ok(()),
+                Err(original) => {
+                    observer_error = Some(original);
+                    Err(ExecutionAttemptError::Rejected(
+                        crate::sumeragi::checkpoint_prefix::Error::Invalid(
+                            "snapshot observer refused the original portable result".into(),
+                        ),
+                    ))
+                }
+            });
+        if let Some(original) = observer_error {
+            return Err(original);
+        }
+        let portable = portable.map_err(portable_history_error)?;
         let chain = CertifiedChain::from_pinned(chain_id, network, &pinned, kura, budget)
             .map_err(TipRestoreError::from)?;
         // One verified walk over the native prefix authenticates the tip and its
         // predecessor and records history checkpoints for off-chain readers.
         let checkpoints = kura.history_checkpoints();
-        let mut previous = if height == 2 {
+        let mut previous = if let Some(portable) = &portable {
+            portable.predecessor().map(portable_record)
+        } else if height == 2 {
             Some(restored_genesis_record(&chain)?)
         } else {
             None
         };
-        let mut current = None;
-        let mut walk = chain.walk(1, height);
-        observe_restored_genesis(&mut walk, observe)?;
+        let mut current = portable
+            .as_ref()
+            .map(|cut| portable_record(cut.checkpoint()));
+        let start = current.map_or(1, |tip| tip.height + 1);
+        let mut walk = chain.walk(start, height);
+        if portable.is_none() {
+            observe_restored_genesis(&mut walk, observe)?;
+        }
         while let Some(block) = next_restored_record(&mut walk, observe)? {
             checkpoints.record_sparse(block.height, checkpoint_of(block));
             previous = current.replace(block).or(previous);
@@ -274,7 +318,12 @@ impl NativeExecutionTipSnapshot {
         }
         drop(walk);
         // The sequential cursor stands at the tip, so the successor costs one certificate.
-        let state_root = restored_successor_world_root(&chain, successor, current)?;
+        let state_root = match portable {
+            Some(portable) if portable.checkpoint().header().height().get() == height => {
+                portable.published_root()
+            }
+            _ => restored_successor_world_root(&chain, successor, current)?,
+        };
         Ok(RestoredNativeTip {
             cell: initialize(
                 budget,
@@ -339,13 +388,13 @@ fn restored_genesis_record(
 #[inline(never)]
 fn observe_restored_genesis(
     walk: &mut impl Iterator<Item = Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>>>,
-    observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+    observe: &mut dyn FnMut(RestoredCertifiedBlock<'_>) -> Result<(), TipRestoreError>,
 ) -> Result<(), TipRestoreError> {
     let genesis = walk
         .next()
         .ok_or("verified native prefix ended before the snapshot tip")?
         .map_err(TipRestoreError::from)?;
-    observe(&genesis)
+    observe(RestoredCertifiedBlock::Native(&genesis))
 }
 
 // The iterator owns the same source-bound prefix and advances in the same order.
@@ -354,13 +403,13 @@ fn observe_restored_genesis(
 #[inline(never)]
 fn next_restored_record(
     walk: &mut impl Iterator<Item = Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>>>,
-    observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+    observe: &mut dyn FnMut(RestoredCertifiedBlock<'_>) -> Result<(), TipRestoreError>,
 ) -> Result<Option<NativeExecutionTipRecord>, TipRestoreError> {
     let Some(certified) = walk.next() else {
         return Ok(None);
     };
     let certified = certified.map_err(TipRestoreError::from)?;
-    observe(&certified)?;
+    observe(RestoredCertifiedBlock::Native(&certified))?;
     let block = certified
         .into_authenticated_execution()
         .map_err(|error| error.to_string())?;
@@ -386,6 +435,29 @@ fn record(block: &CommittedBlock) -> NativeExecutionTipRecord {
         iroha_hash: block.block_hash(),
         core_hash: block.core_hash().0,
         result: block.result().0,
+    }
+}
+
+fn portable_record(
+    block: &iroha_data_model::sumeragi_finality::PortableCertifiedBlockV1,
+) -> NativeExecutionTipRecord {
+    NativeExecutionTipRecord {
+        root_scope: block.root_scope(),
+        height: block.header().height().get(),
+        creation_time_ms: u64::try_from(block.header().creation_time().as_millis())
+            .expect("block creation time is a u64 millisecond value"),
+        iroha_hash: block.header().hash(),
+        core_hash: block.core_hash().0,
+        result: block.result().0,
+    }
+}
+
+fn portable_history_error(
+    error: ExecutionAttemptError<crate::sumeragi::checkpoint_prefix::Error>,
+) -> TipRestoreError {
+    match error {
+        ExecutionAttemptError::Rejected(error) => TipRestoreError::History(error.to_string()),
+        ExecutionAttemptError::Deferred(original) => TipRestoreError::Deferred(original),
     }
 }
 

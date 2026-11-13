@@ -1842,6 +1842,7 @@ fn fee_exempt_payload(
     payload: &TransactionPayload,
     observation_time_ms: u64,
     sccp_committed_time_ms: Option<u64>,
+    next_block_height: u64,
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     Ok(root_fees::permits_public_exemption(world)?
         && (nexus_fee_exempt_payload(payload)
@@ -1850,6 +1851,7 @@ fn fee_exempt_payload(
                 world,
                 payload,
                 sccp_committed_time_ms,
+                next_block_height,
             )))
 }
 /// Return whether `transaction` skips the Nexus fee when it succeeds, judged against the
@@ -1861,6 +1863,7 @@ fn fee_exempt_transaction(
     transaction: &SignedTransaction,
     observation_time_ms: u64,
     sccp_committed_time_ms: Option<u64>,
+    next_block_height: u64,
 ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     // `world` is the committed parent World, the one SCCP eligibility is judged against.
     Ok(root_fees::permits_public_exemption(world)?
@@ -1875,6 +1878,7 @@ fn fee_exempt_transaction(
                 world,
                 transaction.payload(),
                 sccp_committed_time_ms,
+                next_block_height,
             )))
 }
 /// Return how the Nexus fee applies to `transaction` executing in `state_transaction`, with
@@ -3183,6 +3187,27 @@ pub(crate) fn transaction_gas_limit(transaction: &SignedTransaction) -> Option<u
         .gas_limit()
         .map(core::num::NonZeroU64::get)
 }
+/// Committed per-transaction gas cap of a quarantine-lane transaction.
+///
+/// `pipeline.quarantine_tx_max_gas` (0 = no cap) applies only to a transaction that opted into
+/// the quarantine lane. Gas is the only execution budget, so the root runs under
+/// `min(signed gas limit, cap)`; every VM segment, nested call and replay of the root draws from
+/// that one allowance. Every executable that runs VM work signs a gas limit; a native-instruction
+/// root that signs none is metered statically and bounded by the block's remaining gas.
+fn quarantine_gas_cap(
+    state_transaction: &StateTransaction<'_, '_>,
+    transaction: &SignedTransaction,
+) -> Option<u64> {
+    let cap = state_transaction.pipeline.quarantine_tx_max_gas;
+    (cap != 0 && crate::tx::is_quarantine_transaction(transaction)).then_some(cap)
+}
+/// Narrow a root gas limit by an optional per-transaction cap: `min(limit, cap)`.
+const fn cap_gas_limit(limit: u64, cap: Option<u64>) -> u64 {
+    match cap {
+        Some(cap) if cap < limit => cap,
+        _ => limit,
+    }
+}
 fn overlay_build_error_to_attempt_validation_fail(
     state: &mut StateTransaction<'_, '_>,
     error: crate::pipeline::overlay::OverlayBuildError,
@@ -3220,7 +3245,7 @@ fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
     zk_availability: PreparedIvmZkAvailability,
-) -> Result<std::num::NonZeroU64, ValidationFail> {
+) -> Result<(), ValidationFail> {
     crate::pipeline::overlay::validate_header_policy(metadata)
         .map_err(ValidationFail::IvmAdmission)?;
     if zk_availability == PreparedIvmZkAvailability::RequireLocalBackend
@@ -3233,28 +3258,23 @@ fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
             ),
         ));
     }
-    let effective_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
-        metadata,
-        state.pipeline().ivm_max_cycles_upper_bound,
-        state.world().parameters().smart_contract().fuel(),
-    )
-    .map_err(ValidationFail::IvmAdmission)?;
     crate::pipeline::overlay::enforce_pre_execution_policy(
         state.pipeline().ivm_max_cycles_upper_bound,
         metadata,
     )
-    .map_err(overlay_build_error_to_validation_fail)?;
-    Ok(effective_cycles)
+    .map_err(overlay_build_error_to_validation_fail)
 }
 /// Apply the canonical first-release IVM admission policy to an already prepared program.
 ///
-/// Preparation authenticates and predecodes the image, while this check binds local execution to
-/// the node/governance limits and requires a locally enabled backend for ZK-mode execution. The
-/// metadata-only interface prevents warm dispatch from rewalking authenticated opcode bytes.
+/// Preparation authenticates and predecodes the image, while this check binds a ZK artifact's
+/// trace bound to the committed ceiling and requires a locally enabled backend for ZK-mode
+/// execution. Gas, owned by the caller, is the only execution budget, so nothing here derives a
+/// limit from the artifact. The metadata-only interface prevents warm dispatch from rewalking
+/// authenticated opcode bytes.
 pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
-) -> Result<std::num::NonZeroU64, ValidationFail> {
+) -> Result<(), ValidationFail> {
     validate_prepared_ivm_execution_policy_with_availability(
         state,
         metadata,
@@ -3267,7 +3287,7 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
 fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
-) -> Result<std::num::NonZeroU64, ValidationFail> {
+) -> Result<(), ValidationFail> {
     validate_prepared_ivm_execution_policy_with_availability(
         state,
         metadata,
@@ -4008,12 +4028,6 @@ pub(crate) fn nested_contract_entrypoint_authorization(
             )))
         }
     }
-}
-fn is_self_describing_contract(bytecode: &[u8]) -> bool {
-    ivm::ProgramMetadata::parse(bytecode)
-        .ok()
-        .and_then(|parsed| parsed.contract_interface)
-        .is_some()
 }
 #[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
@@ -5067,6 +5081,7 @@ pub fn quote_nexus_fee_admission_payload(
         payload,
         observation_time_ms,
         sccp_committed_time_ms,
+        next_block_height,
     )
     .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
@@ -5166,6 +5181,7 @@ pub fn quote_nexus_fee_admission_draft(
         payload,
         observation_time_ms,
         sccp_committed_time_ms,
+        next_block_height,
     )
     .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
@@ -5319,6 +5335,7 @@ pub(crate) fn quote_external_nexus_fee_admission(
         transaction,
         observation_time_ms,
         sccp_committed_time_ms,
+        next_block_height,
     )
     .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
     {
@@ -7206,11 +7223,7 @@ impl Executor {
             state_transaction,
             summary.prepared_contract().syscall_policy(),
         )?;
-        let effective_cycles =
-            validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
-        let effective_limit = effective_limit.min(
-            crate::smartcontracts::ivm::gas_limit_for_cycles(effective_cycles),
-        );
+        validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
         let manifest = state_transaction
             .world
             .contract_manifests()
@@ -7269,7 +7282,6 @@ impl Executor {
                     ValidationFail::InternalError(error.to_string())
                 })
             })?;
-        runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
         if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
             let code_len = runtime.memory.code_len();
@@ -7342,12 +7354,8 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         host.set_telemetry(state_transaction.telemetry.clone());
 
-        let cycle_budget = state_transaction.execution_cycle_budget()?;
         let run_result = precharge_result
-            .and_then(|()| match cycle_budget {
-                Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
-                None => runtime.run_with_host(&mut host),
-            })
+            .and_then(|()| runtime.run_with_host(&mut host))
             .and_then(|()| host.finish_contract_result(&runtime));
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
@@ -7857,7 +7865,10 @@ impl Executor {
             .iter()
             .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
             .map(|limit| limit.asset_definition_id.canonical_address());
-        let gas_limit_md = transaction_gas_limit(transaction);
+        // The quarantine cap narrows the signed limit; a root that signs none gains no limit.
+        let quarantine_cap = quarantine_gas_cap(state_transaction, transaction);
+        let gas_limit_md =
+            transaction_gas_limit(transaction).map(|limit| cap_gas_limit(limit, quarantine_cap));
         let pipeline_gas_bound = fee_bound_for_admission(transaction, &state_transaction.zk.gas)
             .map_err(|attempt| {
                 state_transaction.attempt_error_to_validation_fail(
@@ -7980,7 +7991,6 @@ impl Executor {
                 transaction,
                 proved,
                 &summary,
-                state_transaction.execution_cycle_budget()?,
                 &mut replay_work,
             );
             let observed_gas = replay_work
@@ -8425,8 +8435,7 @@ impl Executor {
                     md,
                     artifact,
                 )?;
-                let effective_cycles =
-                    validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+                validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 let prepared_contract_cache = ivm_cache.prepared_contract_cache();
                 let amx_analysis =
                     ivm_cache
@@ -8455,7 +8464,6 @@ impl Executor {
                             ValidationFail::InternalError(error.to_string())
                         })
                     })?;
-                runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 let accounts = state_transaction.accounts_snapshot();
                 let mut host =
@@ -8493,11 +8501,9 @@ impl Executor {
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
 
-                let run_result = match state_transaction.execution_cycle_budget()? {
-                    Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
-                    None => runtime.run_with_host(&mut host),
-                }
-                .and_then(|()| host.finish_contract_result(&runtime).map(|_| ()));
+                let run_result = runtime
+                    .run_with_host(&mut host)
+                    .and_then(|()| host.finish_contract_result(&runtime).map(|_| ()));
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 if let Err(err) = run_result {
                     let attempt =
@@ -8570,8 +8576,7 @@ impl Executor {
             state_transaction,
             summary.prepared_contract().syscall_policy(),
         )?;
-        let effective_cycles =
-            validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
         crate::pipeline::overlay::validate_contract_binding(
             state_transaction,
             transaction_for_fee.payload(),
@@ -8650,7 +8655,6 @@ impl Executor {
                     ValidationFail::InternalError(error.to_string())
                 })
             })?;
-        runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
         if let Some(context) = contract_call_context.as_ref()
             && let Some(entrypoint_pc) = context.entrypoint_pc
@@ -8715,12 +8719,8 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         host.set_telemetry(state_transaction.telemetry.clone());
 
-        let cycle_budget = state_transaction.execution_cycle_budget()?;
         let run_result = precharge_result
-            .and_then(|()| match cycle_budget {
-                Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
-                None => runtime.run_with_host(&mut host),
-            })
+            .and_then(|()| runtime.run_with_host(&mut host))
             .and_then(|()| host.finish_contract_result(&runtime).map(|_| ()));
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {

@@ -142,6 +142,23 @@ fn suffix_frozen_schema_roundtrips_exact_original_and_refuses_other_scheme_or_tr
 }
 
 #[test]
+fn suffix_recovery_body_requires_the_header_source_capsule() {
+    use iroha_data_model::kagemusha::KagemushaWalletValidationErrorV1;
+
+    let step = selected_fixture();
+    let (frozen, _) = step.suffix().unwrap();
+    let mut body = frozen.capsule.body().clone();
+    body.validate().unwrap();
+    body.predecessor_capsule_digest[0] ^= 1;
+    assert!(matches!(
+        body.validate(),
+        Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "suffix recovery binding"
+        })
+    ));
+}
+
+#[test]
 fn selected_suffix_rejects_altered_generation_original_and_valid_alternate_capsule() {
     let original = selected_fixture();
     original.verify_completion().unwrap();

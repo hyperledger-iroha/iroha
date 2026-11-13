@@ -526,11 +526,7 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
     let _retention = retention();
     // One canonical generic ADDI followed by HALT supplies both success and a
     // completed typed OutOfGas control, without introducing a new opcode/profile.
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: GAS,
-        ..Default::default()
-    }
-    .encode();
+    let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(
         &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 7, 0, 23)
             .to_le_bytes(),

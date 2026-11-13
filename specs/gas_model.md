@@ -42,21 +42,17 @@ view of that canonical mapping.
 
 ## Invocation gas limit
 
-Every artifact carries a positive `max_cycles` value in its hash-covered
-header. A host derives the gas limit of one invocation from its effective
-cycle limit with the fixed ABI constant `ivm::gas::GAS_PER_CYCLE = 5_000`
-(`ivm::gas::gas_limit_for_cycles`), saturating at `u64::MAX`:
+Gas is the only execution budget. The caller owns it: a root invocation runs
+under the signature-bound transaction gas limit within the remaining block
+budget (and, for a quarantine-lane transaction, within the committed
+`quarantine_tx_max_gas` cap), and a nested invocation draws from its parent's
+remaining gas, which is billed back to the parent. The budget is shared by
+instructions, ZK trace padding (one gas per padded cycle) and syscalls. No
+artifact header field converts into gas; only `HALT` is free, so gas alone
+bounds the number of executed instructions.
 
-```text
-gas_limit = cycle_limit * GAS_PER_CYCLE
-```
-
-This limit is the invocation's whole budget, shared by instructions, ZK trace
-padding (one gas per padded cycle) and syscalls. The conversion is bound into
-the gas-schedule hash as parameter `gas_per_cycle`. It does not depend on the
-opcode price table, and it bounds neither the price of one instruction nor the
-cost of a syscall. A signature-bound transaction limit and the remaining block
-budget still apply: the invocation runs under the smallest applicable bound.
+The header `max_cycles` field is the ZK trace bound. It is nonzero exactly when
+the header selects ZK mode; node policy `ivm_max_cycles_upper_bound` caps it.
 
 ## Heap governance
 

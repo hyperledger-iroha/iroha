@@ -239,7 +239,14 @@ fn private_divceil_native_private_arithmetic_and_gas_traps_refuse_completed_rows
             } else if tags != [false, false] {
                 assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
             } else {
-                assert!(matches!(outcome, Err(ivm::VMError::AssertionFailed)));
+                let fault = if right == 0 {
+                    ivm::numeric::NumericFaultV1::DivisionByZero
+                } else {
+                    ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
+                };
+                assert!(
+                    matches!(outcome, Err(ivm::VMError::NumericFault(actual)) if actual == fault)
+                );
             }
             let record = &recorder.records()[0];
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
@@ -342,7 +349,7 @@ fn private_divceil_mean_square_multiply_and_padding_keep_distinct_original_cell_
     let instructions = [
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::MEAN, 4, 4, 3),
-        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 0),
         enc::encode_rr(wide::arithmetic::MUL, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::DIV, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 4, 3),

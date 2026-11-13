@@ -84,12 +84,18 @@ fn runtime_capture() -> Value {
         "result_words": (child_callable.result_word_count().unwrap() as u64)});
     vm.registers.set(10, child_result);
     vm.registers.set(11, 1);
-    assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
+    assert!(matches!(
+        vm.finish_call(),
+        Err(VMError::ControlFlowViolation)
+    ));
     vm.store_u64(child_result, 1).unwrap();
     vm.registers.set(31, parent_start + 8);
     let before_wrong_sp = observe(&vm.memory, child_result & !15);
     let gas_before_wrong_sp = vm.remaining_gas();
-    assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
+    assert!(matches!(
+        vm.finish_call(),
+        Err(VMError::ControlFlowViolation)
+    ));
     let gas_after_wrong_sp = vm.remaining_gas();
     assert!(
         gas_after_wrong_sp < gas_before_wrong_sp,

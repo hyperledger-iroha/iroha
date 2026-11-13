@@ -8,6 +8,8 @@
 //! Kura, the system clock and the State executor.
 
 mod configuration;
+#[cfg(test)]
+mod portable_resume_tests;
 mod replay;
 pub use configuration::consensus_configuration_fingerprint;
 /// Offline replay check of a copied store with this build (`iroha3d --check-replay`).

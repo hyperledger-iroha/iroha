@@ -66,6 +66,63 @@ fn pointers(owner: &SuccessorContextPreparation) -> [usize; 4] {
 }
 
 #[test]
+fn portable_successor_context_authenticates_exact_parent_and_retains_refused_preparation() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let fixture = crate::snapshot::tests::transferred_checkpoint_fixture();
+            let view = fixture.restored.view();
+            let header = fixture.source.committed(3).block().header();
+            let tip = view.native_execution_tip().unwrap();
+            let current = &view.world().consensus_schedule().ready(3).unwrap().epoch;
+            let expected = GlobalThresholdBeaconPulseContextV1 {
+                instance: fixture.source.instance().0,
+                epoch: current.authorization.epoch,
+                epoch_context_id: current.context_id().unwrap(),
+                parent_consensus_hash: tip.core_hash().0,
+                parent_result: tip.result().0,
+            };
+            let mut owner = SuccessorContextPreparation::default();
+            owner.authenticate(&view, &header, &expected).unwrap();
+            assert!(
+                owner.parent.is_none() && owner.genesis.is_none(),
+                "portable context cannot manufacture a native parent carrier"
+            );
+            let retained = owner.portable_parent.as_ref().unwrap().checkpoint().clone();
+            let mut changed = expected;
+            changed.parent_result[0] ^= 1;
+            assert!(owner.recheck(&view, &header, &changed).is_err());
+            let refused = norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 128),
+                || owner.recheck(&view, &header, &expected),
+            );
+            assert!(matches!(refused, Err(ExecutionAttemptError::Deferred(_))));
+            assert_eq!(
+                owner
+                    .portable_parent
+                    .as_ref()
+                    .unwrap()
+                    .checkpoint()
+                    .header(),
+                retained.header()
+            );
+            owner.authenticate(&view, &header, &expected).unwrap();
+            schedule::authenticate_successor_context(&view, &header, &expected).unwrap();
+            assert!(schedule::authenticate_successor_context(&view, &header, &changed).is_err());
+            assert!(
+                fixture
+                    .kura
+                    .native_frame_read(2, tip.iroha_hash())
+                    .unwrap()
+                    .is_none()
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap_or_else(|error| std::panic::resume_unwind(error));
+}
+
+#[test]
 fn successor_context_reuses_original_parent_and_genesis_at_full_pool_capacity() {
     let _retirement = crossbeam_epoch::pin();
     for parent_height in [1, 2] {

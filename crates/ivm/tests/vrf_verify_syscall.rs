@@ -37,7 +37,7 @@ fn run_vrf_verify(req: VrfVerifyRequest) -> (u64, u64) {
     vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     (vm.register(10), vm.register(11))
@@ -86,7 +86,7 @@ fn syscall_vrf_verify_normal_returns_expected_output() {
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     let p_env = Memory::INPUT_START;
     vm.set_register(10, p_env);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     let p_out = vm.register(10);
@@ -137,7 +137,7 @@ fn syscall_vrf_verify_network_mismatch_rejected() {
     vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_b));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(10), 0, "no output pointer on network mismatch");
@@ -180,7 +180,7 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
     vm.set_host(ivm::host::DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY as u8]);
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(10), 0, "no output on failure");

@@ -70,33 +70,38 @@ fn private_bit_counts_match_native_every_bit_zero_tags_aliases_and_r0() {
             for tag in [false, true] {
                 for rd in [0, 2, 4] {
                     checked(
-                        enc::encode_rr(opcode, rd, 2, 255),
-                        &[(2, value, tag), (4, 91, !tag), (255, 17, !tag)],
+                        enc::encode_rr(opcode, rd, 2, 0),
+                        &[(2, value, tag), (4, 91, !tag), (31, 17, !tag)],
                     );
                 }
             }
         }
         for rd in [0, 4] {
             checked(
-                enc::encode_rr(opcode, rd, 0, 255),
-                &[(4, 99, true), (255, 1, true)],
+                enc::encode_rr(opcode, rd, 0, 0),
+                &[(4, 99, true), (31, 1, true)],
             );
         }
     }
 }
 
 #[test]
-fn private_bit_counts_ignore_all_encoded_rs2_bytes_but_keep_original_source_tag() {
+fn private_bit_counts_reject_encoded_rs2_bits_and_keep_original_source_tag() {
     for opcode in OPS {
-        for raw in 0..=u8::MAX {
-            checked(
-                enc::encode_rr(opcode, 4, 2, raw),
-                &[(2, 0x8000_1234_0000_0000, true), (255, 17, false)],
+        // Unary words reserve bits 13..0; admission rejects every nonzero rs2 field.
+        for raw in 1..32 {
+            assert!(
+                ivm::prepare_contract(super::super::super::tests::contract_artifact(
+                    &[enc::encode_rr(opcode, 4, 2, raw)],
+                    1_000,
+                    ivm::ivm_mode::ZK,
+                ))
+                .is_err()
             );
         }
-        let instruction = enc::encode_rr(opcode, 4, 2, 255);
-        let (program, fixture) = checked(instruction, &[(2, 16, true), (255, 0, false)]);
-        let (_, changed_unused) = checked(instruction, &[(2, 16, true), (255, u64::MAX, true)]);
+        let instruction = enc::encode_rr(opcode, 4, 2, 0);
+        let (program, fixture) = checked(instruction, &[(2, 16, true), (31, 0, false)]);
+        let (_, changed_unused) = checked(instruction, &[(2, 16, true), (31, u64::MAX, true)]);
         assert_eq!(fixture.0.row, changed_unused.0.row);
         assert_eq!(fixture.0.packets.fields, changed_unused.0.packets.fields);
         let mut wrong_tag = fixture.clone();
@@ -104,7 +109,7 @@ fn private_bit_counts_ignore_all_encoded_rs2_bytes_but_keep_original_source_tag(
         assert!(!wrong_tag.accepts(&program));
         let mut extra = fixture.clone();
         extra.0.packets.fields[SCALAR_RIGHT] = event(
-            (Space::Register, 0, 255),
+            (Space::Register, 0, 31),
             0,
             0,
             false,
@@ -120,7 +125,7 @@ fn private_bit_counts_ignore_all_encoded_rs2_bytes_but_keep_original_source_tag(
 fn private_bit_count_coherent_wrong_prefix_direction_source_and_result_reject() {
     let value = 0x0000_1234_0000_0000;
     for opcode in OPS {
-        let instruction = enc::encode_rr(opcode, 4, 2, 255);
+        let instruction = enc::encode_rr(opcode, 4, 2, 0);
         let (program, fixture) = checked(instruction, &[(2, value, true)]);
         for i in 0..64 {
             let mut changed = fixture.clone();
@@ -153,7 +158,7 @@ fn private_bit_count_coherent_wrong_prefix_direction_source_and_result_reject() 
 #[test]
 fn private_bit_count_six_gas_one_cycle_and_unconditional_prefixes_are_bound() {
     for opcode in OPS {
-        let (program, fixture) = checked(enc::encode_rr(opcode, 4, 2, 255), &[(2, 17, true)]);
+        let (program, fixture) = checked(enc::encode_rr(opcode, 4, 2, 0), &[(2, 17, true)]);
         let before = packet::half(&fixture.0.packets.fields[GAS_DEBIT], BEFORE, 0);
         for cost in [0, 1, 3, 5, 7] {
             let mut changed = fixture.clone();

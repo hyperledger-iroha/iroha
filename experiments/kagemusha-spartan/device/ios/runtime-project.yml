@@ -1,0 +1,89 @@
+name: SpartanRuntimeFixture
+options:
+  deploymentTarget:
+    iOS: '18.0'
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    DEVELOPMENT_TEAM: YLWWUD25VZ
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: '1,2'
+    ENABLE_TESTABILITY: YES
+    IROHA_FIXTURE_SWIFT_CONDITIONS: >-
+      IROHA_SWIFT IROHASWIFT_ENABLE_SECP256K1
+      IROHASWIFT_ENABLE_MLDSA IROHASWIFT_ENABLE_BLS IROHASWIFT_ENABLE_GOST
+      IROHASWIFT_ENABLE_SM IROHASWIFT_BRIDGE_REQUIRED IROHASWIFT_BRIDGE_PRESENT
+      IROHASWIFT_DEVICE_DEMO_ARTIFACT
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(IROHA_FIXTURE_SWIFT_CONDITIONS)
+    SWIFT_INCLUDE_PATHS:
+      - $(inherited)
+      - ${IROHA_ROOT}/experiments/kagemusha-spartan/device/ios/NativeFixture
+    HEADER_SEARCH_PATHS:
+      - $(inherited)
+      - ${IROHA_ROOT}/crates/connect_norito_bridge/include
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(IROHA_FIXTURE_SWIFT_CONDITIONS) DEBUG IROHASWIFT_DEVICE_DEMO_DEBUG
+targets:
+  IrohaSwift:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: ${IROHA_ROOT}/IrohaSwift/Sources/IrohaSwift
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        PRODUCT_MODULE_NAME: IrohaSwift
+        SWIFT_VERSION: '5.0'
+        SWIFT_INSTALL_OBJC_HEADER: NO
+        SKIP_INSTALL: YES
+  SpartanRuntimeFixture:
+    type: application
+    platform: iOS
+    sources:
+      - RuntimeFixture.swift
+      - path: ${SPARTAN_DEVICE_ARTIFACTS}
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: IrohaSwift
+      - sdk: Security.framework
+      - sdk: DeviceCheck.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Accelerate.framework
+      - sdk: libc++.tbd
+      - sdk: libiconv.tbd
+      - sdk: libz.tbd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.co.soramitsu.kagemusha.spartanfixture
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_NSFaceIDUsageDescription: Confirm the exact experimental offline payment.
+        INFOPLIST_KEY_CFBundleDisplayName: Spartan Runtime Fixture
+        CODE_SIGN_ENTITLEMENTS: ${IROHA_ROOT}/experiments/kagemusha-spartan/device/ios/RuntimeFixture.entitlements
+        OTHER_LDFLAGS: $(inherited) -Wl,-force_load,${SPARTAN_DEVICE_ARCHIVE} -Wl,-export_dynamic
+        DEAD_CODE_STRIPPING: NO
+        ENABLE_DEBUG_DYLIB: NO
+schemes:
+  SpartanRuntimeFixture:
+    build:
+      targets:
+        SpartanRuntimeFixture: all
+    run:
+      config: Debug
+    profile:
+      config: Debug
+    analyze:
+      config: Debug
+    archive:
+      config: Debug

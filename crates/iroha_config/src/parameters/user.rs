@@ -58,6 +58,8 @@ pub use kagemusha_enrollment::{
     KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider, KagemushaEnrollmentWorker,
 };
 mod app_routed_read_config;
+mod runtime_checkpoint;
+pub use runtime_checkpoint::ToriiRuntimeCheckpoint;
 mod musubi_publication_installation;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
@@ -13402,6 +13404,9 @@ pub struct Torii {
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     #[config(default = "defaults::torii::data_dir()")]
     pub data_dir: PathBuf,
+    /// Immutable checkpoint-package serving; no directory is selected by default.
+    #[config(nested)]
+    pub runtime_checkpoint: ToriiRuntimeCheckpoint,
     /// Optional public key used to sign transaction submission receipts (must be paired).
     #[config(env = "TORII_RECEIPT_PUBLIC_KEY")]
     pub receipt_public_key: Option<PublicKey>,
@@ -13796,6 +13801,7 @@ impl core::fmt::Debug for Torii {
             .field("address", &self.address)
             .field("max_content_len", &self.max_content_len)
             .field("data_dir", &self.data_dir)
+            .field("runtime_checkpoint", &self.runtime_checkpoint)
             .field("receipt_public_key", &self.receipt_public_key)
             .field(
                 "receipt_private_key",
@@ -14937,6 +14943,7 @@ impl Torii {
             address: self.address.map(ConfigSocketAddr::into_inner),
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
+            runtime_checkpoint: self.runtime_checkpoint.parse(emitter),
             receipt_signer,
             events_buffer_capacity: self.events_buffer_capacity,
             ws_message_timeout: self.ws_message_timeout_ms.get(),

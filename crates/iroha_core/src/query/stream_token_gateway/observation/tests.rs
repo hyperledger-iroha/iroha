@@ -1050,3 +1050,61 @@ fn pending_scheduling_hint_rejects_expiry_and_corrupt_native_finality() {
         "corrupt original native finality cannot become Idle"
     );
 }
+
+#[test]
+fn gateway_original_refund_callbacks_wait_for_view_and_publication_retirement() {
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
+
+    fn observed<T>(
+        state: &Arc<State>,
+        operation: impl FnOnce(iroha_allocation::AllocationReservation) -> T,
+    ) -> T {
+        let budget = state.ivm_execution_budget();
+        let mut registration = crate::unit_test_support::release_registration(&budget);
+        let probe = state.replay_retirement_probe_for_test();
+        let [release, ..] = state.replay_retirement_sources_for_test();
+        let waker = Waker::from(probe.clone());
+        let mut context = Context::from_waker(&waker);
+        let mut wait = std::pin::pin!(release.wait_for_release(&mut registration));
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+        // This exact original-pool owner is released by the clock callback while the
+        // production operation still holds its State view (and final publication lease).
+        let original = budget.try_reserve_bytes(1).unwrap();
+        let result = operation(original);
+        assert!(wait.as_mut().poll(&mut context).is_ready());
+        probe.assert_released("gateway original execution-pool refund");
+        result
+    }
+
+    let mut fixture = Fixture::ready();
+    let request = fixture.request("gateway-original-refund-order");
+    let record = fixture.admit(&request);
+    fixture.acknowledge(record);
+    let pending = fixture.bind(fixture.prepare(Selector::Serving(request.clone())));
+    fixture.publish(&pending);
+    let time = fixture.clock();
+    let verified = observed(fixture.chain.state(), |original| {
+        pending
+            .verify_finalized(|| {
+                drop(original);
+                Ok(time)
+            })
+            .unwrap()
+    });
+    let captured = observed(fixture.chain.state(), |original| {
+        verified
+            .consume_for_serving(
+                &request,
+                || {
+                    drop(original);
+                    Ok(time)
+                },
+                |record| record,
+            )
+            .unwrap()
+    });
+    assert_eq!(captured, record);
+}

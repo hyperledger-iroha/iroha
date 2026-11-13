@@ -272,6 +272,8 @@ pub struct BlockStore {
     body_read_calls: AtomicUsize,
     /// Durable prefix validated read-only before emergency Fast recovery.
     fast_prevalidated_count: Option<u64>,
+    /// Reverified portable omission boundary; never native full-body authority.
+    checkpoint_prefix: Option<iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1>,
     commit_marker_count: u64,
     commit_marker_pending: Option<u64>,
     /// Committed DA rewrite whose body promotion must be retried before the next mutation.

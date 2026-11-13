@@ -118,10 +118,9 @@ private enum TimeIronwoodPublicCorpusV1 {
     static let inputKeys = ["BOI_ACTIVATION_FIXTURE_DIR", "BOI_ACTIVATION_MANIFEST_SHA256",
         "BOI_ACTIVATION_PRODUCER_RECEIPT", "BOI_ACTIVATION_PRODUCER_RECEIPT_SHA256"]
     // Selection is pure: it does not read files or touch the native bridge.
-    static func selection(_ environment: [String: String]) throws -> [String: String]? {
+    static func selection(_ environment: [String: String]) throws -> [String: String] {
         let present = inputKeys.filter { environment[$0] != nil }
-        if present.isEmpty { return nil }
-        try need(present.count == inputKeys.count, "partial activation input selection")
+        try need(present.count == inputKeys.count, "all four BOI_ACTIVATION inputs are required")
         var selected = [String: String]()
         for key in inputKeys {
             guard let value = environment[key], !value.isEmpty else { throw Refusal.invalid("empty " + key) }
@@ -226,9 +225,7 @@ private enum TimeIronwoodPublicCorpusV1 {
 
 final class NativeTimeIronwoodActivationV1Tests: XCTestCase {
     func testPinnedExternalActivationCallsRealNativeAdvanceAndRefusesSubstitutions() throws {
-        guard let selected = try TimeIronwoodPublicCorpusV1.selection(ProcessInfo.processInfo.environment) else {
-            throw XCTSkip("No activation corpus selected: all four BOI_ACTIVATION input keys are absent")
-        }
+        let selected = try TimeIronwoodPublicCorpusV1.selection(ProcessInfo.processInfo.environment)
         let fixture = try TimeIronwoodPublicCorpusV1.load(selected)
         let digest = Data(SHA256.hash(data: fixture.checkpoint))
         func advance(_ frames: [Data], checkpoint: Data = fixture.checkpoint, network: NetworkId = fixture.network,
@@ -272,9 +269,9 @@ final class NativeTimeIronwoodActivationSelectionV1Tests: XCTestCase {
         "BOI_ACTIVATION_MANIFEST_SHA256": String(repeating: "1", count: 64),
         "BOI_ACTIVATION_PRODUCER_RECEIPT": "/activation-selection/producer.json",
         "BOI_ACTIVATION_PRODUCER_RECEIPT_SHA256": String(repeating: "2", count: 64)]
-    func testAllAbsentIsUnselected() throws {
-        XCTAssertNil(try TimeIronwoodPublicCorpusV1.selection([:]))
-        XCTAssertNil(try TimeIronwoodPublicCorpusV1.selection(["UNRELATED": "value"]))
+    func testAllAbsentRefuses() {
+        XCTAssertThrowsError(try TimeIronwoodPublicCorpusV1.selection([:]))
+        XCTAssertThrowsError(try TimeIronwoodPublicCorpusV1.selection(["UNRELATED": "value"]))
     }
     func testEveryPartialSelectionRefuses() {
         let keys = TimeIronwoodPublicCorpusV1.inputKeys

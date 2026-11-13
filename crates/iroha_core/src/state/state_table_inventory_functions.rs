@@ -125,6 +125,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/query/native_receipts.rs",
+        "native_ordinary_write_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/query/native_receipts.rs",
         "parliament_casting_proof",
         1,
         UseOwner::Roots(&[
@@ -220,6 +226,48 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         ),
     ),
     function(
+        "crates/iroha_core/src/runtime/native_amx_capture.rs",
+        "global_opening",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Binds one original AMX Begin record, its times and exact participant tracker identities for retained completion custody; no table or World root",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/native_amx_capture.rs",
+        "live",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists original unsettled AMX transaction identities for completion and shared-tracker membership checks; computes no digest",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/native_amx_capture.rs",
+        "operation_members",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists original unsettled AMX transaction identities for completion and shared-tracker membership checks; computes no digest",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/native_amx_capture.rs",
+        "participant_live",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists original unsettled AMX transaction identities for completion and shared-tracker membership checks; computes no digest",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/retirement.rs",
+        "receipt_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
         "crates/iroha_core/src/runtime/taira_activation.rs",
         "validate_boundary",
         1,
@@ -284,6 +332,36 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "local_instance",
         1,
         UseOwner::Other(Use::Seed, DERIVED_SEED),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition/captured_proofs.rs",
+        "game_unit_export_cancel_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition/captured_proofs.rs",
+        "game_unit_export_intent_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition/captured_proofs.rs",
+        "game_unit_import_ack_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition/captured_proofs.rs",
+        "game_unit_reservation_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition/captured_proofs.rs",
+        "reserved_game_unit_export_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/isi/multisig.rs",

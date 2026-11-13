@@ -423,6 +423,14 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::AdvanceGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::RequestGameUnitExportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::runtime_retirement::RetireRuntimeDefinitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::ReserveGameUnitImportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::ExportReservedGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::ImportReservedGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::AcknowledgeGameUnitImportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::CancelGameUnitExportRequestV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::CancelReservedGameUnitImportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // The anonymous Parliament family records facts, intents and credentials; it moves no
     // asset. Core derives every authority its reducer needs (design §8.1).
@@ -1754,7 +1762,7 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 4,
+            max_cycles: 0,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -1799,7 +1807,7 @@ mod tests {
             ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
         ] {
             code.extend_from_slice(&instruction.to_le_bytes());
         }

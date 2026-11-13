@@ -10,7 +10,7 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, encoding, instruction::wide,
+    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, encoding,
     syscalls,
 };
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -238,7 +238,7 @@ fn json_get_blob_hex_accepts_canonical_lowercase_hex() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"settlement_hash"))
         .unwrap();
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
@@ -260,7 +260,7 @@ fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
         let p_key = vm
             .alloc_input_tlv(&tlv(PointerType::Name, b"value"))
             .expect("allocate JSON key");
-        let program = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
+        let program = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX]);
         vm.set_register(10, p_json);
         vm.set_register(11, p_key);
         vm.load_program(&program).expect("load blob getter");
@@ -279,7 +279,7 @@ fn json_get_asset_definition_id_reads_address_literals() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"asset_definition_id"))
         .unwrap();
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
@@ -554,7 +554,7 @@ fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
 #[test]
 fn schema_info_accepts_input_heap_and_literal_pointers() {
     let schema_tlv = tlv(PointerType::Name, b"Order");
-    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO]);
     let decode_schema_info = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -583,7 +583,7 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_schema_info(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_SCHEMA_INFO as u8],
+        &[syscalls::SYSCALL_SCHEMA_INFO],
         &[schema_tlv.as_slice()],
     );
     let schema_addr = literal_ptrs[0];
@@ -598,7 +598,7 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
 fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"bucket_id");
-    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64 as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64]);
     let decode_bucket_id = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -633,7 +633,7 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_bucket_id(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_SET_I64 as u8],
+        &[syscalls::SYSCALL_JSON_SET_I64],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
@@ -656,7 +656,7 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"owner");
     let owner_tlv = tlv(PointerType::AccountId, owner_literal.as_bytes());
-    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID]);
     let decode_owner = |vm: &IVM| {
         let tlv = vm
             .memory
@@ -693,7 +693,7 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_owner(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8],
+        &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID],
         &[
             json_tlv.as_slice(),
             key_tlv.as_slice(),
@@ -780,7 +780,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();
     vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_OBJECT as u8
+        syscalls::SYSCALL_JSON_OBJECT
     ]))
     .unwrap();
     vm.run().unwrap();
@@ -789,7 +789,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     vm.set_register(11, p_bucket_key);
     vm.set_register(12, 2);
     vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_SET_I64 as u8,
+        syscalls::SYSCALL_JSON_SET_I64,
     ]))
     .unwrap();
     vm.run().unwrap();
@@ -798,7 +798,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     vm.set_register(11, p_owner_key);
     vm.set_register(12, p_owner);
     vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8,
+        syscalls::SYSCALL_JSON_SET_ACCOUNT_ID,
     ]))
     .unwrap();
     vm.run().unwrap();
@@ -806,7 +806,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     vm.set_register(10, p_payload);
     vm.set_register(11, p_owner_key);
     vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
+        syscalls::SYSCALL_JSON_GET_ACCOUNT_ID,
     ]))
     .unwrap();
     vm.run().unwrap();
@@ -839,7 +839,7 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     let p_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"controller"))
         .unwrap();
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ACCOUNT_ID]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();

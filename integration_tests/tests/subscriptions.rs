@@ -47,20 +47,11 @@ fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     (start, start_ms)
 }
 fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
-    let opcode = u8::try_from(syscall).expect("syscall should fit in u8");
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(u32::from(opcode)).to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ProgramMetadata {
-        // The helper executes one syscall and HALT. Keep a small explicit
-        // budget so trigger admission cannot interpret zero as unlimited.
-        max_cycles: 64,
-        ..ProgramMetadata::default()
-    }
-    .encode();
-    blob.extend_from_slice(&code);
+    // One syscall and HALT under the non-ZK header: gas, supplied when the trigger fires,
+    // is the program's only execution budget.
+    let mut blob = ProgramMetadata::default().encode();
+    blob.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
+    blob.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     IvmBytecode::from_compiled(blob)
 }
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {

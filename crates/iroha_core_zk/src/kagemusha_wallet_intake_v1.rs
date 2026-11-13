@@ -150,7 +150,10 @@ pub(crate) fn account(original: &[u8], expected_digest: &[u8; 32]) -> Result<Acc
     Ok(account)
 }
 
-fn asset_scope(original: &[u8], expected: &[u8; 32]) -> Result<KagemushaWalletAssetScopeV1, Error> {
+pub(crate) fn asset_scope(
+    original: &[u8],
+    expected: &[u8; 32],
+) -> Result<KagemushaWalletAssetScopeV1, Error> {
     if original.is_empty() || original.len() > ASSET_SCOPE_ORIGINAL_MAX_BYTES_V1 {
         return Err(Error::Authority("asset scope original bound"));
     }
@@ -198,7 +201,11 @@ fn bind_challenge(
     Ok(())
 }
 
-fn authorize_account(account: &AccountId, challenge: &[u8], original: &[u8]) -> Result<(), Error> {
+pub(crate) fn authorize_account(
+    account: &AccountId,
+    challenge: &[u8],
+    original: &[u8],
+) -> Result<(), Error> {
     let key = account
         .try_signatory()
         .filter(|key| key.algorithm() == Algorithm::Ed25519)
@@ -211,7 +218,7 @@ fn authorize_account(account: &AccountId, challenge: &[u8], original: &[u8]) -> 
         .map_err(|_| Error::Authority("existing account authorization"))
 }
 
-fn open_message(
+pub(crate) fn open_message(
     nonce: &[u8; 32],
     manifest: &[u8; 32],
     slot: &KagemushaWalletSlotIdV1,

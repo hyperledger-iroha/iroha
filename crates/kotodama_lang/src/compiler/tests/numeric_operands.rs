@@ -3,7 +3,7 @@
 use crate::{
     ast::BinaryOp,
     compiler::{CompilerOptions, numeric_operands::with_publication},
-    encoding, instruction,
+    encoding,
     ir::{DataRefKind, Instr, Temp, WideNumericKind},
     metadata::ProgramMetadata,
     session::{CompileOutput, CompileRequest, CompilerSession},

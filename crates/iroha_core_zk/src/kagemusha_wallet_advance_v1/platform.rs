@@ -699,6 +699,98 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
     }
 }
 
+// Sharing platform callbacks never shares the exclusive journal/filesystem owner.
+impl<P: KagemushaWalletPlatformV1> KagemushaWalletPlatformV1 for std::sync::Arc<P> {
+    fn key_enumerate(&self) -> Result<Vec<KagemushaWalletSlotIdV1>, KagemushaWalletUnavailableV1> {
+        (**self).key_enumerate()
+    }
+    fn key_probe(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+    ) -> KagemushaWalletProbeV1<KagemushaDevicePublicKeyV1> {
+        (**self).key_probe(s)
+    }
+    fn key_attestation_chain(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+    ) -> KagemushaWalletProbeV1<Vec<Vec<u8>>> {
+        (**self).key_attestation_chain(s)
+    }
+    fn key_generate(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+        r: &KagemushaWalletKeyGenerationRequestV1,
+    ) -> KagemushaWalletKeyGenerationV1 {
+        (**self).key_generate(s, r)
+    }
+    fn key_recover_generation_reply(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+        r: &KagemushaWalletKeyGenerationRequestV1,
+    ) -> Result<Option<KagemushaDevicePublicKeyV1>, KagemushaWalletUnavailableV1> {
+        (**self).key_recover_generation_reply(s, r)
+    }
+    fn key_generation_policy(
+        &self,
+    ) -> Result<KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletUnavailableV1> {
+        (**self).key_generation_policy()
+    }
+    fn key_generate_fresh(
+        &self,
+        g: KagemushaWalletFreshGenerationV1<'_>,
+    ) -> KagemushaWalletKeyGenerationV1 {
+        (**self).key_generate_fresh(g)
+    }
+    fn key_sign(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+        m: KagemushaWalletSignMessageV1<'_>,
+    ) -> Result<KagemushaWalletPlatformSignatureV1, KagemushaWalletUnavailableV1> {
+        (**self).key_sign(s, m)
+    }
+    fn key_delete(&self, s: &KagemushaWalletSlotIdV1) -> KagemushaWalletRemoveOutcomeV1 {
+        (**self).key_delete(s)
+    }
+    fn anchor_policy(&self) -> KagemushaWalletAnchorPolicyV1 {
+        (**self).anchor_policy()
+    }
+    fn anchor_create(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+        v: &[u8],
+    ) -> KagemushaWalletPublishOutcomeV1 {
+        (**self).anchor_create(s, v)
+    }
+    fn anchor_read(&self, s: &KagemushaWalletSlotIdV1) -> KagemushaWalletProbeV1<Vec<u8>> {
+        (**self).anchor_read(s)
+    }
+    fn anchor_update(
+        &self,
+        s: &KagemushaWalletSlotIdV1,
+        v: &[u8],
+    ) -> KagemushaWalletPublishOutcomeV1 {
+        (**self).anchor_update(s, v)
+    }
+    fn storage_state(&self) -> Result<(), KagemushaWalletUnavailableV1> {
+        (**self).storage_state()
+    }
+    fn boot_id(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
+        (**self).boot_id()
+    }
+    fn monotonic_ms(&self) -> Result<u64, KagemushaWalletUnavailableV1> {
+        (**self).monotonic_ms()
+    }
+    #[cfg(test)]
+    fn live_enrollment_clock_for_test(
+        &self,
+    ) -> Option<Result<([u8; 32], u128), KagemushaWalletUnavailableV1>> {
+        (**self).live_enrollment_clock_for_test()
+    }
+    fn available_memory(&self) -> Option<u64> {
+        (**self).available_memory()
+    }
+}
+
 /// Boot stamp written into custody envelopes: the current boot identity, or zero when it
 /// cannot be read (a zero stamp is always treated as the current boot).
 #[must_use]

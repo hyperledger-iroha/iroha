@@ -97,7 +97,11 @@ export class ToriiStreamGapError extends ToriiError {
   }
 }
 
-/** A non-success HTTP response from Torii. */
+/**
+ * A non-success HTTP response from Torii. `code` is the reject code when Torii
+ * names one and the envelope's code otherwise; `envelopeCode` is always the
+ * envelope's own `code`.
+ */
 export class ToriiHttpError extends ToriiError {
   /**
    * @param {{
@@ -105,6 +109,7 @@ export class ToriiHttpError extends ToriiError {
    *   statusText?: string | null,
    *   expected?: ReadonlyArray<number>,
    *   code?: string | null,
+   *   envelopeCode?: string | null,
    *   rejectCode?: string | null,
    *   errorMessage?: string | null,
    *   bodyText?: string | null,
@@ -117,6 +122,7 @@ export class ToriiHttpError extends ToriiError {
     expected,
     statusText,
     code,
+    envelopeCode,
     rejectCode,
     errorMessage,
     bodyText,
@@ -150,6 +156,7 @@ export class ToriiHttpError extends ToriiError {
     this.status = status;
     this.statusText = statusText ?? null;
     this.expected = Array.isArray(expected) ? [...expected] : [];
+    this.envelopeCode = envelopeCode ?? null;
     this.rejectCode = rejectCode ?? null;
     this.errorMessage = errorMessage ?? null;
     this.bodyText = bodyText ?? null;
@@ -174,7 +181,7 @@ export function isIdempotentSubmissionRejection(error) {
     error instanceof ToriiHttpError &&
     error.status === 409 &&
     (IDEMPOTENT_SUBMISSION_REJECT_CODES.has(error.rejectCode) ||
-      IDEMPOTENT_SUBMISSION_CODES.has(error.bodyJson?.code))
+      IDEMPOTENT_SUBMISSION_CODES.has(error.envelopeCode))
   );
 }
 
@@ -243,9 +250,10 @@ function compactJson(value) {
  * Torii errors are `{"code": "...", "message": "...", "details": {...}}`; the
  * `x-iroha-reject-code` header (or `details.reject_code`) carries the precise
  * admission rejection code and takes precedence as `code` when present.
+ * `envelopeCode` is the envelope's own `code` regardless of that precedence.
  *
  * @param {{bodyText?: string | null, bodyJson?: unknown, rejectCodeHeader?: string | null}} input
- * @returns {{code: string | null, rejectCode: string | null, errorMessage: string | null, details: Record<string, unknown> | null}}
+ * @returns {{code: string | null, envelopeCode: string | null, rejectCode: string | null, errorMessage: string | null, details: Record<string, unknown> | null}}
  */
 export function extractToriiErrorFields({ bodyText = null, bodyJson = null, rejectCodeHeader = null }) {
   const payload = bodyJson && typeof bodyJson === "object" && !Array.isArray(bodyJson)
@@ -258,21 +266,46 @@ export function extractToriiErrorFields({ bodyText = null, bodyJson = null, reje
     ? rejectCodeHeader.trim()
     : null;
   const rejectCode = headerRejectCode ?? rejectCodeFromDetails(details);
-  let envelopeCode = null;
-  if (payload) {
-    if (typeof payload.code === "string" && payload.code) {
-      envelopeCode = payload.code;
-    } else if (typeof payload.reason === "string" && payload.reason) {
-      envelopeCode = payload.reason;
+  const envelopeCode = typeof payload?.code === "string" && payload.code ? payload.code : null;
+  let bodyCode = envelopeCode;
+  if (payload && bodyCode === null) {
+    if (typeof payload.reason === "string" && payload.reason) {
+      bodyCode = payload.reason;
     } else if (typeof payload.error === "string" && payload.error.startsWith("ERR_")) {
-      envelopeCode = payload.error;
+      bodyCode = payload.error;
     }
   }
   const textCode = typeof bodyText === "string" ? bodyText.match(/ERR_[A-Z0-9_]+/u)?.[0] ?? null : null;
-  const code = rejectCode ?? envelopeCode ?? textCode ?? null;
+  const code = rejectCode ?? bodyCode ?? textCode ?? null;
   const errorMessage =
     messageFromValue(payload ?? bodyJson) ?? compactJson(bodyJson) ?? trimErrorText(bodyText);
-  return { code, rejectCode, errorMessage, details };
+  return { code, envelopeCode, rejectCode, errorMessage, details };
+}
+
+/**
+ * `ToriiHttpError` fields for a body that is Torii's canonical error envelope,
+ * as `decodeTypedToriiErrorEnvelope` returns it from `bytes`.
+ *
+ * The envelope supplies its exact message and decoded `details`; the
+ * reject-code header (or `details.reject_code`) keeps its usual precedence as
+ * `code`. A JSON envelope also keeps its text and value as `bodyText` and
+ * `bodyJson`; a binary Norito frame has neither.
+ *
+ * @param {{code: string, message: string, details: Record<string, unknown> | null, format: "norito" | "json"}} decoded
+ * @param {Uint8Array} bytes
+ * @param {string | null} [rejectCodeHeader]
+ */
+export function toriiErrorEnvelopeFields(decoded, bytes, rejectCodeHeader = null) {
+  const envelope = decoded.details === null
+    ? { code: decoded.code, message: decoded.message }
+    : { code: decoded.code, message: decoded.message, details: decoded.details };
+  const json = decoded.format === "json";
+  return {
+    ...extractToriiErrorFields({ bodyJson: envelope, rejectCodeHeader }),
+    errorMessage: decoded.message,
+    bodyText: json ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : null,
+    bodyJson: json ? envelope : null,
+  };
 }
 
 /** Parse a response body as JSON only when it looks like a JSON document. */

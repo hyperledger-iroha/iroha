@@ -461,12 +461,19 @@ fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py
 enum NativeValidationError {
     Value(String),
     Runtime(&'static str),
+    Read(
+        &'static str,
+        iroha_data_model::sumeragi_finality::FinalityReadError,
+    ),
 }
 impl NativeValidationError {
     fn into_py(self) -> PyErr {
         match self {
             Self::Value(message) => PyValueError::new_err(message),
             Self::Runtime(message) => PyRuntimeError::new_err(message),
+            Self::Read(phase, error) => {
+                Python::attach(|py| public_finality_checkpoint::native_read_error(py, phase, error))
+            }
         }
     }
 }
@@ -13168,17 +13175,17 @@ fn decode_canonical_signed_transaction_v1_native(
     bytes: &[u8],
 ) -> Result<SignedTransaction, NativeValidationError> {
     require_canonical_signed_transaction_wire_size_v1_native(bytes)?;
-    let signed = SignedTransaction::decode_all_versioned(bytes).map_err(|_| {
-        NativeValidationError::Value(
+    // The native decoder checks exact canonical bytes with its fallible writer.
+    // Retain its original scope classification; re-encoding here could panic on
+    // a later resource refusal and would repeat that already completed check.
+    SignedTransaction::decode_all_versioned(bytes).map_err(|error| match error {
+        iroha_version::error::Error::NoritoResourceLimit(original) => {
+            NativeValidationError::Read("signed_transaction_decode", original.into())
+        }
+        _ => NativeValidationError::Value(
             "signed_transaction_versioned is not a valid current signed transaction".into(),
-        )
-    })?;
-    if signed.encode_versioned() != bytes {
-        return Err(NativeValidationError::Value(
-            "signed_transaction_versioned is not the exact canonical wire".into(),
-        ));
-    }
-    Ok(signed)
+        ),
+    })
 }
 fn signed_transaction_envelope_from_model_v1(
     signed: &SignedTransaction,
@@ -15658,6 +15665,11 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ironwood_payment::state_rows::PyIronwoodStateSchema>()?;
     module.add_class::<ironwood_payment::state_rows::PyIronwoodReadPlan>()?;
     module.add_class::<ironwood_payment::state_rows::PyFinalityPage>()?;
+    module.add_class::<ironwood_payment::world_replay::PyIronwoodWorldReplayContext>()?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_payment::world_replay::verify_ironwood_world_replay_v1_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         ironwood_payment::state_rows::ironwood_warm_rows_v1_py,
         module

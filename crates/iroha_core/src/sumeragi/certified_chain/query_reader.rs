@@ -288,13 +288,25 @@ pub struct QueryCertifiedChain<'v> {
 
 pub(super) struct QueryPrefix {
     pub(super) tip: ParentProjection,
-    pub(super) wire: (u64, Hash),
+    pub(super) wire: Option<(u64, Hash)>,
     pub(super) schedule: schedule::ConsensusSchedule,
     pub(super) authority: PrefixAuthority,
     pub(super) validation: EpochValidationScope,
     pub(super) proof_source: Option<Hash>,
+    pub(super) portable_successor: Option<(u64, Hash32, Hash32)>,
 }
 impl QueryPrefix {
+    fn check_portable_successor(&self, original: &CommittedBlock) -> Result<(), ChainReadError> {
+        if let Some((height, core_hash, result)) = self.portable_successor
+            && original.height() == height
+            && (original.core_hash() != core_hash || original.result() != result)
+        {
+            return Err(ChainReadError::HeaderMismatch {
+                height: original.height(),
+            });
+        }
+        Ok(())
+    }
     fn borrowed(&mut self) -> PrefixRef<'_> {
         PrefixRef {
             tip: self.tip,
@@ -520,7 +532,14 @@ impl QueryCertifiedChain<'_> {
             *cursor = None;
             // Preserve the original target-source -> fresh genesis -> target C1-C5
             // order. Its actual already consumed target corridor stays reserved.
-            *cursor = Some(workspace.bootstrap(&target, || self.genesis_prefix_query())?);
+            *cursor =
+                Some(workspace.bootstrap(
+                    &target,
+                    || match self.portable_query_prefix(height)? {
+                        Some(portable) => Ok(portable),
+                        None => self.genesis_prefix_query(),
+                    },
+                )?);
         }
         let prefix = cursor
             .as_mut()
@@ -535,6 +554,9 @@ impl QueryCertifiedChain<'_> {
                 Some((self.budget(), raw.len())),
             )
         })?;
+        prefix
+            .check_portable_successor(&committed)
+            .map_err(ExecutionAttemptError::from)?;
         #[cfg(test)]
         crate::sumeragi::finality::FinalityDecodeWorkspace::note_target_cost(&target);
         progress()?;
@@ -569,6 +591,9 @@ impl QueryCertifiedChain<'_> {
                     None,
                     Some((self.budget(), maximum_payload)),
                 )?;
+                prefix
+                    .check_portable_successor(&checked)
+                    .map_err(ExecutionAttemptError::from)?;
                 progress()?;
                 StagedQueryFrame::new(checked, payload, None, wire, self.budget()).map_err(E::from)
             })?;
@@ -584,10 +609,11 @@ impl QueryCertifiedChain<'_> {
                     None,
                 )?;
                 prefix.tip = next.frame.parent();
-                prefix.wire = next.wire;
+                prefix.wire = Some(next.wire);
                 prefix.schedule = prepared.schedule;
                 prefix.authority = prepared.authority;
                 prefix.proof_source = prepared.proof_source;
+                prefix.portable_successor = None;
                 Ok::<_, E>(())
             })?;
         }
@@ -621,10 +647,11 @@ impl QueryCertifiedChain<'_> {
                     verdict,
                 )?;
                 prefix.tip = staged.frame.parent();
-                prefix.wire = staged.wire;
+                prefix.wire = Some(staged.wire);
                 prefix.schedule = prepared.schedule;
                 prefix.authority = prepared.authority;
                 prefix.proof_source = prepared.proof_source;
+                prefix.portable_successor = None;
                 return Ok(result);
             };
             progress()?;
@@ -665,11 +692,12 @@ impl QueryCertifiedChain<'_> {
             });
         Ok(QueryPrefix {
             tip: ParentProjection::from_original(&tip),
-            wire,
+            wire: Some(wire),
             schedule,
             authority,
             validation,
             proof_source,
+            portable_successor: None,
         })
     }
 }

@@ -30,8 +30,8 @@ fn instructions(rd: u8) -> [u32; 7] {
         enc::encode_rr(wide::arithmetic::SRA, rd, 2, 3),
         enc::encode_rr(wide::arithmetic::ROTL, rd, 2, 3),
         enc::encode_rr(wide::arithmetic::ROTR, rd, 2, 3),
-        enc::encode_ri(wide::arithmetic::ROTL_IMM, rd, 2, i8::MIN),
-        enc::encode_ri(wide::arithmetic::ROTR_IMM, rd, 2, -1),
+        enc::encode_ri(wide::arithmetic::ROTL_IMM, rd, 2, 32),
+        enc::encode_ri(wide::arithmetic::ROTR_IMM, rd, 2, 63),
     ]
 }
 
@@ -50,12 +50,15 @@ fn checked_native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, 
             result
         }
     );
+    // Register amounts join their tag into the destination; immediates never do.
+    let joined = packets[SCALAR_LEFT][BEFORE_TAG] == F::ONE
+        || (right_immediate(instruction).is_none() && packets[SCALAR_RIGHT][BEFORE_TAG] == F::ONE);
     assert_eq!(
         packets[SCALAR_DESTINATION][AFTER_TAG],
         if wide::rd(instruction) == 0 {
             F::ZERO
         } else {
-            packets[SCALAR_LEFT][BEFORE_TAG]
+            F(u64::from(joined))
         }
     );
     assert_eq!(
@@ -164,51 +167,63 @@ fn native_private_shift_register_amounts_tags_aliases_and_zero_match() {
 }
 
 #[test]
-fn native_private_rotate_immediates_are_unsigned_and_never_read_raw_byte_registers() {
+fn native_private_rotate_immediates_are_unsigned_six_bit_amounts_and_never_read_registers() {
     for opcode in IMMEDIATE_OPS {
-        for raw in 0..=u8::MAX {
+        for amount in 0..=wide::ROTATE_AMOUNT_MAX {
             for tag in [false, true] {
-                let instruction = enc::encode_ri(opcode, 4, 2, u8::cast_signed(raw));
+                let instruction = enc::encode_ri(opcode, 4, 2, i16::from(amount));
                 let (program, fixture) =
                     checked_native(instruction, &[(2, 0x8000_1234_5678_9abc, tag)]);
-                assert_eq!(right_immediate(instruction), Some(u64::from(raw)));
+                assert_eq!(right_immediate(instruction), Some(u64::from(amount)));
                 let source = word::Sources::new(&fixture.0.row[SCALAR..SCALAR + ALU]);
-                assert_eq!(source.limb(1, 0), F(u64::from(raw)));
+                assert_eq!(source.limb(1, 0), F(u64::from(amount)));
                 for limb in 1..4 {
                     assert_eq!(source.limb(1, limb), F::ZERO);
                 }
-                if raw == 128 || raw == 255 {
+                if amount >= 32 {
+                    // A sign-extended reading of the six-bit field is never admitted.
                     let mut signed = fixture.clone();
                     replace_sources(
                         &mut signed,
                         instruction,
                         0x8000_1234_5678_9abc,
-                        i64::cast_unsigned(i64::from(u8::cast_signed(raw))),
+                        i64::cast_unsigned(i64::from(amount) - 64),
                     );
                     assert!(!signed.accepts(&program));
                 }
             }
         }
-        for raw in [0, 2, 4, 128, 255] {
-            for rd in [0, 2, raw] {
+        // Bits 13..6 are reserved: admission rejects every wider amount field.
+        for raw in [64, 128, 255, wide::IMM14_MAX, -1, wide::IMM14_MIN] {
+            assert!(
+                ivm::prepare_contract(super::super::super::tests::contract_artifact(
+                    &[enc::encode_ri(opcode, 4, 2, raw)],
+                    1_000,
+                    ivm::ivm_mode::ZK,
+                ))
+                .is_err()
+            );
+        }
+        for amount in [0, 2, 4, 31] {
+            for rd in [0, 2, amount] {
                 checked_native(
-                    enc::encode_ri(opcode, rd, 2, u8::cast_signed(raw)),
+                    enc::encode_ri(opcode, rd, 2, i16::from(amount)),
                     &[(2, u64::MAX, true)],
                 );
             }
         }
         checked_native(
-            enc::encode_ri(opcode, 4, 0, -1),
-            &[(4, 19, true), (255, 17, true)],
+            enc::encode_ri(opcode, 4, 0, 63),
+            &[(4, 19, true), (31, 17, true)],
         );
-        let instruction = enc::encode_ri(opcode, 4, 2, -1);
-        let (program, first) = checked_native(instruction, &[(2, 17, true), (255, 0, false)]);
-        let (_, second) = checked_native(instruction, &[(2, 17, true), (255, u64::MAX, true)]);
+        let instruction = enc::encode_ri(opcode, 4, 2, 63);
+        let (program, first) = checked_native(instruction, &[(2, 17, true), (31, 0, false)]);
+        let (_, second) = checked_native(instruction, &[(2, 17, true), (31, u64::MAX, true)]);
         assert_eq!(first.0.row, second.0.row);
         assert_eq!(first.0.packets.fields, second.0.packets.fields);
         let mut read = first.clone();
         read.0.packets.fields[SCALAR_RIGHT] = event(
-            (Space::Register, 0, 255),
+            (Space::Register, 0, 31),
             0,
             0,
             false,
@@ -221,40 +236,35 @@ fn native_private_rotate_immediates_are_unsigned_and_never_read_raw_byte_registe
 }
 
 #[test]
-fn native_shift_mismatched_tags_trap_after_exact_gas_even_for_zero_destination() {
+fn native_shift_mixed_tags_complete_with_a_joined_destination_tag() {
     for opcode in REGISTER_OPS {
         for rd in [0, 4] {
             for (left_tag, right_tag) in [(true, false), (false, true)] {
                 let instruction = enc::encode_rr(opcode, rd, 2, 3);
                 let cost = 1 + u64::from(is_rotate(instruction));
-                let (_, recorder, outcome) = capture(
+                let (program, recorder, _later_outcome) = capture(
                     &[instruction],
                     &[(2, 17, left_tag), (3, 63, right_tag)],
                     16,
                     32,
                 );
-                assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
                 let record = &recorder.records()[0];
-                assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
+                assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);
                 assert_eq!(record.opcode_gas, Some(cost));
-                assert_eq!(record.after.pc, record.before.pc);
-                assert_eq!(record.after.cycles, record.before.cycles);
-                assert_eq!(record.after.registers, record.before.registers);
-                assert_eq!(record.after.tags, record.before.tags);
                 assert_eq!(
                     record.after.gas_remaining + cost,
                     record.before.gas_remaining
                 );
-                let (program, mut forged) =
-                    checked_native(instruction, &[(2, 17, false), (3, 63, false)]);
-                for (slot, tag) in [(SCALAR_LEFT, left_tag), (SCALAR_RIGHT, right_tag)] {
-                    forged.0.packets.fields[slot][BEFORE_TAG] = F(u64::from(tag));
-                    forged.0.packets.fields[slot][AFTER_TAG] = F(u64::from(tag));
-                }
+                assert_eq!(record.after.tags[usize::from(rd)], rd != 0);
+                let fixture = ScalarFixture::from_record(&program, record);
+                assert!(fixture.accepts(&program));
                 if rd != 0 {
-                    forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F(u64::from(left_tag));
+                    // A public destination (the retired left-tag rule whenever
+                    // only the amount is private) cannot replace the join.
+                    let mut forged = fixture.clone();
+                    forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F::ZERO;
+                    assert!(!forged.accepts(&program));
                 }
-                assert!(!forged.accepts(&program));
             }
         }
     }
@@ -498,8 +508,8 @@ pub(super) fn mixed_body() -> [u32; 10] {
         enc::encode_rr(wide::arithmetic::SRA, 2, 2, 3),
         enc::encode_rr(wide::arithmetic::ROTL, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::ROTR, 3, 4, 3),
-        enc::encode_ri(wide::arithmetic::ROTL_IMM, 2, 3, i8::MIN),
-        enc::encode_ri(wide::arithmetic::ROTR_IMM, 4, 2, -1),
+        enc::encode_ri(wide::arithmetic::ROTL_IMM, 2, 3, 32),
+        enc::encode_ri(wide::arithmetic::ROTR_IMM, 4, 2, 63),
     ]
 }
 

@@ -658,10 +658,11 @@ The version-3 phase tags are `0 Entry`, `1 PointerHeader`,
 `8 OutputSerialization`. Every tag names work that a production numeric path
 can actually reach; V1 has no reserved or quote-only staged phases.
 
-Every ABI V1 numeric syscall number requires the wide `SYSTEM`/`SCALLX`
-instruction. Executing that instruction costs 5 gas before syscall admission
-or staged dispatch. That opcode cost is part of total VM gas, but is
-deliberately outside the numeric staged-call formula below. Therefore:
+Every ABI V1 numeric syscall is invoked by the sole `SCALL` instruction, whose
+24-bit field carries the syscall number. Executing that instruction costs 5 gas
+before syscall admission or staged dispatch. That opcode cost is part of total
+VM gas, but is deliberately outside the numeric staged-call formula below.
+Therefore:
 
 ```text
 total_vm_gas_for_one_numeric_call = 5 + completed_numeric_stage_gas
@@ -687,7 +688,7 @@ recoverable arithmetic fault has no output charge. The operational state
 machine is:
 
 ```text
-execute_numeric_scallx(call):
+execute_numeric_scall(call):
     debit 5                         # ordinary VM instruction gas
     staged_debit(Entry, 384)
     initialize the staged context and validate syscall privacy
@@ -771,7 +772,7 @@ framing/authentication/publication pipelines. A failing
 numeric syscall with an invalid zero pointer separately measures the entry,
 dispatch/control, and seven-byte pointer-header boundary without performing
 payload work. Its calibration denominator is the staged `384 + 7` gas; the
-generic five-gas `SCALLX` instruction charge is asserted against the VM's total
+generic five-gas `SCALL` instruction charge is asserted against the VM's total
 consumption but excluded from that denominator, so it cannot hide an
 underpriced numeric entry phase. For each supported
 baseline hardware tier, maintainers compare median time per declared work cell

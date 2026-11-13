@@ -179,6 +179,14 @@ PRIVATE_SETTLEMENT_EXPORTS = {
 }
 KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_revision_v1",
+    "connect_norito_kagemusha_spartan_install_v1",
+    "connect_norito_kagemusha_spartan_begin_account_v1",
+    "connect_norito_kagemusha_spartan_authorize_account_v1",
+    "connect_norito_kagemusha_spartan_prepare_v1",
+    "connect_norito_kagemusha_spartan_execute_v1",
+    "connect_norito_kagemusha_spartan_output_v1",
+    "connect_norito_kagemusha_spartan_verify_payment_v1",
+    "connect_norito_kagemusha_spartan_discard_v1",
     "connect_norito_kagemusha_wallet_open_begin_v1",
     "connect_norito_kagemusha_wallet_open_finish_v1",
     "connect_norito_kagemusha_wallet_open_cancel_v1",

@@ -1553,8 +1553,8 @@ also remain.
 the governance clock, the due predicate, the progress invariant and their
 wording. The ballot requires the following of them. The positioned pass
 (section 12.3, slice 3) implements the progress ticket, the exact-pulse draw,
-late processing and the casting clock. The admission cap waits for the
-attempt-creation interface, and the latency bound for qualification.
+late processing and the casting clock, and attempt creation enforces the
+admission cap. The latency bound waits for qualification.
 
 - **Bounded progress to the slot.** A governance progress item
   `AdvanceToNativeSlot` exists for the nearest admitted future slot. Its
@@ -2210,20 +2210,31 @@ real-peer test are still open (last bullet).
   `ConfirmationJuryCapacityUnavailable`. The registration runs inside a
   block-start closure, so it is never an error that would abandon every block
   while the closure stays due.
+- **Idle-chain progress.** A keepalive that Parliament's terms alone make due
+  is fee-exempt (K3). Admission, fee quoting, the proposer and the queue's
+  quotas evaluate Parliament's due predicate on the committed tip at the
+  candidate height; execution and block validation take the executing block's
+  own `governance_due_applied` (K2). The two agree because the predicate
+  lists exactly what the pass applies.
+  - The keeper wakes at Parliament's next-governance-progress time: the least
+    block time at which the due predicate holds for the next height. A casting
+    clock, or a draw whose pulse is available, is due at any time (zero).
+    Otherwise it is the earliest of the height-progress ticket (the parent's
+    time plus the committed block cadence), the earliest live lifecycle item,
+    the earliest closing time and, while fewer than `K` windows are open, the
+    earliest opening. The predicate holds from then on for the same parent.
+  - The keeper staggers it by `rank · 1 000 ms`, like other governance work.
+    With no such time it waits for a pulse or a transaction; an unavailable
+    Parliament observation is never a deadline.
 - **Open.**
   - A due index bounded by `K`, rebuilt on restore: listing reads every
     attempt and board, terminal ones included, and the admission cap counts
     nonterminal attempts by reading the attempts table.
   - A real-peer test: no network may activate the family before slice 4, so
     the interfaces and the pass are tested on World rows only.
-  - Idle-chain progress: fee exemption (K3) of a keepalive justified by
-    Parliament work alone (fee admission refuses it today), the keeper's
-    next-governance-progress time and the read-only schedule projection.
-    Until then a block for Parliament work alone needs an ordinary
-    fee-paying transaction; its pass then applies the due work.
-  - Clients: a committed-transaction proof assumes a Network output's index
-    equals its input's index, which holds only in a block without governance
-    rows (slice 5).
+  - Clients (slice 5): a committed-transaction proof assumes a Network
+    output's index equals its input's index, which holds only in a block
+    without governance rows, and no query projects an attempt's schedule.
   - Production enactment in G3 (slice 5). This release certifies no
     production attempt.
 

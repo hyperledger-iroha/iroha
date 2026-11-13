@@ -9,6 +9,7 @@ use iroha_pasta::{Ep, Eq, PastaAffine, PastaCurve};
 
 /// One fresh private restructuring witness, shared by both proof halves.
 pub struct GeneratorFolds {
+    pub(super) mu: zeroize::Zeroizing<crate::verifier::Fq>,
     pub p: gc::Fold<Eq>,
     pub s: gc::Fold<Ep>,
     pub tp: gc::Trace<Eq>,
@@ -152,7 +153,8 @@ impl GeneratorFolds {
             entropy,
             b"secondary inherited generator fold",
         );
-        Ok(Self { p, s, tp, ts })
+        let mu = zeroize::Zeroizing::new(entropy.stream(b"pair binding privacy mask").scalar());
+        Ok(Self { p, s, tp, ts, mu })
     }
     pub(super) fn append_shared(&self, values: &mut Vec<u128>) -> (usize, usize) {
         let p = values.len();

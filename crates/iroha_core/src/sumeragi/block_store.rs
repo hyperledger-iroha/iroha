@@ -373,6 +373,54 @@ impl BlockStore for KuraBlockStore {
     fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         self.read_committed(height, CommittedRead::poll_metadata)
     }
+    fn startup_headers(
+        &self,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<BlockHeader>>, Attempt<io::Error>> {
+        let Some(floor) = self.kura.checkpoint_prefix_height() else {
+            return Ok(None);
+        };
+        if first > last || first > floor {
+            return Ok(None);
+        }
+        let prefix_end = last.min(floor);
+        let prefix = self
+            .schedule
+            .checkpoint_headers(first, prefix_end)?
+            .ok_or_else(|| {
+                invalid("omitted startup history has no independent portable authority")
+            })?;
+        if prefix_end == last {
+            return Ok(Some(prefix));
+        }
+        let count =
+            usize::try_from(last - first + 1).map_err(|error| invalid(error.to_string()))?;
+        let layout = std::alloc::Layout::array::<BlockHeader>(count)
+            .map_err(|error| invalid(error.to_string()))?;
+        norito::core::classify_decode_attempt(|| {
+            norito::core::reserve_decode_allocation(layout.size())
+        })
+        .map_err(|error| {
+            crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+                invalid(error.to_string())
+            })
+        })?;
+        let mut headers = Vec::new();
+        headers.try_reserve_exact(count).map_err(|original| {
+            Attempt::Deferred(
+                iroha_allocation::AllocatorRefusal::from_vec_reserve(original, layout).into(),
+            )
+        })?;
+        headers.extend(prefix);
+        for height in prefix_end + 1..=last {
+            headers.push(
+                self.header(height)?
+                    .ok_or_else(|| invalid("missing original post-checkpoint startup header"))?,
+            );
+        }
+        Ok(Some(headers))
+    }
     fn append(&self, body: &AvailableBody, qc: &Qc) -> Result<(), Attempt<io::Error>> {
         self.write(body, qc)
     }

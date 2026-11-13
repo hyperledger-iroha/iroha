@@ -5,15 +5,16 @@ use ivm::instruction;
 const fn is_assigned_opcode(opcode: u8) -> bool {
     matches!(
         opcode,
-        0x01..=0x2A | 0x30 | 0x31 | 0x34 | 0x35 | 0x40..=0x46 | 0x48..=0x4B | 0x60 | 0x62
+        0x01..=0x2A | 0x30 | 0x31 | 0x34 | 0x35 | 0x40..=0x46 | 0x48..=0x4B | 0x60
     )
 }
 
 #[test]
 fn first_release_extension_opcodes_are_valid_but_unassigned_slots_are_invalid() {
     assert!(instruction::wide::is_valid_opcode(
-        instruction::wide::system::SYSTEM
+        instruction::wide::system::SCALL
     ));
+    assert!(!instruction::wide::is_valid_opcode(0x62));
     assert!(instruction::wide::is_valid_opcode(
         instruction::wide::memory::LDLIT
     ));

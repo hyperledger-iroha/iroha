@@ -121,8 +121,21 @@ def consumed_source_projection(metadata, root, originals, current, receipts,
     return expected
 
 def _source_directories(names, current, package_root, root, metadata):
-    """Prune owned Cargo outputs by path, retaining nested source `target` namespaces."""
-    output_roots = {root / "target", Path(metadata["target_directory"])}
+    """Prune exact owned build outputs, retaining nested source namespaces."""
+    output_roots = {
+        root / "target", Path(metadata["target_directory"]),
+        # The isolated hardware fixture is an independent Cargo workspace under
+        # the experimental library. Its default warm target is generated output,
+        # not a native source input to the host bridge. Keep all fixture source,
+        # manifests and headers in the capture; a consumed Rust input from this
+        # excluded output still fails the ordinary dep-info reconciliation.
+        root / "experiments/kagemusha-spartan/device/runtime/target",
+        # The experiment's ignored artifact directory also holds active Xcode
+        # derived data and test logs. It is generated output, not source. Do not
+        # generalize this to arbitrary directories named output; compiler use of
+        # an uncaptured file here still fails dep-info reconciliation.
+        root / "experiments/kagemusha-spartan/output",
+    }
     if package_root is not None:
         output_roots.add(package_root / "target")
     return sorted(name for name in names

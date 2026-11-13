@@ -312,9 +312,11 @@ fn initialization_degree_geometry_and_missing_lifecycle_authority_are_explicit()
     let field_bytes = 136 * 2 * 8 + 2 * 32;
     assert_eq!(WIDTH * field_bytes, 35_840);
     assert_eq!(total * field_bytes, 179_200);
+    // The packets fit the 32-register scalar segment's remaining proof-byte
+    // headroom, but sharing them is not free and no complete profile is claimed.
     assert!(
-        total * field_bytes > 41_152,
-        "shared packets are not free; no complete-profile fit claim"
+        total * field_bytes <= 1_044_672,
+        "shared packets must stay within the scalar segment headroom"
     );
     // No permission, first-state or frame-generation authority is fabricated.
     // The existing bus/lifecycle relation must reject counterfeit old state.

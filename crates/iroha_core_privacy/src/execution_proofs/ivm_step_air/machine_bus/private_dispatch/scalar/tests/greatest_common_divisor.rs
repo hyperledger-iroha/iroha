@@ -30,7 +30,8 @@ fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarF
         }
     );
     if has_destination(instruction) {
-        assert_eq!(p[SCALAR_DESTINATION][AFTER_TAG], p[SCALAR_LEFT][BEFORE_TAG]);
+        let joined = p[SCALAR_LEFT][BEFORE_TAG] == F::ONE || p[SCALAR_RIGHT][BEFORE_TAG] == F::ONE;
+        assert_eq!(p[SCALAR_DESTINATION][AFTER_TAG], F(u64::from(joined)));
     }
     assert_eq!(
         packet::half(&p[GAS_DEBIT], BEFORE, 0) - packet::half(&p[GAS_DEBIT], AFTER, 0),
@@ -153,7 +154,7 @@ fn private_gcd_total_zero_branches_and_nonzero_bank_reject_every_cell_change() {
 }
 
 #[test]
-fn private_gcd_rejects_coherent_foreign_sources_and_mismatched_original_tags() {
+fn private_gcd_rejects_coherent_foreign_sources_and_joins_mixed_original_tags() {
     let instruction = enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3);
     let (program, fixture) = checked(instruction, &[(2, 12, true), (3, 18, true)]);
     for (left, right) in [(0, 0), (12, 0), (0, 18), (24, 18), (u64::MAX, 65537)] {
@@ -171,27 +172,13 @@ fn private_gcd_rejects_coherent_foreign_sources_and_mismatched_original_tags() {
     for rd in [0, 4] {
         let instruction = enc::encode_rr(wide::arithmetic::GCD, rd, 2, 3);
         for tags in [[false, true], [true, false]] {
-            let (_, recorder, outcome) = shifts::capture(
-                &[instruction],
-                &[(2, 12, tags[0]), (3, 18, tags[1])],
-                100,
-                64,
-            );
-            assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
-            let record = &recorder.records()[0];
-            assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
-            assert_eq!(record.before.registers, record.after.registers);
-            assert_eq!(record.before.pc, record.after.pc);
-            assert_eq!(record.before.cycles, record.after.cycles);
-            let (program, mut forged) = checked(instruction, &[(2, 12, false), (3, 18, false)]);
-            for (slot, tag) in [(SCALAR_LEFT, tags[0]), (SCALAR_RIGHT, tags[1])] {
-                forged.0.packets.fields[slot][BEFORE_TAG] = F(u64::from(tag));
-                forged.0.packets.fields[slot][AFTER_TAG] = F(u64::from(tag));
-            }
+            // Mixed tags complete natively; `checked` binds the joined private tag.
+            let (program, fixture) = checked(instruction, &[(2, 12, tags[0]), (3, 18, tags[1])]);
             if rd != 0 {
-                forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F(u64::from(tags[0]));
+                let mut forged = fixture.clone();
+                forged.0.packets.fields[SCALAR_DESTINATION][AFTER_TAG] = F::ZERO;
+                assert!(!forged.accepts(&program));
             }
-            assert!(!forged.accepts(&program));
         }
     }
 }
@@ -251,7 +238,7 @@ fn private_gcd_all_six_shared_workspace_modes_keep_original_record_continuity() 
         enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::MEAN, 4, 4, 3),
-        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 255),
+        enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 0),
         enc::encode_rr(wide::arithmetic::MUL, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::DIV, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::GCD, 4, 4, 3),

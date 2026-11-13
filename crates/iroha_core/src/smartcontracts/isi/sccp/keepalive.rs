@@ -174,9 +174,23 @@ pub fn next_scheduled_at_ms(
     committed_time_ms.and_then(|since| Current(world).scheduled_progress_at_ms(since, next_height))
 }
 
-/// Earliest independently known progress deadline, even after degraded heartbeats stop.
-/// TODO(design §9): Parliament's next due time (`next_governance_progress_at_ms`) is not a
-/// term here; the keeper learns Parliament work from [`due`] at each tip.
+/// Parliament's next-governance-progress time on the committed parent `world` for the
+/// candidate block at `next_height` (design §9): the least block time at which Parliament's
+/// terms of [`due`] hold, `Some(0)` for work due at any time, or `None` while only a pulse or
+/// a transaction can make Parliament work due. The keeper staggers it by `rank · 1 000 ms`.
+/// # Errors
+/// Preserves unavailable Parliament work instead of treating it as no deadline.
+pub fn next_governance_at_ms(
+    world: &impl WorldReadOnly,
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+) -> Result<Option<u64>, DueWorkUnavailable> {
+    super::parliament_iface::next_governance_progress_at_ms(world, committed_time_ms, next_height)
+}
+
+/// Earliest independently known SCCP or scheduled progress deadline, even after degraded
+/// heartbeats stop. Parliament's deadline is [`next_governance_at_ms`], kept apart because its
+/// observation can be unavailable, as [`due`] asks Parliament only after these terms.
 #[must_use]
 pub fn next_progress_at_ms(
     world: &(impl WorldReadOnly + ?Sized),

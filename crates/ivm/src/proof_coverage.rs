@@ -364,18 +364,8 @@ pub const OPEN_SEMANTICS: &[OpenSemantic] = &[
     OpenSemantic {
         id: "host_cycle_limit_override",
         subject: "invocation",
-        reason: "hosts can override the artifact cycle limit; the override is not yet explicit statement context",
+        reason: "hosts can override the artifact's ZK trace bound; the override is not yet explicit statement context",
         evidence: &[evidence(INTERPRETER, "pub fn set_max_cycles(")],
-    },
-    OpenSemantic {
-        id: "shared_cycle_allowance_node_local",
-        subject: "invocation",
-        reason: "a quarantine-lane signed source runs under one shared cycle allowance across its batch segments, nested contract runs and ZK padding; a refused reservation ends a run with ExceededMaxCycles and rejects a parent even after a successful run. The limit is node-local `pipeline.quarantine_tx_max_cycles`, so the outcome is not yet a function of committed State and the statement",
-        evidence: &[
-            evidence(INTERPRETER, "pub fn run_with_host_and_cycle_budget("),
-            evidence(INTERPRETER, "pub fn run_with_host_and_parent_cycle_budget("),
-            evidence(ROOT_EFFECTS, "self.pipeline.quarantine_tx_max_cycles"),
-        ],
     },
     OpenSemantic {
         id: "host_output_limits_node_local",

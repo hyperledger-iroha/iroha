@@ -1395,6 +1395,69 @@ const ROOTS: &[Root] = &[
         ],
     },
     Root {
+        id: "runtime_checkpoint_transfer_inventory",
+        class: RootClass::LocalBindingDigest,
+        carrier: "the checkpoint transport package descriptor and pinned artifact/range requests",
+        keyed: false,
+        scope: "the descriptor and ordered lengths and SHA-256 digests of the complete snapshot, sparse Kura store, portable proof files and completion marker",
+        construction: "domain-separated SHA-256 over framed descriptor fields and the fixed ordered artifact inventory",
+        witnesses: "none for State: artifact hashes check transferred file bytes",
+        owner: "Runtime checkpoint transport",
+        disposition: "kept as immutable transfer identity and file integrity, never State authentication or startup authority; consumers independently verify the pinned signed genesis, portable ancestry, complete restored State root and actual successor replay",
+        defect: None,
+        domains: &[r"iroha-runtime-checkpoint-transfer-inventory-v1"],
+        evidence: &[
+            (
+                "crates/iroha_core/src/snapshot/transfer/transport.rs",
+                "fn inventory_start(descriptor: &PackageDescriptorV1) -> Sha256 {",
+            ),
+            (
+                "crates/iroha_core/src/snapshot/transfer/transport.rs",
+                "fn inventory_add(hash: &mut Sha256, artifact: ArtifactV1) {",
+            ),
+        ],
+    },
+    Root {
+        id: "runtime_retirement_root_coverage",
+        class: RootClass::LocalBindingDigest,
+        carrier: "the in-memory RetirementCoverage evidence owner",
+        keyed: false,
+        scope: "one original parent tip, its canonical private data space registry and the parent and every registered child root's original retirement receipt proof",
+        construction: "domain-separated hash of the definition, authenticated parent tip and canonical registry followed by the ordered canonical original proof graphs",
+        witnesses: "none: the original certified ordinary-write inclusion proofs authenticate receipt statements",
+        owner: "Runtime retirement coverage verifier",
+        disposition: "kept as a local binding of independently authenticated receipt coverage at one exact registry cut; it authenticates no State read and grants no source-code deletion authority",
+        defect: None,
+        domains: &[r"iroha:runtime:retirement-coverage:v1\0"],
+        evidence: &[
+            (
+                "crates/iroha_core/src/runtime/retirement.rs",
+                "pub(crate) fn verify_coverage(",
+            ),
+            (
+                "crates/iroha_core/src/runtime/retirement.rs",
+                "fn append_evidence(",
+            ),
+        ],
+    },
+    Root {
+        id: "runtime_retirement_native_code_coverage",
+        class: RootClass::LocalBindingDigest,
+        carrier: "the in-memory NativeCodeCoverage evidence owner",
+        keyed: false,
+        scope: "one exact native module and reference closure, every matching compiled or retained parent definition alias and each alias's original authenticated root coverage",
+        construction: "domain-separated native code identity hash folded with ordered alias identities and their retirement coverage digests",
+        witnesses: "none: each alias requires its original authenticated retirement proofs",
+        owner: "Runtime retirement coverage verifier",
+        disposition: "kept as a local binding of verified coverage for the enumerated aliases; it authenticates no State read and grants no source-code deletion authority, which still requires child-local historical alias coverage and reviewed retained-storage, reader and proof dependencies",
+        defect: None,
+        domains: &[r"iroha:runtime:native-code-coverage:v1\0"],
+        evidence: &[(
+            "crates/iroha_core/src/runtime/retirement/code_coverage.rs",
+            "pub(crate) fn verify_native_code_coverage(",
+        )],
+    },
+    Root {
         id: "sorafs_reputation_archive_digest",
         class: RootClass::LocalBindingDigest,
         carrier: "records of the node-local durable SoraFS reputation archive",
@@ -10276,6 +10339,89 @@ fn configured_lane_catalog_domain_is_a_nested_policy_fingerprint() {
             .unlisted_domains
             .contains(&format!("{shadow} in {path}"))
     );
+}
+
+/// Runtime transfer and retirement summaries retain their precise, non-authoritative roles.
+#[test]
+fn runtime_checkpoint_and_retirement_domains_keep_exact_owners() {
+    let owners = domain_owners();
+    let groups: &[(DomainOwner, &[&str])] = &[
+        (
+            DomainOwner::Other(Use::LocalArtifact),
+            &[r"iroha-checkpoint-prefix-files-v1"],
+        ),
+        (
+            DomainOwner::Other(Use::Name),
+            &[
+                r"iroha.game_partition.acknowledge_import.v1",
+                r"iroha.game_partition.cancel_export_request.v1",
+                r"iroha.game_partition.cancel_import_reservation.v1",
+                r"iroha.game_partition.export_reserved.v1",
+                r"iroha.game_partition.import_reserved.v1",
+                r"iroha.game_partition.request_export.v1",
+                r"iroha.game_partition.reserve_import.v1",
+                r"iroha.runtime.contract_lifecycle.v1",
+                r"iroha.runtime.native_game_capture.v1",
+                r"iroha.runtime.obligation.contract.register.v1",
+                r"iroha.runtime.retirement.finalize.v1",
+                r"iroha.runtime.retirement.v1",
+            ],
+        ),
+        (
+            DomainOwner::Other(Use::WitnessKey),
+            &[
+                r"iroha/game-partition/cancel-intent/v1/",
+                r"iroha/game-partition/export-intent/v1/",
+                r"iroha/game-partition/import-ack/v1/",
+                r"iroha/game-partition/reservation/v1/",
+                r"iroha/game-partition/reserved-export/v1/",
+                r"iroha:runtime:retirement:v1\0",
+            ],
+        ),
+        (
+            DomainOwner::Other(Use::Record),
+            &[
+                r"iroha/game-reserved-export/v1",
+                r"iroha/game-reserved-transfer/v1",
+                r"iroha:runtime:native-game-capture:v1:source-intent-destination-reservation-export-import-ack-preexport-certified-cancel",
+                r"iroha:runtime:retirement:v1:published-history-code-needed-highwater-permanent-exclusion-effective-floor-empty-live-closure-retained-readers",
+            ],
+        ),
+        (
+            DomainOwner::Root("runtime_checkpoint_transfer_inventory"),
+            &[r"iroha-runtime-checkpoint-transfer-inventory-v1"],
+        ),
+        (
+            DomainOwner::Root("runtime_retirement_root_coverage"),
+            &[r"iroha:runtime:retirement-coverage:v1\0"],
+        ),
+        (
+            DomainOwner::Root("runtime_retirement_native_code_coverage"),
+            &[r"iroha:runtime:native-code-coverage:v1\0"],
+        ),
+    ];
+    for (owner, literals) in groups {
+        for literal in *literals {
+            assert_eq!(owners.get(literal), Some(owner), "{literal}");
+            let shadow = format!("{literal}:shadow");
+            let text = format!("const SHADOW: &str = r\"{shadow}\";\n");
+            assert!(
+                scan_sources([("runtime_domain_shadow.rs", text.as_str())])
+                    .unlisted_domains
+                    .contains(&format!("{shadow} in runtime_domain_shadow.rs")),
+                "a new domain must not inherit {literal}'s classification"
+            );
+        }
+        if let DomainOwner::Root(id) = owner {
+            let root = ROOTS.iter().find(|root| root.id == *id).unwrap();
+            assert_eq!(root.class, RootClass::LocalBindingDigest);
+            assert!(!root.keyed && !root.class.certified());
+            assert_eq!(root_anchors(root), ["domain_literal"]);
+            for (path, marker) in root.evidence {
+                let _ = evidence(path, marker);
+            }
+        }
+    }
 }
 
 /// Receipt identifiers remain records; the private State-byte comparison is a local digest.

@@ -5,6 +5,7 @@
 mod block_hash_range;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod certificate_corruption_test_support;
+pub(crate) mod checkpoint_prefix;
 mod fastpq_artifact_store;
 pub(crate) mod history_checkpoints;
 mod lane_geometry;
@@ -165,6 +166,8 @@ const MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES: usize = 4_096;
 /// generic owned-value limit while retaining generous schema headroom.
 const RECOVERY_CONTROL_DECODE_DEPTH_V1: usize = 128;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
+/// Explicit absent pre-checkpoint body, authorized only by the durable portable prefix.
+const CHECKPOINT_OMITTED_BLOCK_START: u64 = u64::MAX - 1;
 /// Build the conservative Norito budget at a recovery format's exact V1 wire cap.
 ///
 /// `decode_canonical_with_limits` also installs its payload-derived budget, so
@@ -1336,6 +1339,8 @@ impl Kura {
         let store_root = store_dir.clone();
         let store_root_lock_file =
             Self::acquire_store_root_lock(&store_dir, config.init_mode == InitMode::Strict)?;
+        // A retained fresh-store checkpoint intent must finish before canonical preflight.
+        checkpoint_prefix::recover(&store_root, config.init_mode == InitMode::Strict)?;
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory =
             Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
@@ -1452,6 +1457,8 @@ impl Kura {
                 }
                 fast_preflight_height = Some(block_store.preflight_fast_durable_prefix()?);
                 block_store.open_fast_prevalidated_files_read_only()?;
+                let count = usize::try_from(fast_preflight_height.expect("just validated"))?;
+                block_store.verify_fast_checkpoint_prefix(count)?;
             }
             InitMode::Strict => {
                 block_store.recover_canonical_storage_stages()?;
@@ -4885,6 +4892,7 @@ impl Kura {
             return Err(Error::HashesFileHeightMismatch);
         }
         let data_len = block_store.data_file_len()?;
+        block_store.verify_checkpoint_prefix(expected)?;
         let mut buffer = Vec::new();
         let mut previous = None;
         for (position, slot) in block_indices.iter().enumerate() {
@@ -4893,6 +4901,13 @@ impl Kura {
                 .ok_or(Error::HashesFileHeightMismatch)?;
             let index_height = NonZeroUsize::new(usize::try_from(height)?)
                 .ok_or(Error::HashesFileHeightMismatch)?;
+            if block_store.valid_checkpoint_omission(height, slot) {
+                if let Some(index) = transaction_entrypoint_index.as_deref_mut() {
+                    index.incomplete_heights.insert(index_height);
+                }
+                previous = Some(expected[position]);
+                continue;
+            }
             if slot.length == 0 || slot.length > STRICT_INIT_MAX_BLOCK_BYTES {
                 return Err(Error::CorruptedBlockLength {
                     length: slot.length,
@@ -5518,6 +5533,9 @@ impl Kura {
                 }
             };
             let is_evicted = index.is_evicted();
+            if block_store.valid_checkpoint_omission(block_height.get() as u64, &index) {
+                return Ok(None);
+            }
             let BlockIndex { start, length } = index;
             if length > STRICT_INIT_MAX_BLOCK_BYTES {
                 drop(block_store);
@@ -6205,6 +6223,9 @@ impl Kura {
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(fastpq_artifact_store::DIRECTORY),
         )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(checkpoint_prefix::DIRECTORY),
+        )?);
         for journal_name in [
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
@@ -6402,6 +6423,12 @@ impl Kura {
         let mut block_store = self.block_store.lock();
         let index_position = u64::try_from(height.get().saturating_sub(1))?;
         let index = block_store.read_block_index(index_position)?;
+        if index.is_checkpoint_omitted() {
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::NotFound, "checkpoint omitted this block body"),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         if index.is_evicted() {
             return block_store.read_da_block_bytes(u64::try_from(height.get())?, index.length);
         }
@@ -7115,6 +7142,9 @@ pub struct BlockIndex {
     pub length: u64,
 }
 impl BlockIndex {
+    fn is_checkpoint_omitted(&self) -> bool {
+        self.start == CHECKPOINT_OMITTED_BLOCK_START && self.length == 0
+    }
     fn is_evicted(&self) -> bool {
         self.start == EVICTED_BLOCK_START
     }
@@ -7520,6 +7550,7 @@ impl BlockStore {
             #[cfg(any(test, feature = "iroha-core-tests"))]
             body_read_calls: AtomicUsize::new(0),
             fast_prevalidated_count: None,
+            checkpoint_prefix: None,
             commit_marker_count: 0,
             commit_marker_pending: None,
             deferred_da_recovery_fault: None,
@@ -7766,6 +7797,9 @@ impl BlockStore {
         let mut previous_height = 0_u64;
         for entry in &stage.evicted {
             if entry.height <= 1
+                || self.checkpoint_prefix.as_ref().is_some_and(|proof| {
+                    entry.height <= proof.checkpoint().header().height().get().saturating_add(1)
+                })
                 || entry.height > stage.marker.count
                 || entry.height <= previous_height
                 || entry.wire_len == 0
@@ -7962,7 +7996,9 @@ impl BlockStore {
             let height = index_position.saturating_add(1);
             let index = self.read_block_index(index_position)?;
             if index.length > STRICT_INIT_MAX_BLOCK_BYTES
-                || (index.length == 0 && !index.is_evicted())
+                || (index.length == 0
+                    && !index.is_evicted()
+                    && !self.valid_checkpoint_omission(height, &index))
             {
                 return Err(self.invalid_eviction_compaction_stage(
                     "promoted eviction index contains an invalid block length",
@@ -8180,6 +8216,7 @@ impl BlockStore {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
+        self.verify_checkpoint_recovery_prefix()?;
         self.recover_eviction_compaction_stage()?;
         self.recover_da_block_rewrite_stage()
     }
@@ -9277,6 +9314,9 @@ impl BlockStore {
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
+                    if self.valid_checkpoint_omission(candidate, &index) {
+                        break;
+                    }
                     if index.is_evicted() {
                         if index.length == 0
                             || index.length > STRICT_INIT_MAX_BLOCK_BYTES
@@ -10086,7 +10126,7 @@ impl BlockStore {
         let mut data_end = 0u64;
         for index_pos in 0..count {
             let index = self.read_block_index(index_pos)?;
-            if index.is_evicted() {
+            if index.is_evicted() || self.valid_checkpoint_omission(index_pos + 1, &index) {
                 continue;
             }
             let end = index
@@ -10503,7 +10543,7 @@ impl BlockStore {
             let mut idx = start_height.saturating_sub(1);
             loop {
                 let entry = self.read_block_index(idx)?;
-                if !entry.is_evicted() {
+                if !entry.is_evicted() && !self.valid_checkpoint_omission(idx + 1, &entry) {
                     break entry.start.checked_add(entry.length).ok_or(
                         Error::CorruptedBlockRange {
                             start: entry.start,

@@ -926,6 +926,38 @@ fn typed_nested_instruction_frames_share_the_original_scanner_allowance() {
 }
 
 #[test]
+fn a_nested_instruction_this_release_does_not_register_is_refused() {
+    use crate::{
+        isi::{InstructionBox, OpaqueInstructionV1, Register},
+        trigger::Trigger,
+    };
+    // Ordinary decoding keeps such an envelope opaque; lifecycle evidence never does.
+    let opaque: InstructionBox =
+        OpaqueInstructionV1::new("test.unreleased.instruction.v1", vec![1, 2, 3])
+            .expect("a well-formed wire identifier")
+            .into();
+    let child = Action::new(
+        Executable::Instructions(ConstVec::from(vec![opaque])),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let root = Action::new(
+        Executable::Instructions(ConstVec::from(vec![
+            Register::trigger(Trigger::new("nested".parse().unwrap(), child)).into(),
+        ])),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let frame = norito::encode_canonical(&root).unwrap();
+    let pool = AllocationBudget::new(4_000_000);
+    assert!(complete_scanner(&pool).scan(&frame).is_err());
+}
+
+#[test]
 fn prepaid_nested_leaf_failures_do_not_format_owned_diagnostics() {
     use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     let pool = AllocationBudget::new(8192);

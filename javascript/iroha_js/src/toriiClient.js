@@ -204,6 +204,7 @@ import {
   ToriiHttpError,
   extractToriiErrorFields,
   isIdempotentSubmissionRejection,
+  toriiErrorEnvelopeFields,
 } from "./toriiErrors.js";
 import { createToriiCollections } from "./query/collections.js";
 import { decodeAssetMovementRow } from "./query/assetMovements.js";
@@ -421,6 +422,19 @@ const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 // Keep one literal boundary so ordinary Torii clients avoid its startup cost.
 function loadToriiOptionalModule() {
   return import("./toriiOptional.js");
+}
+
+// Torii renders every failure as its canonical `ErrorEnvelope` in the negotiated
+// encoding, so a route that negotiates Norito receives a binary envelope rather
+// than text. Such routes classify their bounded error bytes with the shared
+// decoder, loaded through the optional boundary only once a failure is in hand:
+// neither the success path nor the eager client graph carries the Norito codecs.
+async function decodeNegotiatedToriiErrorEnvelope(contentType, bytes, signal) {
+  const { decodeTypedToriiErrorEnvelope } = await waitForPromiseWithSignal(
+    loadToriiOptionalModule(),
+    signal,
+  );
+  return decodeTypedToriiErrorEnvelope(contentType, bytes);
 }
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 
@@ -2429,6 +2443,8 @@ export class ToriiClient {
 
   /**
    * Fetch and locally verify one bounded validation-fee consensus proof page.
+   * A failure carrying Torii's canonical error envelope rejects with a
+   * `ToriiHttpError` that exposes the envelope's code and exact message.
    *
    * @param {object} binding exact immutable ledger binding
    * @param {object | null} checkpoint durable checkpoint, or null for binding.checkpoint
@@ -2455,6 +2471,7 @@ export class ToriiClient {
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
       createValidationFeeConsensusApi,
+      decodeTypedToriiErrorEnvelope,
     } = await loadToriiOptionalModule();
     const {
       encodeValidationFeeCurrentPolicyProofRequestV1,
@@ -2475,7 +2492,9 @@ export class ToriiClient {
         signal, canonicalAuth,
       },
     );
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeTypedToriiErrorEnvelope,
+    });
     const contentType = this._getHeader(response, "content-type") ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       const error = new TypeError(
@@ -3955,6 +3974,8 @@ export class ToriiClient {
 
   /**
    * Fetch one exact owned published billing statement as canonical Norito bytes.
+   * A failure carrying Torii's canonical error envelope rejects with a
+   * `ToriiHttpError` that exposes the envelope's code and exact message.
    * @param {string} statementIdHex
    * @param {string} expectedCheckpointFingerprintHex
    * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
@@ -4000,7 +4021,9 @@ export class ToriiClient {
         signal,
       },
     );
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     this._requireSorafsHedgingBillingIdentityEncoding(response, context);
     let contentType;
     try {
@@ -4809,7 +4832,10 @@ export class ToriiClient {
 
   /**
    * Fetch PoR challenge status snapshots (`GET /v1/sorafs/por/status`).
-   * Returns the raw Norito bytes for downstream decoding.
+   * Returns the raw Norito bytes for downstream decoding. A failure carrying
+   * Torii's canonical error envelope rejects with a `ToriiHttpError` that
+   * exposes its code and exact message; the export and weekly-report reads
+   * below behave the same way.
    * @param {SorafsPorStatusOptions} [options]
    * @returns {Promise<Buffer>}
    */
@@ -4824,7 +4850,9 @@ export class ToriiClient {
       params,
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -4845,7 +4873,9 @@ export class ToriiClient {
       params,
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -4874,7 +4904,9 @@ export class ToriiClient {
         signal,
       },
     );
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -5001,6 +5033,8 @@ export class ToriiClient {
   /**
    * Submit one exact canonical VersionedSignedTransaction V1 payload.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
+   * A failure carrying Torii's canonical error envelope rejects with a
+   * `ToriiHttpError` that exposes the envelope's code and exact message.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
@@ -5030,7 +5064,10 @@ export class ToriiClient {
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    await this._expectStatus(response, [200, 201, 202, 204], { signal });
+    await this._expectStatus(response, [200, 201, 202, 204], {
+      signal,
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     return this._decodeTransactionIngressResponse(response, signal);
   }
 
@@ -5920,7 +5957,10 @@ export class ToriiClient {
       cancelResponseBodyBestEffort(response, `${context} rejected redirected or other-origin bytes`);
       rejectType(`${context} must come from the exact authenticated URL without redirects`);
     }
-    await this.#expectStatus(response, [200], { signal });
+    await this.#expectStatus(response, [200], {
+      signal,
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     let contentType;
     try {
       contentType = this.#getHeader(response, "content-type");
@@ -7357,7 +7397,11 @@ export class ToriiClient {
     }
   }
 
-  /** Bounded unverified original issuance bytes; never a balance/admission verdict. */
+  /**
+   * Bounded unverified original issuance bytes; never a balance/admission verdict.
+   * A failure carrying Torii's canonical error envelope rejects with a
+   * `ToriiHttpError` exposing its code and exact message (all wallet originals).
+   */
   getKagemushaWalletLoadIssuanceOriginalV1(selection, options) {
     return this.#readKagemushaWalletOriginalV1("load", selection, options);
   }
@@ -7403,7 +7447,10 @@ export class ToriiClient {
         publicRequest: true, canonicalAuth: auth, exactNetworkId: context.networkId,
         cache: "no-store", signal, disableRetries: true, redirect: "error",
       }), signal, label);
-      await this._expectStatus(response, [200], { signal, maximumBodyBytes: 64 * 1024, responseLabel: label });
+      await this._expectStatus(response, [200], {
+        signal, maximumBodyBytes: 64 * 1024, responseLabel: label,
+        decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+      });
       try {
         validateKagemushaWalletOriginalResponse(response, new URL(path, base).href, (name) => this._getHeader(response, name));
       } catch (error) {
@@ -7424,6 +7471,8 @@ export class ToriiClient {
 
   /**
    * Fetch the exact canonical result-bearing SignedBlockWire at a finalized height.
+   * A failure carrying Torii's canonical error envelope rejects with a
+   * `ToriiHttpError` that exposes the envelope's code and exact message.
    * @param {number | string | bigint} height
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Buffer>}
@@ -7447,7 +7496,9 @@ export class ToriiClient {
         signal,
       },
     );
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      decodeErrorEnvelope: decodeNegotiatedToriiErrorEnvelope,
+    });
     let contentType;
     try {
       contentType = this._getHeader(response, "content-type");
@@ -9974,23 +10025,18 @@ export class ToriiClient {
   }
 
   async _buildHttpError(response, expected, options = {}) {
-    const { bodyText, bodyJson, envelope = null } = await this._readErrorBody(response, options);
+    const { bodyText, bodyJson, envelope = null, bytes } = await this._readErrorBody(response, options);
     const rejectCodeHeader = this._getHeader(response, "x-iroha-reject-code");
-    // A canonical envelope supplies its exact message rather than a trimmed
-    // summary; the reject-code header keeps its usual precedence as `code`.
+    // A canonical envelope supplies its exact message and details rather than
+    // a trimmed summary; the reject-code header keeps its usual precedence as `code`.
     const fields = envelope === null
-      ? extractToriiErrorFields({ bodyText, bodyJson, rejectCodeHeader })
-      : {
-        ...extractToriiErrorFields({ bodyJson: envelope, rejectCodeHeader }),
-        errorMessage: envelope.message,
-      };
+      ? { ...extractToriiErrorFields({ bodyText, bodyJson, rejectCodeHeader }), bodyText, bodyJson }
+      : toriiErrorEnvelopeFields(envelope, bytes, rejectCodeHeader);
     return new ToriiHttpError({
       status: responseStatusWithoutUserGetter(response),
       statusText: responseStatusTextWithoutUserGetter(response),
       expected,
       ...fields,
-      bodyText,
-      bodyJson,
     });
   }
 
@@ -10045,12 +10091,12 @@ export class ToriiClient {
     }
     // A typed caller classifies the exact bounded bytes as Torii's canonical
     // error envelope first; any other body keeps the generic handling below.
-    const decoded = decodeErrorEnvelope === undefined ? null : decodeErrorEnvelope(contentType, bytes);
+    // The decoder may load lazily, so it observes the same deadline signal.
+    const decoded = decodeErrorEnvelope === undefined
+      ? null
+      : await decodeErrorEnvelope(contentType, bytes, signal);
     if (decoded !== null) {
-      const envelope = { code: decoded.code, message: decoded.message };
-      return decoded.format === "json"
-        ? { bodyText: new TextDecoder("utf-8", { fatal: true }).decode(bytes), bodyJson: { ...envelope }, envelope }
-        : { bodyText: null, bodyJson: null, envelope };
+      return { bodyText: null, bodyJson: null, envelope: decoded, bytes };
     }
     let text;
     try {

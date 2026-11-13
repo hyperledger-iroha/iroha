@@ -147,7 +147,8 @@ from .client_status_models import (
 )
 from .collection import Collection, CollectionsMixin
 from .election_tally import ElectionTally
-from .errors import error_for_response
+from .errors import ERROR_BODY_PREVIEW_BYTES, error_for_response
+from .errors import _read_preview as _read_error_preview
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
@@ -7054,11 +7055,21 @@ class ToriiClient(
         *,
         maximum_body_bytes: Optional[int] = None,
         context: str = "Torii",
+        decode_error_envelope: Optional[
+            Callable[
+                [Optional[str], bytes],
+                Optional[Tuple[str, str, Optional[Mapping[str, Any]]]],
+            ]
+        ] = None,
     ) -> None:
         """Raise the typed :class:`~iroha_torii_client.errors.ToriiError` for unexpected statuses.
 
         ``maximum_body_bytes`` makes the error-body read strict (oversized or
         non-UTF-8 bodies raise ``ValueError``); otherwise a bounded preview is read.
+        A route negotiating Norito receives Torii's error envelope as binary, so
+        it passes ``decode_error_envelope`` to classify those bytes (with the
+        response ``Content-Type``) first; a ``(code, message, details)`` result
+        types the error and ``None`` keeps the handling above.
         """
 
         expected_set = set(expected)
@@ -7066,15 +7077,26 @@ class ToriiClient(
             return
         label = None if context == "Torii" else context
         if maximum_body_bytes is None:
-            raise error_for_response(response, expected=expected_set, context=label)
-        body = _read_bounded_response_body(
-            response, maximum_body_bytes, f"{context} error"
+            if decode_error_envelope is None:
+                raise error_for_response(response, expected=expected_set, context=label)
+            body = _read_error_preview(response, ERROR_BODY_PREVIEW_BYTES)
+        else:
+            body = _read_bounded_response_body(
+                response, maximum_body_bytes, f"{context} error"
+            )
+        envelope = (
+            None
+            if decode_error_envelope is None
+            else decode_error_envelope(response.headers.get("Content-Type"), body)
         )
-        try:
-            body.decode("utf-8", "strict")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"{context} error response body must be strict UTF-8") from exc
-        raise error_for_response(response, expected=expected_set, context=label, body=body)
+        if envelope is None and maximum_body_bytes is not None:
+            try:
+                body.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"{context} error response body must be strict UTF-8") from exc
+        raise error_for_response(
+            response, expected=expected_set, context=label, body=body, envelope=envelope
+        )
 
     def _query_collection(
         self,

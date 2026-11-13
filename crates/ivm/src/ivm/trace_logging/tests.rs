@@ -149,7 +149,10 @@ fn completed_cycle_batch_records_changes_once_then_padding_uses_no_change_span()
         let mut last = 0;
         vm.publish_trace_cycles(&invocation, &mut last).unwrap();
         assert_eq!(vm.trace_log.len(), cycles as usize);
-        assert_eq!(vm.trace_log.entry(0).unwrap().changes.len(), 256);
+        assert_eq!(
+            vm.trace_log.entry(0).unwrap().changes.len(),
+            crate::parallel::REGISTER_COUNT
+        );
         assert!(
             vm.trace_log
                 .entries()
@@ -229,7 +232,9 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
         .unwrap();
     assert_eq!(original.reserved_bytes(), before + demand);
     original.set_limit_bytes(0);
-    copies.cycles.record_reserved(vm.pc, [9; crate::parallel::REGISTER_COUNT], [true; 256]);
+    copies
+        .cycles
+        .record_reserved(vm.pc, [9; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
     let mut copied_registers = vm.registers.snapshot();
     copied_registers[7] = 23;
     copies

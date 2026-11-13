@@ -95,7 +95,6 @@ fn captured_original_ivm_public_frames() {
         pc_trace_hash: [0x05; 32],
         delta_trace_hash: [0x06; 32],
         register_trace_hash: [0x07; 32],
-        constraint_hash: [0x08; 32],
         memory_log_hash: [0x09; 32],
         register_log_hash: [0x0a; 32],
         step_log_hash: [0x0b; 32],
@@ -106,13 +105,11 @@ fn captured_original_ivm_public_frames() {
         pc_trace_len: u64::MAX - 4,
         delta_trace_len: u64::MAX - 5,
         register_trace_len: u64::MAX - 6,
-        constraint_len: u64::MAX - 7,
         memory_log_len: u64::MAX - 8,
         register_log_len: u64::MAX - 9,
         step_log_len: u64::MAX - 10,
         zk_mode: true,
         halted: true,
-        constraint_failed: true,
     };
     let key = SigningKey::from_bytes(&[0x31; 32]);
     let entry = |message: &[u8]| Ed25519BatchEntry {

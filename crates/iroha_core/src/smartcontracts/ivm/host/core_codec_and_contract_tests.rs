@@ -193,16 +193,11 @@ fn authenticated_test_probe_result(vm: &IVM) -> u64 {
     // The probe snapshots the syscall's r10 before returning its separate Unit table.
     vm.register(17)
 }
-fn build_authenticated_test_contract_program(
-    code: &[u8],
-    vector_length: u8,
-    zk_mode: bool,
-) -> Vec<u8> {
-    build_authenticated_test_contract_program_with_states(code, vector_length, zk_mode, Vec::new())
+fn build_authenticated_test_contract_program(code: &[u8], zk_mode: bool) -> Vec<u8> {
+    build_authenticated_test_contract_program_with_states(code, zk_mode, Vec::new())
 }
 fn build_authenticated_test_contract_program_with_states(
     code: &[u8],
-    vector_length: u8,
     zk_mode: bool,
     states: Vec<ivm::EmbeddedStateDescriptor>,
 ) -> Vec<u8> {
@@ -263,8 +258,8 @@ fn build_authenticated_test_contract_program_with_states(
         version_major: 1,
         version_minor: 1,
         mode: if zk_mode { ivm::ivm_mode::ZK } else { 0 },
-        vector_length,
-        max_cycles: 1_000_000,
+        // `max_cycles` is the ZK trace bound: zero exactly for a non-ZK header.
+        max_cycles: if zk_mode { 1_000_000 } else { 0 },
         abi_version: 1,
     }
     .encode();
@@ -284,7 +279,7 @@ fn build_authenticated_test_contract_program_with_states(
         wide::encode_ri(arithmetic::ADDI, 10, 25, 0),
         wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
         wide::encode_ri(arithmetic::ADDI, 31, 31, 16),
-        wide::encode_rr(control::JALR, 0, 1, 0),
+        wide::encode_ri(control::JALR, 0, 1, 0),
     ] {
         program.extend_from_slice(&instruction.to_le_bytes());
     }
@@ -293,7 +288,7 @@ fn build_authenticated_test_contract_program_with_states(
 #[test]
 fn authenticated_test_probe_completes_unit_and_preserves_syscall_observation() {
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_authenticated_test_contract_program(&[], 0, false))
+    vm.load_program(&build_authenticated_test_contract_program(&[], false))
         .expect("authenticated probe fixture");
     vm.set_register(14, 42);
     vm.run().expect("probe completes protected return");
@@ -319,7 +314,6 @@ fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
     let mut vm = IVM::new(10_000);
     vm.load_program(&build_authenticated_test_contract_program(
         &instruction.to_le_bytes(),
-        0,
         false,
     ))
     .expect("authenticated probe fixture");

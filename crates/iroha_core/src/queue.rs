@@ -1384,6 +1384,7 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
                         reason: error.to_string()
                     }
                 )?,
+                self.next_block_height,
             ),
             Some(SccpExemptClassV1::ForgeryEvidence)
         ) {
@@ -3532,6 +3533,7 @@ impl Queue {
                     state_view.world(),
                     tx.as_accepted().entrypoint(),
                     committed_time_ms,
+                    state_view_height_for_routing(state_view).saturating_add(1),
                 )
             } else {
                 None
@@ -10055,6 +10057,9 @@ pub mod tests {
                     transaction.entrypoint(),
                     crate::smartcontracts::isi::sccp::hold::committed_time_ms(&view)
                         .expect("original fixture time"),
+                    u64::try_from(view.height())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
                 )
             })
             .collect::<Vec<_>>();

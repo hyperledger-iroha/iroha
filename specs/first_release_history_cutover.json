@@ -979,6 +979,18 @@
           "carries": "hex"
         },
         {
+          "artifact": "crates/iroha_core/src/release_identity.rs",
+          "generator": "crates/iroha_core/src/release_identity.rs",
+          "mention": "ironwood_wire_and_ivm_identity_coverage",
+          "carries": "hex"
+        },
+        {
+          "artifact": "specs/ironwood_runtime_transition.md",
+          "generator": "crates/iroha_core/src/release_identity.rs",
+          "mention": "ironwood_wire_and_ivm_identity_coverage",
+          "carries": "hex"
+        },
+        {
           "artifact": "scripts/ivm_artifacts.tsv",
           "generator": "scripts/regenerate_kotodama_goldens.py",
           "mention": "ivm_artifacts.tsv",
@@ -1174,12 +1186,12 @@
   "declared_abi_cutover": {
     "surface": "abi",
     "cutover": "contract_redeployment",
-    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+    "abi_hash": "bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849",
     "golden": {
       "path": "crates/iroha_data_model/tests/fixtures/abi_v1_hash.rs",
       "prefix": "pub const ABI_V1_HASH_GOLDEN: &str =\n    \""
     },
-    "change": "ABI V1 adds the asset UID and linked-FI syscalls ASSET_UID_HOLDING_QUOTE, TRANSFER_TO_LINKED_FI, ASSET_FI_LINK_REVISION and ASSET_SAME_UID and the waterfall asset-lock drawdown, cancel and expire syscalls (0x010224 through 0x01022A), and ASSET_LOCK_OPEN now returns the derived protocol escrow custody account. The controller-bound native asset-lock open, drawdown, cancel and expire syscalls (0x010220 through 0x010223, ledger-writing and denied to contract-less generic programs), the existing compact CS1 callable schema, declared permission identities, authenticated native event schemas, typed contract-call argument/result tables, generation-bound alias operations and the operation-tagged 0xA0 bridge remain part of the current descriptor. The bridge permits tag 1 for SubmitBallot and tag 2 for SubmitPrivacyZkX509CertificateV1; tag 2 uses original signed attachment custody and returns a queued PendingAction ordinal, not proof success or applied effects. Neither tag permits RecordSccpMessage or arbitrary instructions. The ABI version remains 1; the current complete descriptor determines this hash.",
+    "change": "The sole ABI V1 descriptor binds the current 48-byte program header, its ZK-only trace bound, the admitted 32-bit instruction encodings and 32-register file, deterministic instruction faults, and the existing compact CS1 callable schema, declared permissions, authenticated native events, typed contract-call records, generation-bound aliases and asset UID, linked-FI and controller-bound escrow operations. The baseline 0xA0 bridge retains tag 1 for SubmitBallot and tag 2 for SubmitPrivacyZkX509CertificateV1. Independently selecting iroha.ivm.runtime_lifecycle.v1 adds the exact runtime-obligation operations at tags 3 and 4 under its own authenticated descriptor; it does not change the baseline hash or permit arbitrary instructions. Retired vector/system execution modes and the former header layout are refused. ABI version 1 remains the only version; the current complete baseline descriptor determines this declared hash.",
     "redeployment": "Contracts compiled before this surface change carry an obsolete interface or abi_hash and are refused by decoding or admission. Recompile .ko to .to with the current compiler and deploy its manifest. There is no alias for former hashes or compatibility decoder.",
     "fresh_genesis": false,
     "fresh_genesis_reason": "The pinned history holds no contract and no runtime-ABI record: none of its frames contains the ABI hash, which the guard re-checks on every run. A history that holds either needs a fresh genesis with this cutover."

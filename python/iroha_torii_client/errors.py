@@ -56,7 +56,8 @@ class ToriiError(RuntimeError):
     ``code``, ``message`` and ``details`` come from Torii's error envelope;
     ``code`` is ``None`` when the body was not an envelope. ``reject_code`` is
     the ``x-iroha-reject-code`` header (or ``details.reject_code``).
-    ``retry_after`` is the ``Retry-After`` delay in seconds when Torii sent one.
+    ``retry_after`` is the ``Retry-After`` delay in seconds when Torii sent one
+    (or ``details.retry_after_seconds``).
     """
 
     def __init__(
@@ -320,18 +321,33 @@ def error_for_response(
     expected: Iterable[int] = (),
     context: Optional[str] = None,
     body: Optional[bytes] = None,
+    envelope: Optional[Tuple[str, str, Optional[Mapping[str, Any]]]] = None,
 ) -> ToriiError:
     """Parse Torii's error envelope from ``response`` into a :class:`ToriiError`.
 
     ``body`` supplies already-read bytes; otherwise at most
     :data:`ERROR_BODY_PREVIEW_BYTES` are read and the response is closed.
+    ``envelope`` is the ``(code, message, details)`` a caller already decoded
+    from those bytes as Torii's canonical error envelope (``details`` is
+    ``None`` when absent), such as the binary Norito frame a Norito-negotiating
+    route receives; it replaces the JSON classification. Without the
+    corresponding header, ``reject_code`` comes from ``details.reject_code``
+    and ``retry_after`` from ``details.retry_after_seconds``.
     """
 
     raw = _read_preview(response, ERROR_BODY_PREVIEW_BYTES) if body is None else body
-    code, message, details = _envelope_fields(raw)
+    if envelope is None:
+        code, message, details = _envelope_fields(raw)
+    else:
+        code, message, decoded_details = envelope
+        details = dict(decoded_details or {})
     reject_code = _header(response, _REJECT_CODE_HEADER)
     if reject_code is None and isinstance(details.get("reject_code"), str):
         reject_code = details["reject_code"]
+    retry_after = _retry_after(response)
+    delay = details.get("retry_after_seconds")
+    if retry_after is None and type(delay) is int and delay >= 0:
+        retry_after = delay
     return error_for_status(
         int(getattr(response, "status_code", 0)),
         expected=expected,
@@ -340,5 +356,5 @@ def error_for_response(
         message=message,
         details=details,
         reject_code=reject_code,
-        retry_after=_retry_after(response),
+        retry_after=retry_after,
     )

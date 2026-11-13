@@ -152,6 +152,13 @@ impl<'kura> TerminalSelection<'kura> {
             self.delivered = true;
             return Ok(certificate.into_certified(self.target.take()));
         }
+        if prefix.tip.height == height {
+            let certificate =
+                context.prepare_retained_native_certificate(prefix, self.target.borrowed())?;
+            self.target.acquisition.original_source()?;
+            self.delivered = true;
+            return Ok(certificate.into_certified(self.target.take()));
+        }
         while prefix
             .tip
             .height

@@ -67,11 +67,11 @@ impl StepEffect {
 pub enum PcTransition {
     /// Advance by one four-byte instruction.
     Sequential,
-    /// Signed eight-bit word offset when the predicate holds, else sequential.
-    ConditionalRelative8,
-    /// `JAL`: signed 16-bit word offset; writes `rd` unless it is `r0`, and a
+    /// Signed 14-bit word offset when the predicate holds, else sequential.
+    ConditionalRelative14,
+    /// `JAL`: signed 19-bit word offset; writes `rd` unless it is `r0`, and a
     /// protected `rd = r1` also enters a child call.
-    DirectRelative16WithOptionalLink,
+    DirectRelative19WithOptionalLink,
     /// Signed 24-bit word offset.
     DirectRelative24,
     /// Signed 24-bit word offset, link in `r1` and a protected child call.
@@ -89,8 +89,8 @@ impl PcTransition {
     pub const fn id(self) -> &'static str {
         match self {
             Self::Sequential => "sequential",
-            Self::ConditionalRelative8 => "conditional_relative8",
-            Self::DirectRelative16WithOptionalLink => "direct_relative16_with_optional_link",
+            Self::ConditionalRelative14 => "conditional_relative14",
+            Self::DirectRelative19WithOptionalLink => "direct_relative19_with_optional_link",
             Self::DirectRelative24 => "direct_relative24",
             Self::DirectRelative24AndLink => "direct_relative24_and_link",
             Self::IndirectMaskedOrProtectedReturn => "indirect_masked_or_protected_return",
@@ -152,7 +152,7 @@ pub const PRIVACY_HELPERS: &[&str] = &[
     "record_memory_store_privacy",
     "validate_memory_store_privacy",
     "zk_apply_tag",
-    "zk_match_tags",
+    "zk_join_tags",
     "zk_require_public_trap_operands",
     "zk_unary_tag",
 ];
@@ -236,7 +236,7 @@ const RETURN: &[Obligation] = &[
 ];
 /// `HALT`: raw termination or a protected-call trap.
 const HALT: &[Obligation] = &[Fetch, Padding, Gas, Faults];
-/// `SCALL`/`SYSTEM`: dispatch to the syscall relation of the selected number.
+/// `SCALL`: dispatch to the syscall relation of the selected 24-bit number.
 const HOST_CALL: &[Obligation] = &[
     Fetch,
     TypedValues,
@@ -274,7 +274,7 @@ macro_rules! op {
 }
 
 /// Number of admitted ABI V1 opcodes.
-pub const OPCODE_COUNT: usize = 59;
+pub const OPCODE_COUNT: usize = 58;
 
 /// Every admitted ABI V1 opcode in ascending opcode order.
 pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
@@ -285,8 +285,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SUB,
@@ -295,8 +295,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::AND,
@@ -305,8 +305,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::OR,
@@ -315,8 +315,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::XOR,
@@ -325,8 +325,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SLL,
@@ -335,8 +335,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SRL,
@@ -345,8 +345,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SRA,
@@ -355,8 +355,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SLT,
@@ -365,8 +365,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SLTU,
@@ -375,8 +375,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::CMOV,
@@ -386,7 +386,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         ["PrivacyViolation"],
         [],
-        ["tag", "zk_apply_tag", "zk_unary_tag"]
+        ["tag", "zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::NOT,
@@ -396,7 +396,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::NEG,
@@ -406,7 +406,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::SEQ,
@@ -415,8 +415,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::SNE,
@@ -425,8 +425,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MUL,
@@ -435,8 +435,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MULH,
@@ -445,8 +445,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MULHU,
@@ -455,8 +455,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MULHSU,
@@ -465,8 +465,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::DIV,
@@ -475,16 +475,12 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        [
-            "checked_div_i64",
-            "zk_match_tags",
-            "zk_require_public_trap_operands"
-        ],
+        ["checked_div_i64", "zk_require_public_trap_operands"],
         [
             "zk_apply_tag",
-            "zk_match_tags",
+            "zk_join_tags",
             "zk_require_public_trap_operands"
-        ]
+        ],
     ),
     op!(
         arithmetic::DIVU,
@@ -492,13 +488,13 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         ScalarRegisters,
         Sequential,
         SCALAR,
-        ["AssertionFailed"],
-        ["zk_match_tags", "zk_require_public_trap_operands"],
+        [],
+        ["checked_div_u64", "zk_require_public_trap_operands"],
         [
             "zk_apply_tag",
-            "zk_match_tags",
+            "zk_join_tags",
             "zk_require_public_trap_operands"
-        ]
+        ],
     ),
     op!(
         arithmetic::REM,
@@ -507,16 +503,12 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        [
-            "checked_rem_i64",
-            "zk_match_tags",
-            "zk_require_public_trap_operands"
-        ],
+        ["checked_rem_i64", "zk_require_public_trap_operands"],
         [
             "zk_apply_tag",
-            "zk_match_tags",
+            "zk_join_tags",
             "zk_require_public_trap_operands"
-        ]
+        ],
     ),
     op!(
         arithmetic::REMU,
@@ -524,13 +516,13 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         ScalarRegisters,
         Sequential,
         SCALAR,
-        ["AssertionFailed"],
-        ["zk_match_tags", "zk_require_public_trap_operands"],
+        [],
+        ["checked_rem_u64", "zk_require_public_trap_operands"],
         [
             "zk_apply_tag",
-            "zk_match_tags",
+            "zk_join_tags",
             "zk_require_public_trap_operands"
-        ]
+        ],
     ),
     op!(
         arithmetic::ROTL,
@@ -539,8 +531,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::ROTR,
@@ -549,8 +541,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::POPCNT,
@@ -560,7 +552,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::CLZ,
@@ -570,7 +562,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::CTZ,
@@ -580,7 +572,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::ISQRT,
@@ -590,7 +582,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::MIN,
@@ -599,8 +591,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MAX,
@@ -609,8 +601,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::ADDI,
@@ -620,7 +612,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::ANDI,
@@ -630,7 +622,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::ORI,
@@ -640,7 +632,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::XORI,
@@ -650,7 +642,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::CMOVI,
@@ -660,7 +652,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         ["PrivacyViolation"],
         [],
-        ["set_tag", "tag"]
+        ["set_tag", "tag"],
     ),
     op!(
         arithmetic::ROTL_IMM,
@@ -670,7 +662,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::ROTR_IMM,
@@ -680,7 +672,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR,
         [],
         [],
-        ["zk_apply_tag", "zk_unary_tag"]
+        ["zk_apply_tag", "zk_unary_tag"],
     ),
     op!(
         arithmetic::ABS,
@@ -694,7 +686,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
             "zk_apply_tag",
             "zk_require_public_trap_operands",
             "zk_unary_tag"
-        ]
+        ],
     ),
     op!(
         arithmetic::DIV_CEIL,
@@ -703,16 +695,12 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        [
-            "div_ceil_i64",
-            "zk_match_tags",
-            "zk_require_public_trap_operands"
-        ],
+        ["div_ceil_i64", "zk_require_public_trap_operands"],
         [
             "zk_apply_tag",
-            "zk_match_tags",
+            "zk_join_tags",
             "zk_require_public_trap_operands"
-        ]
+        ],
     ),
     op!(
         arithmetic::GCD,
@@ -721,8 +709,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         arithmetic::MEAN,
@@ -731,8 +719,8 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Sequential,
         SCALAR,
         [],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
+        [],
+        ["zk_apply_tag", "zk_join_tags"],
     ),
     op!(
         memory::LOAD64,
@@ -742,7 +730,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         MEMORY,
         ["PrivacyViolation"],
         ["memory.load_u64", "memory_load_privacy_tag"],
-        ["memory_load_privacy_tag", "set_tag", "tag"]
+        ["memory_load_privacy_tag", "set_tag", "tag"],
     ),
     op!(
         memory::STORE64,
@@ -761,7 +749,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
             "record_memory_store_privacy",
             "tag",
             "validate_memory_store_privacy"
-        ]
+        ],
     ),
     op!(
         memory::LDLIT,
@@ -771,7 +759,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         POINTER_LITERAL,
         ["InvalidMetadata"],
         [],
-        ["set_tag"]
+        ["set_tag"],
     ),
     op!(
         memory::LDI64,
@@ -781,77 +769,77 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         SCALAR_LITERAL,
         ["InvalidMetadata"],
         [],
-        ["set_tag"]
+        ["set_tag"],
     ),
     op!(
         control::BEQ,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::BNE,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::BLT,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::BGE,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::BLTU,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::BGEU,
         Control,
         Control,
-        ConditionalRelative8,
+        ConditionalRelative14,
         BRANCH,
         ["PrivacyViolation"],
         [],
-        ["tag"]
+        ["tag"],
     ),
     op!(
         control::JAL,
         Control,
         Control,
-        DirectRelative16WithOptionalLink,
+        DirectRelative19WithOptionalLink,
         CALL,
-        ["AssertionFailed"],
+        ["ControlFlowViolation"],
         ["begin_child_call"],
-        ["set_tag"]
+        ["set_tag"],
     ),
     op!(
         control::JALR,
@@ -859,9 +847,9 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Control,
         IndirectMaskedOrProtectedReturn,
         RETURN,
-        ["AssertionFailed", "PrivacyViolation"],
+        ["ControlFlowViolation", "PrivacyViolation"],
         ["finish_call"],
-        ["set_tag", "tag"]
+        ["set_tag", "tag"],
     ),
     op!(
         control::HALT,
@@ -869,9 +857,9 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         Control,
         HaltOrStrictReturnTrap,
         HALT,
-        ["AssertionFailed"],
+        ["ControlFlowViolation"],
         [],
-        []
+        [],
     ),
     op!(
         control::JMP,
@@ -881,7 +869,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         JUMP,
         [],
         [],
-        []
+        [],
     ),
     op!(
         control::JALS,
@@ -891,7 +879,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         CALL,
         [],
         ["begin_child_call"],
-        ["set_tag"]
+        ["set_tag"],
     ),
     op!(
         system::SCALL,
@@ -901,17 +889,7 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         HOST_CALL,
         ["UnknownSyscall"],
         ["execute_syscall_with_register_log"],
-        []
-    ),
-    op!(
-        system::SYSTEM,
-        System,
-        HostCall,
-        Sequential,
-        HOST_CALL,
-        ["UnknownSyscall"],
-        ["execute_syscall_with_register_log"],
-        []
+        [],
     ),
 ];
 

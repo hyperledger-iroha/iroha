@@ -68,16 +68,8 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let mut state_transaction = block.transaction();
     let original_data_model = state_transaction.world.executor_data_model().clone();
     let mut executor = RuntimeExecutor::Initial;
-    for vector_length in 1..=8 {
-        let mut bytecode = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            vector_length,
-            max_cycles: 1_000_000,
-            abi_version: 1,
-        }
-        .encode();
+    {
+        let mut bytecode = ivm::ProgramMetadata::default().encode();
         bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let raw = DataModelExecutor::new(IvmBytecode::from_compiled(bytecode));
         let error = executor
@@ -88,7 +80,7 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
                 error,
                 iroha_core::executor::ExecutorMigrationError::Rejected(VMError::DecodeError)
             ),
-            "vector-length metadata must not select host fixture behavior"
+            "header metadata must not select host fixture behavior"
         );
         assert!(
             matches!(executor, RuntimeExecutor::Initial),

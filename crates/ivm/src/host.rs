@@ -3868,7 +3868,6 @@ impl IVMHost for DefaultHost {
                     .pc_trace_len
                     .saturating_add(summary.delta_trace_len)
                     .saturating_add(summary.register_trace_len)
-                    .saturating_add(summary.constraint_len)
                     .saturating_add(summary.memory_log_len)
                     .saturating_add(summary.register_log_len)
                     .saturating_add(summary.step_log_len);
@@ -4799,8 +4798,7 @@ mod tests {
         let mut host = DefaultHost::new().with_public_inputs(inputs);
         let mut vm = IVM::new(1_000_000);
         let code = [
-            crate::encoding::wide::encode_scall(syscalls::SYSCALL_GET_PUBLIC_INPUT)
-            .to_le_bytes(),
+            crate::encoding::wide::encode_scall(syscalls::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
             crate::encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat();
@@ -6050,8 +6048,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH)
-            .to_le_bytes(),
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH).to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&code).expect("load ZK batch test program");
@@ -6094,8 +6091,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH)
-            .to_le_bytes(),
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH).to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&code).expect("load forged-count test program");
@@ -6658,8 +6654,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_VERIFY_SIGNATURE)
-            .to_le_bytes(),
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_VERIFY_SIGNATURE).to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&code).expect("load signature test program");

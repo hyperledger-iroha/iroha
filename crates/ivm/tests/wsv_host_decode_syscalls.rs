@@ -51,7 +51,7 @@ fn wsv_host_name_decode_roundtrip() {
     let p_name = vm
         .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &name_payload))
         .expect("alloc name");
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_NAME_DECODE as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_NAME_DECODE]);
     vm.set_register(10, p_name);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("name decode");
@@ -69,7 +69,7 @@ fn wsv_host_json_decode_rejects_retired_blob_carrier() {
     let p_blob = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, json))
         .expect("alloc blob");
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_DECODE as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_DECODE]);
     vm.set_register(10, p_blob);
     vm.load_program(&prog).expect("load program");
     assert!(matches!(vm.run(), Err(VMError::NoritoInvalid)));
@@ -86,7 +86,7 @@ fn wsv_host_json_get_asset_definition_id_reads_address_literals() {
     let p_key = vm
         .alloc_input_tlv(&make_tlv(PointerType::Name, b"asset_definition_id"))
         .expect("alloc key");
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).expect("load program");
@@ -112,7 +112,7 @@ fn wsv_host_schema_decode_roundtrip() {
     let p_json = vm
         .alloc_input_tlv(&make_tlv(PointerType::Json, json))
         .expect("alloc order json");
-    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE as u8]);
+    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE]);
     vm.set_register(10, p_schema);
     vm.set_register(11, p_json);
     vm.load_program(&enc_prog).expect("load program");
@@ -123,7 +123,7 @@ fn wsv_host_schema_decode_roundtrip() {
     let p_bytes_in = vm
         .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, encoded.payload))
         .expect("alloc encoded order bytes");
-    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE as u8]);
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE]);
     vm.set_register(10, p_schema);
     vm.set_register(11, p_bytes_in);
     vm.load_program(&prog).expect("load program");
@@ -149,7 +149,7 @@ fn wsv_host_schema_unknown_and_malformed_inputs_fail_closed() {
     let p_json = vm
         .alloc_input_tlv(&make_tlv(PointerType::Json, json))
         .expect("alloc json");
-    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE as u8]);
+    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE]);
     vm.set_register(10, p_schema);
     vm.set_register(11, p_json);
     vm.load_program(&enc_prog).expect("load program");
@@ -169,7 +169,7 @@ fn wsv_host_schema_unknown_and_malformed_inputs_fail_closed() {
         let p_blob_in = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, payload))
             .expect("alloc blob");
-        let dec_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE as u8]);
+        let dec_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE]);
         vm.set_register(10, p_schema);
         vm.set_register(11, p_blob_in);
         vm.load_program(&dec_prog).expect("load program");

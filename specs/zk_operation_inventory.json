@@ -863,6 +863,10 @@
     "scope": "out",
     "reason": "Ratification of the adoption anchor and raising of the startup floor, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_boundary.rs, specs/live_runtime_upgrades.md sections 7.3 and 13). Each carries every validator's signed statement; it verifies no proof and carries no ZK or FHE relation."
    },
+   "runtime_retirement": {
+    "scope": "out",
+    "reason": "Permanent exclusion of a native definition that governance already disabled, once its live execution and completion dependencies have drained and the startup floor is above its last required height, the `iroha.runtime.retirement.v1` addition (crates/iroha_core/src/runtime/retirement/producer.rs, specs/runtime_upgrades.md \"Permanent definition retirement\"). The submitter only relays the deterministic native check; it verifies no proof and carries no ZK or FHE relation."
+   },
    "sorafs_authority": {
     "scope": "out",
     "reason": "Parliament-owned SoraFS authority proposals and their Parliament attempts, the `iroha.sorafs.authority_governance.v1` addition (crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs). Governance records decided by Parliament; no proof and no ZK or FHE relation."
@@ -3187,7 +3191,7 @@
     "evidence": [
      {
       "path": "crates/kotodama_surface/src/builtins.rs",
-      "symbol": "Self::ScExecuteSubmitBallot | Self::PresentX509 => { &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION] }"
+      "symbol": "Self::ScExecuteSubmitBallot | Self::RegisterRuntimeObligation | Self::CompleteRuntimeObligation | Self::PresentX509 => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]"
      },
      {
       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
@@ -4515,7 +4519,7 @@
     "evidence": [
      {
       "path": "crates/kotodama_surface/src/builtins.rs",
-      "symbol": "Self::ScExecuteSubmitBallot | Self::PresentX509 => { &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION] }"
+      "symbol": "Self::ScExecuteSubmitBallot | Self::RegisterRuntimeObligation | Self::CompleteRuntimeObligation | Self::PresentX509 => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]"
      },
      {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {"}
     ]
@@ -7655,8 +7659,8 @@
     "name": "SMARTCONTRACT_EXECUTE_INSTRUCTION",
     "number": "0xA0",
     "product": "exact12_admission",
-    "does": "The instruction bridge: queue one operation-tagged instruction. Only the SubmitBallot tag is accepted by the host.",
-    "kotodama_builtins": ["PresentX509", "ScExecuteSubmitBallot"],
+    "does": "The instruction bridge: queue one operation-tagged instruction. The host accepts the SubmitBallot, PresentX509, RegisterRuntimeObligation and CompleteRuntimeObligation tags.",
+    "kotodama_builtins": ["CompleteRuntimeObligation", "PresentX509", "RegisterRuntimeObligation", "ScExecuteSubmitBallot"],
     "host": {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {"},
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/SMARTCONTRACT_EXECUTE_INSTRUCTION"}
    },

@@ -272,7 +272,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         self.nested_contract_ancestors[self.nested_contract_call_depth] =
             Some(caller.contract_address);
         self.nested_contract_call_depth += 1;
-        let run_result = child.run_with_host_and_parent_cycle_budget(self, vm);
+        // The child draws only from the gas the parent granted it (`child_limit`).
+        let run_result = child.run_with_host(self);
         self.nested_contract_call_depth -= 1;
         self.nested_contract_ancestors[self.nested_contract_call_depth] = None;
         let child_spent = child_limit.saturating_sub(child.remaining_gas());

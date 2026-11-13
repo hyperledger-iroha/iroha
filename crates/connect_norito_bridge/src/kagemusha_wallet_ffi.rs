@@ -40,6 +40,8 @@ pub use exchange::{
     connect_norito_kagemusha_wallet_end_exchange_v1,
 };
 mod exports;
+pub(crate) mod spartan;
+pub use spartan::*;
 mod maintenance;
 pub(crate) mod observation;
 pub use observation::{
@@ -185,6 +187,7 @@ impl From<advance::KagemushaWalletProviderErrorV1> for Failure {
         match value {
             E::Unavailable(reason) => Self::unavailable(UNAVAILABLE, reason),
             E::Uncertain(reason) => Self::unavailable(UNCERTAIN, reason),
+            E::NoMemory => Self::code(NOT_ENOUGH_MEMORY),
             E::NoSpace => Self::code(NOT_ENOUGH_STORAGE),
             E::DecodeResource(_) => Self::code(RESOURCE),
             E::NoReplaceUnsupported => Self::invalid(236),

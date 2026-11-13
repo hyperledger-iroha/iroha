@@ -15,17 +15,19 @@ Use the unified Rust compiler driver:
 ```sh
 koto check examples/hello/hello.ko
 koto build examples/hello/hello.ko \
-  --max-cycles 1000000 \
   --out target/examples/hello.to \
   --manifest-out target/examples/hello.manifest.json
 ```
 
-ABI v1 is unconditional. Source cannot select an ABI or execution feature. `--max-cycles` selects a positive ceiling, up to node
-admission policy, that is embedded in the execution header and covered by the
-artifact hash.
+ABI v1 is unconditional. Source cannot select an ABI or execution feature. Gas,
+supplied by the caller, is the only execution budget, so an ordinary artifact
+carries a zero cycle bound in its execution header.
 
 ZK contracts are checked, built, and documented with `--zk`. The flag selects a
 compiler capability; the source still cannot override execution-header metadata.
+A ZK artifact records its positive trace bound in the execution header, where the
+artifact hash covers it. The default is 1,000,000 cycles; `--zk-trace-cycles`
+selects another bound, up to node admission policy, and requires `--zk`.
 
 The separately governed contract kernel profile is selected at build time with
 `--host-profile iroha.ivm.runtime_lifecycle.v1`. It still emits ABI version 1, with its exact named

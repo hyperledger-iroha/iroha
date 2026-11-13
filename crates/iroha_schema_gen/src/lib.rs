@@ -51,6 +51,8 @@ macro_rules! schema_types {
             iroha_data_model::sumeragi_finality::SumeragiCommitCheckpointV1,
             iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
+            // Body-independent checkpoint ancestry, authenticated by original signed rows.
+            iroha_data_model::sumeragi_finality::PortablePrefixFrameV1,
             // Explicit genesis testing policy has an opaque custom-parameter payload.
             iroha_data_model::governance::anonymous_ballot::ParliamentCandidateTestingPolicyV1,
             // Committed fraud admission custom parameter has an opaque payload.

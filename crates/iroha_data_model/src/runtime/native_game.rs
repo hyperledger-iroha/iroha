@@ -192,7 +192,8 @@ record! {
         pub acknowledgement: Option<GameUnitImportAckV1>,
         /// Authentic source cancellation before any export; never a timeout release.
         pub cancellation: Option<GameUnitExportCancelV1>,
-        /// Original native completion closure; no timeout or owner action clears it.
+        /// Original completion closure, released by certified import acknowledgement or
+        /// pre-export cancellation; no timeout or owner refund clears an exported transfer.
         pub capture: Option<CompletionCaptureV1>,
     }
 }
@@ -314,6 +315,20 @@ impl NativeGameTransferV1 {
     /// # Errors
     /// Invalid or substituted identities, missing source custody or fabricated completion.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_shape()?;
+        if let (Some(ack), Some(export)) = (&self.acknowledgement, &self.export) {
+            if ack.export_hash != export.digest().map_err(|error| error.to_string())? {
+                return Err("game ACK differs from its original export digest".into());
+            }
+        }
+        Ok(())
+    }
+    /// Validate structural custody without encoding a digest or losing an original codec refusal.
+    /// Mutation handlers separately authenticate and hash the exact export before publication.
+    ///
+    /// # Errors
+    /// Invalid immutable identity, terminal state, or original capture lifetime.
+    pub fn validate_shape(&self) -> Result<(), String> {
         self.intent.validate()?;
         if self.capture.is_some() != (self.acknowledgement.is_none() && self.cancellation.is_none())
             || self.acknowledgement.is_some() && self.cancellation.is_some()
@@ -351,7 +366,7 @@ impl NativeGameTransferV1 {
                 .ok_or("game ACK has no source export")?;
             if ack.transfer_id != self.intent.transfer_id()
                 || ack.destination_height == 0
-                || ack.export_hash != export.digest().map_err(|error| error.to_string())?
+                || export.reservation.intent != self.intent
             {
                 return Err("game ACK differs from its original export".into());
             }

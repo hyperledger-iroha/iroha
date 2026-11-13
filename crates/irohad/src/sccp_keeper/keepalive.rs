@@ -62,10 +62,28 @@ impl Host for NodeKeeper {
         let next_height = u64::try_from(height)?
             .checked_add(1)
             .ok_or_else(|| eyre::eyre!("Keepalive height overflow"))?;
+        // Parliament's deadline. An unavailable observation is no deadline: the due recheck
+        // below then defers the poll unless an SCCP or scheduled term holds.
+        let governance_ms =
+            match keepalive::next_governance_at_ms(world, committed_time_ms, next_height) {
+                Ok(due_ms) => due_ms,
+                Err(error) => {
+                    iroha_logger::debug!(
+                        height,
+                        wall_ms,
+                        %error,
+                        observation = "parliament_unavailable",
+                        "native progress poll"
+                    );
+                    None
+                }
+            };
         let Some(due_ms) = keepalive::next_progress_at_ms(world, committed_time_ms, next_height)
+            .into_iter()
+            .chain(governance_ms)
+            .min()
         else {
-            // TODO: Parliament's authoritative due-item iterator supplies its own due time
-            // and one-second rank stagger here. Missing work is never an invented deadline.
+            // Missing work is never an invented deadline.
             iroha_logger::debug!(
                 height,
                 wall_ms,
@@ -102,6 +120,7 @@ impl Host for NodeKeeper {
             keepalive::next_heartbeat_at_ms(world),
             keepalive::next_reconciliation_at_ms(world),
             keepalive::next_scheduled_at_ms(world, committed_time_ms, next_height),
+            governance_ms,
             rank,
             self.stagger,
             wall_ms,
@@ -154,20 +173,24 @@ impl Host for NodeKeeper {
     }
 }
 
-/// Reconciliation is governance due work with a one-second stagger (§4.7.4).
-/// Compare both staggered deadlines: a later reconciliation can precede a ranked heartbeat.
+/// Reconciliation, scheduled Time outputs and Parliament's items are governance due work
+/// with a one-second stagger (§4.7.4). Compare every staggered deadline: a later governance
+/// deadline can precede a ranked heartbeat.
 fn scheduled_progress(
     heartbeat_ms: Option<u64>,
     reconciliation_ms: Option<u64>,
     time_output_ms: Option<u64>,
+    parliament_ms: Option<u64>,
     rank: usize,
     heartbeat_stagger: Duration,
     wall_ms: u64,
 ) -> bool {
+    let governance = Duration::from_secs(1);
     heartbeat_ms.is_some_and(|due| scheduled(due, rank, heartbeat_stagger, wall_ms))
-        || reconciliation_ms
-            .is_some_and(|due| scheduled(due, rank, Duration::from_secs(1), wall_ms))
-        || time_output_ms.is_some_and(|due| scheduled(due, rank, Duration::from_secs(1), wall_ms))
+        || [reconciliation_ms, time_output_ms, parliament_ms]
+            .into_iter()
+            .flatten()
+            .any(|due| scheduled(due, rank, governance, wall_ms))
 }
 
 /// Use the exact canonical rank without allowing overflow to move a deadline backwards.
@@ -234,6 +257,7 @@ mod tests {
             None,
             Some(110_000),
             None,
+            None,
             3,
             heartbeat_stagger,
             112_999
@@ -242,12 +266,14 @@ mod tests {
             None,
             Some(110_000),
             None,
+            None,
             3,
             heartbeat_stagger,
             113_000
         ));
         assert!(!scheduled_progress(
             Some(100_000),
+            None,
             None,
             None,
             3,
@@ -258,11 +284,13 @@ mod tests {
             Some(100_000),
             Some(110_000),
             None,
+            None,
             3,
             heartbeat_stagger,
             113_000
         ));
         assert!(!scheduled_progress(
+            None,
             None,
             None,
             None,
@@ -279,6 +307,7 @@ mod tests {
             None,
             None,
             Some(100_001),
+            None,
             2,
             stagger,
             102_000
@@ -287,6 +316,7 @@ mod tests {
             None,
             None,
             Some(100_001),
+            None,
             2,
             stagger,
             102_001
@@ -295,6 +325,7 @@ mod tests {
             Some(900_000),
             None,
             Some(100_001),
+            None,
             0,
             stagger,
             100_001
@@ -303,9 +334,41 @@ mod tests {
             None,
             None,
             Some(u64::MAX),
+            None,
             1,
             stagger,
             u64::MAX
+        ));
+    }
+
+    #[test]
+    fn parliament_work_wakes_the_keeper_with_the_governance_stagger() {
+        let stagger = Duration::from_secs(15);
+        let parliament = |rank, wall_ms| {
+            scheduled_progress(None, None, None, Some(200_000), rank, stagger, wall_ms)
+        };
+        assert!(!parliament(0, 199_999));
+        assert!(parliament(0, 200_000));
+        assert!(!parliament(3, 202_999));
+        assert!(parliament(3, 203_000));
+        // Work due at any time is staggered from zero.
+        assert!(scheduled_progress(
+            None,
+            None,
+            None,
+            Some(0),
+            2,
+            stagger,
+            2_000
+        ));
+        assert!(!scheduled_progress(
+            Some(100_000),
+            None,
+            None,
+            Some(u64::MAX),
+            1,
+            stagger,
+            114_999
         ));
     }
 

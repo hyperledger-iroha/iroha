@@ -79,7 +79,6 @@ pub(super) fn assert_same_semantic_metadata(baseline: &CompileOutput, optimized:
             metadata.version_major,
             metadata.version_minor,
             metadata.mode,
-            metadata.vector_length,
             metadata.max_cycles,
             metadata.abi_version,
         )

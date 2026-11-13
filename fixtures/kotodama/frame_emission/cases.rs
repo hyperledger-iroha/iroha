@@ -273,10 +273,17 @@ pub(crate) fn load_pairs(
             before: artifact(fields[4], fields[2]),
             after: artifact(fields[5], fields[3]),
         };
-        assert_ne!(
-            pair.before, pair.after,
-            "this pass must actually change the captured frame emission"
-        );
+        if matches!(case.id, "large_frame" | "division_trap") {
+            assert_eq!(
+                pair.before, pair.after,
+                "direct signed 14-bit slots must not open a saved-register window"
+            );
+        } else {
+            assert_ne!(
+                pair.before, pair.after,
+                "shared return restoration must change the captured frame emission"
+            );
+        }
         assert!(
             pairs.insert(case.id.to_owned(), pair).is_none(),
             "duplicate pair identity"

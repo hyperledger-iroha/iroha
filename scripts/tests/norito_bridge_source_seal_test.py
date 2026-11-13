@@ -60,6 +60,44 @@ class NoritoBridgeVendoredOriginalManifestTests(unittest.TestCase):
                     seal._public_source_relative(relative)
 
 
+class NoritoBridgeAppleFixtureDescriptorTests(unittest.TestCase):
+    INPUTS = (
+        "experiments/kagemusha-spartan/device/ios/NativeFixture/module.modulemap",
+        "experiments/kagemusha-spartan/device/ios/RuntimeFixture.entitlements",
+    )
+
+    def test_only_exact_fixture_descriptors_are_admitted(self) -> None:
+        self.assertEqual(seal._REVIEWED_PUBLIC_APPLE_FIXTURE_INPUTS, frozenset(self.INPUTS))
+        for relative in self.INPUTS:
+            self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
+            for changed in (relative + ".bak", relative.replace("device/ios/", "other/"),
+                            "secrets/" + relative, relative + ".mobileprovision"):
+                with self.subTest(relative=changed):
+                    with self.assertRaisesRegex(RuntimeError, "not an admitted public filename|prohibited"):
+                        seal._public_source_relative(changed)
+
+    def test_descriptors_hash_all_bytes_and_refuse_symlinks(self) -> None:
+        for relative in self.INPUTS:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source = root / relative
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b"public fixture descriptor\n")
+                lockfile = root / "Cargo.lock"
+                lockfile.write_bytes(b"public synthetic lock\n")
+                with mock.patch.object(seal, "listed_files", return_value=[relative]), \
+                        mock.patch.object(seal, "selected_lockfile_path", return_value=lockfile), \
+                        mock.patch.object(seal, "lockfile_identity", return_value=("0" * 64,)):
+                    before = seal.fingerprint(root, [relative], lockfile)
+                    source.write_bytes(source.read_bytes() + b"changed\n")
+                    self.assertNotEqual(before, seal.fingerprint(root, [relative], lockfile))
+                    original = source.with_name(source.name + ".txt")
+                    source.rename(original)
+                    source.symlink_to(original)
+                    with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                        seal.fingerprint(root, [relative], lockfile)
+
+
 class NoritoBridgeAndroidConsumerRuleResourceTests(unittest.TestCase):
     """A maintained public resource filename never exempts source bytes or custody."""
 
@@ -623,10 +661,10 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                     self.assertTrue(self.public_role_original(source))
 
     def test_public_required_roles_are_exact_without_suffix_widening(self) -> None:
-        self.assertEqual(len(self.public_role_inputs()), 102)
+        self.assertEqual(len(self.public_role_inputs()), 104)
         self.assertEqual(len(seal._REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS), 9)
         self.assertEqual(len(seal._REVIEWED_PUBLIC_FIXTURE_INPUTS), 45)
-        self.assertEqual(len(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS), 4)
+        self.assertEqual(len(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS), 6)
         for relative in self.public_role_inputs():
             self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
         for suffix in (".to", ".env", ".digest", ".tape", ".metallib", ".lex", ".m",
@@ -666,7 +704,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
         selected = (
             "crates/ivm/docs/examples/01_hajimari.to",
-            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_cycles0_abi1.to",
             "crates/iroha_core/src/sumeragi/certified_chain/artifacts/metadata/destination.rs",
             "crates/iroha_p2p/src/peer/run/granted.rs",
             "crates/ivm/metal/v1/ivm_kernels.metallib",
@@ -720,12 +758,21 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
         }))
         self.assertEqual(seal._REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS, frozenset({
+            "experiments/kagemusha-spartan/research/SPEC-CHANGE-credential-continuity.md",
+            "experiments/kagemusha-spartan/fixtures/credential-532.txt",
+            "experiments/kagemusha-spartan/fixtures/credential-source-vectors.txt",
+            "experiments/kagemusha-spartan/CREDENTIAL.md",
             "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt",
             "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv",
         }))
         self.assertEqual(frozenset(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS),
                          seal._REVIEWED_PUBLIC_MOCK_ENV_INPUTS
-                         | seal._REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS)
+                         | frozenset({
+                             "experiments/kagemusha-spartan/fixtures/credential-532.txt",
+                             "experiments/kagemusha-spartan/fixtures/credential-source-vectors.txt",
+                             "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt",
+                             "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv",
+                         }))
         for relative, (digest, size) in seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS.items():
             contents = self.public_role_original(relative)
             self.assertEqual((seal.hashlib.sha256(contents).hexdigest(), len(contents)), (digest, size))
@@ -744,7 +791,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         for relative in (
             "crates/iroha_core/src/sumeragi/certified_chain/artifacts/metadata/destination.rs",
             "crates/iroha_p2p/src/peer/run/granted.rs",
-            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_cycles0_abi1.to",
             "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
         ):
             path = self.root / relative

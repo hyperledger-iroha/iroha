@@ -547,6 +547,11 @@ pub struct LiveObligations {
         iroha_data_model::runtime::obligation::CompletionCaptureV1,
         usize,
     )>,
+    /// Exact original native game intent, reservation and acknowledgement closures.
+    captured_game: Vec<(
+        iroha_data_model::runtime::obligation::CompletionCaptureV1,
+        usize,
+    )>,
     /// AMX transactions this root coordinates and has not decided.
     amx_decisions: usize,
     /// AMX escrows this root holds as a participant and has not settled.
@@ -574,7 +579,7 @@ impl LiveObligations {
         self
     }
 
-    /// The custody and participation obligations of `world`: escrows, AMX participations and
+    /// The custody and participation obligations of `world`: escrows, native game transfers, AMX and
     /// selected SoraFS authorities. [`Self::with_registered`] adds the registered ones.
     pub(crate) fn of(world: &crate::state::WorldTransaction<'_, '_>) -> Self {
         let sorafs_authorities =
@@ -619,6 +624,7 @@ impl LiveObligations {
             sorafs_authorities,
             registered: Vec::new(),
             captured_escrows: super::native_escrow_capture::live_captures(world),
+            captured_game: super::native_game_capture::live_captures(world),
             orderbook_custody: super::native_escrow_capture::live_orderbook_count(world),
             escrows: world
                 .asset_escrows
@@ -643,6 +649,7 @@ impl LiveObligations {
             orderbook_custody: 0,
             captured_escrows: Vec::new(),
             captured_amx: Vec::new(),
+            captured_game: Vec::new(),
             amx_decisions: coordinator
                 .transactions
                 .iter()
@@ -661,7 +668,98 @@ impl LiveObligations {
             && self.registered.is_empty()
             && self.captured_escrows.is_empty()
             && self.captured_amx.is_empty()
+            && self.captured_game.is_empty()
             && Class::ALL.into_iter().all(|class| self.count(class) == 0)
+    }
+
+    /// Exact retained captured graphs plus the declared predecessor graph of uncaptured custody.
+    /// Permanent code retirement consumes this set; missing descriptors fail closed.
+    pub(crate) fn required_definitions(
+        &self,
+        selection: &RootSelectionV1,
+        published: &impl DefinitionLookup,
+    ) -> Result<BTreeSet<DefinitionId>, String> {
+        let mut needed = BTreeSet::new();
+        for (capture, _) in self
+            .registered
+            .iter()
+            .chain(&self.captured_escrows)
+            .chain(&self.captured_amx)
+            .chain(&self.captured_game)
+        {
+            needed.extend(
+                capture
+                    .closure(published)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let mut pending = Vec::new();
+        let mut wires = Vec::new();
+        for class in Class::ALL {
+            if self.count(class) != 0 {
+                wires.extend(class.completions());
+                if class.invokes_contracts() {
+                    pending.extend(selection.active.iter().copied().filter(|id| {
+                        matches!(
+                            published.definition(id),
+                            Some(DefinitionDescriptorV1::HostProfile(_))
+                        )
+                    }));
+                }
+            }
+        }
+        if self.sorafs_authorities != 0 {
+            wires.extend(
+                [
+                    "iroha.sorafs.authority.propose.v1",
+                    "iroha.sorafs.authority.attempt.create.v1",
+                    "iroha.governance.parliament.transition.submit.v1",
+                ]
+                .into_iter(),
+            );
+        }
+        if self.orderbook_custody != 0 {
+            pending.extend(
+                selection
+                    .active
+                    .iter()
+                    .copied()
+                    .filter(|id| executes(selection, *id)),
+            );
+        }
+        for wire in wires {
+            let bound = binding(selection, &wire)
+                .ok_or_else(|| format!("live custody lost binding {wire}"))?;
+            pending.extend([bound.interface, bound.implementation]);
+        }
+        if !pending.is_empty() {
+            pending.extend([
+                selection.kernel,
+                selection.services_profile,
+                selection.commitment_profile,
+            ]);
+        }
+        while let Some(id) = pending.pop() {
+            if !needed.insert(id) {
+                continue;
+            }
+            let descriptor = published
+                .definition(&id)
+                .ok_or_else(|| format!("live custody lost definition {id}"))?;
+            pending.extend(
+                descriptor
+                    .typed_dependencies()
+                    .into_iter()
+                    .map(|(_, id)| id),
+            );
+            if let DefinitionDescriptorV1::Interface(interface) = descriptor {
+                let bound = binding(selection, &interface.wire_id).ok_or_else(|| {
+                    format!("live custody lost nested binding {}", interface.wire_id)
+                })?;
+                pending.push(bound.implementation);
+            }
+        }
+        Ok(needed)
     }
 
     /// How many live obligations of `class` there are.
@@ -691,6 +789,7 @@ impl LiveObligations {
             orderbook_custody: 0,
             captured_escrows: Vec::new(),
             captured_amx: Vec::new(),
+            captured_game: Vec::new(),
             amx_decisions: decisions,
             amx_settlements: settlements,
             sorafs_authorities: 0,
@@ -875,6 +974,14 @@ pub fn stranded(
         successor,
         published,
         &live.captured_amx,
+    ) {
+        return Some(reason);
+    }
+    if let Some(reason) = super::native_game_capture::closure_gap(
+        predecessor,
+        successor,
+        published,
+        &live.captured_game,
     ) {
         return Some(reason);
     }

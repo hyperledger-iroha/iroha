@@ -20,6 +20,7 @@ pub struct ParentServicePreparation {
     authority: Option<FundedAuthorityGraph>,
     predecessor: Option<ReceiptRead>,
     parent: Option<ReceiptRead>,
+    portable: Option<iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1>,
     genesis: Option<Carrier>,
     authenticated: Option<(
         Hash32,
@@ -276,6 +277,58 @@ impl ParentServicePreparation {
             .authenticated
             .expect("original genesis authenticated")
             .1;
+        if view.kura().checkpoint_prefix_height().is_some_and(|floor| {
+            parent_height == floor || floor.checked_add(1) == Some(parent_height)
+        }) {
+            let sealed = super::super::portable_checkpoint_for_state(view)
+                .map_err(source)?
+                .ok_or_else(|| parent_source_failure("portable parent-service cut disappeared"))?;
+            let floor = sealed.checkpoint().header().height().get();
+            if sealed.successor_header().instance != self.authenticated.unwrap().0 {
+                return Err(parent_source_failure(
+                    "portable parent-service instance differs",
+                ));
+            }
+            if self.portable.is_none() {
+                self.portable = Some(sealed);
+            } else {
+                self.require_portable_cut(&sealed)?;
+            }
+            if parent_height > floor {
+                if self.parent.is_none() {
+                    self.parent = Some(ReceiptRead::new(view, parent_height, &budget)?);
+                }
+                let parent = self
+                    .parent
+                    .as_mut()
+                    .unwrap()
+                    .complete(view, &budget, scope)?;
+                let tip = self.original.as_ref().unwrap().tip;
+                crate::state::CanonicalHistorySource::require_native_execution_link(
+                    parent,
+                    tip.core_hash(),
+                    tip.result(),
+                )
+                .map_err(parent_source_attempt)?;
+                let sealed = self.portable.as_ref().unwrap();
+                if parent.header() != Some(sealed.successor_header())
+                    || parent.certified_result() != sealed.successor_result()
+                {
+                    return Err(parent_source_failure(
+                        "native successor differs from portable parent-service cut",
+                    ));
+                }
+            }
+            if self.authority.is_none() {
+                let (predecessor, parent) = self.blocks();
+                self.authority = Some(
+                    parent_service_authority(predecessor, parent, &budget)
+                        .map_err(parent_verification_source)?
+                        .into_graph(),
+                );
+            }
+            return Ok(());
+        }
         if self.parent.is_none() {
             self.parent = Some(ReceiptRead::new(view, parent_height, &budget)?);
         }
@@ -368,6 +421,22 @@ impl ParentServicePreparation {
         parent_height: u64,
     ) -> Result<(), ParentServiceError> {
         self.require_view(view, parent_height)?;
+        if self.portable.is_some() {
+            self.require_portable(view)?;
+            self.genesis
+                .as_ref()
+                .ok_or_else(|| parent_source_failure("original genesis is incomplete"))?
+                .recheck(view, &view.execution_budget())?;
+            if let Some(parent) = &self.parent {
+                parent.carrier.recheck(view, &view.execution_budget())?;
+            }
+            if self.authority.is_none() {
+                return Err(parent_source_failure(
+                    "portable parent-service authority is incomplete",
+                ));
+            }
+            return Ok(());
+        }
         let original = self.original.as_ref().expect("original cut checked");
         for carrier in [
             self.genesis.as_ref(),
@@ -387,27 +456,16 @@ impl ParentServicePreparation {
         }
         Ok(())
     }
-    pub(super) fn inputs(
+    pub(super) fn service_inputs(
         &self,
     ) -> (
-        &CommittedBlock,
-        &CommittedBlock,
+        &dyn ParentServiceBlock,
+        &dyn ParentServiceBlock,
         AuthorityRef<'_>,
         &HeightConfig,
         PrefixVerifierContext,
     ) {
-        let predecessor = self
-            .predecessor
-            .as_ref()
-            .expect("complete predecessor")
-            .frame
-            .committed();
-        let parent = self
-            .parent
-            .as_ref()
-            .expect("complete parent")
-            .frame
-            .committed();
+        let (predecessor, parent) = self.blocks();
         let schedule::ScheduledSlot::Ready(scheduled) = &predecessor.commitment().schedule.next
         else {
             unreachable!("original complete authority is ready")
@@ -424,6 +482,98 @@ impl ParentServicePreparation {
                 root_scope,
             },
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn inputs(
+        &self,
+    ) -> (
+        &CommittedBlock,
+        &CommittedBlock,
+        AuthorityRef<'_>,
+        &HeightConfig,
+        PrefixVerifierContext,
+    ) {
+        let (_, _, authority, config, context) = self.service_inputs();
+        (
+            self.predecessor
+                .as_ref()
+                .expect("native test predecessor")
+                .frame
+                .committed(),
+            self.native_current().expect("native test current"),
+            authority,
+            config,
+            context,
+        )
+    }
+
+    fn blocks(&self) -> (&dyn ParentServiceBlock, &dyn ParentServiceBlock) {
+        Self::blocks_from(
+            self.portable.as_ref(),
+            self.predecessor.as_ref(),
+            self.parent.as_ref(),
+        )
+    }
+
+    fn blocks_from<'a>(
+        portable: Option<&'a iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1>,
+        predecessor: Option<&'a ReceiptRead>,
+        parent: Option<&'a ReceiptRead>,
+    ) -> (&'a dyn ParentServiceBlock, &'a dyn ParentServiceBlock) {
+        if let Some(sealed) = portable {
+            return if let Some(parent) = parent {
+                (sealed.checkpoint(), parent.frame.committed())
+            } else {
+                (
+                    sealed.predecessor().expect("checkpoint above genesis"),
+                    sealed.checkpoint(),
+                )
+            };
+        }
+        (
+            predecessor.expect("complete predecessor").frame.committed(),
+            parent.expect("complete parent").frame.committed(),
+        )
+    }
+
+    fn require_portable(
+        &self,
+        view: &(impl StateReadOnly + ?Sized),
+    ) -> Result<(), ParentServiceError> {
+        let fresh = super::super::portable_checkpoint_for_state(view)
+            .map_err(source)?
+            .ok_or_else(|| parent_source_failure("portable parent-service source disappeared"))?;
+        self.require_portable_cut(&fresh)
+    }
+
+    fn require_portable_cut(
+        &self,
+        fresh: &iroha_data_model::sumeragi_finality::VerifiedPortableCheckpointV1,
+    ) -> Result<(), ParentServiceError> {
+        let retained = self
+            .portable
+            .as_ref()
+            .ok_or_else(|| parent_source_failure("portable parent-service capture absent"))?;
+        if fresh.checkpoint().header() != retained.checkpoint().header()
+            || fresh.checkpoint().core_hash() != retained.checkpoint().core_hash()
+            || fresh.checkpoint().result() != retained.checkpoint().result()
+            || fresh.successor_core_hash() != retained.successor_core_hash()
+            || fresh.successor_result_hash() != retained.successor_result_hash()
+        {
+            return Err(parent_source_failure(
+                "portable parent-service original source changed",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn native_current(&self) -> Result<&CommittedBlock, ParentServiceError> {
+        self.parent
+            .as_ref()
+            .filter(|parent| parent.complete)
+            .map(|parent| parent.frame.committed())
+            .ok_or_else(|| parent_source_failure("omitted checkpoint parent has no native body"))
     }
 
     /// Prepare the destination copy before queue leases, retaining original native inputs.
@@ -449,18 +599,11 @@ impl ParentServicePreparation {
         view: &(impl StateReadOnly + ?Sized),
         proposal: &SignedBlock,
     ) -> Result<(), ParentServiceError> {
-        let predecessor = self
-            .predecessor
-            .as_ref()
-            .expect("complete predecessor")
-            .frame
-            .committed();
-        let current = self
-            .parent
-            .as_ref()
-            .expect("complete parent")
-            .frame
-            .committed();
+        let (predecessor, current) = Self::blocks_from(
+            self.portable.as_ref(),
+            self.predecessor.as_ref(),
+            self.parent.as_ref(),
+        );
         let schedule::ScheduledSlot::Ready(scheduled) = &predecessor.commitment().schedule.next
         else {
             unreachable!("original complete authority is ready")

@@ -2720,6 +2720,188 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
         })
     }
 }
+/// Degree of the base-field curve that carries one Fp4 vector.
+///
+/// Every Fp4 value is `c0 + c1*theta + c2*theta^2 + c3*theta^3` with base-field `c_i`
+/// and `theta^4 = 7`, so an opened row is a cubic in `theta` with base-field
+/// coefficient vectors.
+const NOTE_DEEP_POINT_CURVE_DEGREE_V1: usize = 3;
+/// Evaluate the cubic through one Fp4 vector at a base-field node.
+fn deep_point_curve_row_v1(values: &[E], node: F) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+    let mut row = Vec::new();
+    row.try_reserve_exact(values.len())
+        .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+    row.extend(values.iter().map(|value| {
+        value
+            .coefficients()
+            .iter()
+            .rev()
+            .fold(F::ZERO, |sum, coefficient| sum.mul(node).add(*coefficient))
+    }));
+    Ok(row)
+}
+/// Lagrange weights at the Fp4 generator for the base-field nodes `0..node_count`.
+fn deep_point_curve_weights_v1(node_count: usize) -> Result<Vec<E>, ProofManagedNoteStarkErrorV1> {
+    let theta = E::from_coefficients([F::ZERO, F::ONE, F::ZERO, F::ZERO])
+        .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
+    let nodes = (0..node_count)
+        .map(|node| u64::try_from(node).map(F))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| {
+            let mut numerator = E::ONE;
+            let mut denominator = F::ONE;
+            for (other_index, other) in nodes.iter().enumerate() {
+                if other_index != index {
+                    numerator = numerator.mul(theta.sub(E::from_base(*other)));
+                    denominator = denominator.mul(node.sub(*other));
+                }
+            }
+            denominator
+                .inv()
+                .map(|inverse| numerator.mul_base(inverse))
+                .ok_or(ProofManagedNoteStarkErrorV1::Internal)
+        })
+        .collect()
+}
+/// Highest-order finite difference of values taken at consecutive integer nodes.
+///
+/// It is zero exactly when the values lie on a polynomial of degree below
+/// `values.len() - 1`.
+fn highest_finite_difference_v1(values: &[E]) -> E {
+    let mut differences = values.to_vec();
+    while differences.len() > 1 {
+        for index in 0..differences.len() - 1 {
+            differences[index] = differences[index + 1].sub(differences[index]);
+        }
+        differences.pop();
+    }
+    differences.first().copied().unwrap_or(E::ZERO)
+}
+/// Check the complete AIR at the transcript-derived out-of-domain point.
+///
+/// The per-query callback checks the constraint quotient only on sampled rows of the
+/// evaluation domain, where a quotient that merely interpolates an invalid trace passes
+/// each query with constant probability. This check evaluates the same residues at the
+/// DEEP point `z`, from the openings that the DEEP quotient binds to the committed
+/// low-degree polynomials, and requires
+///
+/// ```text
+/// sum_j z^(j*cap) * H_j(z) = (sum_i alpha_i * C_i(T(z), T(z*omega_H), fixed(z))) / (z^n - 1)
+/// ```
+///
+/// The residue evaluator is written over the base field. An opened Fp4 row is a cubic
+/// in the extension generator with base-field coefficient vectors, so a residue of total
+/// degree `d` restricted to that cubic has degree at most `3d`. It is evaluated at
+/// `3d + 1` base-field nodes and interpolated at the generator; one further node
+/// rejects an evaluator that exceeds the profile's declared degree.
+#[allow(clippy::too_many_arguments)]
+fn verify_deep_point_relation_v1<A: ProofManagedNoteStarkAdapterV1>(
+    adapter: &A,
+    prepared: &PreparedNoteProfileV1,
+    deep: &aggregate::AggregateDeepProofV1,
+    deep_point: E,
+    fixed_at_deep_point: &[E],
+    copy_challenges: NoteCopyChallengesV1,
+    profile_challenges: &A::ProfileChallenges,
+    alphas: &[Vec<E>],
+) -> Result<(), ProofManagedNoteStarkErrorV1> {
+    let parameters = prepared.protocol.parameters;
+    let groups = aggregate::canonical_deep_trace_groups_v1(deep, parameters, &prepared.layout)
+        .map_err(map_aggregate_error_v1)?;
+    let opening = groups
+        .first()
+        .filter(|_| groups.len() == 1)
+        .ok_or(ProofManagedNoteStarkErrorV1::Composition)?;
+    if opening.base_current.len() != prepared.base_width
+        || opening.base_next.len() != prepared.base_width
+        || opening.aux_current.len() != prepared.aux_width
+        || opening.aux_next.len() != prepared.aux_width
+        || fixed_at_deep_point.len() != prepared.fixed_width
+        || alphas.len() != parameters.security_lanes
+        || deep.composition_values.len() != parameters.security_lanes
+        || alphas
+            .iter()
+            .any(|lane| lane.len() != prepared.constraint_count)
+    {
+        return Err(ProofManagedNoteStarkErrorV1::Composition);
+    }
+    let interpolation_nodes = usize::from(prepared.protocol.maximum_constraint_degree)
+        .checked_mul(NOTE_DEEP_POINT_CURVE_DEGREE_V1)
+        .and_then(|degree| degree.checked_add(1))
+        .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    // The last node is redundant for interpolation and checks the declared degree.
+    let mut lane_sums = vec![Vec::<E>::new(); parameters.security_lanes];
+    for node in 0..=interpolation_nodes {
+        let node =
+            F(u64::try_from(node).map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?);
+        let base_current = deep_point_curve_row_v1(&opening.base_current, node)?;
+        let base_next = deep_point_curve_row_v1(&opening.base_next, node)?;
+        let aux_current = deep_point_curve_row_v1(&opening.aux_current, node)?;
+        let aux_next = deep_point_curve_row_v1(&opening.aux_next, node)?;
+        let fixed = deep_point_curve_row_v1(fixed_at_deep_point, node)?;
+        let residues = all_constraint_residues_v1(
+            adapter,
+            prepared,
+            (&base_current, &base_next),
+            (&aux_current, &aux_next),
+            &fixed,
+            copy_challenges,
+            profile_challenges,
+        )?;
+        for (sums, lane_alphas) in lane_sums.iter_mut().zip(alphas) {
+            sums.push(
+                residues
+                    .iter()
+                    .zip(lane_alphas)
+                    .fold(E::ZERO, |sum, (residue, alpha)| {
+                        sum.add(alpha.mul_base(*residue))
+                    }),
+            );
+        }
+    }
+    let weights = deep_point_curve_weights_v1(interpolation_nodes)?;
+    let inverse_vanishing = deep_point
+        .pow(prepared.trace_size as u128)
+        .sub(E::ONE)
+        .inv()
+        .ok_or(ProofManagedNoteStarkErrorV1::Composition)?;
+    let chunk_power = deep_point.pow(
+        prepared
+            .layout
+            .fri_degree_cap(parameters)
+            .map_err(map_aggregate_error_v1)? as u128,
+    );
+    for (sums, composition_values) in lane_sums.iter().zip(&deep.composition_values) {
+        if highest_finite_difference_v1(sums) != E::ZERO {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
+        // `zip` stops at the interpolation nodes; the redundant last value is unused here.
+        let expected = sums
+            .iter()
+            .zip(&weights)
+            .fold(E::ZERO, |sum, (value, weight)| sum.add(value.mul(*weight)))
+            .mul(inverse_vanishing);
+        let chunks = aggregate::canonical_fp4_fields_v1(
+            composition_values,
+            parameters.composition_degree_chunks,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let mut power = E::ONE;
+        let mut composition = E::ZERO;
+        for chunk in chunks {
+            composition = composition.add(chunk.mul(power));
+            power = power.mul(chunk_power);
+        }
+        if composition != expected {
+            return Err(ProofManagedNoteStarkErrorV1::Composition);
+        }
+    }
+    Ok(())
+}
 /// Verify the exact canonical proof wire against one statement-derived adapter.
 pub fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
@@ -2820,11 +3002,22 @@ pub fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fixed_openings = fixed_queries::query_rows_v1(
+    let (fixed_openings, fixed_at_deep_point) = fixed_queries::query_rows_and_deep_point_v1(
         prepare_fixed_columns_v1(adapter, prepared.trace_size, prepared.fixed_width)?,
         prepared.trace_log2,
         prepared.layout.common_lde_log2(),
         &expected_indices,
+        deep_point,
+    )?;
+    verify_deep_point_relation_v1(
+        adapter,
+        &prepared,
+        &deep,
+        deep_point,
+        &fixed_at_deep_point,
+        copy_challenges,
+        &profile_challenges,
+        &alphas,
     )?;
     let lde_root = goldilocks_primitive_root_v1(prepared.layout.common_lde_log2())
         .map_err(map_transparent_error_v1)?;
@@ -5320,5 +5513,324 @@ mod tests {
         );
         assert!(degree_four_quotient <= production_composition_capacity);
         assert!(degree_nine_quotient > production_composition_capacity);
+    }
+
+    /// Verifier inputs of the fixture proof at its out-of-domain relation.
+    struct DeepPointRelationFixtureV1 {
+        prepared: PreparedNoteProfileV1,
+        deep: aggregate::AggregateDeepProofV1,
+        deep_point: E,
+        fixed_at_deep_point: Vec<E>,
+        copy_challenges: NoteCopyChallengesV1,
+        alphas: Vec<Vec<E>>,
+    }
+    /// Replay the verifier transcript of the fixture proof up to its DEEP point.
+    fn deep_point_relation_fixture_v1() -> DeepPointRelationFixtureV1 {
+        let (adapter, _, proof) = proof_fixture_v1();
+        let prepared = prepare_note_profile_with_fixed_v1(adapter, false).expect("geometry");
+        let parameters = prepared.protocol.parameters;
+        let domains = &prepared.protocol.domains;
+        let (decoded, deep) =
+            aggregate::decode_proof_with_deep_v1(proof, parameters, &prepared.layout)
+                .expect("exact proof wire");
+        let public_digest = adapter.public_input_digest_v1().expect("public digest");
+        let mut transcript = new_note_transcript_v1(&prepared, &public_digest).expect("transcript");
+        aggregate::absorb_base_roots_v1(&mut transcript, domains, &decoded.trace_groups)
+            .expect("base roots");
+        let copy_challenges =
+            derive_note_copy_challenges_v1(&mut transcript).expect("copy challenges");
+        adapter
+            .derive_profile_challenges_v1(&mut transcript, copy_challenges)
+            .expect("profile challenges");
+        aggregate::absorb_aux_roots_v1(&mut transcript, domains, &decoded.trace_groups)
+            .expect("aux roots");
+        let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)
+            .expect("constraint alphas");
+        aggregate::absorb_composition_roots_v1(
+            &mut transcript,
+            parameters,
+            domains,
+            &decoded.composition_roots,
+        )
+        .expect("composition roots");
+        aggregate::absorb_fri_mask_roots_v1(
+            &mut transcript,
+            parameters,
+            domains,
+            &decoded.fri_mask_roots,
+        )
+        .expect("FRI mask roots");
+        let deep_point =
+            aggregate::derive_deep_point_v1(&mut transcript, parameters, &prepared.layout)
+                .expect("DEEP point");
+        let (_, fixed_at_deep_point) = fixed_queries::query_rows_and_deep_point_v1(
+            prepare_fixed_columns_v1(adapter, prepared.trace_size, prepared.fixed_width)
+                .expect("fixed columns"),
+            prepared.trace_log2,
+            prepared.layout.common_lde_log2(),
+            &[0],
+            deep_point,
+        )
+        .expect("fixed columns at the DEEP point");
+        DeepPointRelationFixtureV1 {
+            prepared,
+            deep,
+            deep_point,
+            fixed_at_deep_point,
+            copy_challenges,
+            alphas,
+        }
+    }
+    /// Add one to a canonical Fp4 wire value without leaving the field.
+    fn bump_fp4_words_v1(words: &mut [u64; 4]) {
+        let value = E::canonical(*words).expect("canonical opening").add(E::ONE);
+        *words = value.coefficients().map(F::value);
+    }
+    #[test]
+    fn deep_point_relation_accepts_authenticated_openings_and_rejects_each_changed_value() {
+        let (adapter, _, _) = proof_fixture_v1();
+        let fixture = deep_point_relation_fixture_v1();
+        let check = |deep: &aggregate::AggregateDeepProofV1, fixed: &[E], alphas: &[Vec<E>]| {
+            verify_deep_point_relation_v1(
+                adapter,
+                &fixture.prepared,
+                deep,
+                fixture.deep_point,
+                fixed,
+                fixture.copy_challenges,
+                &(),
+                alphas,
+            )
+        };
+        assert_eq!(
+            check(&fixture.deep, &fixture.fixed_at_deep_point, &fixture.alphas),
+            Ok(())
+        );
+        let rejected = Err(ProofManagedNoteStarkErrorV1::Composition);
+        // Every class of opened value takes part in at least one residue: the profile
+        // residue reads base column zero, the first auxiliary cell is a constrained bit,
+        // and the first running-product column appears in a transition residue.
+        let transition_cell = COPY_AUX_PRODUCTS_OFFSET + COPY_NUMERATOR_BEFORE;
+        let mutations: [fn(&mut aggregate::AggregateDeepProofV1, usize); 4] = [
+            |deep, _| bump_fp4_words_v1(&mut deep.trace_groups[0].base_current[0]),
+            |deep, _| bump_fp4_words_v1(&mut deep.trace_groups[0].aux_current[0]),
+            |deep, cell| bump_fp4_words_v1(&mut deep.trace_groups[0].aux_next[cell]),
+            |deep, _| bump_fp4_words_v1(&mut deep.composition_values[0][0]),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut changed = fixture.deep.clone();
+            mutate(&mut changed, transition_cell);
+            assert_eq!(
+                check(&changed, &fixture.fixed_at_deep_point, &fixture.alphas),
+                rejected,
+                "changed opening class {index} must fail the out-of-domain relation"
+            );
+        }
+        let mut fixed = fixture.fixed_at_deep_point.clone();
+        fixed[COPY_FIXED_TRANSITION] = fixed[COPY_FIXED_TRANSITION].add(E::ONE);
+        assert_eq!(check(&fixture.deep, &fixed, &fixture.alphas), rejected);
+        let mut alphas = fixture.alphas.clone();
+        alphas[0][0] = alphas[0][0].add(E::ONE);
+        assert_eq!(
+            check(&fixture.deep, &fixture.fixed_at_deep_point, &alphas),
+            rejected
+        );
+        for (fixed, alphas) in [
+            (&fixture.fixed_at_deep_point[1..], &fixture.alphas[..]),
+            (&fixture.fixed_at_deep_point[..], &fixture.alphas[..0]),
+        ] {
+            assert_eq!(check(&fixture.deep, fixed, alphas), rejected);
+        }
+    }
+
+    /// Fixture adapter that observes, and can change, the first residue evaluations.
+    struct ResidueProbeV1<'a> {
+        inner: &'a MockAdapterV1,
+        calls: std::sync::atomic::AtomicUsize,
+        /// Evaluations, counted from the first, whose profile residue is changed.
+        changed_calls: usize,
+        /// Power of base column one added to a changed residue; zero adds one.
+        added_power: u128,
+    }
+    impl<'a> ResidueProbeV1<'a> {
+        fn new(inner: &'a MockAdapterV1, changed_calls: usize, added_power: u128) -> Self {
+            Self {
+                inner,
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                changed_calls,
+                added_power,
+            }
+        }
+    }
+    impl ProofManagedNoteStarkAdapterV1 for ResidueProbeV1<'_> {
+        type ProfileChallenges = ();
+        fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
+            self.inner.protocol_v1()
+        }
+        fn public_input_digest_v1(
+            &self,
+        ) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
+            self.inner.public_input_digest_v1()
+        }
+        fn trace_log2_v1(&self) -> u8 {
+            self.inner.trace_log2_v1()
+        }
+        fn base_width_v1(&self) -> usize {
+            self.inner.base_width_v1()
+        }
+        fn profile_aux_width_v1(&self) -> usize {
+            self.inner.profile_aux_width_v1()
+        }
+        fn profile_fixed_width_v1(&self) -> usize {
+            self.inner.profile_fixed_width_v1()
+        }
+        fn profile_constraint_count_v1(&self) -> usize {
+            self.inner.profile_constraint_count_v1()
+        }
+        fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
+            self.inner.copy_schedule_v1()
+        }
+        fn profile_fixed_columns_v1(&self) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+            self.inner.profile_fixed_columns_v1()
+        }
+        fn derive_profile_challenges_v1(
+            &self,
+            transcript: &mut TransparentTranscriptV1,
+            copy_challenges: NoteCopyChallengesV1,
+        ) -> Result<Self::ProfileChallenges, ProofManagedNoteStarkErrorV1> {
+            self.inner
+                .derive_profile_challenges_v1(transcript, copy_challenges)
+        }
+        fn build_profile_aux_columns_v1(
+            &self,
+            base_columns: &[Vec<F>],
+            copy_aux_columns: &[Vec<F>],
+            fixed_columns: &[Vec<F>],
+            copy_challenges: NoteCopyChallengesV1,
+            profile_challenges: &Self::ProfileChallenges,
+        ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+            self.inner.build_profile_aux_columns_v1(
+                base_columns,
+                copy_aux_columns,
+                fixed_columns,
+                copy_challenges,
+                profile_challenges,
+            )
+        }
+        fn profile_constraint_residues_v1(
+            &self,
+            base_rows: (&[F], &[F]),
+            current_aux: &[F],
+            next_aux: &[F],
+            fixed: &[F],
+            copy_challenges: NoteCopyChallengesV1,
+            profile_challenges: &Self::ProfileChallenges,
+        ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut residues = self.inner.profile_constraint_residues_v1(
+                base_rows,
+                current_aux,
+                next_aux,
+                fixed,
+                copy_challenges,
+                profile_challenges,
+            )?;
+            if call < self.changed_calls {
+                residues[0] = residues[0].add(base_rows.0[1].pow(self.added_power));
+            }
+            Ok(residues)
+        }
+    }
+    /// Residue evaluations spent on the out-of-domain relation by the mock profile.
+    fn mock_deep_point_evaluations_v1() -> usize {
+        usize::from(NOTE_COPY_CONSTRAINT_DEGREE_V1) * NOTE_DEEP_POINT_CURVE_DEGREE_V1 + 2
+    }
+    #[test]
+    fn verifier_checks_the_air_at_the_deep_point_before_any_opened_row() {
+        let (adapter, _, proof) = proof_fixture_v1();
+        let deep_point_evaluations = mock_deep_point_evaluations_v1();
+        let honest = ResidueProbeV1::new(adapter, 0, 0);
+        verify_proof_managed_note_stark_v1(&honest, proof).expect("canonical proof verifies");
+        assert_eq!(
+            honest.calls.load(std::sync::atomic::Ordering::SeqCst),
+            deep_point_evaluations
+                + PROOF_MANAGED_NOTE_QUERY_COUNT_V1 * PROOF_MANAGED_NOTE_SECURITY_LANES_V1,
+            "one curve per DEEP point, then one evaluation per opened row and lane"
+        );
+        // Only the DEEP-point evaluations differ here; every opened row would still
+        // satisfy its quotient. The proof is rejected before any row is read.
+        let changed = ResidueProbeV1::new(adapter, deep_point_evaluations, 0);
+        assert_eq!(
+            verify_proof_managed_note_stark_v1(&changed, proof),
+            Err(ProofManagedNoteStarkErrorV1::Composition)
+        );
+        assert_eq!(
+            changed.calls.load(std::sync::atomic::Ordering::SeqCst),
+            deep_point_evaluations
+        );
+    }
+    #[test]
+    fn deep_point_relation_rejects_a_residue_above_the_declared_degree() {
+        let (adapter, _, proof) = proof_fixture_v1();
+        // A cube of an opened column has total degree three; the mock declares two.
+        let overdegree = ResidueProbeV1::new(adapter, mock_deep_point_evaluations_v1(), 3);
+        assert_eq!(
+            verify_proof_managed_note_stark_v1(&overdegree, proof),
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+        );
+    }
+    #[test]
+    fn deep_point_curve_interpolates_base_field_residues_at_extension_values() {
+        let values = [
+            E::canonical([3, 5, 7, 11]).unwrap(),
+            E::canonical([13, 17, 19, 23]).unwrap(),
+            E::canonical([29, 31, 37, 41]).unwrap(),
+            E::canonical([43, 47, 53, 59]).unwrap(),
+        ];
+        // a*b*c*d + 7*a*b + c + 5 has total degree four.
+        let expected = values[0]
+            .mul(values[1])
+            .mul(values[2])
+            .mul(values[3])
+            .add(values[0].mul(values[1]).mul_base(F(7)))
+            .add(values[2])
+            .add(E::from_base(F(5)));
+        let degree_four = |row: &[F]| {
+            row[0]
+                .mul(row[1])
+                .mul(row[2])
+                .mul(row[3])
+                .add(F(7).mul(row[0]).mul(row[1]))
+                .add(row[2])
+                .add(F(5))
+        };
+        let node_count = 4 * NOTE_DEEP_POINT_CURVE_DEGREE_V1 + 1;
+        let evaluate = |residue: &dyn Fn(&[F]) -> F| {
+            (0..=node_count)
+                .map(|node| {
+                    let row = deep_point_curve_row_v1(&values, F(node as u64)).expect("curve row");
+                    E::from_base(residue(&row))
+                })
+                .collect::<Vec<_>>()
+        };
+        let weights = deep_point_curve_weights_v1(node_count).expect("curve weights");
+        assert_eq!(weights.len(), node_count);
+        let samples = evaluate(&degree_four);
+        assert_eq!(highest_finite_difference_v1(&samples), E::ZERO);
+        assert_eq!(
+            samples
+                .iter()
+                .zip(&weights)
+                .fold(E::ZERO, |sum, (sample, weight)| sum
+                    .add(sample.mul(*weight))),
+            expected
+        );
+        // One more factor exceeds the degree the nodes can carry, and is detected.
+        let degree_five = |row: &[F]| degree_four(row).mul(row[0]);
+        assert_ne!(
+            highest_finite_difference_v1(&evaluate(&degree_five)),
+            E::ZERO
+        );
+        assert_eq!(highest_finite_difference_v1(&[]), E::ZERO);
     }
 }

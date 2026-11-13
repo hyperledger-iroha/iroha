@@ -159,7 +159,7 @@ use iroha_primitives::{
     },
 };
 use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
-use kotodama_lang::{encoding, instruction, metadata::ProgramMetadata, syscalls};
+use kotodama_lang::{encoding, metadata::ProgramMetadata, syscalls};
 use napi::{
     ValueType,
     bindgen_prelude::{
@@ -1379,19 +1379,12 @@ pub fn norito_decode_instruction_box_archive(
     let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
     iroha_js_codec::decode_instruction_archive(bytes.as_ref(), prefix).map_err(codec_to_napi)
 }
-fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> Vec<u8> {
-    let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(u32::from(opcode)).to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut artifact = ProgramMetadata {
-        max_cycles: max_cycles.get(),
-        ..ProgramMetadata::default()
-    }
-    .encode();
-    artifact.extend_from_slice(&code);
+/// The exact first-release subscription program: one `SCALL` and `HALT` under the default
+/// non-ZK header, which carries no trace bound (gas is its only budget).
+fn subscription_syscall_program_bytes(syscall: u32) -> Vec<u8> {
+    let mut artifact = ProgramMetadata::default().encode();
+    artifact.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
+    artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     artifact
 }
 /// Inspect and fail closed on one subscription trigger action returned inside
@@ -1421,22 +1414,12 @@ pub fn inspect_subscription_trigger_action(
             "subscription trigger executable must be exact IVM bytecode",
         ));
     };
-    let parsed = ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
-    let max_cycles = NonZeroU64::new(parsed.metadata.max_cycles).ok_or_else(|| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            "subscription trigger max_cycles must be non-zero",
-        )
-    })?;
     let program_kind = if bytecode.as_ref()
-        == subscription_syscall_program_bytes(syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
+        == subscription_syscall_program_bytes(syscalls::SYSCALL_SUBSCRIPTION_BILL)
     {
         "billing"
     } else if bytecode.as_ref()
-        == subscription_syscall_program_bytes(
-            syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
-            max_cycles,
-        )
+        == subscription_syscall_program_bytes(syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE)
     {
         "usage"
     } else {
@@ -1463,10 +1446,6 @@ pub fn inspect_subscription_trigger_action(
     summary.insert(
         "authority".to_owned(),
         json::Value::String(account_id_to_canonical_i105(action.authority())?),
-    );
-    summary.insert(
-        "max_cycles".to_owned(),
-        json::Value::String(max_cycles.get().to_string()),
     );
     match program_kind {
         "billing" => {
@@ -8587,7 +8566,6 @@ mod tests {
         let subscription_id: NftId = "sub_demo$subscriptions.universal"
             .parse()
             .expect("subscription NFT id");
-        let max_cycles = NonZeroU64::new(17).expect("positive cycle limit");
         let mut metadata = Metadata::default();
         metadata.insert(
             SUBSCRIPTION_TRIGGER_REF_METADATA_KEY
@@ -8601,7 +8579,6 @@ mod tests {
             Executable::Ivm(IvmBytecode::from_compiled(
                 subscription_syscall_program_bytes(
                     kotodama_lang::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-                    max_cycles,
                 ),
             )),
             Repeats::Exactly(1),
@@ -8642,7 +8619,6 @@ mod tests {
             Executable::Ivm(IvmBytecode::from_compiled(
                 subscription_syscall_program_bytes(
                     kotodama_lang::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
-                    max_cycles,
                 ),
             )),
             Repeats::Indefinitely,

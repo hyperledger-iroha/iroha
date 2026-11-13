@@ -11,17 +11,17 @@ fn register_compact_proof_decodes_and_verifies() {
     let mut vm = IVM::new(u64::MAX);
     // Modify a few registers (including tag) to create nontrivial tree
     vm.set_register(5, 123456789);
-    vm.set_register(255, 42);
+    vm.set_register(31, 42);
     // Simulate tag change via direct method (call VM internal API if accessible)
     // Here we keep only values and rely on default tag=false for simplicity.
     let out_ptr = ivm::Memory::OUTPUT_START;
     let root_out = ivm::Memory::OUTPUT_START + 8192;
-    let idx = 255u64;
+    let idx = 31u64;
     vm.set_register(10, idx);
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
     vm.set_register(13, root_out);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT]);
     vm.load_program(&prog).expect("load");
     vm.run().expect("run");
     // Read and decode compact proof
@@ -60,7 +60,7 @@ fn register_compact_proof_decodes_and_verifies() {
     let root = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
     let commitment = MerkleTreeCommitment::new(
         root,
-        NonZeroU64::new(256).expect("register count is non-zero"),
+        NonZeroU64::new(ivm::parallel::REGISTER_COUNT as u64).expect("register count is non-zero"),
     );
     assert!(compact.verify_sha256(&leaf, &commitment));
     let full: MerkleProof<[u8; 32]> = compact
@@ -70,7 +70,7 @@ fn register_compact_proof_decodes_and_verifies() {
     assert_eq!(full.leaf_index(), idx as u32);
     assert!(full.verify_sha256(&leaf, &commitment));
     let wrong_count =
-        MerkleTreeCommitment::new(root, NonZeroU64::new(255).expect("wrong count is non-zero"));
+        MerkleTreeCommitment::new(root, NonZeroU64::new(31).expect("wrong count is non-zero"));
     assert!(!compact.verify_sha256(&leaf, &wrong_count));
     let wrong_index = CompactMerkleProof::from_parts(
         compact.depth(),
@@ -87,7 +87,7 @@ fn register_compact_depth_cap_uses_the_full_protocol_register() {
     vm.set_register(11, ivm::Memory::OUTPUT_START);
     vm.set_register(12, u64::from(u32::MAX) + 2);
     vm.set_register(13, 0);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT]);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("run");
     assert!(vm.register(10) > 1);

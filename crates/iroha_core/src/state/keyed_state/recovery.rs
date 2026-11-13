@@ -39,21 +39,48 @@ impl State {
             ));
         }
         // The native tip restore verified the certified prefix through this height and its
-        // successor. Only the stored header is read here; the pinned identity binds it.
-        let chain = CertifiedChain::new(&view).map_err(history_error)?;
-        let block = chain.committed(claim.tip.height()).map_err(history_error)?;
-        if block.block_hash() != claim.tip.iroha_hash()
-            || block.core_hash() != claim.tip.core_hash()
-            || block.result() != claim.tip.result()
-            || block.root_scope() != claim.tip.root_scope()
-        {
-            return Err(Error::Capture(
-                "restored keyed State tip differs from the stored certified block".into(),
-            ));
-        }
-        let header = block.block().header();
-        drop(block);
-        drop(chain);
+        // successor. An omitted checkpoint body stays absent: the separate portable verifier
+        // supplies only its successor-authenticated header and P_H, never a native receipt.
+        let header = if self.kura.checkpoint_prefix_height() == Some(claim.tip.height()) {
+            let hashes = self.committed_block_hashes_snapshot();
+            let portable = self
+                .kura
+                .walk_checkpoint_prefix(
+                    self.chain_id_ref(),
+                    *self.network_id_ref(),
+                    &hashes,
+                    &mut |_| Ok(()),
+                )
+                .map_err(history_error)?
+                .ok_or_else(|| {
+                    Error::Capture("restored portable checkpoint source disappeared".into())
+                })?;
+            let block = portable.checkpoint();
+            if block.header().hash() != claim.tip.iroha_hash()
+                || block.core_hash() != claim.tip.core_hash()
+                || block.result() != claim.tip.result()
+                || block.root_scope() != claim.tip.root_scope()
+                || portable.published_root() != claim.certified
+            {
+                return Err(Error::Capture(
+                    "restored keyed State differs from its portable certified checkpoint".into(),
+                ));
+            }
+            *block.header()
+        } else {
+            let chain = CertifiedChain::new(&view).map_err(history_error)?;
+            let block = chain.committed(claim.tip.height()).map_err(history_error)?;
+            if block.block_hash() != claim.tip.iroha_hash()
+                || block.core_hash() != claim.tip.core_hash()
+                || block.result() != claim.tip.result()
+                || block.root_scope() != claim.tip.root_scope()
+            {
+                return Err(Error::Capture(
+                    "restored keyed State tip differs from the stored certified block".into(),
+                ));
+            }
+            block.block().header()
+        };
         drop(view);
         let (schema, published) = self.cold_committed_keyed_image(claim.tip, header)?;
         let captured = KeyedStateRoot(published.root());

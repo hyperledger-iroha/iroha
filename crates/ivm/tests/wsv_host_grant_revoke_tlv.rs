@@ -70,7 +70,7 @@ fn grant_revoke_permission_with_tlv() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + subj.len() as u64 + 8);
-    let prog_grant = assemble_syscalls(&[syscalls::SYSCALL_GRANT_PERMISSION as u8]);
+    let prog_grant = assemble_syscalls(&[syscalls::SYSCALL_GRANT_PERMISSION]);
     vm.load_program(&prog_grant).unwrap();
     vm.run().expect("grant permission failed");
     // Step 2: verify balance with granted permission via TLVs for alice & asset
@@ -85,7 +85,7 @@ fn grant_revoke_permission_with_tlv() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8);
-    let prog_bal = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
+    let prog_bal = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE]);
     vm.load_program(&prog_bal).unwrap();
     vm.run().expect("balance after grant failed");
     let tlv = vm.validate_tlv(vm.register(10)).expect("balance tlv");
@@ -106,7 +106,7 @@ fn grant_revoke_permission_with_tlv() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + subj.len() as u64 + 8);
-    let prog_revoke = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_PERMISSION as u8]);
+    let prog_revoke = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_PERMISSION]);
     vm.load_program(&prog_revoke).unwrap();
     vm.run().expect("revoke permission failed");
     // Step 4: balance call should now fail (no permission)

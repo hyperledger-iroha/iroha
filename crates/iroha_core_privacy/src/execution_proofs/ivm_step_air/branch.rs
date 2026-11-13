@@ -4,7 +4,7 @@
 //! constrains both operand values and tags across the step, including `r0`
 //! and aliased sources. It range-checks the operands and their subtraction,
 //! then derives equality, unsigned less-than, signed less-than, and the PC
-//! edge from the opcode and signed eight-bit offset. Fetch, the other 254
+//! edge from the opcode and signed 14-bit word offset. Fetch, the other 30
 //! registers, instruction boundaries, and complete invocation continuity
 //! belong to the unfinished machine relation; this profile is not registered.
 
@@ -88,7 +88,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-branch-fri-beta-v1",
     query_seed: b"ivm-branch-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-branch-step-air-v1:public-single-step:beq-bne-blt-bge-bltu-bgeu:signed-imm8:64-bit-signed-unsigned-compare:read-only-registers:r0:aliases:pc-conditional:cycles+1:base-gas=1:no-machine-admission";
+const PROFILE: &[u8] = b"ivm-branch-step-air-v1:public-single-step:beq-bne-blt-bge-bltu-bgeu:lhs-rd-rhs-rs1:signed-off14-words:64-bit-signed-unsigned-compare:read-only-registers:r0:aliases:pc-conditional:cycles+1:base-gas=1:no-machine-admission";
 
 #[derive(Clone, Copy, Debug)]
 #[expect(
@@ -275,7 +275,7 @@ fn residues(row: &[F], fixed: &[F], word: u32) -> Result<Vec<F>, ProofManagedNot
         out.push(row[index].sub(fixed[index]));
     }
     let taken = row[TAKEN_OFFSET];
-    let displacement = signed_field(i64::from(wide::imm8(word)) * 4);
+    let displacement = signed_field(i64::from(wide::imm14(word)) * 4);
     out.push(
         row[1]
             .sub(row[0])

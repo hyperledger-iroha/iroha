@@ -46,7 +46,7 @@ struct Original {
     count: usize,
 }
 
-fn coordinates(block: &CommittedBlock) -> (HashOf<IrohaHeader>, Hash32, Hash32) {
+fn coordinates(block: &dyn ParentServiceBlock) -> (HashOf<IrohaHeader>, Hash32, Hash32) {
     (block.block_hash(), block.core_hash(), block.result())
 }
 
@@ -54,8 +54,8 @@ impl Original {
     fn capture(
         view: &(impl StateReadOnly + ?Sized),
         proposal: &SignedBlock,
-        predecessor: &CommittedBlock,
-        current: &CommittedBlock,
+        predecessor: &dyn ParentServiceBlock,
+        current: &dyn ParentServiceBlock,
         qc: &Qc,
     ) -> Result<Self, ParentServiceError> {
         let pool = view.execution_budget();
@@ -110,8 +110,8 @@ impl Original {
         &self,
         view: &(impl StateReadOnly + ?Sized),
         proposal: &SignedBlock,
-        predecessor: &CommittedBlock,
-        current: &CommittedBlock,
+        predecessor: &dyn ParentServiceBlock,
+        current: &dyn ParentServiceBlock,
         qc: &Qc,
     ) -> Result<(), ParentServiceError> {
         if cfg!(all(test, sumeragi_core_mutation = "HC466")) {
@@ -178,7 +178,7 @@ impl Construction {
     fn prepare(
         &mut self,
         original: &Original,
-        current: &CommittedBlock,
+        current: &dyn ParentServiceBlock,
     ) -> Result<(), ParentServiceError> {
         let pool = &original.pool;
         if self.keys.is_none() {
@@ -285,8 +285,8 @@ impl ParentServiceSignersPreparation {
         &mut self,
         view: &(impl StateReadOnly + ?Sized),
         proposal: &SignedBlock,
-        predecessor: &CommittedBlock,
-        current: &CommittedBlock,
+        predecessor: &dyn ParentServiceBlock,
+        current: &dyn ParentServiceBlock,
         qc: &Qc,
     ) -> Result<(), ParentServiceError> {
         if self.original.is_none() {
@@ -347,8 +347,8 @@ impl ParentServiceSignersPreparation {
         &self,
         view: &(impl StateReadOnly + ?Sized),
         proposal: &SignedBlock,
-        predecessor: &CommittedBlock,
-        current: &CommittedBlock,
+        predecessor: &dyn ParentServiceBlock,
+        current: &dyn ParentServiceBlock,
         qc: &Qc,
     ) -> Result<RetainedSigners, ParentServiceError> {
         let original = self

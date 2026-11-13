@@ -7,7 +7,6 @@ use iroha_primitives::numeric_abi::QuantityValueV1;
 use ivm::{
     CoreHost, IVM, Memory, PointerType, ProgramMetadata, VMError, encoding,
     host::{DefaultHost, IVMHost},
-    instruction,
     numeric::NumericFaultV1,
     syscalls,
 };
@@ -138,10 +137,7 @@ fn borrowed_state_operands_keep_quantity_conservation_and_owned_results_on_both_
             syscalls::SYSCALL_STATE_VALUE_DECODE,
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
         ] {
-            let word = u8::try_from(number).map_or_else(
-                |_| encoding::wide::encode_scall(number),
-                |number| encoding::wide::encode_scall(u32::from(number)),
-            );
+            let word = encoding::wide::encode_scall(number);
             let calls = steps
                 .records()
                 .iter()

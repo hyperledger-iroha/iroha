@@ -480,7 +480,8 @@ mod tests {
     fn fallible_initial_register_tree_matches_canonical_root_and_capacity() {
         let regs = Registers::try_new().expect("initial register allocation fits test host");
         let zero_leaf: [u8; 32] = Sha256::digest([0_u8; 9]).into();
-        let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![zero_leaf; REGISTER_COUNT]);
+        let canonical =
+            MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![zero_leaf; REGISTER_COUNT]);
         let tree = regs.tree.lock();
         assert_eq!(tree.root(), canonical.root());
         assert_eq!(tree.allocated_bytes(), canonical.allocated_bytes());

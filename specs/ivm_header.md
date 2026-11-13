@@ -6,15 +6,14 @@ Magic
 
 Layout (current)
 <!-- BEGIN GENERATED HEADER LAYOUT -->
-- Offsets and sizes (49 bytes total):
+- Offsets and sizes (48 bytes total):
   - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
   - 6: `mode: u8` (feature bits; see below)
-  - 7: `vector_length: u8` (reserved)
-  - 8..16: `max_cycles: u64` (little‑endian)
-  - 16: `abi_version: u8`
-  - 17..49: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)
+  - 7..15: `max_cycles: u64` (little‑endian ZK trace bound; zero without `ZK`)
+  - 15: `abi_version: u8`
+  - 16..48: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)
 <!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
@@ -107,8 +106,8 @@ The following policy summary is generated from the implementation and should not
 | version_major | 1 |
 | version_minor | 1 (sole current header for every profile) |
 | mode (known bits) | 0x01 (ZK=0x01) |
+| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |
 | abi_version | 1 |
-| vector_length | 0..=64 (reserved; no instruction reads it) |
 <!-- END GENERATED HEADER POLICY -->
 
 ### ABI Hashes (generated)
@@ -130,7 +129,8 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7 |
+| ABI v1 | bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849 |
+| iroha.ivm.runtime_lifecycle.v1 | 76f057f25a3ba9a1525dc9b066de73c982f49c2ffd8180e65ddaeeb64d3515af |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI V1 is the sole first-release version. Named host profiles preserve its

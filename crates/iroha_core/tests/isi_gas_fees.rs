@@ -1100,11 +1100,7 @@ fn ivm_syscall_charges_fees() {
     let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
     let scall = encoding::wide::encode_scall(ivm_sys::SYSCALL_DEBUG_PRINT);
-    let mut program = ProgramMetadata {
-        max_cycles: 1_000,
-        ..ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&scall.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let exec = Executable::Ivm(IvmBytecode::from_compiled(program));
@@ -1290,7 +1286,7 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 1_000_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut program = meta.encode();

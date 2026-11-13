@@ -249,7 +249,9 @@ fn selected_amx_funded_settlement_uses_captured_executor_context_after_compiled_
     let second = roots.prepare(1, &transaction, &begin);
     let decision = roots.decide([first, second], transaction.id().unwrap());
     let chain = &roots.participants[0];
-    let budget = chain.state().ivm_execution_budget();
+    // This Decision was read from the global root's original proof archive. Its
+    // retained transport graph stays in that pool when delivered to a participant.
+    let budget = roots.global.state().ivm_execution_budget();
     let instruction = decision
         .try_copy(&budget)
         .unwrap()
@@ -402,7 +404,7 @@ fn selected_amx_rebound_creators_cannot_change_shared_trackers_or_fund_new_custo
     }
     // Even a repeated/held Prepare cannot mutate the shared participant tracker from a new context.
     let chain = &roots.participants[0];
-    let budget = chain.state().ivm_execution_budget();
+    let budget = roots.global.state().ivm_execution_budget();
     let instruction = begin
         .try_copy(&budget)
         .unwrap()

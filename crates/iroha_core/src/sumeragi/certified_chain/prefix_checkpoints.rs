@@ -250,11 +250,12 @@ impl QueryCertifiedChain<'_> {
         admit_schedule_clone(checkpoint.schedule.canonical(), checkpoint.height)?;
         *cursor = Some(query_reader::QueryPrefix {
             tip: ParentProjection::from_original(&tip),
-            wire: checkpoint.wire,
+            wire: Some(checkpoint.wire),
             schedule: checkpoint.schedule.canonical().clone(),
             authority: PrefixAuthority::Retained(checkpoint.authority.clone()),
             validation,
             proof_source: Some(checkpoint.proof_source),
+            portable_successor: None,
         });
         Ok(true)
     }
@@ -280,7 +281,9 @@ impl QueryCertifiedChain<'_> {
         let Some(proof_source) = prefix.proof_source else {
             return Ok(None);
         };
-        let wire = prefix.wire;
+        let Some(wire) = prefix.wire else {
+            return Ok(None);
+        };
         if height <= GENESIS_HEIGHT
             || proof_source_append(parent_source, height, wire.0, wire.1) != proof_source
         {

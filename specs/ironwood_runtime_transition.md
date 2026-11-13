@@ -191,7 +191,7 @@ its opaque instruction roots do not bind the privacy payload registry. It moved 
 `8c6e5380…` when the execution commitment's World roots became `KeyedStateRoot`
 (`sumeragi.md` §16.6): LtHash roots keep their bytes, but a reader built before that change
 refuses a keyed root whose marker bit is clear. IVM ABI V1
-stays `7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7`.
+is `bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849`.
 Neither hash is a sufficient Ironwood support signal.
 
 Before approving activation, governance qualification must record a candidate

@@ -16,18 +16,18 @@ fn roundtrip_ri() {
 #[test]
 fn roundtrip_mem() {
     let load = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 5, 3, 6);
-    let (op_l, rd, base, imm_l) = encoding::wide::decode_mem(load);
+    let (op_l, rd, base, imm_l) = encoding::wide::decode_load(load);
     assert_eq!(op_l, instruction::wide::memory::LOAD64);
     assert_eq!((rd, base, imm_l), (5, 3, 6));
     let store = encoding::wide::encode_store(instruction::wide::memory::STORE64, 9, 8, -7);
-    let (op_s, base_s, rs_s, imm_s) = encoding::wide::decode_mem(store);
+    let (op_s, base_s, rs_s, imm_s) = encoding::wide::decode_store(store);
     assert_eq!(op_s, instruction::wide::memory::STORE64);
     assert_eq!((base_s, rs_s, imm_s), (9, 8, -7));
 }
 #[test]
 fn roundtrip_branch_jump_sys() {
     let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, 6);
-    let (op_b, rs1, rs2, off) = encoding::wide::decode_mem(beq);
+    let (op_b, rs1, rs2, off) = encoding::wide::decode_branch(beq);
     assert_eq!(op_b, instruction::wide::control::BEQ);
     assert_eq!((rs1, rs2, off), (1, 2, 6));
     let jal = encoding::wide::encode_jump(instruction::wide::control::JAL, 3, -32);
@@ -35,7 +35,9 @@ fn roundtrip_branch_jump_sys() {
     assert_eq!(op_j, instruction::wide::control::JAL);
     assert_eq!((rd, off_j), (3, -32));
     let sys = encoding::wide::encode_scall(0x1A);
-    let (op_s, imm8) = encoding::wide::decode_sys(sys);
-    assert_eq!(op_s, instruction::wide::system::SCALL);
-    assert_eq!(imm8, 0x1A);
+    assert_eq!(
+        instruction::wide::opcode(sys),
+        instruction::wide::system::SCALL
+    );
+    assert_eq!(encoding::wide::decode_scall(sys), 0x1A);
 }

@@ -3293,7 +3293,7 @@ fn assert_fixed_tail<S: fs::Scalar>(
 }
 
 /// Proves a uniform pair, linked (P's phase-1 digest d, S with d giving rho
-/// and R, P again with rho and R), and verifies both proofs. `seed` names
+/// and R, P with rho and R), and verifies both proofs. `seed` names
 /// the pair's randomness ("fixed point" keeps the Receive pair's original
 /// seeds, so its proofs are byte-identical to earlier runs).
 #[allow(clippy::too_many_arguments)]
@@ -3316,16 +3316,12 @@ fn prove_linked_pair(
     let rlc = |rho: &[u8; 32]| verifier::rlc_value(rho, Fq::from(3), &[1, 2, 3]).to_repr();
     let rng_p = SpikeRng::new(&[format!("{seed} P/").as_bytes(), &[hop as u8]].concat());
     let mut rng_s = SpikeRng::new(&[format!("{seed} S/").as_bytes(), &[hop as u8]].concat());
-    let (_, d, _) = spartan::prove_linked_circuit(
+    let d = spartan::prepare_linked_phase1(
         &cp.shape,
         &gp,
         ip,
         wp,
         &mut rng_p.clone(),
-        &Link::First {
-            rho: [0; 32],
-            r: [0; 32],
-        },
         cp,
     );
     let (ps, rho, r) = spartan::prove_linked_circuit(

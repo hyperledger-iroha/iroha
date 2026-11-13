@@ -5,8 +5,10 @@ import {
   ToriiHttpError,
   ToriiStreamGapError,
   isIdempotentSubmissionRejection,
+  toriiErrorEnvelopeFields,
   toriiHttpErrorFromResponseText,
 } from "./toriiErrors.js";
+import { decodeTypedToriiErrorEnvelope } from "./toriiErrorEnvelope.js";
 import { createToriiCollections } from "./query/collections.js";
 import { decodeAssetMovementRow } from "./query/assetMovements.js";
 import { decodePageText, stringifyRequestJson } from "./query/page.js";
@@ -1033,6 +1035,16 @@ async function responseText(response) {
   return "";
 }
 
+// A Norito error body is binary, so its exact bytes are kept for envelope
+// classification; an unreadable body is empty, as `responseText` treats it.
+async function responseBytes(response) {
+  if (typeof response?.arrayBuffer !== FIELD_FUNCTION) return null;
+  return response.arrayBuffer().then(
+    (buffer) => new Uint8Array(buffer),
+    () => new Uint8Array(0),
+  );
+}
+
 function requestSignal(options, timeoutMs) {
   const callerSignal = options.signal;
   if (!(timeoutMs > 0) || typeof AbortController !== FIELD_FUNCTION) {
@@ -1116,12 +1128,21 @@ async function fetchToriiResponse(
 }
 
 async function toriiHttpErrorFromResponse(response, status, expected, bodyOptions) {
+  const statusText = typeof response?.statusText === "string" && response.statusText ? response.statusText : null;
+  const contentType = response?.headers?.get?.(FIELD_CONTENT_TYPE) ?? null;
+  const rejectCodeHeader = response?.headers?.get?.("x-iroha-reject-code") ?? null;
+  // A route negotiating Norito receives Torii's canonical error envelope as
+  // binary, so it classifies the exact body bytes first; any other body keeps
+  // the text handling below under the route's existing size bound.
+  const decodeErrorEnvelope = bodyOptions?.decodeErrorEnvelope;
+  let bytes = null;
   let bodyText;
   if (bodyOptions?.maximumBodyBytes === undefined) {
-    bodyText = await responseText(response);
+    bytes = decodeErrorEnvelope === undefined ? null : await responseBytes(response);
+    if (bytes === null) bodyText = await responseText(response);
   } else {
     try {
-      bodyText = await readBoundedResponseText(
+      bytes = await readBoundedResponseBytes(
         response,
         bodyOptions.maximumBodyBytes,
         bodyOptions.context,
@@ -1136,13 +1157,35 @@ async function toriiHttpErrorFromResponse(response, status, expected, bodyOption
       throw error;
     }
   }
+  if (bytes !== null) {
+    const decoded = decodeErrorEnvelope === undefined ? null : decodeErrorEnvelope(contentType, bytes);
+    if (decoded !== null) {
+      // The envelope supplies its exact message and details; the reject-code
+      // header keeps its usual precedence as `code`.
+      return new ToriiHttpError({
+        status,
+        statusText,
+        expected,
+        ...toriiErrorEnvelopeFields(decoded, bytes, rejectCodeHeader),
+      });
+    }
+    if (bodyOptions?.maximumBodyBytes === undefined) {
+      bodyText = new TextDecoder().decode(bytes);
+    } else {
+      try {
+        bodyText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch (error) {
+        rejectType(`${bodyOptions.context} must be valid UTF-8`, { cause: error });
+      }
+    }
+  }
   return toriiHttpErrorFromResponseText({
     status,
-    statusText: typeof response?.statusText === "string" && response.statusText ? response.statusText : null,
+    statusText,
     expected,
     bodyText,
-    contentType: response?.headers?.get?.(FIELD_CONTENT_TYPE) ?? null,
-    rejectCodeHeader: response?.headers?.get?.("x-iroha-reject-code") ?? null,
+    contentType,
+    rejectCodeHeader,
   });
 }
 
@@ -2116,6 +2159,8 @@ export class ToriiBrowserClient {
       },
       DEFAULT_SUCCESS_STATUSES,
       cleanup,
+      // Torii answers this Norito negotiation with a binary error envelope.
+      { decodeErrorEnvelope: decodeTypedToriiErrorEnvelope },
     );
     try {
       const contentType = response.headers?.get?.(FIELD_CONTENT_TYPE) ?? "";

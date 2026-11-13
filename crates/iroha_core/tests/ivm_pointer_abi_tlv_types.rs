@@ -5,19 +5,17 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls as ivm_sys};
 use norito::to_bytes;
 fn program_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    let scall = instruction::wide::system::SCALL;
-    let sys_u8 = u8::try_from(sys).unwrap();
-    code.extend_from_slice(&encoding::wide::encode_scall(u32::from(sys_u8)).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(sys).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 0,
         abi_version: 1,
     };
     let mut out = meta.encode();

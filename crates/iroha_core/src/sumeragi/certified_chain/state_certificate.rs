@@ -18,7 +18,11 @@ pub use parent_service_copy::{
     ParentServiceCopyAdmissionProbe, observe_parent_service_copy_admission,
 };
 use parent_service_qc::ParentServiceQcPreparation;
+mod parent_service_context;
 mod parent_service_signers;
+use parent_service_context::{
+    ParentServiceBlock, parent_service_authority, verify_service_boundary,
+};
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 pub use parent_service_qc::admit_parent_service_fixture;
 #[cfg(test)]
@@ -31,6 +35,8 @@ use parent_service_signers::{ParentServiceSignersPreparation, RetainedSigners};
 
 #[cfg(test)]
 mod authority_regressions;
+#[cfg(test)]
+mod portable_parent_service_tests;
 
 use super::funded_authority::FundedExecutionAuthority;
 
@@ -1239,22 +1245,43 @@ fn check_parent_service_original(
 }
 
 fn verify_parent_service_relation(
-    parent: &CommittedBlock,
-    current: &CommittedBlock,
+    parent: &dyn ParentServiceBlock,
+    current: &dyn ParentServiceBlock,
     qc: &Qc,
     authority: AuthorityRef<'_>,
     context: PrefixVerifierContext,
 ) -> Result<(), ParentServiceError> {
+    if current.root_scope() != context.root_scope {
+        return Err(parent_source_failure(
+            "parent-service scope differs from authenticated genesis",
+        ));
+    }
+    check_result_scope_identity(
+        current.height(),
+        current.active_result(),
+        context.root_scope,
+    )
+    .map_err(|error| ParentServiceError::Invalid(error.to_string()))?;
+    let header = current
+        .header()
+        .ok_or_else(|| parent_source_failure("parent-service consensus header is absent"))?;
     context
-        .verify_commit_qc_original(current, authority, qc)
+        .verify_commit_qc_identity(
+            current.height(),
+            header,
+            current.core_hash(),
+            current.result(),
+            authority,
+            qc,
+        )
         .map_err(|error| ParentServiceError::Invalid(error.to_string()))?;
-    verify_boundary_source(current, parent, authority).map_err(parent_source_failure)?;
+    verify_service_boundary(current, parent, authority).map_err(parent_source_failure)?;
     Ok(())
 }
 
 fn verified_parent_service(
     proposal: &SignedBlock,
-    current: &CommittedBlock,
+    current: &dyn ParentServiceBlock,
     signers: RetainedSigners,
 ) -> Result<VerifiedParentService, ParentServiceError> {
     Ok(VerifiedParentService {
@@ -1273,7 +1300,7 @@ impl ParentServicePreparation {
         parent: &SignedBlock,
     ) -> Result<iroha_data_model::consensus::NposParentServiceCommitQc, ParentServiceError> {
         self.require_producer_relation(view, parent)?;
-        let (_, original, _, _, _) = self.inputs();
+        let original = self.native_current()?;
         self.producer_copy
             .get(original.block(), &view.execution_budget())
     }
@@ -1284,7 +1311,8 @@ impl ParentServicePreparation {
         parent: &SignedBlock,
     ) -> Result<(), ParentServiceError> {
         self.require_complete(view, parent.header().height().get())?;
-        let (predecessor, original, authority, config, context) = self.inputs();
+        let (predecessor, _, authority, config, context) = self.service_inputs();
+        let original = self.native_current()?;
         context
             .prepare_certificate_with_scratch_admission(
                 original,
@@ -1294,7 +1322,7 @@ impl ParentServicePreparation {
                 &mut query_scratch_admission,
             )
             .map_err(parent_verification_source)?;
-        verify_boundary_source(original, predecessor, authority).map_err(parent_source_failure)?;
+        verify_service_boundary(original, predecessor, authority).map_err(parent_source_failure)?;
         check_parent_service_original(parent, original)
     }
     /// Prepare the original QC and complete paid signer graph before a disposable overlay.
@@ -1315,7 +1343,7 @@ impl ParentServicePreparation {
                 ParentServiceError::Invalid("parent height is not addressable".into())
             })?;
         self.require_complete(view, height)?;
-        let (_, current, _, _, _) = self.inputs();
+        let (_, current, _, _, _) = self.service_inputs();
         if proposal.header().prev_block_hash() != Some(current.block_hash()) {
             return Err(ParentServiceError::Invalid(
                 "proposal does not extend the authenticated parent".into(),
@@ -1369,7 +1397,7 @@ impl ParentServicePreparation {
             ));
         }
         self.require_complete(view, parent_height)?;
-        let (parent, current, authority, _, context) = self.inputs();
+        let (parent, current, authority, _, context) = self.service_inputs();
         if proposal.header().prev_block_hash() != Some(current.block_hash()) {
             return Err(ParentServiceError::Invalid(
                 "proposal does not extend the authenticated parent".into(),

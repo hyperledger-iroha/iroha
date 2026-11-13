@@ -7,6 +7,8 @@ use iroha_data_model::events::pipeline::PipelineEventBox;
 use norito::streaming::{CapabilityFlags, HpkeSuite, PrivacyBucketGranularity};
 use std::num::NonZeroU64;
 use tokio::time::{Duration, Instant, sleep};
+/// Architectural register count of a trace row.
+const REGISTERS: usize = ivm::instruction::wide::REGISTER_COUNT;
 #[tokio::test]
 async fn zk_lane_emits_warning_on_rejected_trace() {
     // Register a local events sender to capture warnings
@@ -19,15 +21,23 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
         ..iroha_config::parameters::actual::DiagnosticTrace::default()
     };
     let _ = zk_lane::start(&cfg);
-    // Build a task whose constraint fails: gpr[0] = 1 but requires zero at cycle 0
-    let mut gpr = [0u64; 256];
-    gpr[0] = 1;
+    // Build a task whose register event does not authenticate against its register root.
+    let mut gpr = [0u64; REGISTERS];
+    gpr[1] = 1;
     let trace = vec![ivm::zk::RegisterState {
         pc: 0,
         gpr,
-        tags: [false; 256],
+        tags: [false; REGISTERS],
     }];
-    let constraints = vec![ivm::zk::Constraint::Zero { reg: 0, cycle: 0 }];
+    let register_events = vec![ivm::zk::RegEvent::Read {
+        index: 1,
+        value: 1,
+        tag: false,
+        path: [[0u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
+        root: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"not the register root",
+        )),
+    }];
     let job = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xCD; 32],
@@ -39,7 +49,7 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
             0,
             0,
         )),
-        snapshot: funded_snapshot(&trace, &constraints),
+        snapshot: funded_snapshot(&trace, &register_events),
         transport_capabilities: None,
         negotiated_capabilities: None,
     };
@@ -83,8 +93,8 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
 fn zk_task_digest_reflects_transport_metadata() {
     let trace = vec![ivm::zk::RegisterState {
         pc: 0,
-        gpr: [0u64; 256],
-        tags: [false; 256],
+        gpr: [0u64; REGISTERS],
+        tags: [false; REGISTERS],
     }];
     let make_base = || zk_lane::ZkTask {
         tx_hash: None,
@@ -118,13 +128,12 @@ fn zk_task_digest_reflects_transport_metadata() {
 
 fn funded_snapshot(
     trace: &[ivm::zk::RegisterState],
-    constraints: &[ivm::zk::Constraint],
+    register_events: &[ivm::zk::RegEvent],
 ) -> ivm::zk::DiagnosticTraceSnapshot {
     ivm::zk::DiagnosticTraceSource {
         registers: ivm::zk::DiagnosticRegisterSource::States(trace),
-        constraints,
         memory_events: &[],
-        register_events: &[],
+        register_events,
         steps: &[],
     }
     .try_snapshot(&iroha_allocation::AllocationBudget::new(64 * 1024))

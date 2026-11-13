@@ -62,6 +62,12 @@ pub use checkpoint::{
     MAX_FINALITY_CHECKPOINT_BYTES, SumeragiCheckpointAdvanceError, SumeragiFinalityCheckpoint,
 };
 mod compact;
+mod portable_prefix;
+pub use portable_prefix::{
+    MAX_PORTABLE_PREFIX_FRAME_BYTES, PortableCertifiedBlockV1, PortablePrefixAcquisitionV1,
+    PortablePrefixFrameV1, PortablePrefixRowV1, PortablePrefixVerifierV1,
+    VerifiedPortableCheckpointV1,
+};
 pub use compact::{
     CertifiedTransactionInclusionV1, MAX_COMMIT_CERTIFICATE_BYTES_V1, MAX_COMMIT_CHECKPOINT_BYTES,
     SumeragiCommitCertificateV1, SumeragiCommitCheckpointV1, SumeragiCommitVerifierV1,
@@ -84,8 +90,10 @@ pub use world_state::{
     MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
     VerifiedWorldStateSnapshotV1, WORLD_STATE_ACCUMULATOR_LANES_V1, WorldStateElementKindV1,
     WorldStateSchemaPolicyV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
-    native_world_schema_family_v1, native_world_schemas_for_anchor_v1, world_state_element_v1,
-    world_state_path_hash_v1, world_state_root_from_accumulator_v1, world_state_value_hash_v1,
+    ironwood_world_schema_v1, lthash16_world_profile_v1, native_world_schema_family_v1,
+    native_world_schemas_for_anchor_v1, world_state_element_v1, world_state_path_hash_v1,
+    world_state_root_from_accumulator_v1, world_state_selection_schema_v1,
+    world_state_value_hash_v1,
 };
 
 use std::collections::BTreeMap;

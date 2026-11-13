@@ -158,14 +158,10 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     vm.set_register(10, ptr);
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_scall(ivm_sys::SYSCALL_VERIFY_PROOF)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_VERIFY_PROOF).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = ProgramMetadata {
-        ..ProgramMetadata::default()
-    }
-    .encode();
+    let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).expect("load verify");
     vm.run().expect("run verify");
@@ -200,13 +196,10 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     let mut code2 = Vec::new();
     code2.extend_from_slice(
         &encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-        .to_le_bytes(),
+            .to_le_bytes(),
     );
     code2.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog2 = ProgramMetadata {
-        ..ProgramMetadata::default()
-    }
-    .encode();
+    let mut prog2 = ProgramMetadata::default().encode();
     prog2.extend_from_slice(&code2);
     let nullifier = derive_ballot_nullifier("zkvote", &state.network_id, "e1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {

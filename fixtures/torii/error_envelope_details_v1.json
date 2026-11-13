@@ -1,0 +1,198 @@
+{
+  "schema": "iroha.torii.error_envelope_details",
+  "version": 1,
+  "classification": "public-synthetic-test-data",
+  "norito_envelope": {
+    "schema_type_name": "iroha_torii_shared::ErrorEnvelope",
+    "schema_hash_hex": "793f11768076bfe270a17aeb86752cd9",
+    "flags_hex": "02"
+  },
+  "decoded": [
+    {
+      "name": "queue_full",
+      "status": 429,
+      "code": "queue_full",
+      "message": "transaction queue is at capacity",
+      "details": {
+        "reject_code": "PRTRY:QUEUE_FULL",
+        "queue": {
+          "state": "saturated",
+          "queued": 65536,
+          "capacity": 65536,
+          "saturated": true
+        },
+        "retry_after_seconds": 1
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900a0000000000000001a25d8c78103e838020b0a71756575655f66756c6c21207472616e73616374696f6e20717565756520697320617420636170616369747971016f010001001301111050525452593a51554555455f46554c4c21011f0a0973617475726174656408000001000000000008000001000000000001010a01080100000000000000010001000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"queue_full\",\"message\":\"transaction queue is at capacity\",\"details\":{\"reject_code\":\"PRTRY:QUEUE_FULL\",\"queue\":{\"state\":\"saturated\",\"queued\":65536,\"capacity\":65536,\"saturated\":true},\"retry_after_seconds\":1}}"
+    },
+    {
+      "name": "admission_deferred",
+      "status": 429,
+      "code": "admission_deferred",
+      "message": "local admission capacity is unavailable; retry the same signed transaction",
+      "details": {
+        "queue": {
+          "state": "healthy",
+          "queued": 17,
+          "capacity": 65536,
+          "saturated": false
+        },
+        "retry_after_seconds": 1
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900be000000000000004467c1d56362fb9002131261646d697373696f6e5f64656665727265644b4a6c6f63616c2061646d697373696f6e20636170616369747920697320756e617661696c61626c653b207265747279207468652073616d65207369676e6564207472616e73616374696f6e5d015b0100010001001f011d08076865616c74687908110000000000000008000001000000000001000a01080100000000000000010001000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"admission_deferred\",\"message\":\"local admission capacity is unavailable; retry the same signed transaction\",\"details\":{\"queue\":{\"state\":\"healthy\",\"queued\":17,\"capacity\":65536,\"saturated\":false},\"retry_after_seconds\":1}}"
+    },
+    {
+      "name": "already_committed",
+      "status": 409,
+      "code": "already_committed",
+      "message": "transaction already committed to the blockchain",
+      "details": {
+        "reject_code": "PRTRY:ALREADY_COMMITTED",
+        "queue": {
+          "state": "healthy",
+          "queued": 3,
+          "capacity": 65536,
+          "saturated": false
+        }
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900b20000000000000038c744e36a199252021211616c72656164795f636f6d6d6974746564302f7472616e73616374696f6e20616c726561647920636f6d6d697474656420746f2074686520626c6f636b636861696e6d016b010001001a01181750525452593a414c52454144595f434f4d4d49545445441f011d08076865616c74687908030000000000000008000001000000000001000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"already_committed\",\"message\":\"transaction already committed to the blockchain\",\"details\":{\"reject_code\":\"PRTRY:ALREADY_COMMITTED\",\"queue\":{\"state\":\"healthy\",\"queued\":3,\"capacity\":65536,\"saturated\":false}}}"
+    },
+    {
+      "name": "queue_nexus_fee_rejected",
+      "status": 422,
+      "code": "queue_nexus_fee_rejected",
+      "message": "transaction cannot cover the Nexus fee admission bound",
+      "details": {
+        "reject_code": "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
+        "queue": {
+          "state": "healthy",
+          "queued": 9,
+          "capacity": 65536,
+          "saturated": false
+        },
+        "fee": {
+          "code": "authority_payer_insufficient",
+          "retryable": true,
+          "remediation": "fund the authority fee asset balance or select an eligible sponsor program"
+        }
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9004a01000000000000188a960dcc83d69602191871756575655f6e657875735f6665655f72656a656374656437367472616e73616374696f6e2063616e6e6f7420636f76657220746865204e65787573206665652061646d697373696f6e20626f756e64f60101f301010001002501232250525452593a4e455855535f4645455f41444d495353494f4e5f52454a45435445441f011d08076865616c74687908090000000000000008000001000000000001000100010001000100010001000100010001000100010001000100010001007e017c1d1c617574686f726974795f70617965725f696e73756666696369656e74010101000100010001000100010001004d014b4a66756e642074686520617574686f72697479206665652061737365742062616c616e6365206f722073656c65637420616e20656c696769626c652073706f6e736f722070726f6772616d010001000100010001000100",
+      "json_utf8": "{\"code\":\"queue_nexus_fee_rejected\",\"message\":\"transaction cannot cover the Nexus fee admission bound\",\"details\":{\"reject_code\":\"PRTRY:NEXUS_FEE_ADMISSION_REJECTED\",\"queue\":{\"state\":\"healthy\",\"queued\":9,\"capacity\":65536,\"saturated\":false},\"fee\":{\"code\":\"authority_payer_insufficient\",\"retryable\":true,\"remediation\":\"fund the authority fee asset balance or select an eligible sponsor program\"}}}"
+    },
+    {
+      "name": "transaction_admission_deferred",
+      "status": 503,
+      "code": "transaction_admission_deferred",
+      "message": "Local readiness or resources prevented transaction admission. This request was not queued; retry the unchanged signed request.",
+      "details": {
+        "retry_after_seconds": 1
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900e0000000000000004ad1c6ef132c9a5b021f1e7472616e73616374696f6e5f61646d697373696f6e5f64656665727265647f7e4c6f63616c2072656164696e657373206f72207265736f75726365732070726576656e746564207472616e73616374696f6e2061646d697373696f6e2e2054686973207265717565737420776173206e6f74207175657565643b2072657472792074686520756e6368616e676564207369676e656420726571756573742e3f013d01000100010001000a01080100000000000000010001000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"transaction_admission_deferred\",\"message\":\"Local readiness or resources prevented transaction admission. This request was not queued; retry the unchanged signed request.\",\"details\":{\"retry_after_seconds\":1}}"
+    },
+    {
+      "name": "proof_rate_limited",
+      "status": 429,
+      "code": "proof_rate_limited",
+      "message": "proof endpoint `/v1/zk/proofs` throttled; retry after 3s",
+      "details": {
+        "retry_after_seconds": 3,
+        "endpoint": "/v1/zk/proofs"
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9009d00000000000000167aaad63c90f5aa02131270726f6f665f726174655f6c696d69746564393870726f6f6620656e64706f696e7420602f76312f7a6b2f70726f6f667360207468726f74746c65643b2072657472792061667465722033734e014c01000100010001000a0108030000000000000010010e0d2f76312f7a6b2f70726f6f667301000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"proof_rate_limited\",\"message\":\"proof endpoint `/v1/zk/proofs` throttled; retry after 3s\",\"details\":{\"retry_after_seconds\":3,\"endpoint\":\"/v1/zk/proofs\"}}"
+    },
+    {
+      "name": "every_decoded_field",
+      "status": 400,
+      "code": "every_decoded_field",
+      "message": "quote \" backslash \\ newline \n tab \t bell \u0007 unit \u001f del  accent é kanji 日本 blossom 🌸 separator  ",
+      "details": {
+        "layer": "torii",
+        "reject_code": "PRTRY:AXT_POLICY_REJECTED",
+        "queue": {
+          "state": "saturated",
+          "queued": 18446744073709551615,
+          "capacity": 9007199254740992,
+          "saturated": true
+        },
+        "retry_after_seconds": 9007199254740991,
+        "endpoint": "/v1/pipeline/transactions",
+        "field": "payload.instructions[0]",
+        "expected": "Applied",
+        "actual": "quote \" backslash \\ newline \n tab \t bell \u0007 unit \u001f del  accent é kanji 日本 blossom 🌸 separator  ",
+        "profile": "taira",
+        "chain_discriminant": 65535,
+        "entrypoint_hash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "tx_hash": "abababababababababababababababababababababababababababababababab",
+        "last_status": "Rejected",
+        "hint": "",
+        "axt": {
+          "code": "AXT_HANDLE_ERA",
+          "reason": "handle era is stale",
+          "snapshot_version": 18446744073709551615,
+          "dataspace": 0,
+          "lane": 4294967295,
+          "active_handle_era": 9007199254740993,
+          "next_handle_counter": 1
+        },
+        "fee": {
+          "code": "vault_insufficient",
+          "retryable": false,
+          "program_id": "retail#sponsor",
+          "program_revision": 7,
+          "asset_definition_id": "xor#sora",
+          "required": "12.5",
+          "available": "0",
+          "rule_id": "default_route",
+          "observation_height": 4294967296,
+          "remediation": "fund the isolated sponsor-program vault or select another payer"
+        }
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9005103000000000000dcdf1cdd9f99132902141365766572795f6465636f6465645f6669656c646a6971756f74652022206261636b736c617368205c206e65776c696e65200a2074616220092062656c6c200720756e6974201f2064656c207f20616363656e7420c3a9206b616e6a6920e697a5e69cac20626c6f73736f6d20f09f8cb820736570617261746f7220e280a8cf0501cc05010008010605746f7269691c011a1950525452593a4158545f504f4c4943595f52454a454354454421011f0a0973617475726174656408ffffffffffffffff08000000000000200001010a0108ffffffffffff1f001c011a192f76312f706970656c696e652f7472616e73616374696f6e731a0118177061796c6f61642e696e737472756374696f6e735b305d0a0108074170706c6965646c016a6971756f74652022206261636b736c617368205c206e65776c696e65200a2074616220092062656c6c200720756e6974201f2064656c207f20616363656e7420c3a9206b616e6a6920e697a5e69cac20626c6f73736f6d20f09f8cb820736570617261746f7220e280a8080106057461697261040102ffff430141406364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636443014140616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261620100010001000b01090852656a6563746564030101005e015c11010f0e4158545f48414e444c455f4552411601141368616e646c6520657261206973207374616c650a0108ffffffffffffffff0a01080000000000000000060104ffffffff0a010801000000000020000a01080100000000000000ae0101ab0113127661756c745f696e73756666696369656e74010011010f0e72657461696c2373706f6e736f720a010807000000000000000b010908786f7223736f72610701050431322e35040102013010010e0d64656661756c745f726f7574650a010800000000010000004201403f66756e64207468652069736f6c617465642073706f6e736f722d70726f6772616d207661756c74206f722073656c65637420616e6f74686572207061796572010001000100010001000100",
+      "json_utf8": "{\"code\":\"every_decoded_field\",\"message\":\"quote \\\" backslash \\\\ newline \\n tab \\t bell \\u0007 unit \\u001f del  accent é kanji 日本 blossom 🌸 separator  \",\"details\":{\"layer\":\"torii\",\"reject_code\":\"PRTRY:AXT_POLICY_REJECTED\",\"queue\":{\"state\":\"saturated\",\"queued\":18446744073709551615,\"capacity\":9007199254740992,\"saturated\":true},\"retry_after_seconds\":9007199254740991,\"endpoint\":\"/v1/pipeline/transactions\",\"field\":\"payload.instructions[0]\",\"expected\":\"Applied\",\"actual\":\"quote \\\" backslash \\\\ newline \\n tab \\t bell \\u0007 unit \\u001f del  accent é kanji 日本 blossom 🌸 separator  \",\"profile\":\"taira\",\"chain_discriminant\":65535,\"entrypoint_hash\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"tx_hash\":\"abababababababababababababababababababababababababababababababab\",\"last_status\":\"Rejected\",\"hint\":\"\",\"axt\":{\"code\":\"AXT_HANDLE_ERA\",\"reason\":\"handle era is stale\",\"snapshot_version\":18446744073709551615,\"dataspace\":0,\"lane\":4294967295,\"active_handle_era\":9007199254740993,\"next_handle_counter\":1},\"fee\":{\"code\":\"vault_insufficient\",\"retryable\":false,\"program_id\":\"retail#sponsor\",\"program_revision\":7,\"asset_definition_id\":\"xor#sora\",\"required\":\"12.5\",\"available\":\"0\",\"rule_id\":\"default_route\",\"observation_height\":4294967296,\"remediation\":\"fund the isolated sponsor-program vault or select another payer\"}}}"
+    },
+    {
+      "name": "empty_details",
+      "status": 400,
+      "code": "empty_details",
+      "message": "details present without fields",
+      "details": {},
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd90066000000000000000577bafe6cb553a1020e0d656d7074795f64657461696c731f1e64657461696c732070726573656e7420776974686f7574206669656c647336013401000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100",
+      "json_utf8": "{\"code\":\"empty_details\",\"message\":\"details present without fields\",\"details\":{}}"
+    }
+  ],
+  "undecoded": [
+    {
+      "name": "account_alias_not_found",
+      "status": 404,
+      "code": "account_alias_not_found",
+      "message": "The requested account alias does not resolve.",
+      "details": {
+        "account_alias_not_found": {
+          "alias": "merchant@banka.paynet"
+        }
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd90097000000000000000c3416aa5e5e574b0218176163636f756e745f616c6961735f6e6f745f666f756e642e2d54686520726571756573746564206163636f756e7420616c69617320646f6573206e6f74207265736f6c76652e4e014c01000100010001000100010001000100010001000100010001000100010001000100010001000100010019011716156d65726368616e744062616e6b612e7061796e65740100010001000100",
+      "json_utf8": "{\"code\":\"account_alias_not_found\",\"message\":\"The requested account alias does not resolve.\",\"details\":{\"account_alias_not_found\":{\"alias\":\"merchant@banka.paynet\"}}}"
+    },
+    {
+      "name": "decoded_and_undecoded_fields",
+      "status": 404,
+      "code": "account_alias_not_found",
+      "message": "The requested account alias does not resolve.",
+      "details": {
+        "reject_code": "PRTRY:ALIAS_ABSENT",
+        "retry_after_seconds": 1,
+        "account_alias_not_found": {
+          "alias": "merchant@paynet"
+        }
+      },
+      "norito_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900ae000000000000007544f2ad38ddd1190218176163636f756e745f616c6961735f6e6f745f666f756e642e2d54686520726571756573746564206163636f756e7420616c69617320646f6573206e6f74207265736f6c76652e650163010001001501131250525452593a414c4941535f414253454e5401000a010801000000000000000100010001000100010001000100010001000100010001000100010001000100130111100f6d65726368616e74407061796e65740100010001000100",
+      "json_utf8": "{\"code\":\"account_alias_not_found\",\"message\":\"The requested account alias does not resolve.\",\"details\":{\"reject_code\":\"PRTRY:ALIAS_ABSENT\",\"retry_after_seconds\":1,\"account_alias_not_found\":{\"alias\":\"merchant@paynet\"}}}"
+    }
+  ]
+}

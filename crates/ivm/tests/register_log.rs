@@ -308,7 +308,6 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
             "{mutation:?}"
         );
         assert!(vm.step_log().is_empty(), "{mutation:?}");
-        assert!(vm.constraints().is_empty(), "{mutation:?}");
         assert!(vm.memory_log().is_empty(), "{mutation:?}");
         assert!(vm.trace_pcs().is_empty(), "{mutation:?}");
         assert!(vm.delta_register_trace().is_empty(), "{mutation:?}");
@@ -384,7 +383,6 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
             "{phase:?}"
         );
         assert!(vm.step_log().is_empty(), "{phase:?}");
-        assert!(vm.constraints().is_empty(), "{phase:?}");
         assert!(vm.memory_log().is_empty(), "{phase:?}");
         assert!(vm.trace_pcs().is_empty(), "{phase:?}");
         assert!(vm.delta_register_trace().is_empty(), "{phase:?}");
@@ -416,7 +414,7 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
                 instruction::wide::arithmetic::ADDI,
                 7,
                 0,
-                sentinel as i8,
+                sentinel as i16,
             )
             .to_le_bytes()
             .to_vec();

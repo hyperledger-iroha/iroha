@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import requests
 
+from ._torii_error_envelope import decode_typed_error_envelope_v1
 from .client import (
     ToriiClient,
     _copy_http_headers,
@@ -32,7 +33,29 @@ _MEDIA_TYPE_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Z
 
 
 class NoritoRpcError(RuntimeError):
-    """Raised when a Norito RPC response violates the transport contract."""
+    """Raised when a Norito RPC response violates the transport contract.
+
+    A non-success response sets ``status``. When its bounded body is Torii's
+    canonical error envelope, ``code``, ``error_message`` and ``details`` carry
+    the envelope's code, exact message and decoded details (``details`` is
+    ``None`` when the envelope has none); all three are ``None`` for any other
+    body.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: Optional[int] = None,
+        code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.error_message = error_message
+        self.details = details
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,15 +177,35 @@ class NoritoRpcClient:
         )
         try:
             if not 200 <= response.status_code < 300:
+                status = response.status_code
                 detail_bytes, truncated = _read_body_prefix(
                     response,
                     maximum_bytes=_ERROR_DETAIL_MAX_BYTES,
                 )
+                # Torii renders a failure as its canonical error envelope in the
+                # negotiated encoding; a complete bounded envelope types the error.
+                envelope = (
+                    None
+                    if truncated
+                    else decode_typed_error_envelope_v1(
+                        response.headers.get("Content-Type"), detail_bytes
+                    )
+                )
+                if envelope is not None:
+                    code, message, details = envelope
+                    raise NoritoRpcError(
+                        f"Norito RPC request failed with status {status}: {code}: {message}",
+                        status=status,
+                        code=code,
+                        error_message=message,
+                        details=details,
+                    )
                 detail = detail_bytes.decode("utf-8", errors="replace")
                 if truncated:
                     detail += "… <truncated>"
                 raise NoritoRpcError(
-                    f"Norito RPC request failed with status {response.status_code}: {detail}"
+                    f"Norito RPC request failed with status {status}: {detail}",
+                    status=status,
                 )
             response_media_type = response.headers.get("Content-Type")
             if (

@@ -1,10 +1,10 @@
-use ivm::{IVM, IVMHost, Memory, ProgramMetadata, VMError, encoding, instruction};
+use ivm::{IVM, IVMHost, Memory, ProgramMetadata, VMError, encoding};
 use std::any::Any;
 #[test]
 fn unknown_syscall_traps_under_default_policy() {
     // Build a small program with an unknown syscall; policy dispatch should reject it.
     let syscall = 0xDF;
-    let word = encoding::wide::encode_scall(u32::from(syscall));
+    let word = encoding::wide::encode_scall(syscall);
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     // HALT to terminate if SCALL is skipped (it shouldn't be)
@@ -12,7 +12,7 @@ fn unknown_syscall_traps_under_default_policy() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_code(&code).unwrap();
     match vm.run() {
-        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, syscall as u32),
+        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, syscall),
         other => panic!("expected UnknownSyscall(0xDF), got {other:?}"),
     }
 }

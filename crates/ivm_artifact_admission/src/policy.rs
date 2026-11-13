@@ -1748,7 +1748,9 @@ mod tests {
         ];
         let current = ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1);
         assert_ne!(current, erased_schema_surface);
-        bytes[17..49].copy_from_slice(&erased_schema_surface);
+        let hash_offset = ivm_abi::metadata::HEADER_ABI_HASH_OFFSET;
+        bytes[hash_offset..hash_offset + erased_schema_surface.len()]
+            .copy_from_slice(&erased_schema_surface);
         assert!(matches!(
             crate::verify_contract_artifact(&bytes).expect_err("retired surface must reject").into_vm_error(),
             ivm_abi::VMError::ArtifactAbiHashMismatch { expected, actual } if expected == current && actual == erased_schema_surface

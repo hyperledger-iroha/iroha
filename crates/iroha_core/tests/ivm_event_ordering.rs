@@ -29,10 +29,8 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
-    let scall = ivm::instruction::wide::system::SCALL;
-    let syscall = u8::try_from(num).expect("syscall number must fit in wide encoding");
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(num).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
@@ -41,11 +39,7 @@ fn encode_prog_syscall(num: u32) -> Vec<u8> {
 /// Generic program whose pointer arguments are its authenticated literal-table TLVs.
 fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     // Signed generic programs declare their cycle bound in the authenticated header.
-    let mut program = ProgramMetadata {
-        max_cycles: 1_000_000,
-        ..ProgramMetadata::default()
-    }
-    .encode();
+    let mut program = ProgramMetadata::default().encode();
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let pad = (4 - (data_offset + data_len) % 4) % 4;

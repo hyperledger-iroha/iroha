@@ -13,6 +13,10 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 
+mod captured;
+mod captured_proofs;
+pub use captured_proofs::*;
+
 fn invalid(s: impl Into<String>) -> Error {
     Error::InvariantViolation(s.into().into())
 }
@@ -34,7 +38,7 @@ fn require_governance(
     authority: &AccountId,
 ) -> Result<(), Error> {
     if state.genesis_execution_scope.is_some() && state._curr_block.is_genesis()
-        || governance(&state.world, authority)
+        || governance(state.world(), authority)
     {
         Ok(())
     } else {
@@ -73,6 +77,7 @@ fn write(
     partition: GamePartitionStateV1,
 ) -> Result<(), Error> {
     partition.validate().map_err(invalid)?;
+    crate::runtime::native_game_capture::check_partition_capacity(state.world(), &partition)?;
     state
         .world
         .game_partitions
@@ -239,6 +244,11 @@ impl Execute for AdvanceGameUnitV1 {
         authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        crate::runtime::native_game_capture::ensure_unlocked(
+            state.world(),
+            self.world_id,
+            self.unit_id,
+        )?;
         let mut p = read(state, &self.world_id)?;
         let i = owned_index(&p, self.unit_id, authority)?;
         if p.kernel_hash != ivm::game_unit_step::kernel_hash() || p.units[i].work_remaining == 0 {
@@ -299,6 +309,13 @@ impl Execute for ExportGameUnitV1 {
         authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if crate::runtime::native_game_capture::enabled(state.world.runtime_selection.canonical())
+            .map_err(invalid)?
+        {
+            return Err(invalid(
+                "selected native game exports require a certified destination reservation",
+            ));
+        }
         let (p, record) = export_candidate(
             read(state, &self.world_id)?,
             self.unit_id,
@@ -415,6 +432,13 @@ impl Execute for ImportGameUnitV1 {
         _authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if crate::runtime::native_game_capture::enabled(state.world.runtime_selection.canonical())
+            .map_err(invalid)?
+        {
+            return Err(invalid(
+                "selected native game imports require their original reservation",
+            ));
+        }
         let p = read(state, &self.proof.record.world_id)?;
         let is_new = check_import(&p, &self.proof).map_err(|e| {
             if let Some(resource) = crate::sumeragi::amx::classified_decode_refusal(&e) {

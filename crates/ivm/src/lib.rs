@@ -165,7 +165,8 @@ pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
     EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor,
     EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1,
-    EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor, EmbeddedStateType, HEADER_SIZE,
+    EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor, EmbeddedStateType,
+    HEADER_ABI_HASH_OFFSET, HEADER_ABI_VERSION_OFFSET, HEADER_BUDGET_OFFSET, HEADER_SIZE,
     LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata, contract_code_hash,
     decode_literal_descriptor, encode_literal_descriptor,
 };

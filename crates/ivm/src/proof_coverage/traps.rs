@@ -27,8 +27,7 @@ pub enum TrapOrigin {
     /// its entrypoint, its host or its argument record. No trace exists and no
     /// statement may be produced.
     PrepareRejection,
-    /// Raised inside `run` before the first instruction is fetched, by the
-    /// entry check of the shared cycle allowance or by root-call
+    /// Raised inside `run` before the first instruction is fetched, by root-call
     /// initialization: the prepaid argument-decode gas is consumed, result-
     /// and call-table gas is debited, the heap is preflighted and the call
     /// tables are validated. The invocation ends with zero completed steps,
@@ -387,9 +386,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     // check guards guest and host memory transfers.
     producer!(
         "crates/ivm/src/call_frame.rs",
-        InitializationTrap: [AssertionFailed, MemoryOutOfBounds, MisalignedAccess],
+        InitializationTrap: [ControlFlowViolation, MemoryOutOfBounds, MisalignedAccess],
         InterpreterTrap: [
-            AssertionFailed, MemoryAccessViolation, MemoryOutOfBounds, MisalignedAccess,
+            CallDepthExceeded, ControlFlowViolation, MemoryAccessViolation, MemoryOutOfBounds,
+            MisalignedAccess,
         ],
         SyscallTrap: [MemoryAccessViolation],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
@@ -405,9 +405,9 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/ivm/src/call_runtime.rs",
         PrepareRejection: [DecodeError, PermissionDenied],
         InitializationTrap: [
-            AssertionFailed, DecodeError, NoritoInvalid, PermissionDenied, PrivacyViolation,
+            ControlFlowViolation, DecodeError, NoritoInvalid, PermissionDenied, PrivacyViolation,
         ],
-        InterpreterTrap: [AssertionFailed, DecodeError, NoritoInvalid, PrivacyViolation],
+        InterpreterTrap: [ControlFlowViolation, DecodeError, NoritoInvalid, PrivacyViolation],
     ),
     producer!(
         "crates/ivm/src/call_runtime/layouts.rs",
@@ -418,12 +418,12 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/ivm/src/call_runtime/values.rs",
-        InitializationTrap: [AssertionFailed, DecodeError, PrivacyViolation],
-        InterpreterTrap: [AssertionFailed, DecodeError, PrivacyViolation],
+        InitializationTrap: [ControlFlowViolation, DecodeError, PrivacyViolation],
+        InterpreterTrap: [ControlFlowViolation, DecodeError, PrivacyViolation],
     ),
     producer!(
         "crates/ivm/src/contract_return_stack.rs",
-        InterpreterTrap: [AssertionFailed],
+        InterpreterTrap: [CallDepthExceeded],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
     producer!(
@@ -481,22 +481,19 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     // The interpreter, program loading, syscall dispatch and the gas, heap and TLV helpers
     // they share. `debit_gas` and the heap preflight serve argument prepayment before the
-    // run, root-call initialization and the opcodes or syscalls that call them. A shared
-    // cycle allowance that an earlier run of the same signed source exhausted is refused
-    // at entry, before the first fetch. A non-ZK run entered with private state is a
-    // violated host lifecycle contract.
+    // run, root-call initialization and the opcodes or syscalls that call them. A non-ZK
+    // run entered with private state is a violated host lifecycle contract.
     producer!(
         "crates/ivm/src/ivm.rs",
         PrepareRejection: [
             DecodeError, GenericSyscallNotAllowed, InvalidMetadata, InvalidOpcode,
             MemoryOutOfBounds, OutOfGas, OutOfMemory, UnknownSyscall,
         ],
-        InitializationTrap: [
-            AbiTypeNotAllowed, DecodeError, ExceededMaxCycles, NoritoInvalid, OutOfGas, OutOfMemory,
-        ],
+        InitializationTrap: [AbiTypeNotAllowed, DecodeError, NoritoInvalid, OutOfGas, OutOfMemory],
         InterpreterTrap: [
-            AbiTypeNotAllowed, AssertionFailed, DecodeError, ExceededMaxCycles, InvalidMetadata,
-            InvalidOpcode, MemoryAccessViolation, MissingHalt, NoritoInvalid, OutOfGas,
+            AbiTypeNotAllowed, AssertionFailed, CallDepthExceeded, ControlFlowViolation,
+            DecodeError, ExceededMaxCycles, InvalidMetadata, InvalidOpcode,
+            MemoryAccessViolation, MissingHalt, NoritoInvalid, NumericFault, OutOfGas,
             PrivacyViolation, RegisterOutOfBounds,
         ],
         SyscallTrap: [
@@ -792,7 +789,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/ivm_abi/src/metadata/program_header.rs",
         PrepareRejection: [
-            ArtifactAbiHashMismatch, InvalidMetadata, ProgramVectorLengthTooLarge,
+            ArtifactAbiHashMismatch, InvalidMetadata, MaxCyclesWithoutZk, MissingMaxCycles,
             UnsupportedProgramAbiVersion, UnsupportedProgramFeatureBits,
             UnsupportedProgramVersion,
         ],
@@ -890,7 +887,7 @@ const fn error(variant: &'static str, trap_kind: Option<VmTrapKind>) -> VmErrorE
 }
 
 /// Number of [`VMError`] variants.
-pub const VM_ERROR_COUNT: usize = 43;
+pub const VM_ERROR_COUNT: usize = 45;
 
 /// Every [`VMError`] variant in declaration order.
 pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
@@ -939,10 +936,8 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
         "UnsupportedProgramAbiVersion",
         Some(VmTrapKind::UnsupportedProgramAbiVersion),
     ),
-    error(
-        "ProgramVectorLengthTooLarge",
-        Some(VmTrapKind::ProgramVectorLengthTooLarge),
-    ),
+    error("MissingMaxCycles", Some(VmTrapKind::MissingMaxCycles)),
+    error("MaxCyclesWithoutZk", Some(VmTrapKind::MaxCyclesWithoutZk)),
     error(
         "ArtifactAbiHashMismatch",
         Some(VmTrapKind::ArtifactAbiHashMismatch),
@@ -956,8 +951,12 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
     // `vm_error_without_producer` open semantic tracks it.
     error("NullifierAlreadyUsed", Some(VmTrapKind::PermissionDenied)),
     error("PermissionDenied", Some(VmTrapKind::PermissionDenied)),
-    error("ReentrantCall", Some(VmTrapKind::PermissionDenied)),
-    error("CallDepthExceeded", Some(VmTrapKind::PermissionDenied)),
+    error("ReentrantCall", Some(VmTrapKind::ReentrantCall)),
+    error("CallDepthExceeded", Some(VmTrapKind::CallDepthExceeded)),
+    error(
+        "ControlFlowViolation",
+        Some(VmTrapKind::ControlFlowViolation),
+    ),
     error("PrivacyViolation", Some(VmTrapKind::PrivacyViolation)),
     error("RegisterOutOfBounds", Some(VmTrapKind::RegisterOutOfBounds)),
     error("NoritoInvalid", Some(VmTrapKind::NoritoInvalid)),
@@ -1005,7 +1004,8 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::UnsupportedProgramVersion { .. } => "UnsupportedProgramVersion",
         VMError::UnsupportedProgramFeatureBits { .. } => "UnsupportedProgramFeatureBits",
         VMError::UnsupportedProgramAbiVersion { .. } => "UnsupportedProgramAbiVersion",
-        VMError::ProgramVectorLengthTooLarge { .. } => "ProgramVectorLengthTooLarge",
+        VMError::MissingMaxCycles => "MissingMaxCycles",
+        VMError::MaxCyclesWithoutZk { .. } => "MaxCyclesWithoutZk",
         VMError::ArtifactAbiHashMismatch { .. } => "ArtifactAbiHashMismatch",
         VMError::GenericSyscallNotAllowed { .. } => "GenericSyscallNotAllowed",
         VMError::MissingHalt => "MissingHalt",
@@ -1013,6 +1013,7 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::PermissionDenied => "PermissionDenied",
         VMError::ReentrantCall => "ReentrantCall",
         VMError::CallDepthExceeded => "CallDepthExceeded",
+        VMError::ControlFlowViolation => "ControlFlowViolation",
         VMError::PrivacyViolation => "PrivacyViolation",
         VMError::RegisterOutOfBounds => "RegisterOutOfBounds",
         VMError::NoritoInvalid => "NoritoInvalid",
@@ -1048,11 +1049,15 @@ pub const fn trap_kind_name(kind: VmTrapKind) -> &'static str {
         VmTrapKind::UnsupportedProgramVersion => "UnsupportedProgramVersion",
         VmTrapKind::UnsupportedProgramFeatureBits => "UnsupportedProgramFeatureBits",
         VmTrapKind::UnsupportedProgramAbiVersion => "UnsupportedProgramAbiVersion",
-        VmTrapKind::ProgramVectorLengthTooLarge => "ProgramVectorLengthTooLarge",
+        VmTrapKind::MissingMaxCycles => "MissingMaxCycles",
+        VmTrapKind::MaxCyclesWithoutZk => "MaxCyclesWithoutZk",
         VmTrapKind::ArtifactAbiHashMismatch => "ArtifactAbiHashMismatch",
         VmTrapKind::GenericSyscallNotAllowed => "GenericSyscallNotAllowed",
         VmTrapKind::MissingHalt => "MissingHalt",
         VmTrapKind::PermissionDenied => "PermissionDenied",
+        VmTrapKind::ReentrantCall => "ReentrantCall",
+        VmTrapKind::CallDepthExceeded => "CallDepthExceeded",
+        VmTrapKind::ControlFlowViolation => "ControlFlowViolation",
         VmTrapKind::PrivacyViolation => "PrivacyViolation",
         VmTrapKind::RegisterOutOfBounds => "RegisterOutOfBounds",
         VmTrapKind::NoritoInvalid => "NoritoInvalid",
@@ -1115,7 +1120,7 @@ const fn kind(kind: VmTrapKind) -> TrapKindEntry {
 }
 
 /// Number of [`VmTrapKind`] variants.
-pub const TRAP_KIND_COUNT: usize = 31;
+pub const TRAP_KIND_COUNT: usize = 35;
 
 /// Every [`VmTrapKind`] in declaration order.
 pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
@@ -1138,11 +1143,15 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
     kind(VmTrapKind::UnsupportedProgramVersion),
     kind(VmTrapKind::UnsupportedProgramFeatureBits),
     kind(VmTrapKind::UnsupportedProgramAbiVersion),
-    kind(VmTrapKind::ProgramVectorLengthTooLarge),
+    kind(VmTrapKind::MissingMaxCycles),
+    kind(VmTrapKind::MaxCyclesWithoutZk),
     kind(VmTrapKind::ArtifactAbiHashMismatch),
     kind(VmTrapKind::GenericSyscallNotAllowed),
     kind(VmTrapKind::MissingHalt),
     kind(VmTrapKind::PermissionDenied),
+    kind(VmTrapKind::ReentrantCall),
+    kind(VmTrapKind::CallDepthExceeded),
+    kind(VmTrapKind::ControlFlowViolation),
     kind(VmTrapKind::PrivacyViolation),
     kind(VmTrapKind::RegisterOutOfBounds),
     kind(VmTrapKind::NoritoInvalid),

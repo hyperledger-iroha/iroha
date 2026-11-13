@@ -81,7 +81,9 @@ pub(super) fn select<S: Scalar>(
     let (sp, ss) = word_offsets(&pair.proof_s, wire.secondary);
     let (scalars, points) = if primary { (ps, sp) } else { (ss, pp) };
     let mut bits = Vec::with_capacity(scalars.len() + points.len());
-    if !primary { bits.push(proof_bytes::total_scalar(w,family,original,42).canonical); }
+    if !primary {
+        bits.push(proof_bytes::total_scalar(w, family, original, 42).canonical);
+    }
     for at in scalars {
         bits.push(proof_bytes::total_scalar(w, family, original, at).canonical);
     }

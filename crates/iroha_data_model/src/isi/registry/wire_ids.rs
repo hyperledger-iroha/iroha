@@ -156,6 +156,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::game_partition::ImportGameUnitV1 => "iroha.game_partition.import.v1", register, tolerant),
     built_in_wire_id!(crate::isi::game_partition::ReserveGameUnitImportV1 => "iroha.game_partition.reserve_import.v1", register, tolerant),
     built_in_wire_id!(crate::isi::game_partition::RequestGameUnitExportV1 => "iroha.game_partition.request_export.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::runtime_retirement::RetireRuntimeDefinitionV1 => "iroha.runtime.retirement.finalize.v1", register, tolerant),
     built_in_wire_id!(crate::isi::game_partition::ExportReservedGameUnitV1 => "iroha.game_partition.export_reserved.v1", register, tolerant),
     built_in_wire_id!(crate::isi::game_partition::ImportReservedGameUnitV1 => "iroha.game_partition.import_reserved.v1", register, tolerant),
     built_in_wire_id!(crate::isi::game_partition::AcknowledgeGameUnitImportV1 => "iroha.game_partition.acknowledge_import.v1", register, tolerant),

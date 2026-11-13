@@ -210,12 +210,28 @@ where
         &mut SpikeRng::new(b"generator points circuit"),
     );
     let mut fingerprint = None;
-    for case in 0..3 {
+    for case in 0..4 {
         let original = match case {
             0 => fold.sources[0].g,
             1 => (C::from(fold.sources[0].g) + C::from(gens.h)).to_affine(),
-            _ => C::identity().to_affine(),
+            2 => C::identity().to_affine(),
+            _ => fold.sources[0].g,
         };
+        let mut tr = tr.clone();
+        if case == 3 {
+            // Same exact point under the field join, different integer limbs:
+            // without canonicality this could falsify a limb-wise inherited
+            // claim comparison and burn an otherwise valid incoming payment.
+            let (x, _): (C::Base, C::Base) = Option::from(fold.sources[0].g.coordinates()).unwrap();
+            let alias = num_bigint::BigUint::from_bytes_le(&x.to_repr())
+                + num_bigint::BigUint::from_bytes_le(&(-C::Base::ONE).to_repr())
+                + 1u32;
+            let mut bytes = alias.to_bytes_le();
+            bytes.resize(32, 0);
+            let at = tr.layout.source(0);
+            tr.shared[at] = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+            tr.shared[at + 1] = u128::from_le_bytes(bytes[16..].try_into().unwrap());
+        }
         let mut values = tr.shared.clone();
         push_point::<C>(&mut values, original);
         let mut w = Wiring::<C::Base>::default();
@@ -240,7 +256,7 @@ where
         let verdict = equal.validity(&idx);
         assert_eq!(
             w.arrays[verdict.0].values[verdict.1][verdict.2],
-            C::Base::from((case == 0) as u64)
+            C::Base::from((case == 0 || case == 3) as u64)
         );
         let mut public_sources = vec![verdict];
         public_sources.extend((0..values.len()).map(|i| (shared, 0, i)));
@@ -257,6 +273,13 @@ where
             1024,
             b"generator points circuit",
         );
+        if case == 3 {
+            assert!(
+                !holds(&built),
+                "x+p coordinate aliases must be unsatisfiable"
+            );
+            continue;
+        }
         assert!(holds(&built));
         let mut h = blake3::Hasher::new();
         for a in 0..built.0.arrays.len() {
@@ -277,6 +300,8 @@ where
             fingerprint = Some(hash);
         }
         let outer = Gens::<D>::new(built.0.shape.cols());
+        let start = std::time::Instant::now();
+        eprintln!("private generator fold proof case {case}: shape={:?}, memory={:?}", built.0.shape, built.0.proving_memory_accounting());
         let (proof, _) = crate::spartan::prove_circuit(
             &built.0.shape,
             &outer,
@@ -295,6 +320,7 @@ where
             )
             .is_ok()
         );
+        eprintln!("private generator fold proof case {case} verified in {:?}", start.elapsed());
         let mut forged = built.1.clone();
         forged.io[4] = C::Base::ONE - forged.io[4];
         assert!(

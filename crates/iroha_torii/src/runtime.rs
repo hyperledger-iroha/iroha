@@ -1488,7 +1488,8 @@ pub async fn handle_runtime_metrics(
         upgrade_events_total: counters,
     })
 }
-/// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
+/// GET /v1/runtime/abi/hash — return the baseline ABI V1 descriptor hash.
+/// Named host profiles are discovered through the root's committed selection and definitions.
 #[expect(
     clippy::unused_async,
     reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
@@ -1496,7 +1497,7 @@ pub async fn handle_runtime_metrics(
 pub async fn handle_runtime_abi_hash(
     _state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiHashResponse, crate::Error> {
-    // First release: single policy V1
+    // Preserve this route's baseline policy identity; named profiles remain explicit.
     let h = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     Ok(RuntimeAbiHashResponse {
         policy: "V1".to_string(),

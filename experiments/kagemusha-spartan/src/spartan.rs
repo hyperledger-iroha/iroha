@@ -29,6 +29,10 @@ use crate::grid::{
 use crate::ipa::{self, Aff, Claim, F, Gens, IpaProof};
 use crate::r1cs::{self, Circuit, Instance, Rel, Shape, ToyCircuit, Witness};
 
+#[cfg(test)]
+#[path = "phase1_tests.rs"]
+mod phase1_tests;
+
 #[derive(Clone)]
 pub struct Proof<C: PastaCurve> {
     pub rows: Vec<Aff<C>>,
@@ -1291,6 +1295,73 @@ fn gamma_challenge<C: PastaCurve>(t: &mut Transcript<C>, separated: bool) -> F<C
     if separated { gamma } else { F::<C>::ONE }
 }
 
+/// Shared first-phase schedule. Mask randomization precedes this function; every
+/// non-fixed row's blind is drawn even when only the first rows are committed.
+fn commit_first_phase<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    w: &[F<C>],
+    rng: &mut SpikeRng,
+    circuit: &dyn Circuit<F<C>>,
+) -> (Vec<F<C>>, Option<Vec<usize>>, Vec<Aff<C>>) {
+    let rows_c = shape.rows() - circuit.fixed_rows(shape);
+    let blinds: Vec<_> = (0..shape.rows())
+        .map(|r| {
+            if r < rows_c {
+                rng.scalar()
+            } else {
+                F::<C>::ZERO
+            }
+        })
+        .collect();
+    let bounds = circuit.row_bounds(shape);
+    let p1 = circuit.phase1_rows(shape);
+    assert!(p1 <= rows_c, "first-phase rows precede the fixed tail");
+    let rows = match &bounds {
+        Some(b) => commit_rows_lanes(gens, shape, w, 0..p1, b, &blinds, false),
+        None => (0..p1)
+            .map(|r| {
+                commit_row(
+                    gens,
+                    shape,
+                    r,
+                    &w[r * shape.cols()..r * shape.cols() + shape.active_cols()],
+                    blinds[r],
+                )
+                .to_affine()
+            })
+            .collect(),
+    };
+    (blinds, bounds, rows)
+}
+
+/// Compute the first linked proof's digest before its link/lookup phases.
+/// Replay the same entropy stream for the final proof. This performs real
+/// masked row commitments, without allocating matrix plans or proving a result
+/// that would be discarded solely to learn this digest.
+pub fn prepare_linked_phase1<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    wit: &Witness<F<C>>,
+    rng: &mut SpikeRng,
+    circuit: &dyn Circuit<F<C>>,
+) -> [u8; 32] {
+    use zeroize::Zeroize as _;
+    shape.check();
+    let mut w = zeroize::Zeroizing::new(wit.w.clone());
+    circuit.randomize_masks(&mut w, rng);
+    let (mut blinds, _, rows) = commit_first_phase(shape, gens, &w, rng, circuit);
+    blinds.zeroize();
+    let mut transcript = Transcript::<C>::new(shape.label.as_bytes());
+    header(&mut transcript, shape, &inst.io);
+    for row in &rows {
+        transcript.point(b"row", row);
+    }
+    let _ = transcript.challenge_full(b"pair/d");
+    transcript.last_word().to_repr()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_inner<C: PastaCurve>(
     shape: &Shape,
@@ -1319,16 +1390,8 @@ fn prove_inner<C: PastaCurve>(
     // Hyrax rows: phase 1, then (after its challenges) phase 2.
     let clock = Instant::now();
     *COMMIT_SPLIT.lock().unwrap() = [0.0; 3];
-    let row_blinds: Vec<F<C>> = (0..rows_n)
-        .map(|r| {
-            if r < rows_c {
-                rng.scalar()
-            } else {
-                F::<C>::ZERO
-            }
-        })
-        .collect();
-    let bounds = circuit.row_bounds(shape);
+    assert_eq!(fixed.len(), circuit.fixed_rows(shape));
+    let (row_blinds, bounds, mut rows) = commit_first_phase(shape, gens, &w, rng, circuit);
     let commit = |w: &[F<C>], range: std::ops::Range<usize>, helpers: bool| -> Vec<Aff<C>> {
         match &bounds {
             Some(b) => commit_rows_lanes(gens, shape, w, range, b, &row_blinds, helpers),
@@ -1347,7 +1410,6 @@ fn prove_inner<C: PastaCurve>(
         }
     };
     let p1 = circuit.phase1_rows(shape);
-    let mut rows: Vec<Aff<C>> = commit(&w, 0..p1, false);
     timings.phase1 = clock.elapsed().as_secs_f64();
     crate::prof::add("c.phase1", timings.phase1);
     for row in &rows {

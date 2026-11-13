@@ -173,12 +173,7 @@ fn syscalls(words: &[u32]) -> Vec<u32> {
     words
         .iter()
         .copied()
-        .filter(|word| {
-            matches!(
-                instruction::wide::opcode(*word),
-                instruction::wide::system::SCALL | instruction::wide::system::SYSTEM
-            )
-        })
+        .filter(|word| instruction::wide::opcode(*word) == instruction::wide::system::SCALL)
         .collect()
 }
 fn no_spill_or_callee_save(function: &ir::Function) {
@@ -481,10 +476,10 @@ pub(super) fn split_spill(source: &str) {
             .iter()
             .enumerate()
             .filter_map(|(index, word)| {
-                let (opcode, destination, base, immediate) = encoding::wide::decode_mem(*word);
+                let (opcode, destination, base, displacement) = encoding::wide::decode_load(*word);
                 (opcode == instruction::wide::memory::LOAD64
                     && base == regalloc::SP_REG as u8
-                    && i16::from(immediate) == offset)
+                    && displacement == offset)
                     .then_some((index, destination))
             })
             .collect::<Vec<_>>();

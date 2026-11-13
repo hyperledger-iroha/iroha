@@ -15,8 +15,7 @@ use iroha_data_model::{
     ValidationFail,
     executor::{
         ArtifactAbiHashMismatchInfo, ContractRejection, IvmAdmissionError,
-        ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
-        MaxCyclesExceedsUpperBoundInfo,
+        ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
     },
     smart_contract::manifest::ContractManifest,
 };
@@ -37,6 +36,10 @@ pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissio
         }
         ivm::VMError::UnsupportedProgramAbiVersion { version } => {
             IvmAdmissionError::UnsupportedAbiVersion(version)
+        }
+        ivm::VMError::MissingMaxCycles => IvmAdmissionError::MissingMaxCycles,
+        ivm::VMError::MaxCyclesWithoutZk { max_cycles } => {
+            IvmAdmissionError::MaxCyclesWithoutZk(max_cycles)
         }
         ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
             IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
@@ -170,15 +173,23 @@ pub(crate) fn validate_manifest_hashes(
     }
     Ok(())
 }
-/// Validate and return an artifact's positive cycle limit under node policy.
+/// Validate the ZK trace bound an artifact declares against node policy.
 ///
-/// This is shared by executable admission and every path that persists an IVM
-/// artifact, so zero cannot mean "unlimited" and an artifact cannot be stored
-/// for later execution with a header above the configured ceiling.
-pub(crate) fn validate_cycle_ceiling(
+/// Gas is the only execution budget and the caller supplies it; the header field `max_cycles` is
+/// the trace bound of a ZK-mode artifact alone. Header admission already requires it to be
+/// non-zero exactly for ZK headers ([`validate_header_policy`] repeats that rule). This check
+/// bounds a ZK artifact's trace by the committed `pipeline.ivm_max_cycles_upper_bound`, and every
+/// path that executes or persists an artifact shares it, so an artifact cannot be stored for later
+/// execution with a trace bound above the ceiling. A non-ZK artifact has no cycle check.
+///
+/// [`validate_header_policy`]: crate::pipeline::overlay::validate_header_policy
+pub(crate) fn validate_zk_trace_bound(
     meta: &ivm::ProgramMetadata,
     upper_bound: NonZeroU64,
-) -> Result<NonZeroU64, IvmAdmissionError> {
+) -> Result<(), IvmAdmissionError> {
+    if meta.mode & ivm::ivm_mode::ZK == 0 {
+        return Ok(());
+    }
     let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
     if cycles > upper_bound {
         return Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(
@@ -188,54 +199,7 @@ pub(crate) fn validate_cycle_ceiling(
             },
         ));
     }
-    Ok(cycles)
-}
-/// Validate an artifact cycle budget against both governance fuel and node policy.
-///
-/// The governance limit is checked first to preserve transaction-admission error
-/// precedence when both limits are exceeded.
-pub(crate) fn validate_cycle_limits(
-    meta: &ivm::ProgramMetadata,
-    upper_bound: NonZeroU64,
-    fuel: NonZeroU64,
-) -> Result<NonZeroU64, IvmAdmissionError> {
-    let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
-    if cycles > fuel {
-        return Err(IvmAdmissionError::MaxCyclesExceedsFuel(
-            MaxCyclesExceedsFuelInfo {
-                max_cycles: cycles.get(),
-                fuel_limit: fuel.get(),
-            },
-        ));
-    }
-    if cycles > upper_bound {
-        return Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(
-            MaxCyclesExceedsUpperBoundInfo {
-                max_cycles: cycles.get(),
-                upper_bound: upper_bound.get(),
-            },
-        ));
-    }
-    Ok(cycles)
-}
-/// Gas limit granted to an invocation by its cycle budget.
-///
-/// The conversion is the ABI constant [`ivm::gas::GAS_PER_CYCLE`], bound into the gas-schedule
-/// hash; it does not depend on the opcode price table. The limit covers instructions, ZK trace
-/// padding (one gas per padded cycle) and syscalls alike. V1 requires a positive cycle limit,
-/// represented by [`NonZeroU64`], so this helper cannot manufacture an unbounded budget.
-#[must_use]
-pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
-    ivm::gas::gas_limit_for_cycles(cycles)
-}
-/// Convenience helper to derive a gas limit from program metadata.
-///
-/// # Errors
-/// Returns [`IvmAdmissionError::MissingMaxCycles`] when the artifact encodes
-/// the forbidden zero cycle limit.
-pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> Result<u64, IvmAdmissionError> {
-    let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
-    Ok(gas_limit_for_cycles(cycles))
+    Ok(())
 }
 /// Classify an original VM failure before rendering completed semantic rejection context.
 ///
@@ -449,70 +413,71 @@ mod tests {
         );
     }
     #[test]
-    fn gas_limit_for_cycles_uses_the_abi_conversion_constant() {
-        let per_cycle = ivm::gas::GAS_PER_CYCLE;
+    fn header_cycle_bound_errors_map_to_their_admission_reasons() {
         assert_eq!(
-            per_cycle, 5_000,
-            "changing the conversion rescales every budget"
+            admission_reason_from_vm_error(ivm::VMError::MissingMaxCycles),
+            IvmAdmissionError::MissingMaxCycles
         );
-        assert_eq!(gas_limit_for_cycles(NonZeroU64::new(1).unwrap()), per_cycle);
         assert_eq!(
-            gas_limit_for_cycles(NonZeroU64::new(2).unwrap()),
-            per_cycle * 2
+            admission_reason_from_vm_error(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 7 }),
+            IvmAdmissionError::MaxCyclesWithoutZk(7)
         );
-        assert_eq!(gas_limit_for_cycles(NonZeroU64::MAX), u64::MAX);
-    }
-    #[test]
-    fn gas_limit_for_meta_rejects_zero_cycle_budget() {
-        let zero = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            max_cycles: 0,
-            abi_version: 1,
-        };
-        assert!(matches!(
-            gas_limit_for_meta(&zero),
-            Err(IvmAdmissionError::MissingMaxCycles)
-        ));
-        let positive = ivm::ProgramMetadata {
-            max_cycles: 2,
-            ..zero
-        };
+        let zk_without_bound = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        let error = ivm::ProgramMetadata::parse(&zk_without_bound)
+            .expect_err("a ZK header requires a trace bound");
         assert_eq!(
-            gas_limit_for_meta(&positive).unwrap(),
-            ivm::gas::GAS_PER_CYCLE * 2
+            admission_reason_from_vm_error(error),
+            IvmAdmissionError::MissingMaxCycles
+        );
+        let bound_without_zk = ivm::ProgramMetadata {
+            max_cycles: 9,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        let error = ivm::ProgramMetadata::parse(&bound_without_zk)
+            .expect_err("a non-ZK header declares no trace bound");
+        assert_eq!(
+            admission_reason_from_vm_error(error),
+            IvmAdmissionError::MaxCyclesWithoutZk(9)
         );
     }
     #[test]
-    fn cycle_ceiling_validation_rejects_zero_and_over_bound() {
+    fn zk_trace_bound_validation_applies_only_to_zk_artifacts() {
         let upper_bound = NonZeroU64::new(42).expect("test ceiling is non-zero");
+        // A non-ZK artifact has no cycle check: gas is its only budget.
+        assert_eq!(
+            validate_zk_trace_bound(&ivm::ProgramMetadata::default(), upper_bound),
+            Ok(())
+        );
         let mut metadata = ivm::ProgramMetadata {
+            mode: ivm::ivm_mode::ZK,
             max_cycles: 0,
             ..ivm::ProgramMetadata::default()
         };
         assert!(matches!(
-            validate_cycle_ceiling(&metadata, upper_bound),
+            validate_zk_trace_bound(&metadata, upper_bound),
             Err(IvmAdmissionError::MissingMaxCycles)
         ));
         metadata.max_cycles = 42;
-        assert_eq!(
-            validate_cycle_ceiling(&metadata, upper_bound),
-            Ok(upper_bound)
-        );
+        assert_eq!(validate_zk_trace_bound(&metadata, upper_bound), Ok(()));
         metadata.max_cycles = 43;
         assert!(matches!(
-            validate_cycle_ceiling(&metadata, upper_bound),
+            validate_zk_trace_bound(&metadata, upper_bound),
             Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(info))
                 if info.max_cycles == 43 && info.upper_bound == 42
         ));
     }
     #[test]
     fn compiler_and_node_release_cycle_defaults_match() {
-        let compiler_default = kotodama_lang::compiler::CompilerOptions::default().max_cycles;
+        // A default ZK build's trace bound fits the default admission ceiling.
+        let compiler_default = kotodama_lang::compiler::CompilerOptions::default().zk_trace_cycles;
         let node_default = iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND;
-        assert_eq!(compiler_default, node_default.get());
-        assert_eq!(compiler_default, 1_000_000);
+        assert_eq!(compiler_default, node_default);
+        assert_eq!(compiler_default.get(), 1_000_000);
     }
     #[test]
     fn vm_error_maps_to_not_permitted() {
@@ -601,7 +566,7 @@ mod tests {
 /// header field in its original order. Unselected/unknown hashes retain baseline rejection.
 pub(crate) fn artifact_policy(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::SyscallPolicy {
     let named = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
-    if bytes.get(ivm::metadata::HEADER_ABI_HASH_OFFSET..ivm::metadata::HEADER_SIZE)
+    if bytes.get(ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE)
         == Some(ivm::syscalls::compute_abi_hash(named).as_slice())
         && named_policy_selected(world, named)
     {

@@ -284,6 +284,146 @@ impl State {
         })
     }
 
+    /// Apply the same authenticated DA projection from a native body or a sealed portable parent.
+    fn hydrate_da_projection(
+        &self,
+        hydrated: &mut HydratedDaIndexes,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        height_u64: NonZeroU64,
+        commitments: Option<&iroha_data_model::da::commitment::DaCommitmentBundle>,
+        pin_intents: Option<&iroha_data_model::da::pin_intent::DaPinIntentBundle>,
+    ) -> Result<bool, DaIndexHydrationError> {
+        let height = height_u64.get();
+        let lane_config = &nexus.lane_config;
+        if let Some(bundle) = commitments {
+            let policy_context = crate::da::ActiveLaneProofPolicyContext::new(&nexus);
+            let active_commitments = bundle
+            .commitments()
+            .iter()
+            .filter_map(|record| {
+                let validation = policy_context
+                    .enforce_commitment_at_height(record, height_u64.get())
+                    .map_err(crate::da::DaCommitmentValidationError::from)
+                    .and_then(|()| {
+                        crate::da::validate_confidential_compute_record(
+                            lane_config,
+                            record,
+                        )
+                        .map(|_| ())
+                        .map_err(crate::da::DaCommitmentValidationError::from)
+                    });
+                match validation {
+                    Ok(())
+                        if hydrated
+                            .shard_cursors
+                            .canonical_reset_height_for_lane(record.lane_id)
+                            .is_none_or(|reset_height| {
+                                height_u64.get() > reset_height
+                            }) =>
+                    {
+                        Some(record.clone())
+                    }
+                    Ok(()) => {
+                        warn!(
+                            height,
+                            lane = %record.lane_id.as_u32(),
+                            epoch = record.epoch,
+                            sequence = record.sequence,
+                            "skipping DA commitment index materialization for an earlier lane incarnation"
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            height,
+                            lane = %record.lane_id.as_u32(),
+                            epoch = record.epoch,
+                            sequence = record.sequence,
+                            "skipping DA commitment index materialization for inactive lane after lifecycle update"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+            let query_visible_keys: BTreeSet<_> = active_commitments
+                .iter()
+                .map(DaCommitmentKey::from_record)
+                .collect();
+            let identity_visible_keys: BTreeSet<_> = bundle
+                .commitments()
+                .iter()
+                .filter(|record| {
+                    let key = DaCommitmentKey::from_record(record);
+                    hydrated
+                        .shard_cursors
+                        .canonical_reset_height_for_lane(record.lane_id)
+                        .is_none_or(|reset_height| height_u64.get() > reset_height)
+                        && (query_visible_keys.contains(&key)
+                            || nexus
+                                .lane_catalog
+                                .lanes()
+                                .iter()
+                                .all(|lane| lane.id != record.lane_id))
+                })
+                .map(DaCommitmentKey::from_record)
+                .collect();
+            hydrated.commitments.insert_bundle_with_visibility_filter(
+                height_u64.get(),
+                bundle.clone(),
+                |record| identity_visible_keys.contains(&DaCommitmentKey::from_record(record)),
+                |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
+            );
+            if let Err(err) = self.advance_da_shard_cursors_into(
+                &mut hydrated.shard_cursors,
+                lane_config,
+                height_u64.get(),
+                active_commitments.iter(),
+            ) {
+                warn!(
+                    ?err,
+                    height, "failed to advance shard cursor index while hydrating from Kura"
+                );
+                return Err(DaIndexHydrationFailure::ShardCursor(err).into());
+            }
+            if let Err(err) = self.advance_da_receipt_cursors_into(
+                &mut hydrated.receipt_cursors,
+                height_u64.get(),
+                active_commitments.iter(),
+            ) {
+                warn!(
+                    ?err,
+                    height, "failed to advance receipt cursor index while hydrating from Kura"
+                );
+                return Err(DaIndexHydrationFailure::ReceiptCursor(err).into());
+            }
+            if let Err(err) = Self::record_confidential_compute_into(
+                &mut hydrated.confidential_compute,
+                lane_config,
+                height_u64.get(),
+                bundle.commitments(),
+                |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
+            ) {
+                warn!(
+                    ?err,
+                    height, "failed to hydrate confidential-compute receipts from Kura"
+                );
+                return Err(DaIndexHydrationFailure::ConfidentialCompute(err).into());
+            }
+        }
+        if let Some(bundle) = pin_intents {
+            let _ = Self::ingest_committed_pin_intents_from_kura_into(
+                &nexus,
+                &mut hydrated.pin_intents,
+                &hydrated.shard_cursors,
+                height_u64.get(),
+                bundle.intents.clone(),
+            );
+        }
+        Ok(commitments.is_some())
+    }
+
     #[allow(clippy::too_many_lines)]
     fn build_da_indexes_from_kura(
         &self,
@@ -357,7 +497,56 @@ impl State {
             return Ok(hydrated);
         }
         let mut saw_da_commitments = false;
-        for (idx, expected_hash) in committed_hash_prefix.iter().enumerate() {
+        // The portable verifier authenticates every original parent and its exact DA bundles.
+        // These are query projections only; absent bodies never acquire native receipt custody.
+        // Keep the original observer failure outside the proof adapter so a local refusal is
+        // returned unchanged and cannot become a cached completed verdict.
+        let mut observer_error = None;
+        let portable = self.kura.walk_checkpoint_prefix(
+            self.chain_id_ref(),
+            *self.network_id_ref(),
+            &committed_hash_prefix,
+            &mut |parent| match self.hydrate_da_projection(
+                &mut hydrated,
+                &nexus,
+                parent.header().height(),
+                parent.da_commitments(),
+                parent.da_pin_intents(),
+            ) {
+                Ok(present) => {
+                    saw_da_commitments |= present;
+                    Ok(())
+                }
+                Err(original) => {
+                    observer_error = Some(original);
+                    Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                        crate::sumeragi::checkpoint_prefix::Error::Invalid(
+                            "original DA observer did not complete".into(),
+                        ),
+                    ))
+                }
+            },
+        );
+        if let Some(original) = observer_error {
+            return Err(original);
+        }
+        let portable = portable.map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                DaIndexHydrationError::Deferred(original)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(original) => {
+                DaIndexHydrationFailure::Storage {
+                    height: NonZeroU64::new(self.kura.checkpoint_prefix_height().unwrap_or(1))
+                        .unwrap(),
+                    reason: original.to_string(),
+                }
+                .into()
+            }
+        })?;
+        let begin = portable.map_or(0, |proof| {
+            proof.checkpoint().header().height().get() as usize
+        });
+        for (idx, expected_hash) in committed_hash_prefix.iter().enumerate().skip(begin) {
             let height = idx + 1;
             let height_u64 = u64::try_from(height).expect("committed block height must fit u64");
             let height_u64 = NonZeroU64::new(height_u64).expect("block height is non-zero");
@@ -396,133 +585,13 @@ impl State {
                 }
                 .into());
             }
-            if let Some(bundle) = block.as_ref().da_commitments() {
-                saw_da_commitments = true;
-                let policy_context = crate::da::ActiveLaneProofPolicyContext::new(&nexus);
-                let active_commitments = bundle
-                    .commitments()
-                    .iter()
-                    .filter_map(|record| {
-                        let validation = policy_context
-                            .enforce_commitment_at_height(record, height_u64.get())
-                            .map_err(crate::da::DaCommitmentValidationError::from)
-                            .and_then(|()| {
-                                crate::da::validate_confidential_compute_record(
-                                    lane_config,
-                                    record,
-                                )
-                                .map(|_| ())
-                                .map_err(crate::da::DaCommitmentValidationError::from)
-                            });
-                        match validation {
-                            Ok(())
-                                if hydrated
-                                    .shard_cursors
-                                    .canonical_reset_height_for_lane(record.lane_id)
-                                    .is_none_or(|reset_height| {
-                                        height_u64.get() > reset_height
-                                    }) =>
-                            {
-                                Some(record.clone())
-                            }
-                            Ok(()) => {
-                                warn!(
-                                    height,
-                                    lane = %record.lane_id.as_u32(),
-                                    epoch = record.epoch,
-                                    sequence = record.sequence,
-                                    "skipping DA commitment index materialization for an earlier lane incarnation"
-                                );
-                                None
-                            }
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    height,
-                                    lane = %record.lane_id.as_u32(),
-                                    epoch = record.epoch,
-                                    sequence = record.sequence,
-                                    "skipping DA commitment index materialization for inactive lane after lifecycle update"
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let query_visible_keys: BTreeSet<_> = active_commitments
-                    .iter()
-                    .map(DaCommitmentKey::from_record)
-                    .collect();
-                let identity_visible_keys: BTreeSet<_> = bundle
-                    .commitments()
-                    .iter()
-                    .filter(|record| {
-                        let key = DaCommitmentKey::from_record(record);
-                        hydrated
-                            .shard_cursors
-                            .canonical_reset_height_for_lane(record.lane_id)
-                            .is_none_or(|reset_height| height_u64.get() > reset_height)
-                            && (query_visible_keys.contains(&key)
-                                || nexus
-                                    .lane_catalog
-                                    .lanes()
-                                    .iter()
-                                    .all(|lane| lane.id != record.lane_id))
-                    })
-                    .map(DaCommitmentKey::from_record)
-                    .collect();
-                hydrated.commitments.insert_bundle_with_visibility_filter(
-                    height_u64.get(),
-                    bundle.clone(),
-                    |record| identity_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                    |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                );
-                if let Err(err) = self.advance_da_shard_cursors_into(
-                    &mut hydrated.shard_cursors,
-                    lane_config,
-                    height_u64.get(),
-                    active_commitments.iter(),
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to advance shard cursor index while hydrating from Kura"
-                    );
-                    return Err(DaIndexHydrationFailure::ShardCursor(err).into());
-                }
-                if let Err(err) = self.advance_da_receipt_cursors_into(
-                    &mut hydrated.receipt_cursors,
-                    height_u64.get(),
-                    active_commitments.iter(),
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to advance receipt cursor index while hydrating from Kura"
-                    );
-                    return Err(DaIndexHydrationFailure::ReceiptCursor(err).into());
-                }
-                if let Err(err) = Self::record_confidential_compute_into(
-                    &mut hydrated.confidential_compute,
-                    lane_config,
-                    height_u64.get(),
-                    bundle.commitments(),
-                    |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                ) {
-                    warn!(
-                        ?err,
-                        height, "failed to hydrate confidential-compute receipts from Kura"
-                    );
-                    return Err(DaIndexHydrationFailure::ConfidentialCompute(err).into());
-                }
-            }
-            if let Some(bundle) = block.as_ref().da_pin_intents() {
-                let _ = Self::ingest_committed_pin_intents_from_kura_into(
-                    &nexus,
-                    &mut hydrated.pin_intents,
-                    &hydrated.shard_cursors,
-                    height_u64.get(),
-                    bundle.intents.clone(),
-                );
-            }
+            saw_da_commitments |= self.hydrate_da_projection(
+                &mut hydrated,
+                &nexus,
+                height_u64,
+                block.as_ref().da_commitments(),
+                block.as_ref().da_pin_intents(),
+            )?;
         }
         if let Some(journal) = persisted_journal {
             if !saw_da_commitments || hydrated.shard_cursors.is_empty() {

@@ -225,6 +225,13 @@ _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
     "java/iroha_android/core/src/main/resources/META-INF/proguard/iroha3.pro",
     "kotlin/core-jvm/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro",
 })
+# Exact public build descriptors for the isolated Apple runtime fixture. Their
+# contents remain fingerprinted; this does not admit arbitrary module maps,
+# signing material, provisioning profiles, or generated Xcode projects.
+_REVIEWED_PUBLIC_APPLE_FIXTURE_INPUTS = frozenset({
+    "experiments/kagemusha-spartan/device/ios/NativeFixture/module.modulemap",
+    "experiments/kagemusha-spartan/device/ios/RuntimeFixture.entitlements",
+})
 # Exact public trybuild diagnostics in the maintained package closures.
 # These are 69 expected originals plus three tracked event-set diagnostic copies
 # retained under iroha_data_model_derive/wip; their full bytes remain sealed.
@@ -333,8 +340,8 @@ _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
     "crates/ivm/tests/data/complex.to",
     "crates/ivm/tests/data/control.to",
     "crates/ivm/tests/data/mfc.to",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_cycles0_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_cycles1000_abi1.to",
     "crates/kotodama_lang/src/samples/asset_ops.to",
     "crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.to",
     "crates/kotodama_lang/src/samples/dex_contract.to",
@@ -367,8 +374,8 @@ _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS = frozenset({
     "crates/iroha_p2p/src/peer/run/admission_class_tests.rs",
     "crates/iroha_p2p/src/peer/run/granted.rs",
     "crates/iroha_p2p/src/peer/run/payload_codec_tests.rs",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_cycles0_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_cycles1000_abi1.to",
 })
 # Fixed public parser seeds, offsets, codec/checksum goldens, normative grammar,
 # Objective-C source and the embedded Metal library, traced to their source
@@ -433,6 +440,11 @@ _REVIEWED_PUBLIC_FIXTURE_INPUTS = frozenset({
 # reviewed complete bytes through the existing no-follow reader. These are
 # source-fixture pins, never credential, signing or runtime authority inputs.
 _REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS = frozenset({
+    "experiments/kagemusha-spartan/research/SPEC-CHANGE-credential-continuity.md",
+    "experiments/kagemusha-spartan/fixtures/credential-532.txt",
+    "experiments/kagemusha-spartan/CREDENTIAL.md",
+    # Public deterministic research credential/certificate vectors, never deployment keys.
+    "experiments/kagemusha-spartan/fixtures/credential-source-vectors.txt",
     "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt",
     "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv",
 })
@@ -441,6 +453,8 @@ _REVIEWED_PUBLIC_MOCK_ENV_INPUTS = frozenset({
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
 })
 _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS = {
+    "experiments/kagemusha-spartan/fixtures/credential-532.txt": ("b3b2d78933760e0422c79eef2deec9583efc54ea811ec6bdd74661dc44efd193", 1654),
+    "experiments/kagemusha-spartan/fixtures/credential-source-vectors.txt": ("0ec355e47e6a7fdaef5dc3e8776c03849c8ac13de20a6ba4a339c0ed8d2abf48", 1842),
     "crates/iroha_config/tests/fixtures/full.env": ("89a46c809c1c5791a4d8f075af920995611b0b85249ed6193df084c54cad7fa4", 2048),
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env": ("196c68787e11f84107aaa983a5cb02a97b5d2ef6f860269c85920a1baf5817f5", 26),
     "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("06f3e6f960e02cb8a452e85d634d6b5b7518ac511d9ab98c69d2ba3e42d8eb4f", 53080),
@@ -672,6 +686,7 @@ def _public_source_relative(
             or relative in _REVIEWED_PUBLIC_VENDOR_INPUTS
             or relative in _REVIEWED_PUBLIC_NEARBY_SOURCE_PINS
             or relative in _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS
+            or relative in _REVIEWED_PUBLIC_APPLE_FIXTURE_INPUTS
             or relative in _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS
             or relative in _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS
             or relative in _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS

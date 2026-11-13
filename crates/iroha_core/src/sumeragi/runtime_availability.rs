@@ -124,6 +124,26 @@ impl NativeGlobalAvailability {
                 invalid("native execution tip differs from captured State publication").into(),
             );
         }
+        if view.kura().checkpoint_prefix_height() == height.checked_sub(1) {
+            let sealed = super::certified_chain::portable_checkpoint_for_state(&view)
+                .map_err(|error| error.map_rejection(invalid))?
+                .ok_or_else(|| invalid("installed portable checkpoint disappeared"))?;
+            if sealed.successor_header().instance != self.instance {
+                return Err(invalid("portable global instance differs").into());
+            }
+            // Only the independently certified parent selects H+1 authority. The body
+            // store still acquires and verifies the original complete H+1 carrier.
+            return match &sealed
+                .checkpoint()
+                .certified_result()
+                .commitment()
+                .schedule
+                .next
+            {
+                ScheduledSlot::Ready(config) if config.height == height => Ok(Some(config.clone())),
+                _ => Err(invalid("portable parent has no exact next-height authority").into()),
+            };
+        }
         if height > tip.height() {
             return match view.world().consensus_schedule().get(height) {
                 Some(ScheduledSlot::Ready(config)) => Ok(Some(config.clone())),
@@ -213,6 +233,97 @@ impl NativeGlobalAvailability {
 impl AvailabilitySchedule for NativeGlobalAvailability {
     fn instance(&self) -> Hash32 {
         self.instance
+    }
+    fn checkpoint_headers(
+        &self,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<iroha_sumeragi::message::BlockHeader>>, Attempt<io::Error>> {
+        let Some(floor) = self.state.kura().checkpoint_prefix_height() else {
+            return Ok(None);
+        };
+        if first <= 1 || last < first || last > floor {
+            return Err(invalid("portable startup window is outside its certified prefix").into());
+        }
+        let view = self.state.try_view_once().map_err(state_view_error)?;
+        let tip = view
+            .native_execution_tip()
+            .ok_or_else(|| invalid("portable startup history has no original native State tip"))?;
+        if tip.height() != view.height() as u64
+            || Some(tip.iroha_hash()) != view.latest_block_hash()
+            || tip.height() < floor
+        {
+            return Err(
+                invalid("portable startup history differs from its published State cut").into(),
+            );
+        }
+        let count = usize::try_from(last - first + 1).map_err(invalid)?;
+        let layout = std::alloc::Layout::array::<iroha_sumeragi::message::BlockHeader>(count)
+            .map_err(invalid)?;
+        norito::core::classify_decode_attempt(|| {
+            norito::core::reserve_decode_allocation(layout.size())
+        })
+        .map_err(|error| {
+            crate::execution_attempt::canonical_decode_attempt_error(error, invalid)
+        })?;
+        let mut headers = Vec::new();
+        headers.try_reserve_exact(count).map_err(|original| {
+            Attempt::Deferred(
+                iroha_allocation::AllocatorRefusal::from_vec_reserve(original, layout).into(),
+            )
+        })?;
+        let hashes = view.block_hashes();
+        let proof_error =
+            |message: &str| crate::sumeragi::checkpoint_prefix::Error::Invalid(message.into());
+        let sealed = view
+            .kura()
+            .walk_checkpoint_prefix_lookup(
+                view.chain_id(),
+                *view.network_id(),
+                hashes.len(),
+                &|index| hashes.get(index).copied(),
+                &mut |block| {
+                    let height = block.header().height().get();
+                    if height >= first && height <= last {
+                        let header = block.core_header().ok_or_else(|| {
+                            proof_error("portable non-genesis parent lost its core header")
+                        })?;
+                        if header.height != height || header.instance != self.instance {
+                            return Err(proof_error(
+                                "portable startup header differs from its original instance or height",
+                            )
+                            .into());
+                        }
+                        let copied = norito::core::classify_decode_attempt(|| {
+                            let bytes = norito::encode_canonical(header)?;
+                            norito::decode_canonical(&bytes)
+                        })
+                        .map_err(|error| {
+                            crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+                                proof_error(&error.to_string())
+                            })
+                        })?;
+                        headers.push(copied);
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|error| error.map_rejection(invalid))?
+            .ok_or_else(|| invalid("portable startup proof disappeared"))?;
+        let parent = sealed.checkpoint();
+        if tip.root_scope() != parent.root_scope()
+            || (tip.height() == floor
+                && (tip.iroha_hash() != parent.header().hash()
+                    || tip.core_hash() != parent.core_hash()
+                    || tip.result() != parent.result()))
+            || headers.len() != count
+        {
+            return Err(invalid(
+                "portable startup headers differ from the original native authority",
+            )
+            .into());
+        }
+        Ok(Some(headers))
     }
     fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         let Some(scheduled) = self.resolve(height)? else {

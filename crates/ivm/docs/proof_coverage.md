@@ -15,7 +15,7 @@ proof: nothing in it constrains a witness or authorizes `IvmProved` admission.
 
 | Section | Entries | Source owner checked by the tests |
 | --- | --- | --- |
-| `opcodes` | 59 admitted opcodes | `wide::is_valid_opcode` (compile time), `ivm_abi/src/instruction.rs`, the interpreter dispatch in `src/ivm.rs` |
+| `opcodes` | 58 admitted opcodes | `wide::is_valid_opcode` (compile time), `ivm_abi/src/instruction.rs`, the interpreter dispatch in `src/ivm.rs` |
 | `syscalls` | every `abi_syscall_list()` entry | `abi_syscall_list()`, `syscall_name` (`ABI_V1_SYSCALL_METADATA`), the access and metering registries |
 | `host_private_syscalls` | Kotodama test helpers | `is_koto_test_syscall`; rejected as `UnknownSyscall` by production hosts |
 | `run_phases` | invocation entry, root-call initialization, step preamble and the terminal block | `IVM::run_with_host_ref` in `src/ivm.rs` and `IVM::begin_root_call` in `src/call_runtime.rs` |
@@ -73,8 +73,8 @@ origin through which its construction sites are reachable, never fewer:
 - `prepare_rejection`: raised before `run` by artifact decoding, admission,
   entrypoint selection, host setup or argument-record preparation. No trace
   exists; the statement binds the admitted code, manifest and header instead.
-- `initialization_trap`: raised inside `run` before the first fetch, by the entry
-  check of the shared cycle allowance or by root-call initialization, where the
+- `initialization_trap`: raised inside `run` before the first fetch, by root-call
+  initialization, where the
   argument-decode prepayment is consumed and result- and call-table gas is
   debited. It is a terminal outcome with zero completed steps whose exact error
   and gas the relation must prove; its executed padding cycles are zero.
@@ -105,7 +105,7 @@ These ownership guarantees do not establish proof validity or complete coverage.
 
 `run_phases` restates the trap tokens and propagated helpers of the four parts
 of a run outside the dispatch arms. The terminal block also returns results
-without `?` (the recorded contract abort and the shared cycle allowance), so the
+without `?` (the recorded contract abort), so the
 tests pin its complete call surface.
 
 ## Coverage status
@@ -116,8 +116,8 @@ tests pin its complete call surface.
 - `complete`: the registered whole-invocation relation discharges every obligation.
   No entry is complete while `COMPLETE_RELATION` is `None`.
 
-Today 55 opcodes are `component_only` and 4 are `uncovered` (`LDLIT`, `HALT`,
-`SCALL` and `SYSTEM`). Every syscall is `uncovered`. Only the `OutOfGas` and `AssertionFailed` outcomes
+Today 55 opcodes are `component_only` and 3 are `uncovered` (`LDLIT`, `HALT` and
+`SCALL`). Every syscall is `uncovered`. Only the `OutOfGas` and `NumericFault` outcomes
 have a component relation, for the final attempted step of the public scalar
 segment. `IvmProved` verification rejects unconditionally.
 

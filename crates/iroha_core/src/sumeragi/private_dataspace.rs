@@ -89,18 +89,20 @@ fn active_owner(
     )
 }
 
-/// Reject physical parent execution policies that would claim an already external private root.
+/// Reject physical parent execution policies that would claim an already external private root
+/// or a dataspace retired from parent execution.
 pub(crate) fn ensure_parent_execution_separate(
     world: &impl WorldReadOnly,
     dataspaces: impl IntoIterator<Item = DataSpaceId>,
 ) -> Result<(), String> {
+    let dataspaces: Vec<_> = dataspaces.into_iter().collect();
     if dataspaces
-        .into_iter()
-        .any(|id| world.private_dataspaces().get(id).is_some())
+        .iter()
+        .any(|id| world.private_dataspaces().get(*id).is_some())
     {
         return Err("physical parent execution cannot claim a registered private root".into());
     }
-    Ok(())
+    crate::state::dataspace_retirement::ensure_not_retired(world, dataspaces)
 }
 
 impl Execute for RegisterPrivateDataspace {
@@ -123,7 +125,14 @@ impl Execute for RegisterPrivateDataspace {
             return Err(invalid("child is bound to another parent network"));
         }
         // Existing locally executed public dataspaces cannot be reinterpreted as external roots.
-        if state.nexus.dataspace_catalog.by_id(dataspace_id).is_some()
+        // An owner-retired catalog identity keeps its descriptor but no parent execution; only
+        // its retiring SNS owner and generation may claim it, checked after ownership below.
+        let retirement =
+            crate::state::dataspace_retirement::retired_dataspace(&state.world, dataspace_id)
+                .map_err(|error| {
+                    state.attempt_error_to_instruction_error(error.map_rejection(invalid))
+                })?;
+        if (retirement.is_none() && state.nexus.dataspace_catalog.by_id(dataspace_id).is_some())
             || state
                 .world
                 .sumeragi_lanes()
@@ -135,14 +144,15 @@ impl Execute for RegisterPrivateDataspace {
                 "private child collides with a locally configured dataspace",
             ));
         }
-        if crate::state::runtime_catalog_from_world(&state.world)
-            .map_err(invalid)?
-            .is_some_and(|catalog| {
-                catalog
-                    .dataspaces
-                    .iter()
-                    .any(|entry| entry.descriptor.id == dataspace_id)
-            })
+        if retirement.is_none()
+            && crate::state::runtime_catalog_from_world(&state.world)
+                .map_err(invalid)?
+                .is_some_and(|catalog| {
+                    catalog
+                        .dataspaces
+                        .iter()
+                        .any(|entry| entry.descriptor.id == dataspace_id)
+                })
         {
             return Err(invalid(
                 "private child collides with a staged physical dataspace",
@@ -183,6 +193,16 @@ impl Execute for RegisterPrivateDataspace {
         if &owner != authority || generation != self.expected_ownership_generation {
             return Err(invalid(
                 "authority or expected SNS ownership generation does not match",
+            ));
+        }
+        if let Some(retirement) = retirement
+            && (retirement.alias != self.alias
+                || retirement.owner != owner
+                || retirement.ownership_generation != generation
+                || retirement.retirement_height >= state.block_height())
+        {
+            return Err(invalid(
+                "a retired dataspace is re-admitted only by its retiring SNS owner and generation in a later block",
             ));
         }
         let policy = state

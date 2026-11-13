@@ -763,7 +763,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     assert_eq!(action.retry_state, None);
 }
 #[test]
-fn ivm_trigger_respects_pipeline_cycle_cap() {
+fn ivm_trigger_respects_the_remaining_block_gas() {
     use iroha_data_model::{
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
         transaction::{Executable, IvmBytecode},
@@ -774,10 +774,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = authenticate_trigger_fixture(State::new(World::default(), kura, query_handle));
-    let mut pipeline = state.pipeline.clone();
-    pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).expect("one is non-zero");
-    state.set_pipeline(pipeline);
+    let state = authenticate_trigger_fixture(State::new(World::default(), kura, query_handle));
     let block = ValidBlock::new_unverified_for_tests(
         state
             .view()
@@ -794,7 +791,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         .unwrap();
     let trigger_id: TriggerId = "ivm_gas_guard".parse().unwrap();
     let mut raw = Vec::new();
-    // Two ADD instructions cost two cycles in total, exceeding the configured cap of one.
+    // Two one-gas ADD instructions exceed the single unit of block gas left to the trigger.
     raw.extend_from_slice(
         &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
             .to_le_bytes(),
@@ -804,9 +801,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
             .to_le_bytes(),
     );
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut bytecode = assemble_ivm_header(&raw);
-    bytecode[8..16].copy_from_slice(&1_u64.to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(bytecode);
+    let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
     let filter = ExecuteTriggerEventFilter::new()
         .for_trigger(trigger_id.clone())
         .under_authority(ALICE_ID.clone());
@@ -844,15 +839,20 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         authority: ALICE_ID.clone(),
         args: Json::default(),
     };
+    // Gas is the only execution budget: the trigger draws from the block's remaining gas.
+    stx.gas_limit_per_block = stx
+        .gas_used_in_block_so_far
+        .saturating_add(stx.last_tx_gas_used)
+        .saturating_add(1);
     let err = stx
         .execute_called_trigger(&trigger_id, &evt)
-        .expect_err("trigger should exhaust the configured gas budget");
+        .expect_err("trigger should exhaust the remaining block gas");
     let TransactionRejectionReason::Validation(ValidationFail::IvmFault(fault)) = err else {
-        panic!("cycle exhaustion must retain its structured execution fault: {err:?}");
+        panic!("gas exhaustion must retain its structured execution fault: {err:?}");
     };
     assert_eq!(
         fault.kind,
-        iroha_data_model::executor::fault::IvmFaultKindV1::ExceededMaxCycles
+        iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas
     );
     assert_eq!(
         fault.site.selector,

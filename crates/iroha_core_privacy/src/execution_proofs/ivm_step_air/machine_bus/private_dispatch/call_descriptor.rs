@@ -114,7 +114,7 @@ fn callable(program: &Program, slot: usize) -> Option<&ivm::call::EmbeddedCallab
         return None;
     }
     let offset = if wide::opcode(instruction) == wide::control::JAL {
-        i64::from(wide::imm16(instruction))
+        i64::from(wide::jal_offset(instruction))
     } else {
         i64::from(wide::imm24(instruction))
     };

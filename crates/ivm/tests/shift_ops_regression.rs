@@ -32,9 +32,11 @@ fn shift_ops_match_with_and_without_cycle_limit() {
     bounded.set_register(2, 4);
     bounded.set_register(3, 0x80);
     bounded.set_register(4, (-8i64) as u64);
+    // A ZK header carries a trace bound; the shift results must not depend on it.
     let mut bounded_prog = prog.clone();
-    let max_cycles = 1024u64.to_le_bytes();
-    bounded_prog[8..16].copy_from_slice(&max_cycles);
+    bounded_prog[6] = ivm::ivm_mode::ZK;
+    bounded_prog[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+        .copy_from_slice(&1024u64.to_le_bytes());
     bounded.load_program(&bounded_prog).unwrap();
     bounded.run().unwrap();
     assert_eq!(r5, bounded.register(5));

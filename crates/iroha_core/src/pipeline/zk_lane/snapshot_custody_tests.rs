@@ -13,12 +13,11 @@ use std::{
 fn task(budget: &AllocationBudget, marker: u8) -> ZkTask {
     let state = [RegisterState {
         pc: u64::from(marker),
-        gpr: [u64::from(marker); 256],
-        tags: [true; 256],
+        gpr: [u64::from(marker); ivm::parallel::REGISTER_COUNT],
+        tags: [true; ivm::parallel::REGISTER_COUNT],
     }];
     let snapshot = DiagnosticTraceSource {
         registers: DiagnosticRegisterSource::States(&state),
-        constraints: &[],
         memory_events: &[],
         register_events: &[],
         steps: &[],

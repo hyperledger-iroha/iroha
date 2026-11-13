@@ -36,6 +36,16 @@ with ToriiClient("https://taira.sora.org", timeout=10.0) as client:
         print(error.status, error.code, error.details)
 ```
 
+`ToriiError.reject_code` is the `x-iroha-reject-code` header or
+`details["reject_code"]`, and `retry_after` the `Retry-After` header or
+`details["retry_after_seconds"]`. Routes that negotiate Norito receive Torii's
+error envelope as binary; `iroha_python` injects its decoder, so those errors
+carry the same `code`, `message` and `details`. `submit_transaction_once_v1`
+accepts the same kind of decoder as `decode_error_envelope`, a
+`(content_type, body) -> (code, message, details) | None` callable, and then
+reports `code`, `error_message` and `details` on its submission errors; they
+never change whether an outcome counts as definitive.
+
 Collections: `domains`, `accounts`, `asset_definitions`, `nfts`, `rwas`,
 `transactions`, `repo_agreements`, `subscription_plans`, `subscriptions`,
 `contract_activity`, `contract_events`, `accounts.assets(id)`,
