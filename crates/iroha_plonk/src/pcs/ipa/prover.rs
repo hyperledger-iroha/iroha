@@ -39,6 +39,9 @@ use super::{
 };
 use crate::transcript::TranscriptWrite;
 
+/// Longest half of a round whose `L` and `R` MSMs run side by side.
+const JOINT_ROUND_MAX: usize = 1 << 10;
+
 /// Writes an opening proof of `poly` (exactly `n` coefficients, committed with
 /// `blind`) at `x` and returns the folded generator `G'_0`.
 ///
@@ -166,24 +169,32 @@ where
             evaluation.cross_terms(&p_prime[..half], &p_prime[half..2 * half], cancellation)?;
         let l_randomness = C::ScalarExt::random(&mut *rng);
         let r_randomness = C::ScalarExt::random(&mut *rng);
-        let l_j = (msm_secret_cancellable::<C>(
-            &p_prime[half..2 * half],
-            &g_prime[..half],
-            budget,
-            &SharedMemoryBudget::process_default(),
-            cancellation,
-        )? + u_base * (value_l * z)
-            + w_base * l_randomness)
-            .to_affine();
-        let r_j = (msm_secret_cancellable::<C>(
-            &p_prime[..half],
-            &g_prime[half..2 * half],
-            budget,
-            &SharedMemoryBudget::process_default(),
-            cancellation,
-        )? + u_base * (value_r * z)
-            + w_base * r_randomness)
-            .to_affine();
+        let left = || {
+            msm_secret_cancellable::<C>(
+                &p_prime[half..2 * half],
+                &g_prime[..half],
+                budget,
+                &SharedMemoryBudget::process_default(),
+                cancellation,
+            )
+        };
+        let right = || {
+            msm_secret_cancellable::<C>(
+                &p_prime[..half],
+                &g_prime[half..2 * half],
+                budget,
+                &SharedMemoryBudget::process_default(),
+                cancellation,
+            )
+        };
+        // A short MSM uses few workers, so the two of a late round run side by side.
+        let (left, right) = if half <= JOINT_ROUND_MAX {
+            rayon::join(left, right)
+        } else {
+            (left(), right())
+        };
+        let l_j = (left? + u_base * (value_l * z) + w_base * l_randomness).to_affine();
+        let r_j = (right? + u_base * (value_r * z) + w_base * r_randomness).to_affine();
         transcript.write_point(&l_j)?;
         transcript.write_point(&r_j)?;
 

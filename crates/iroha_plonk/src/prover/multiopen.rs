@@ -15,6 +15,7 @@
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 use rand_core::{CryptoRng, Rng};
+use rayon::prelude::*;
 
 use super::{
     ProverError,
@@ -29,7 +30,7 @@ use crate::{
         ipa::{PinnedParams, evaluate_polynomial},
         multiopen::{
             Slot, SlotKind,
-            prover::{SlotPolynomial, create_proof_with_claim_cancellable},
+            prover::{SlotPolynomial, create_proof_with_claim_keeping_cancellable},
         },
     },
     protocol::{Protocol, rotate},
@@ -50,6 +51,11 @@ pub(super) struct Opened<'a, F: PastaField> {
     pub(super) random: &'a RandomPoly<F>,
     /// `h` combined at `x^n`.
     pub(super) quotient: CombinedQuotient<F>,
+}
+
+/// Queues a polynomial and the rotation it is opened at, in written order.
+fn queue<'q, 'p, F>(queries: &'q mut Vec<(&'p [F], i32)>) -> impl FnMut(&'p [F], i32) + 'q {
+    move |poly, rotation| queries.push((poly, rotation))
 }
 
 /// A polynomial by `u32` index.
@@ -84,9 +90,10 @@ impl<F: PastaField> Opened<'_, F> {
         let omega = pk.domain().omega();
         let omega_inv = pk.domain().omega_inv();
         let at = |rotation: i32| rotate(x, omega, omega_inv, rotation);
-        let mut write = |poly: &[F], rotation: i32| {
-            transcript.write_scalar(&evaluate_polynomial(poly, at(rotation)));
-        };
+        // Every opened value is independent of the others: queue them in the
+        // written order, evaluate them on the pool, then write them.
+        let mut queries = Vec::new();
+        let mut write = queue(&mut queries);
         if shape.committed_instances {
             for query in &descriptor.instance_queries {
                 write(
@@ -119,6 +126,14 @@ impl<F: PastaField> Opened<'_, F> {
             write(&lookup.input_poly, 0);
             write(&lookup.input_poly, -1);
             write(&lookup.table_poly, 0);
+        }
+        drop(write);
+        let values: Vec<F> = queries
+            .par_iter()
+            .map(|(poly, rotation)| evaluate_polynomial(poly, at(*rotation)))
+            .collect();
+        for value in &values {
+            transcript.write_scalar(value);
         }
         Ok(())
     }
@@ -210,11 +225,16 @@ impl<F: PastaField> Opened<'_, F> {
             .iter()
             .map(|slot| self.slot_polynomial(pk, slot.slot))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(create_proof_with_claim_cancellable(
+        // At the proof's peak the quotient holds its residues beside the
+        // recombined pieces (`super::memory`); the opening holds neither, so as
+        // many set polynomials fit without raising the peak.
+        let kept_sets = protocol.shape().quotient_pieces.saturating_mul(2);
+        Ok(create_proof_with_claim_keeping_cancellable(
             params.params(),
             plan,
             &points,
             &polys,
+            kept_sets,
             rng,
             transcript,
             budget,

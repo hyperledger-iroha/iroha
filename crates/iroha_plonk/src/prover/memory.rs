@@ -7,10 +7,13 @@
 //!
 //! The earlier core proving phases hold less. Advice commitment holds the evaluation columns
 //! in place of the coefficients. The lookup and permutation commitments add, at most, both
-//! instance forms, a fourth column per lookup and three sorting or product columns, fewer than
-//! the workspace's own instance, lookup and coset-power columns plus the masks and residues
-//! they do not hold. The opening holds the quotient pieces and a few polynomial and generator
-//! columns in place of the workspace, masks and residues.
+//! instance forms, a fourth column per lookup and three sorting columns for each lookup sorted
+//! at once, or one product scratch column. Lookups are sorted together only as far as these
+//! stay fewer than the workspace's own advice, instance, product, lookup and coset-power
+//! columns plus the masks and residues those phases do not hold (`lookup::arranged_at_once`).
+//! The opening holds the quotient pieces, then at most twice as many set polynomials as the
+//! quotient has pieces, and a few polynomial and generator columns in place of the workspace,
+//! masks and residues.
 //!
 //! A descriptor cannot bound a circuit's own synthesis allocations or the frontend's pending
 //! `Assigned::Rational` records and denominator buffers. Callers must account for those

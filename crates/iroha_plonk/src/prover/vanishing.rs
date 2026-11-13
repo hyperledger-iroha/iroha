@@ -18,6 +18,7 @@ use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use rand_core::Rng;
+use rayon::prelude::*;
 
 use super::{ProverError, random_values, write_point};
 use crate::{
@@ -28,6 +29,10 @@ use crate::{
 };
 
 /// The committed random polynomial `R`.
+/// Rows per pool task when the quotient pieces are combined; the result does
+/// not depend on it.
+const COMBINE_ROWS_PER_TASK: usize = 1 << 10;
+
 pub(super) struct RandomPoly<F: iroha_pasta::PastaField> {
     /// `n` coefficients.
     pub(super) coeffs: Vec<F>,
@@ -175,13 +180,22 @@ impl<F: iroha_pasta::PastaField> QuotientPieces<F> {
         let n = self.piece_len;
         let blinds = &self.blinds;
         let (first, rest) = coeffs.split_at_mut(n);
-        let mut power = xn;
-        for piece in rest.chunks_exact(n) {
-            for (acc, value) in first.iter_mut().zip(piece) {
-                *acc += power * value;
-            }
-            power *= xn;
-        }
+        // One pool task per block of rows, adding the pieces in their order.
+        let rest = &*rest;
+        let powers: Vec<F> = core::iter::successors(Some(xn), |power| Some(*power * xn))
+            .take(rest.len() / n)
+            .collect();
+        first
+            .par_chunks_mut(COMBINE_ROWS_PER_TASK)
+            .enumerate()
+            .for_each(|(task, block)| {
+                let start = task * COMBINE_ROWS_PER_TASK;
+                for (piece, power) in rest.chunks_exact(n).zip(&powers) {
+                    for (acc, value) in block.iter_mut().zip(&piece[start..]) {
+                        *acc += *power * value;
+                    }
+                }
+            });
         coeffs.truncate(n);
         coeffs.shrink_to_fit();
         let blind = blinds
@@ -224,5 +238,30 @@ mod tests {
             combined.blind,
             Fq::from(2) + xn * Fq::from(3) + xn.square() * Fq::from(5)
         );
+    }
+
+    /// Pieces of several pool tasks combine to the same coefficients as
+    /// adding one piece after another.
+    #[test]
+    fn pooled_combination_matches_piece_by_piece_addition() {
+        let n = 2 * COMBINE_ROWS_PER_TASK + 3;
+        let h: Vec<Fq> = (0..3 * n as u64).map(|i| Fq::from(i * i + 7)).collect();
+        let xn = Fq::from(123_456_789);
+        let expected: Vec<Fq> = (0..n)
+            .map(|row| h[row] + xn * h[n + row] + xn.square() * h[2 * n + row])
+            .collect();
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            let pieces = QuotientPieces {
+                coefficients: h.clone(),
+                piece_len: n,
+                blinds: vec![Fq::from(2), Fq::from(3), Fq::from(5)],
+            };
+            let combined = pool.install(|| pieces.combine(xn));
+            assert_eq!(combined.coeffs, expected, "workers={workers}");
+        }
     }
 }

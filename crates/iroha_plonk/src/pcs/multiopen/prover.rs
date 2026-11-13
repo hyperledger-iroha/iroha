@@ -203,6 +203,10 @@ where
 /// with freshly initialized owners and the original witness; a cancelled
 /// transcript is never a proof or a resumable transcript prefix.
 ///
+/// Every set polynomial is rebuilt for each of the three passes, so the
+/// opening holds one of them at a time. A caller with room for more uses
+/// [`create_proof_with_claim_keeping_cancellable`].
+///
 /// # Errors
 /// As [`create_proof_with_claim`], or cancellation after kernel tasks join.
 #[allow(clippy::too_many_arguments)]
@@ -211,6 +215,47 @@ pub fn create_proof_with_claim_cancellable<C, T, R>(
     plan: &OpeningPlan,
     points: &[C::ScalarExt],
     polys: &[SlotPolynomial<'_, C::ScalarExt>],
+    rng: &mut R,
+    transcript: &mut T,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<crate::pcs::ipa::GeneratorClaim<C>, MultiopenError>
+where
+    C: PastaCurve,
+    T: TranscriptWrite<C> + ?Sized,
+    R: Rng + CryptoRng,
+{
+    create_proof_with_claim_keeping_cancellable(
+        params,
+        plan,
+        points,
+        polys,
+        0,
+        rng,
+        transcript,
+        budget,
+        cancellation,
+    )
+}
+
+/// As [`create_proof_with_claim_cancellable`], keeping the first `kept_sets`
+/// set polynomials from the first pass to the last.
+///
+/// The three passes over the point sets (the quotients for `q'`, the
+/// evaluations at `x_3` and the final polynomial) read the same `q_t`.
+/// Rebuilding one costs a pass over every polynomial of its set, so each kept
+/// `q_t` saves two such passes and holds `n` coefficients until the IPA
+/// starts. The proof bytes do not depend on `kept_sets`.
+///
+/// # Errors
+/// As [`create_proof_with_claim_cancellable`].
+#[allow(clippy::too_many_arguments)]
+pub fn create_proof_with_claim_keeping_cancellable<C, T, R>(
+    params: &ParamsIpa<C>,
+    plan: &OpeningPlan,
+    points: &[C::ScalarExt],
+    polys: &[SlotPolynomial<'_, C::ScalarExt>],
+    kept_sets: usize,
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -234,10 +279,17 @@ where
 
     // q' = sum_t x_2^{n_s-1-t} floor(q_t / prod_{p in t} (X - p)).
     let mut q_prime = SecretPolynomial::new(vec![C::ScalarExt::ZERO; n]);
+    let mut kept: Vec<(SecretPolynomial<C::ScalarExt>, C::ScalarExt)> =
+        Vec::with_capacity(kept_sets.min(plan.sets().len()));
     for (set, set_points) in plan.sets().iter().enumerate() {
         CancellationToken::checkpoint(cancellation)?;
-        let (q, _) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
+        let (q, blind) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
         let mut q = SecretPolynomial::new(q);
+        if set < kept_sets {
+            // The division consumes its input: divide a copy and keep `q_t`.
+            let copy = SecretPolynomial::new(q.to_vec());
+            kept.push((core::mem::replace(&mut q, copy), blind));
+        }
         for point in set_points {
             divide_by_linear(&mut q, points[*point]);
         }
@@ -257,24 +309,33 @@ where
     .to_affine();
     transcript.write_point(&q_prime_commitment)?;
 
+    // A kept set polynomial, or the same one rebuilt for this pass.
+    let set_polynomial = |set: usize| -> Result<SetPolynomial<'_, C::ScalarExt>, MultiopenError> {
+        if let Some((q, blind)) = kept.get(set) {
+            return Ok(SetPolynomial::Kept(q, *blind));
+        }
+        let (q, blind) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
+        Ok(SetPolynomial::Rebuilt(SecretPolynomial::new(q), blind))
+    };
+
     let x_3 = crate::transcript::pipa_r::multiopening_challenge(transcript.squeeze_challenge());
     super::regularity::validate_challenge(params.k(), x_3, points)?;
     for set in 0..plan.sets().len() {
         CancellationToken::checkpoint(cancellation)?;
-        let (q, _) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
-        let q = SecretPolynomial::new(q);
-        transcript.write_scalar(&evaluate_polynomial(&q, x_3));
+        let q = set_polynomial(set)?;
+        transcript.write_scalar(&evaluate_polynomial(q.coeffs(), x_3));
     }
 
     let x_4 = transcript.squeeze_challenge();
     let mut p_blind = q_prime_blind;
     for set in 0..plan.sets().len() {
         CancellationToken::checkpoint(cancellation)?;
-        let (q, blind) = reconstruct_cancellable(plan, polys, set, x_1, n, cancellation)?;
-        let q = SecretPolynomial::new(q);
-        fold_into_cancellable(&mut q_prime, x_4, &q, cancellation)?;
-        p_blind = p_blind * x_4 + blind;
+        let q = set_polynomial(set)?;
+        fold_into_cancellable(&mut q_prime, x_4, q.coeffs(), cancellation)?;
+        p_blind = p_blind * x_4 + q.blind();
     }
+    // The IPA reads only the final polynomial.
+    drop(kept);
     Ok(ipa_create_proof(
         params,
         rng,
@@ -285,6 +346,29 @@ where
         budget,
         cancellation,
     )?)
+}
+
+/// A set polynomial `q_t` and its blind for one pass.
+enum SetPolynomial<'a, F: iroha_pasta::PastaField> {
+    /// Kept since the first pass.
+    Kept(&'a SecretPolynomial<F>, F),
+    /// Rebuilt for this pass and wiped after it.
+    Rebuilt(SecretPolynomial<F>, F),
+}
+
+impl<F: iroha_pasta::PastaField> SetPolynomial<'_, F> {
+    fn coeffs(&self) -> &[F] {
+        match self {
+            Self::Kept(q, _) => q,
+            Self::Rebuilt(q, _) => q,
+        }
+    }
+
+    fn blind(&self) -> F {
+        match self {
+            Self::Kept(_, blind) | Self::Rebuilt(_, blind) => *blind,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +464,71 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// The proof bytes, the folded generator and the random stream do not
+    /// depend on how many set polynomials the opening keeps.
+    #[test]
+    fn kept_set_polynomials_do_not_change_the_proof() {
+        use iroha_pasta::Ep;
+        use rand_chacha::ChaCha20Rng;
+        use rand_core::SeedableRng;
+
+        use super::super::{OpeningQuery, Slot, SlotKind};
+        use crate::transcript::{Blake2bHash, TranscriptWriter};
+
+        let params = ParamsIpa::<Ep>::new(5).expect("k = 5");
+        let n = params.n();
+        let slot = |index| Slot::new(SlotKind::Advice, index);
+        let query = |index, rotation| OpeningQuery::new(slot(index), rotation);
+        // Three point sets: both points, the first alone and the second alone.
+        let plan = OpeningPlan::new(&[
+            query(0, 0),
+            query(1, 0),
+            query(2, 1),
+            query(3, 0),
+            query(0, 1),
+            query(3, 1),
+        ])
+        .unwrap();
+        assert_eq!(plan.sets().len(), 3);
+        let columns: Vec<Vec<Fq>> = (0..4_u64)
+            .map(|column| {
+                (0..n)
+                    .map(|row| Fq::from((column + 1) * (row as u64 + 3)).square())
+                    .collect()
+            })
+            .collect();
+        let polys: Vec<_> = columns
+            .iter()
+            .enumerate()
+            .map(|(slot, coeffs)| SlotPolynomial {
+                coeffs,
+                blind: Fq::from(slot as u64 + 9),
+            })
+            .collect();
+        let points = [Fq::from(1234), Fq::from(98_765)];
+        let prove = |kept_sets: usize| {
+            let mut rng = ChaCha20Rng::seed_from_u64(31);
+            let mut transcript = TranscriptWriter::<Ep, _>::new(Blake2bHash::new());
+            let claim = create_proof_with_claim_keeping_cancellable(
+                &params,
+                &plan,
+                &points,
+                &polys,
+                kept_sets,
+                &mut rng,
+                &mut transcript,
+                MemoryBudget::DEFAULT,
+                None,
+            )
+            .expect("proof");
+            (transcript.finish(), *claim.g(), rng.next_u64())
+        };
+        let rebuilt = prove(0);
+        for kept_sets in [1, 2, 3, usize::MAX] {
+            assert!(prove(kept_sets) == rebuilt, "kept_sets={kept_sets}");
         }
     }
 
