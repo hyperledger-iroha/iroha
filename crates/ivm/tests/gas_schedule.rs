@@ -37,34 +37,3 @@ fn nested_branches_executed_set_gas() {
     let expected: u64 = executed.iter().map(|w| cost_of(*w)).sum();
     assert_eq!(10_000 - vm.remaining_gas(), expected);
 }
-#[test]
-fn sha3_error_path_consumes_base_gas() {
-    // Craft a SHA3BLOCK with out-of-bounds pointers to trigger error after gas deduction.
-    // rd=x4(rslt ptr), rs1=&state, rs2=&block
-    let sha3 = encoding::wide::encode_rr(instruction::wide::crypto::SHA3BLOCK, 4, 10, 11);
-    let bytes = assemble_words(&[sha3, HALT_WORD]);
-    let mut vm = IVM::new(1000);
-    vm.load_program(&bytes).unwrap();
-    // Set rs1/rs2 to near the end of INPUT so 136/200 byte reads go OOB
-    let st_ptr = ivm::Memory::INPUT_START + ivm::Memory::INPUT_SIZE - 8;
-    let blk_ptr = ivm::Memory::INPUT_START + ivm::Memory::INPUT_SIZE - 4;
-    vm.set_register(10, st_ptr);
-    vm.set_register(11, blk_ptr);
-    let res = vm.run();
-    assert!(res.is_err());
-    // Gas consumed should be at least the base cost of SHA3BLOCK
-    let used = 1000 - vm.remaining_gas();
-    assert!(used >= cost_of(sha3));
-}
-#[test]
-fn aesenc_mode_disabled_consumes_base_gas() {
-    // AESENC with VECTOR bit disabled should trap with VectorExtensionDisabled after base gas is consumed.
-    let aes = encoding::wide::encode_rr(instruction::wide::crypto::AESENC, 1, 2, 3);
-    let bytes = assemble_words(&[aes, HALT_WORD]);
-    let mut vm = IVM::new(1000);
-    vm.load_program(&bytes).unwrap();
-    let res = vm.run();
-    assert!(matches!(res, Err(ivm::VMError::VectorExtensionDisabled)));
-    let used = 1000 - vm.remaining_gas();
-    assert!(used >= cost_of(aes));
-}

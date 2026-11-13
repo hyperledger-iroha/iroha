@@ -138,7 +138,7 @@ def test_contract_feature_bitmap_is_not_documented_as_host_hardware() -> None:
 
     assert "Compiler-derived" in description
     assert "hash-covered" in description
-    assert "ZK and VECTOR" in description
+    assert "ZK is the only bit" in description
     assert "never host SIMD, Metal, or CUDA" in description
 
 

@@ -996,7 +996,8 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     let Some(manifest) = metadata_contract_manifest(tx.metadata())? else {
         return Ok(());
     };
-    let verified = ivm::verify_contract_artifact_with_memory_budget(
+    let verified = crate::smartcontracts::ivm::verify_contract_in_world(
+        state_ro.world(),
         bytecode,
         state_ro.prepared_contract_cache().execution_budget(),
     )
@@ -2477,7 +2478,11 @@ where
                     ))
                 })?;
             let summary = ivm_cache
-                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
+                .summarize_program_with_hash_in_world(
+                    state_ro.world(),
+                    code_hash,
+                    code_bytes.as_ref(),
+                )
                 .map_err(map_program_summary_error)?;
             let gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let meta = summary.metadata.clone();
@@ -2612,7 +2617,7 @@ where
         Executable::Ivm(bytecode) => {
             // Validate header against node policy
             let admitted = ivm_cache
-                .summarize_executable(bytecode.as_ref())
+                .summarize_executable_in_world(state_ro.world(), bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let summary = match admitted {
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -2793,7 +2798,7 @@ where
         Executable::IvmProved(proved) => {
             // Validate header against node policy (same checks as `Executable::Ivm`).
             let summary = ivm_cache
-                .summarize_program(proved.bytecode.as_ref())
+                .summarize_program_in_world(state_ro.world(), proved.bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let meta = summary.metadata.clone();
@@ -3011,7 +3016,11 @@ where
                     ))
                 })?;
             let summary = ivm_cache
-                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
+                .summarize_program_with_hash_in_world(
+                    state_ro.world(),
+                    code_hash,
+                    code_bytes.as_ref(),
+                )
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -3174,7 +3183,7 @@ where
             #[cfg(feature = "telemetry")]
             let program_prepare_start = Instant::now();
             let admitted = ivm_cache
-                .summarize_executable(bytecode.as_ref())
+                .summarize_executable_in_world(state_ro.world(), bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let summary = match admitted {
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -3376,7 +3385,7 @@ where
         }
         Executable::IvmProved(proved) => {
             let summary = ivm_cache
-                .summarize_program(proved.bytecode.as_ref())
+                .summarize_program_in_world(state_ro.world(), proved.bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -3502,7 +3511,11 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     ))
                 })?;
             let summary = ivm_cache
-                .summarize_program_with_hash(code_hash, code_bytes.as_ref())
+                .summarize_program_with_hash_in_world(
+                    state_ro.world(),
+                    code_hash,
+                    code_bytes.as_ref(),
+                )
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -3636,7 +3649,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
-                .summarize_executable(bytecode.as_ref())
+                .summarize_executable_in_world(state_ro.world(), bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let summary = match admitted {
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -4037,21 +4050,24 @@ mod tests_overlay_manifest {
                     0,
                     BTreeMap::from([
                         (ordinary.clone(), Some(vec![1])),
-                        (path.clone(), Some(bytes.clone())),
+                        (path.clone(), Some(bytes)),
                     ]),
                 );
                 let result = overlay.apply(&mut tx, &authority);
-                if protocol == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 {
-                    assert!(
-                        matches!(result, Err(ValidationFail::NotPermitted(message)) if message.contains("inactive Ironwood"))
-                    );
-                    assert!(tx.world.smart_contract_state.get(&path).is_none());
-                    assert!(tx.world.smart_contract_state.get(&ordinary).is_none());
+                // The inactive-Ironwood grammar refuses only Ironwood carriers; a predecessor
+                // proposal row still names native multisig state, which no contract overlay
+                // may publish. Either refusal precedes every write.
+                let expected = if protocol == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 {
+                    "inactive Ironwood"
                 } else {
-                    result.unwrap();
-                    assert_eq!(tx.world.smart_contract_state.get(&path), Some(&bytes));
-                    assert_eq!(tx.world.smart_contract_state.get(&ordinary), Some(&vec![1]));
-                }
+                    "native multisig state"
+                };
+                assert!(
+                    matches!(&result, Err(ValidationFail::NotPermitted(message)) if message.contains(expected)),
+                    "{result:?}"
+                );
+                assert!(tx.world.smart_contract_state.get(&path).is_none());
+                assert!(tx.world.smart_contract_state.get(&ordinary).is_none());
             }
         }
     }
@@ -4059,7 +4075,7 @@ mod tests_overlay_manifest {
     fn analysis_with_syscalls(numbers: &[u32]) -> ivm::analysis::ProgramAnalysis {
         let mut program = ivm::ProgramMetadata::default().encode();
         for number in numbers {
-            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(*number).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_scall(*number).to_le_bytes());
         }
         ivm::analysis::analyze_program(&program).expect("diagnostic syscall fixture")
     }
@@ -4112,7 +4128,7 @@ mod tests_overlay_manifest {
         ];
         let mut bytes = ivm::ProgramMetadata::default().encode();
         for number in numbers {
-            bytes.extend_from_slice(&ivm::encoding::wide::encode_syscallx(number).to_le_bytes());
+            bytes.extend_from_slice(&ivm::encoding::wide::encode_scall(number).to_le_bytes());
         }
         let analysis = ivm::analysis::analyze_program(&bytes).unwrap();
         assert_eq!(
@@ -4508,7 +4524,6 @@ mod tests_overlay_manifest {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version: 1,
         };
@@ -4650,7 +4665,6 @@ mod tests_overlay_manifest {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version,
         };
@@ -4750,13 +4764,7 @@ mod tests_overlay_manifest {
             ..ivm::ProgramMetadata::default()
         }
         .encode();
-        program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("test syscall fits in the V1 encoding"),
-            )
-            .to_le_bytes(),
-        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
@@ -7161,7 +7169,7 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
         ));
     }
     // Mode feature bits
-    let known = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
+    let known = ivm::ivm_mode::ZK;
     if meta.mode & !known != 0 {
         return Err(IvmAdmissionError::UnsupportedFeatureBits(
             meta.mode & !known,
@@ -7170,15 +7178,6 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
     // ABI version: first release supports only v1.
     if meta.abi_version != 1 {
         return Err(IvmAdmissionError::UnsupportedAbiVersion(meta.abi_version));
-    }
-    // Vector length sanity
-    if meta.vector_length != 0 && meta.vector_length > ivm::VECTOR_LENGTH_MAX {
-        return Err(IvmAdmissionError::VectorLengthTooLarge(
-            iroha_data_model::executor::VectorLengthTooLargeInfo {
-                vector_length: meta.vector_length,
-                max_allowed: ivm::VECTOR_LENGTH_MAX,
-            },
-        ));
     }
     if meta.max_cycles == 0 {
         return Err(IvmAdmissionError::MissingMaxCycles);
@@ -8175,9 +8174,8 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
                 10,
                 u16::try_from(index).expect("literal index fits in u16"),
             ));
-            emit(encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+            emit(encoding::wide::encode_scall(
+                ivm_sys::SYSCALL_INPUT_PUBLISH_TLV,
             ));
             emit(encoding::wide::encode_rr(
                 instruction::wide::arithmetic::ADD,
@@ -8192,10 +8190,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             40,
             0,
         ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_AXT_BEGIN).expect("syscall fits in u8"),
-        ));
+        emit(encoding::wide::encode_scall(ivm_sys::SYSCALL_AXT_BEGIN));
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
@@ -8208,19 +8203,15 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             0,
             0,
         ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_AXT_TOUCH).expect("syscall fits in u8"),
-        ));
+        emit(encoding::wide::encode_scall(ivm_sys::SYSCALL_AXT_TOUCH));
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
             41,
             0,
         ));
-        emit(encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_VERIFY_DS_PROOF).expect("syscall fits in u8"),
+        emit(encoding::wide::encode_scall(
+            ivm_sys::SYSCALL_VERIFY_DS_PROOF,
         ));
         emit(encoding::wide::encode_halt());
         let program = program_with_literals(&code, &literals);
@@ -8481,7 +8472,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         };
         let mut program = meta.encode();
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let metadata = iroha_model_base::metadata::Metadata::default();

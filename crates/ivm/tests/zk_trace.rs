@@ -37,10 +37,10 @@ fn zk_padding_extends_trace_to_max_cycles() {
 }
 #[test]
 fn disabling_zk_trace_keeps_zk_semantics_without_formal_logs() {
-    let assert_zero = encoding::wide::encode_rr(ivm::instruction::wide::zk::ASSERT, 0, 0, 0);
+    let addi = encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 7);
     let halt = encoding::wide::encode_halt();
     let mut code = Vec::new();
-    code.extend_from_slice(&assert_zero.to_le_bytes());
+    code.extend_from_slice(&addi.to_le_bytes());
     code.extend_from_slice(&halt.to_le_bytes());
     let prog = assemble_zk(&code, 32);
     let mut vm = IVM::new(1_000);

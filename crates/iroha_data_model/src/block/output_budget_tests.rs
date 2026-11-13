@@ -338,7 +338,8 @@ fn reservation_binds_complete_internal_origin_not_just_row_kind() {
             }
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
             }
             ExecutionOutputV1::Network(_) => unreachable!(),
@@ -677,7 +678,8 @@ mod internal_rejection {
             }
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
             }
             ExecutionOutputV1::Network(_) => panic!("internal fixture"),
@@ -783,7 +785,8 @@ mod internal_rejection {
                 ExecutionOutputV1::Time(row) => row.invocation.schedule_index += 1,
                 ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
-                | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::GovernanceBlockStart(_) => {
                     unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                 }
                 ExecutionOutputV1::Network(_) => unreachable!(),
@@ -875,7 +878,8 @@ mod internal_rejection {
                     },
                     ExecutionOutputV1::NetworkWithLifecycle(_)
                     | ExecutionOutputV1::PipelineWithLifecycle(_)
-                    | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                    | ExecutionOutputV1::TimeWithLifecycle(_)
+                    | ExecutionOutputV1::GovernanceBlockStart(_) => {
                         unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                     }
                     ExecutionOutputV1::Network(_) => unreachable!(),

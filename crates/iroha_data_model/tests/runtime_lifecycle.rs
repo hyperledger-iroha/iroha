@@ -8,8 +8,8 @@ use iroha_data_model::{
     block::BlockHeader,
     runtime::{
         definition::{
-            BindingV1, CompletionClosureV1, DefinitionDescriptorV1, DefinitionId, RootSelectionV1,
-            SelectionId,
+            BindingV1, CompletionClosureV1, DefinitionDescriptorV1, DefinitionId,
+            RestrictionEntryV1, RestrictionV1, RootSelectionV1, SelectionError, SelectionId,
         },
         lifecycle::{
             ChangeSetEndorsementV1, ChangeSetError, ChangeSetId, ChangeSetV1, ContainmentError,
@@ -263,6 +263,209 @@ fn rebinding_breaks_a_signed_expectation() {
             wire_id: Some("iroha.bond.claim.v1".into())
         })
     );
+}
+
+#[test]
+fn captured_expectations_follow_transitive_bindings_and_terminate_execution_cycles() {
+    let (mut catalog, _, mut selection, change) = add_call();
+    for descriptor in change.publish {
+        publish(&mut catalog, descriptor);
+    }
+    let interfaces: Vec<_> = selection
+        .bindings
+        .iter()
+        .map(|binding| binding.interface)
+        .collect();
+    for binding in &mut selection.bindings {
+        let DefinitionDescriptorV1::Implementation(mut descriptor) =
+            catalog[&binding.implementation].clone()
+        else {
+            panic!("fixture binds an implementation");
+        };
+        // The immutable artifact graph stays acyclic: implementations refer to interfaces.
+        // Resolving the interfaces creates the cycle in the execution graph.
+        descriptor.invokes = sorted(interfaces.clone());
+        binding.implementation = publish(
+            &mut catalog,
+            DefinitionDescriptorV1::Implementation(descriptor),
+        );
+        selection.active.push(binding.implementation);
+    }
+    selection.active = sorted(selection.active);
+    let expectation =
+        ExpectationV1::capture(&selection, &catalog, &["iroha.bond.claim.v1".into()], false)
+            .expect("the finite closure of an execution cycle is captured");
+    assert_eq!(expectation.bindings, selection.bindings);
+    assert!(expectation.definitions.contains(&selection.kernel));
+    assert!(
+        expectation
+            .definitions
+            .contains(&selection.commitment_profile)
+    );
+    for storage in &selection.installed_storage {
+        assert!(expectation.definitions.contains(storage));
+    }
+    assert_eq!(
+        expectation.check_call(&selection, "iroha.bond.call.v1", 10),
+        Ok(())
+    );
+    assert_eq!(
+        norito::decode_from_bytes::<ExpectationV1>(&norito::to_bytes(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
+    assert_eq!(
+        norito::json::from_str::<ExpectationV1>(&norito::json::to_json(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
+    let mut rebound = selection.clone();
+    let nested = rebound
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.wire_id == "iroha.bond.call.v1")
+        .unwrap();
+    nested.implementation = selection.kernel;
+    assert_eq!(
+        expectation.check(&rebound),
+        Err(RuntimeRejectionV1::ExpectationMismatch {
+            wire_id: Some("iroha.bond.call.v1".into()),
+        })
+    );
+}
+
+#[test]
+fn unrelated_additions_preserve_narrow_consent_but_require_new_opaque_consent() {
+    let (mut catalog, predecessor, successor, change) = add_call();
+    for descriptor in change.publish {
+        publish(&mut catalog, descriptor);
+    }
+    let narrow = ExpectationV1::capture(
+        &predecessor,
+        &catalog,
+        &["iroha.bond.claim.v1".into()],
+        false,
+    )
+    .unwrap();
+    let opaque = ExpectationV1::capture(&predecessor, &catalog, &[], true).unwrap();
+    assert_eq!(narrow.check(&successor), Ok(()));
+    assert_eq!(
+        opaque.check(&successor),
+        Err(RuntimeRejectionV1::ExpectationMismatch { wire_id: None })
+    );
+    assert_eq!(
+        narrow.check_call(&successor, "iroha.bond.call.v1", 10),
+        Err(RuntimeRejectionV1::ExpectationMismatch {
+            wire_id: Some("iroha.bond.call.v1".into()),
+        })
+    );
+    let recaptured = ExpectationV1::capture(&successor, &catalog, &[], true).unwrap();
+    assert_eq!(
+        recaptured.check_call(&successor, "iroha.bond.call.v1", 10),
+        Ok(())
+    );
+}
+
+#[test]
+fn expectation_capture_refuses_unbound_or_malformed_source_selections() {
+    let (mut catalog, _, mut selection) = bond_root();
+    assert_eq!(
+        ExpectationV1::capture(&selection, &catalog, &["missing".into()], false),
+        Err(SelectionError::Unbound("missing".into()))
+    );
+    let original = selection.bindings[0].implementation;
+    catalog.remove(&original);
+    assert_eq!(
+        ExpectationV1::capture(&selection, &catalog, &[], true),
+        Err(SelectionError::Unpublished(original))
+    );
+    selection.active.push(selection.active[0]);
+    assert_eq!(
+        ExpectationV1::capture(&selection, &catalog, &[], true),
+        Err(SelectionError::NonCanonical("active"))
+    );
+}
+
+#[test]
+fn deferred_expectations_honor_restrictions_at_their_effective_height() {
+    let (catalog, _, mut selection) = bond_root();
+    let expectation = ExpectationV1::capture(&selection, &catalog, &[], true).unwrap();
+    let target = selection.bindings[0].implementation;
+    for restriction in [
+        RestrictionV1::AdmissionClosed(20),
+        RestrictionV1::CompletionOnly(20),
+        RestrictionV1::Disabled(20),
+    ] {
+        selection.restrictions = vec![RestrictionEntryV1 {
+            definition: target,
+            restriction,
+        }];
+        assert_eq!(expectation.check_at(&selection, 19), Ok(()));
+        assert_eq!(
+            expectation.check_at(&selection, 20),
+            Err(RuntimeRejectionV1::DefinitionRestricted {
+                definition: target,
+                restriction,
+            })
+        );
+    }
+    selection.restrictions[0].restriction = RestrictionV1::Deprecated(20);
+    assert_eq!(expectation.check_at(&selection, 20), Ok(()));
+}
+
+#[test]
+fn restrictions_outside_the_captured_closure_do_not_revoke_consent() {
+    let (mut catalog, predecessor, mut successor, change) = add_call();
+    for descriptor in change.publish {
+        publish(&mut catalog, descriptor);
+    }
+    let expectation = ExpectationV1::capture(
+        &predecessor,
+        &catalog,
+        &["iroha.bond.claim.v1".into()],
+        false,
+    )
+    .unwrap();
+    let unrelated = successor
+        .bindings
+        .iter()
+        .find(|binding| binding.wire_id == "iroha.bond.call.v1")
+        .unwrap()
+        .implementation;
+    successor.restrictions = vec![RestrictionEntryV1 {
+        definition: unrelated,
+        restriction: RestrictionV1::Disabled(20),
+    }];
+    assert_eq!(expectation.check_at(&successor, 20), Ok(()));
+}
+
+#[test]
+fn expectations_reject_execution_profile_changes_and_retired_dependencies() {
+    let (catalog, _, selection) = bond_root();
+    let expectation = ExpectationV1::capture(&selection, &catalog, &[], true).unwrap();
+    for changed in [
+        RootSelectionV1 {
+            kernel: selection.services_profile,
+            ..selection.clone()
+        },
+        RootSelectionV1 {
+            services_profile: selection.kernel,
+            ..selection.clone()
+        },
+        RootSelectionV1 {
+            commitment_profile: selection.kernel,
+            ..selection.clone()
+        },
+        RootSelectionV1 {
+            installed_storage: Vec::new(),
+            ..selection.clone()
+        },
+    ] {
+        assert_eq!(
+            expectation.check_at(&changed, 10),
+            Err(RuntimeRejectionV1::ExpectationMismatch { wire_id: None })
+        );
+    }
 }
 
 fn attestation(

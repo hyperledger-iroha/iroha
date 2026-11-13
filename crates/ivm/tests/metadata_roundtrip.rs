@@ -5,8 +5,7 @@ fn metadata_encode_parse_roundtrip() {
         ProgramMetadata {
             version_major: 1,
             version_minor: 1,
-            mode: 0x03,
-            vector_length: 0,
+            mode: 0x00,
             max_cycles: 12345,
             abi_version: 1,
         },
@@ -14,7 +13,6 @@ fn metadata_encode_parse_roundtrip() {
             version_major: 1,
             version_minor: 1,
             mode: 0x01,
-            vector_length: 8,
             max_cycles: u32::MAX as u64 + 1,
             abi_version: 1,
         },
@@ -60,7 +58,6 @@ fn metadata_parse_rejects_bad_magic_and_short() {
     assert!(matches!(
         ProgramMetadata::parse(&m),
         Err(VMError::ProgramVectorLengthTooLarge {
-            vector_length: u8::MAX,
             max_allowed: ivm::VECTOR_LENGTH_MAX,
         })
     ));

@@ -12,14 +12,13 @@ use std::{num::NonZeroU64, sync::Arc};
 fn program_with_scall(sys: u8) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(instruction::wide::system::SCALL, sys).to_le_bytes(),
+        &encoding::wide::encode_scall(u32::from(sys)).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10_000,
         abi_version: 1,
     };

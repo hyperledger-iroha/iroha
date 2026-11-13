@@ -2818,16 +2818,6 @@
     {
       "path": "crates/iroha_execution_stark/src/field.rs",
       "engine": "iroha-execution-stark"
-    },
-    {
-      "path": "crates/ivm/src/field.rs",
-      "engine": null,
-      "note": "IVM vector field opcodes; execution semantics, not a proof engine"
-    },
-    {
-      "path": "crates/ivm/tests/field_ops.rs",
-      "engine": null,
-      "note": "IVM field opcode tests"
     }
   ],
   "retained_utilities": [

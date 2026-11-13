@@ -132,6 +132,122 @@ fn committed_restriction(state: &State, definition: &DefinitionId) -> Option<Res
     restriction_of(state.world.runtime_selection.view().get(), definition)
 }
 
+#[test]
+fn selected_orderbook_containment_keeps_terminal_parents_open_until_custody_drains() {
+    use crate::runtime::{
+        activate_additions_for_testing, catalog::additions::NATIVE_ESCROW_CAPTURE,
+        native_escrow_capture,
+    };
+    use iroha_data_model::{
+        escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus},
+        isi::{sorafs::*, wire_id_of},
+        runtime::native_escrow::NativeEscrowKindV1,
+        sorafs::orderbook::orderbook_order_escrow_id,
+    };
+    use iroha_primitives::numeric::Quantity;
+    let primary = members(1..8);
+    let backup = members(21..28);
+    let state = state_with(Some(&panel(&primary, &backup)));
+    activate_additions_for_testing(&state.world, NATIVE_ESCROW_CAPTURE.module).unwrap();
+    let mut block = state.block(header(2, NOW_MS));
+    let mut tx = block.transaction();
+    let mut row = AssetEscrowRecord {
+        id: orderbook_order_escrow_id([0xDA; 32]),
+        seller: iroha_test_samples::ALICE_ID.clone(),
+        buyer: Some(iroha_test_samples::ALICE_ID.clone()),
+        asset_definition: iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .unwrap(),
+        amount: Quantity::from(5_u32),
+        custody: iroha_test_samples::ALICE_ID.clone(),
+        status: AssetEscrowStatus::Locked,
+        kind: AssetEscrowKind::Lock,
+        remaining_amount: Quantity::from(5_u32),
+        release_authority: Some(iroha_test_samples::ALICE_ID.clone()),
+        expires_at_ms: Some(NOW_MS + HOUR_MS),
+        evidence_hashes: vec![],
+        conditions: vec![],
+        created_at_ms: NOW_MS,
+        accepted_at_ms: None,
+        payment_sent_at_ms: None,
+        disputed_at_ms: None,
+        closed_at_ms: None,
+        resolution: None,
+    };
+    let capture =
+        native_escrow_capture::prepare_opening(&tx, &row, NativeEscrowKindV1::OrderbookLock)
+            .unwrap();
+    tx.world
+        .insert_captured_asset_escrow_entry(&row, capture)
+        .unwrap();
+    let original = tx.world.runtime_selection.canonical().clone();
+    let target = |wire: &str| {
+        original
+            .bindings
+            .iter()
+            .find(|binding| binding.wire_id == wire)
+            .unwrap()
+            .interface
+    };
+    let network = tx.network_id;
+    let signed = |wire: &str, kind, incident| {
+        let value = ContainmentV1 {
+            network,
+            root: RootScopeV1::Universal,
+            incident: [incident; 32],
+            targets: vec![target(wire)],
+            kind,
+            lease_until_ms: NOW_MS + 72 * HOUR_MS,
+        };
+        ContainRuntimeV1 {
+            endorsements: endorse(&value, &primary[..6], NOW_MS),
+            containment: value,
+        }
+    };
+    for wire in [
+        wire_id_of::<CancelSorafsOrderbookOrder>().unwrap(),
+        wire_id_of::<MaintainSorafsOrderbook>().unwrap(),
+        wire_id_of::<RecordSorafsOrderbookSettlementReceipt>().unwrap(),
+    ] {
+        for kind in [
+            ContainmentKindV1::AdmissionClosed,
+            ContainmentKindV1::CompletionOnly,
+        ] {
+            let error = contain(&mut tx, signed(wire, kind, 0xDA)).unwrap_err();
+            assert!(error.to_string().contains("ordinary admission"), "{error}");
+            assert_eq!(tx.world.runtime_selection.canonical(), &original);
+            assert!(tx.world.runtime_containments.iter().next().is_none());
+        }
+    }
+    for (wire, kind, incident) in [
+        (
+            wire_id_of::<SubmitSorafsOrderbookOrder>().unwrap(),
+            ContainmentKindV1::AdmissionClosed,
+            0xDB,
+        ),
+        (
+            wire_id_of::<MatchSorafsOrderbook>().unwrap(),
+            ContainmentKindV1::CompletionOnly,
+            0xDC,
+        ),
+    ] {
+        contain(&mut tx, signed(wire, kind, incident)).unwrap();
+    }
+    row.status = AssetEscrowStatus::Cancelled;
+    row.remaining_amount = Quantity::zero();
+    row.closed_at_ms = Some(NOW_MS);
+    tx.world.insert_asset_escrow_entry(&row).unwrap();
+    contain(
+        &mut tx,
+        signed(
+            wire_id_of::<MaintainSorafsOrderbook>().unwrap(),
+            ContainmentKindV1::CompletionOnly,
+            0xDD,
+        ),
+    )
+    .unwrap();
+}
+
 /// A change set of `state`'s universal root that restricts `definition`: what Parliament would
 /// admit or approve to ratify a containment of it. Review reads only its transitions.
 fn ratifying(state: &State, definition: DefinitionId) -> ChangeSetV1 {
@@ -175,6 +291,46 @@ fn pass(state: &State, height: u64, ms: u64) {
         .block(header(height, ms))
         .commit_empty_block_for_testing()
         .expect("commit");
+}
+
+#[test]
+fn containment_preserves_the_root_beyond_a_scoped_execution_context() {
+    let primary = members(1..10);
+    let state = state_with(Some(&panel(&primary, &members(10..19))));
+    let log = interface("iroha.log");
+    let target = containment(&state, 7, vec![log], NOW_MS + 72 * HOUR_MS);
+    let mut block = state.block(header(2, NOW_MS));
+    let mut stx = block.transaction();
+    let original = stx.world.runtime_selection.canonical().clone();
+    let mut scoped = original.clone();
+    scoped
+        .bindings
+        .retain(|binding| binding.wire_id == "iroha.log");
+    stx.world.runtime_selection.set_executing(Some(scoped));
+    contain(
+        &mut stx,
+        ContainRuntimeV1 {
+            containment: target.clone(),
+            endorsements: endorse(&target, &primary[..6], NOW_MS - 1_000),
+        },
+    )
+    .expect("the panel contains the root, even during scoped execution");
+    stx.world.runtime_selection.set_executing(None);
+    assert_eq!(
+        stx.world.runtime_selection.get().bindings,
+        original.bindings
+    );
+    assert_eq!(stx.world.runtime_selection.get().active, original.active);
+    assert_eq!(
+        restriction_of(stx.world.runtime_selection.get(), &log),
+        Some(RestrictionV1::AdmissionClosed(3))
+    );
+    stx.apply();
+    block.commit_empty_block_for_testing().expect("commit");
+    assert_eq!(
+        state.world.runtime_selection.view().get().bindings,
+        original.bindings
+    );
 }
 
 #[test]

@@ -17,6 +17,8 @@
 //! work_digest      = H(Frame("PARL/STAMP-WORK/v1"; payload_digest, nonce))
 //! authority_binding= H(Frame("PARL/AUTHORITY/v1"; Enc(AccountId)))
 //! proposal_digest  = H(Frame("PARL/PROPOSAL/v1"; Enc(ProposalKind)))
+//! attempt_state_digest = H(Frame("PARL/ATTEMPT-STATE/v1"; Enc(attempt_state)))
+//! board_record_digest  = H(Frame("PARL/BOARD-RECORD/v1"; Enc(board_record)))
 //! ```
 //!
 //! Every 64-, 32- and 128-byte operand is its raw bytes. `B`, `R`, `scope`, `policy_hash`
@@ -29,8 +31,9 @@ use super::{
     AdmissionNonceV1, AnonymousBallotAuthorizationV1, AnonymousBallotCorpusEntryV1,
     AnonymousParliamentRosterRootPreimageV1, AuthenticatedBallotContextV1,
     BALLOT_CONTEXT_MAX_BYTES_V1, BallotAuthorityBindingV1, BallotClosureRecordV1,
-    BallotContextErrorV1, BallotScopeV1, Digest512, MAX_SEALED_SEATS_V1, ProofProfileIdV1,
-    SealedCredentialListV1, SealedRegistrationPairV1,
+    BallotContextErrorV1, BallotScopeV1, Digest512, MAX_SEALED_SEATS_V1,
+    ParliamentBallotBoardRecordV1, ProofProfileIdV1, SealedCredentialListV1,
+    SealedRegistrationPairV1,
     framing::{AnonymousBallotCodecErrorV1, enc, enc_bounded, frame_digest},
 };
 use crate::{account::AccountId, governance::types::ProposalKind};
@@ -57,6 +60,10 @@ pub const STAMP_WORK_TAG_V1: &[u8] = b"PARL/STAMP-WORK/v1";
 pub const AUTHORITY_TAG_V1: &[u8] = b"PARL/AUTHORITY/v1";
 /// Frame tag of the proposal digest (the profile's frame, without `P16`).
 pub const PROPOSAL_TAG_V1: &[u8] = b"PARL/PROPOSAL/v1";
+/// Frame tag of the digest of an attempt State in a lifecycle receipt.
+pub const ATTEMPT_STATE_TAG_V1: &[u8] = b"PARL/ATTEMPT-STATE/v1";
+/// Frame tag of the digest of a stored ballot board record in a lifecycle receipt.
+pub const BOARD_RECORD_TAG_V1: &[u8] = b"PARL/BOARD-RECORD/v1";
 /// Frame tag of the qualification-record digest.
 pub const QUALIFICATION_TAG_V1: &[u8] = b"PARL/QUALIFICATION/v1";
 
@@ -462,6 +469,31 @@ pub fn proposal_digest_v1(
     proposal: &ProposalKind,
 ) -> Result<Digest512, AnonymousBallotCodecErrorV1> {
     frame_digest(PROPOSAL_TAG_V1, &[&enc(proposal)?])
+}
+
+/// `attempt_state_digest = H(Frame("PARL/ATTEMPT-STATE/v1"; Enc(attempt_state)))`: the digest
+/// a lifecycle receipt carries of the attempt State its item left. The State is Core's
+/// reducer State, so it enters as any canonical value.
+///
+/// # Errors
+/// [`AnonymousBallotCodecErrorV1`] if `Enc(state)` cannot be produced or exceeds the 32-bit
+/// `Frame` field length.
+pub fn attempt_state_digest_v1<T: norito::NoritoSerialize>(
+    state: &T,
+) -> Result<Digest512, AnonymousBallotCodecErrorV1> {
+    frame_digest(ATTEMPT_STATE_TAG_V1, &[&enc(state)?])
+}
+
+/// `board_record_digest = H(Frame("PARL/BOARD-RECORD/v1"; Enc(board_record)))`: the digest a
+/// lifecycle receipt carries of the stored ballot board its item left.
+///
+/// # Errors
+/// [`AnonymousBallotCodecErrorV1`] if `Enc(record)` cannot be produced or exceeds the 32-bit
+/// `Frame` field length.
+pub fn board_record_digest_v1(
+    record: &ParliamentBallotBoardRecordV1,
+) -> Result<Digest512, AnonymousBallotCodecErrorV1> {
+    frame_digest(BOARD_RECORD_TAG_V1, &[&enc(record)?])
 }
 
 #[cfg(test)]
@@ -916,6 +948,24 @@ mod tests {
     }
 
     #[test]
+    fn the_receipt_digests_frame_the_canonical_state_and_board() {
+        // Any canonical value stands for Core's reducer State here.
+        let state = proposal();
+        assert_eq!(
+            attempt_state_digest_v1(&state),
+            Ok(sha3(
+                &frame_bytes(b"PARL/ATTEMPT-STATE/v1", &[&enc(&state).expect("enc")])
+                    .expect("frame")
+            ))
+        );
+        assert_ne!(
+            attempt_state_digest_v1(&state),
+            proposal_digest_v1(&state),
+            "the tag separates the State digest from the proposal digest"
+        );
+    }
+
+    #[test]
     fn the_frame_tags_are_distinct_ascii() {
         let tags = [
             ENVELOPE_TAG_V1,
@@ -929,6 +979,8 @@ mod tests {
             STAMP_WORK_TAG_V1,
             AUTHORITY_TAG_V1,
             PROPOSAL_TAG_V1,
+            ATTEMPT_STATE_TAG_V1,
+            BOARD_RECORD_TAG_V1,
             QUALIFICATION_TAG_V1,
         ];
         assert_eq!(tags.iter().collect::<BTreeSet<_>>().len(), tags.len());

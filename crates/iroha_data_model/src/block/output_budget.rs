@@ -8,7 +8,13 @@
 //! admit a feasible plan, and fit all associated effects before applying State.
 //! The complete executed-wire limit is checked separately by the block setter.
 
-use super::execution_output::ExecutionOutputV1;
+use super::execution_output::{ExecutionOutputV1, governance_start_row_count_v1};
+use crate::governance::anonymous_ballot::{
+    CASTING_CLOCK_ROW_MAX_BYTES_V1, GOVERNANCE_START_OUTPUT_BYTES_V1,
+    GOVERNANCE_START_OUTPUT_ROWS_V1, GOVERNANCE_START_PRELUDE_ROWS_V1,
+    GOVERNANCE_START_ROW_MAX_BYTES_V1, GOVERNANCE_START_ROWS_PER_ITEM_V1,
+    GovernanceBlockStartEventV1, GovernanceBlockStartOutputV1, LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1,
+};
 
 #[path = "output_terminal_ceilings.rs"]
 mod terminal_ceilings;
@@ -49,7 +55,33 @@ impl ExecutionOutputLimits {
         Ok(())
     }
 
+    /// Check that the complete executed wire can hold the governance-start partition beside
+    /// every execution row the policy allows: the wire ceiling exceeds the execution-row
+    /// byte total by at least [`GOVERNANCE_START_OUTPUT_BYTES_V1`]. A root may install the
+    /// anonymous Parliament family only under such a policy.
+    ///
+    /// # Errors
+    /// Rejects an invalid policy, and one whose wire ceiling leaves no room for the partition.
+    pub fn validate_governance_start_room(&self) -> Result<(), String> {
+        self.validate()?;
+        if self.max_executed_wire_bytes - self.max_total_output_bytes
+            < GOVERNANCE_START_OUTPUT_BYTES_V1
+        {
+            return Err(
+                "executed wire ceiling cannot hold the governance-start partition beside the execution rows"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     /// Check exact row-frame costs without constructing encoded output buffers.
+    ///
+    /// `max_outputs`, `max_output_bytes` and `max_total_output_bytes` bound the Network,
+    /// Pipeline and Time rows. Leading governance block-start rows are a separate partition:
+    /// they are measured against [`GOVERNANCE_START_OUTPUT_ROWS_V1`],
+    /// [`GOVERNANCE_START_OUTPUT_BYTES_V1`] and the cap of each row's event, and count
+    /// towards no execution-row limit. The complete executed wire bounds both.
     ///
     /// This is an allocated-value check, not an ingress allocation guard or
     /// pre-execution capacity reservation. It does not validate row authority.
@@ -58,15 +90,32 @@ impl ExecutionOutputLimits {
     /// Rejects invalid policy, too many rows, encoding errors or exceeded bounds.
     pub fn validate_outputs(&self, outputs: &[ExecutionOutputV1]) -> Result<(), String> {
         self.validate()?;
-        if u64::try_from(outputs.len()).map_err(|_| "output count exceeds u64")?
+        let governance_rows = governance_start_row_count_v1(outputs);
+        if governance_rows > GOVERNANCE_START_OUTPUT_ROWS_V1 as usize {
+            return Err("governance block-start rows exceed their partition".into());
+        }
+        if u64::try_from(outputs.len() - governance_rows).map_err(|_| "output count exceeds u64")?
             > u64::from(self.max_outputs)
         {
             return Err("execution output count exceeds applying policy".into());
         }
+        let mut governance_total = 0_u64;
         let mut total = 0_u64;
-        for output in outputs {
+        for (index, output) in outputs.iter().enumerate() {
             let bytes = output_bytes(output)?;
-            if bytes > self.max_output_bytes {
+            if let ExecutionOutputV1::GovernanceBlockStart(row) = output {
+                if index >= governance_rows {
+                    return Err("governance block-start output follows an execution row".into());
+                }
+                if bytes > row.row_cap_bytes() {
+                    return Err("governance block-start output exceeds its row cap".into());
+                }
+                governance_total = governance_total
+                    .checked_add(bytes)
+                    .filter(|total| *total <= GOVERNANCE_START_OUTPUT_BYTES_V1)
+                    .ok_or("governance block-start rows exceed their byte partition")?;
+                continue;
+            } else if bytes > self.max_output_bytes {
                 return Err("execution output row exceeds applying byte policy".into());
             }
             total = total
@@ -80,9 +129,12 @@ impl ExecutionOutputLimits {
     }
 }
 
-/// Canonical top-level execution phases, in execution order.
+/// Canonical top-level output phases, in row order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionOutputPhase {
+    /// The governance block-start pass, before any input executes. Its rows have their own
+    /// partition ([`GovernanceStartOutputBudgetV1`]) and no terminal reservation.
+    GovernanceStart,
     /// Exact immutable network-input prefix.
     Network,
     /// Isolated callbacks for actual prefix events and `BlockApproved`.
@@ -92,16 +144,28 @@ pub enum ExecutionOutputPhase {
 }
 
 impl ExecutionOutputPhase {
-    fn index(self) -> usize {
+    /// The slot of the phase in the three terminal reservations; `None` for the
+    /// governance-start phase, which reserves a partition instead.
+    fn terminal_index(self) -> Option<usize> {
         match self {
-            Self::Network => 0,
-            Self::Pipeline => 1,
-            Self::Time => 2,
+            Self::GovernanceStart => None,
+            Self::Network => Some(0),
+            Self::Pipeline => Some(1),
+            Self::Time => Some(2),
         }
     }
 
-    fn of(output: &ExecutionOutputV1) -> Self {
+    /// The terminal slot of an execution phase.
+    #[cfg(test)]
+    fn index(self) -> usize {
+        self.terminal_index().expect("an execution phase")
+    }
+
+    /// The phase of `output`.
+    #[must_use]
+    pub fn of(output: &ExecutionOutputV1) -> Self {
         match output {
+            ExecutionOutputV1::GovernanceBlockStart(_) => Self::GovernanceStart,
             ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => {
                 Self::Network
             }
@@ -301,15 +365,18 @@ impl ExecutionOutputBudget {
         })
     }
 
-    fn check_phase(&self, phase: ExecutionOutputPhase) -> Result<(), String> {
+    /// Check that `phase` may act now and return its terminal slot.
+    fn check_phase(&self, phase: ExecutionOutputPhase) -> Result<usize, String> {
         if self.abandoned || self.in_flight {
             return Err("execution output reservation is unfinished or abandoned".into());
         }
-        let index = phase.index();
+        let index = phase
+            .terminal_index()
+            .ok_or("governance block-start rows have no terminal reservation")?;
         if index < self.phase || self.remaining[..index].iter().any(|p| p.count != 0) {
             return Err("execution output phase bypasses unresolved prior obligations".into());
         }
-        Ok(())
+        Ok(index)
     }
 
     /// Release callback slots proven uninvoked by the actual execution owner.
@@ -324,11 +391,11 @@ impl ExecutionOutputBudget {
         phase: ExecutionOutputPhase,
         count: u32,
     ) -> Result<(), String> {
-        self.check_phase(phase)?;
-        if phase == ExecutionOutputPhase::Network || count > self.remaining[phase.index()].count {
+        let index = self.check_phase(phase)?;
+        if phase == ExecutionOutputPhase::Network || count > self.remaining[index].count {
             return Err("cannot skip a network input or an unreserved callback".into());
         }
-        let slot = &mut self.remaining[phase.index()];
+        let slot = &mut self.remaining[index];
         let bytes = u64::from(count)
             .checked_mul(slot.terminal_bytes_per_output)
             .ok_or("skipped output byte product overflows u64")?;
@@ -337,7 +404,7 @@ impl ExecutionOutputBudget {
             .checked_sub(bytes)
             .ok_or("skipped output bytes exceed remaining reservation")?;
         slot.count -= count;
-        self.phase = phase.index();
+        self.phase = index;
         Ok(())
     }
 
@@ -353,12 +420,11 @@ impl ExecutionOutputBudget {
         &mut self,
         terminal: ExecutionOutputV1,
     ) -> Result<ExecutionOutputReservation<'_>, String> {
-        let phase = ExecutionOutputPhase::of(&terminal);
-        self.check_phase(phase)?;
+        let index = self.check_phase(ExecutionOutputPhase::of(&terminal))?;
         if !terminal.is_output_limit_rejection() {
             return Err("reservation requires an exact bounded output-limit terminal".into());
         }
-        let slot = self.remaining[phase.index()];
+        let slot = self.remaining[index];
         let bytes = output_bytes(&terminal)?;
         if slot.count == 0 || bytes > slot.terminal_bytes_per_output {
             return Err("actual terminal exceeds its pre-admitted reservation".into());
@@ -367,8 +433,8 @@ impl ExecutionOutputBudget {
             .remaining_terminal_bytes
             .checked_sub(slot.terminal_bytes_per_output)
             .ok_or("terminal reservation accounting underflows")?;
-        self.remaining[phase.index()].count -= 1;
-        self.phase = phase.index();
+        self.remaining[index].count -= 1;
+        self.phase = index;
         // Keep this fact on the owner as well as the linear guard. Even a
         // forgotten guard must not make its invocation disappear at sealing.
         self.in_flight = true;
@@ -571,7 +637,8 @@ impl ExecutionOutputReservation<'_> {
             ExecutionOutputV1::Network(_)
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 return Err("internal rejection requires a Pipeline or Time output".into());
             }
         };
@@ -618,7 +685,8 @@ impl ExecutionOutputReservation<'_> {
             ExecutionOutputV1::Network(_)
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 return Err("internal rejection has no internal terminal".into());
             }
         };
@@ -921,6 +989,239 @@ impl Drop for ExecutionOutputReservation<'_> {
         if !self.finished {
             self.owner.abandoned = true;
         }
+    }
+}
+
+/// Rows and complete row bytes a positioned Parliament item may emit, known before the item
+/// mutates anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceStartItemCeilingV1 {
+    /// The compact receipt alone.
+    Receipt,
+    /// The receipt, then one richer ballot output: a published sealed list, a casting
+    /// opening or a ballot closure.
+    ReceiptAndOutput,
+}
+
+impl GovernanceStartItemCeilingV1 {
+    /// The most rows the item emits.
+    #[must_use]
+    pub const fn rows(self) -> u32 {
+        match self {
+            Self::Receipt => 1,
+            Self::ReceiptAndOutput => GOVERNANCE_START_ROWS_PER_ITEM_V1,
+        }
+    }
+
+    /// The most complete row bytes the item emits.
+    #[must_use]
+    pub const fn bytes(self) -> u64 {
+        match self {
+            Self::Receipt => LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1,
+            Self::ReceiptAndOutput => {
+                LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1 + GOVERNANCE_START_ROW_MAX_BYTES_V1
+            }
+        }
+    }
+}
+
+/// Why the governance-start partition refused rows.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum GovernanceStartOutputBudgetErrorV1 {
+    /// The node could not allocate room for the rows: a local refusal, never a verdict.
+    #[error("governance block-start rows cannot be allocated")]
+    Allocation,
+    /// The rows are not ones their owner may emit here, or exceed what it reserved.
+    #[error("{0}")]
+    Refused(&'static str),
+    /// A row could not be encoded or validated.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+/// The governance-start output partition of one block: the sole owner of its rows.
+///
+/// The partition is reserved when the block starts, before the pass mutates anything:
+/// [`GOVERNANCE_START_OUTPUT_ROWS_V1`] rows and [`GOVERNANCE_START_OUTPUT_BYTES_V1`] complete
+/// row bytes, of which [`GOVERNANCE_START_PRELUDE_ROWS_V1`] casting-clock rows stay reserved
+/// for the mandatory prelude until [`Self::close_prelude`]. The owner of an item asks
+/// [`Self::fits`] with the item's ceiling before it mutates State, and a refusal defers the
+/// item: admission after a successful `fits` cannot fail for capacity. Every limit is
+/// measured on the complete [`ExecutionOutputV1`] row frame.
+///
+/// The owner is neither clonable nor serializable: one block has one partition.
+#[derive(Debug)]
+pub struct GovernanceStartOutputBudgetV1 {
+    rows: Vec<ExecutionOutputV1>,
+    bytes: u64,
+    prelude_reserved: u32,
+}
+
+impl Default for GovernanceStartOutputBudgetV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GovernanceStartOutputBudgetV1 {
+    /// Reserve the partition of one block, the mandatory prelude rows included.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            bytes: 0,
+            prelude_reserved: GOVERNANCE_START_PRELUDE_ROWS_V1,
+        }
+    }
+
+    /// Rows the partition holds or still reserves for the prelude.
+    fn held_rows(&self) -> u64 {
+        u64::try_from(self.rows.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::from(self.prelude_reserved))
+    }
+
+    /// Complete row bytes the partition holds or still reserves for the prelude.
+    fn held_bytes(&self) -> u64 {
+        self.bytes.saturating_add(
+            u64::from(self.prelude_reserved).saturating_mul(CASTING_CLOCK_ROW_MAX_BYTES_V1),
+        )
+    }
+
+    /// Whether an item with `ceiling` fits beside the rows held and the prelude rows still
+    /// reserved. The first positioned item of a block always fits.
+    #[must_use]
+    pub fn fits(&self, ceiling: GovernanceStartItemCeilingV1) -> bool {
+        self.held_rows().saturating_add(u64::from(ceiling.rows()))
+            <= u64::from(GOVERNANCE_START_OUTPUT_ROWS_V1)
+            && self.held_bytes().saturating_add(ceiling.bytes()) <= GOVERNANCE_START_OUTPUT_BYTES_V1
+    }
+
+    /// The complete row of `output` and its bytes, within the cap of its event.
+    fn row(
+        output: GovernanceBlockStartOutputV1,
+    ) -> Result<(ExecutionOutputV1, u64), GovernanceStartOutputBudgetErrorV1> {
+        use GovernanceStartOutputBudgetErrorV1::{Invalid, Refused};
+        output
+            .validate()
+            .map_err(|error| Invalid(error.to_string()))?;
+        let cap = output.row_cap_bytes();
+        let row = ExecutionOutputV1::GovernanceBlockStart(output);
+        let bytes = output_bytes(&row).map_err(Invalid)?;
+        if bytes > cap {
+            return Err(Refused("a governance block-start row exceeds its cap"));
+        }
+        Ok((row, bytes))
+    }
+
+    /// Admit one casting-clock row of the mandatory prelude into its reserved slot.
+    ///
+    /// # Errors
+    /// The row is not a casting clock, the prelude is closed or has no slot left, or the row
+    /// exceeds its cap. None of these is a capacity deferral: the pass is abandoned.
+    pub fn admit_prelude(
+        &mut self,
+        output: GovernanceBlockStartOutputV1,
+    ) -> Result<(), GovernanceStartOutputBudgetErrorV1> {
+        use GovernanceStartOutputBudgetErrorV1::{Allocation, Refused};
+        if !matches!(
+            output.event,
+            GovernanceBlockStartEventV1::CastingClockEstablished(_)
+        ) {
+            return Err(Refused("the prelude admits casting clocks only"));
+        }
+        if self.prelude_reserved == 0 {
+            return Err(Refused(
+                "the casting-clock prelude exceeds its reserved rows",
+            ));
+        }
+        let (row, bytes) = Self::row(output)?;
+        self.rows.try_reserve(1).map_err(|_| Allocation)?;
+        self.prelude_reserved -= 1;
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.rows.push(row);
+        Ok(())
+    }
+
+    /// Release the prelude rows the prelude did not use: it has run, and the positioned
+    /// items may use what is left.
+    pub fn close_prelude(&mut self) {
+        self.prelude_reserved = 0;
+    }
+
+    /// Admit the rows one positioned item emitted, in emission order: its receipt first.
+    /// The owner checked [`Self::fits`] with `ceiling` before the item mutated State.
+    ///
+    /// # Errors
+    /// The prelude is still open, the rows are not those of one item within `ceiling`, a
+    /// row exceeds its cap, or the partition cannot hold them. None of these is a capacity
+    /// deferral: the pass is abandoned.
+    pub fn admit_item(
+        &mut self,
+        ceiling: GovernanceStartItemCeilingV1,
+        outputs: Vec<GovernanceBlockStartOutputV1>,
+    ) -> Result<(), GovernanceStartOutputBudgetErrorV1> {
+        use GovernanceStartOutputBudgetErrorV1::{Allocation, Refused};
+        if self.prelude_reserved != 0 {
+            return Err(Refused("a positioned item precedes the end of the prelude"));
+        }
+        let Some(first) = outputs.first() else {
+            return Err(Refused("a positioned item emits its receipt"));
+        };
+        if u64::try_from(outputs.len()).unwrap_or(u64::MAX) > u64::from(ceiling.rows())
+            || !first.event.is_receipt()
+            || first.anchor.pass_anchor().is_none()
+            || outputs[1..]
+                .iter()
+                .any(|output| output.event.is_receipt() || output.anchor != first.anchor)
+        {
+            return Err(Refused(
+                "a positioned item emits its receipt, then at most one output",
+            ));
+        }
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(outputs.len())
+            .map_err(|_| Allocation)?;
+        self.rows
+            .try_reserve(outputs.len())
+            .map_err(|_| Allocation)?;
+        let mut bytes = self.bytes;
+        for output in outputs {
+            let (row, row_bytes) = Self::row(output)?;
+            bytes = bytes.saturating_add(row_bytes);
+            rows.push(row);
+        }
+        if self
+            .held_rows()
+            .saturating_add(u64::try_from(rows.len()).unwrap_or(u64::MAX))
+            > u64::from(GOVERNANCE_START_OUTPUT_ROWS_V1)
+            || bytes > GOVERNANCE_START_OUTPUT_BYTES_V1
+        {
+            return Err(Refused(
+                "a positioned item exceeds the capacity its owner checked",
+            ));
+        }
+        self.bytes = bytes;
+        self.rows.append(&mut rows);
+        Ok(())
+    }
+
+    /// The rows held, in emission order.
+    #[must_use]
+    pub fn rows(&self) -> &[ExecutionOutputV1] {
+        &self.rows
+    }
+
+    /// Complete row bytes held.
+    #[must_use]
+    pub const fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Consume the partition into its rows, in emission order, and their complete bytes.
+    #[must_use]
+    pub fn finish(self) -> (Vec<ExecutionOutputV1>, u64) {
+        (self.rows, self.bytes)
     }
 }
 

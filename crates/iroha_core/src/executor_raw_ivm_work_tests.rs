@@ -481,18 +481,12 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
             wide::encode_literal(opcode::memory::LDLIT, 10, 0),
             wide::encode_literal(opcode::memory::LDLIT, 11, 1),
             wide::encode_literal(opcode::memory::LDLIT, 12, 2),
-            wide::encode_sys(
-                opcode::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL).unwrap(),
-            ),
+            wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
         ];
         if failing_tail {
             code.extend([
                 wide::encode_literal(opcode::memory::LDLIT, 10, 3),
-                wide::encode_sys(
-                    opcode::system::SCALL,
-                    u8::try_from(ivm::syscalls::SYSCALL_DELETE_ROLE).unwrap(),
-                ),
+                wide::encode_scall(ivm::syscalls::SYSCALL_DELETE_ROLE),
             ]);
         }
         code.push(wide::encode_halt());

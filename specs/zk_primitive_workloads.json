@@ -76,16 +76,21 @@
    "id": "blake2s",
    "algorithm": "BLAKE2s-256 (RFC 7693)",
    "kind": "native",
-   "output_bytes": [16, 32],
+   "output_bytes": [32],
    "token": {
     "pattern": "blake2s"
    },
    "owners": [
     {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const BLAKE2S: u8 = 0x86;"
+     "path": "IrohaSwift/Sources/IrohaSwift/Blake2s.swift",
+     "symbol": "enum Blake2s {"
+    },
+    {
+     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/Blake2s.kt",
+     "symbol": "object Blake2s {"
     }
    ],
+   "note": "Named only by standalone SDK implementations that no SDK code calls (IrohaSwift and Kotlin core-jvm, and the Java duplicate that only its own tests exercise) and by tooling tests; no role uses it.",
    "in_use": true
   },
   {
@@ -358,7 +363,7 @@
   },
   {
    "id": "poseidon2",
-   "algorithm": "Names containing `poseidon2`: the two-input BN254 Poseidon helper and opcode (original Poseidon, named for its arity), rejected `poseidon2` backend labels, and the development-only Poseidon2 Goldilocks prototype that G.2 measures.",
+   "algorithm": "Names containing `poseidon2`: the two-input BN254 Poseidon helper (original Poseidon, named for its arity), rejected `poseidon2` backend labels, and the development-only Poseidon2 Goldilocks prototype that G.2 measures.",
    "kind": "algebraic",
    "output_bytes": [8, 32],
    "token": {
@@ -366,8 +371,8 @@
    },
    "owners": [
     {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const POSEIDON2: u8 = 0x82;"
+     "path": "crates/ivm/src/poseidon.rs",
+     "symbol": "pub fn poseidon2(a: u64, b: u64) -> u64 {"
     },
     {
      "path": "crates/fastpq_prover/src/state_commitment_prototypes/poseidon2.rs",
@@ -2333,115 +2338,31 @@
    "algorithm": "iroha_crypto::Hash: BLAKE2b-256 with the low bit of the last byte forced to one, and its typed HashOf wrapper"
   },
   {
-   "key": "ivm.opcode-sha256block",
+   "key": "bn254-poseidon.hash2-helper",
    "consumer": "ivm",
-   "role": "SHA-256 compression opcode of the IVM.",
-   "family": "in-circuit",
-   "primitive": "sha2-256",
-   "output_bytes": 32,
-   "domain_separation": "Raw compression function; the contract owns padding and domain separation.",
-   "sites": [
-    {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const SHA256BLOCK: u8 = 0x80;",
-     "compiled": "production"
-    }
-   ],
-   "canonical_native": {
-    "decision": "standard-internal",
-    "note": "Part of ABI V1; M.2 and M.3 prove it as an IVM step."
-   },
-   "algorithm": "SHA-256 (FIPS 180-4)"
-  },
-  {
-   "key": "ivm.opcode-sha3block",
-   "consumer": "ivm",
-   "role": "Keccak-f[1600] block opcode of the IVM.",
-   "family": "in-circuit",
-   "primitive": "sha3",
-   "output_bytes": 32,
-   "domain_separation": "Raw permutation block; the contract owns padding and domain separation.",
-   "sites": [
-    {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const SHA3BLOCK: u8 = 0x81;",
-     "compiled": "production"
-    }
-   ],
-   "canonical_native": {
-    "decision": "standard-internal",
-    "note": "Part of ABI V1; M.2 and M.3 prove it as an IVM step."
-   },
-   "algorithm": "SHA3-256, SHA3-384 and SHA3-512 (FIPS 202)"
-  },
-  {
-   "key": "ivm.opcode-poseidon2",
-   "consumer": "ivm",
-   "role": "Two-input BN254 Poseidon opcode of the IVM (named POSEIDON2 for its arity).",
-   "family": "in-circuit",
+   "role": "Host-side two-input BN254 Poseidon helpers of the IVM crate, named poseidon2 for their arity: the scalar, SIMD, batch and CUDA forms and the pair_hash bridge to the canonical owner. No opcode reaches them; the Kotlin and Python accelerator bindings call the batch form.",
+   "family": "native",
    "primitive": "poseidon2",
    "output_bytes": 32,
-   "domain_separation": "State [a, b, 0], one width-3 permutation, coordinate 0; no domain word.",
+   "domain_separation": "The fixed-arity mode of the canonical owner: capacity coordinate 0 holds the arity tag 2*2^64, the two u64 inputs fill coordinates 1 and 2, one width-3 permutation, output coordinate 1. pair_hash_bytes returns its canonical 32-byte encoding; poseidon2, its batch forms and pair_hash_u64 return its low 64 bits, which are not commitments.",
    "sites": [
     {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const POSEIDON2: u8 = 0x82;",
+     "path": "crates/ivm/src/poseidon.rs",
+     "symbol": "pub fn poseidon2(a: u64, b: u64) -> u64 {",
+     "literals": ["pub fn poseidon2_many_into(inputs: &[(u64, u64)], destination: &mut [u64]) -> bool {", "FieldElem([0, 2, 0, 0]),"],
      "compiled": "production"
     },
     {
      "path": "crates/ivm/src/zk_poseidon.rs",
-     "symbol": "hash2_bytes"
-    }
-   ],
-   "canonical_native": {
-    "decision": "retained-family",
-    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings."
-   }
-  },
-  {
-   "key": "ivm.opcode-poseidon6",
-   "consumer": "ivm",
-   "role": "Six-input BN254 Poseidon opcode of the IVM.",
-   "family": "in-circuit",
-   "primitive": "poseidon",
-   "output_bytes": 32,
-   "domain_separation": "All six state coordinates are inputs, one width-6 permutation, coordinate 0; no capacity element.",
-   "sites": [
-    {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const POSEIDON6: u8 = 0x83;",
+     "symbol": "pub fn pair_hash_bytes(a: u64, b: u64) -> [u8; 32] {",
+     "literals": ["iroha_zkp_halo2::poseidon::hash2_bytes(a, b)"],
      "compiled": "production"
     }
    ],
    "canonical_native": {
     "decision": "retained-family",
-    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings."
+    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings. Not a commitment: no ledger, proof or opcode consumer binds its output."
    }
-  },
-  {
-   "key": "ivm.opcode-blake2s",
-   "consumer": "ivm",
-   "role": "BLAKE2s opcode of the IVM.",
-   "family": "in-circuit",
-   "primitive": "blake2s",
-   "output_bytes": 16,
-   "domain_separation": "BLAKE2s-256 of a 64-byte input; the first 16 bytes are written to two registers.",
-   "sites": [
-    {
-     "path": "crates/ivm_abi/src/instruction.rs",
-     "symbol": "pub const BLAKE2S: u8 = 0x86;",
-     "compiled": "production"
-    },
-    {
-     "path": "crates/ivm/src/ivm.rs",
-     "symbol": "Blake2s256"
-    }
-   ],
-   "canonical_native": {
-    "decision": "standard-internal",
-    "note": "Part of ABI V1; M.2 and M.3 prove it as an IVM step."
-   },
-   "algorithm": "BLAKE2s-256 (RFC 7693)"
   },
   {
    "key": "ivm.syscall-sha256-hash",
@@ -3409,7 +3330,7 @@
     "poseidon2": {
      "class": "role",
      "note": "Two-input helper names and the compile-fail tests of removed exports.",
-     "roles": ["ivm.opcode-poseidon2"]
+     "roles": ["bn254-poseidon.hash2-helper"]
     },
     "sha2-256": {
      "class": "evidence-metadata",
@@ -3418,17 +3339,12 @@
    }
   },
   "ivm": {
-   "description": "IVM digest opcodes and syscalls, their host implementations, accelerators, gas and trace accounting, the Kotodama builtins that reach them and the zk trace helpers.",
+   "description": "IVM digest syscalls, their host implementations, gas and trace accounting, the Kotodama builtins that reach them and the zk trace helpers, and the host-side digest helpers and accelerators that no opcode reaches.",
    "uses": {
     "blake2b": {
      "class": "role",
      "note": "BLAKE2B256_HASH syscall, its host implementations, gas and Kotodama builtin.",
      "roles": ["ivm.syscall-blake2b256-hash"]
-    },
-    "blake2s": {
-     "class": "role",
-     "note": "BLAKE2S opcode: execution, gas and trace accounting.",
-     "roles": ["ivm.opcode-blake2s"]
     },
     "iroha-hash": {
      "class": "role",
@@ -3437,7 +3353,7 @@
     },
     "keccak": {
      "class": "role",
-     "note": "KECCAK256_HASH syscall and the Keccak-f[1600] accelerators behind the SHA3 block opcode.",
+     "note": "KECCAK256_HASH syscall and the host-side Keccak-f[1600] helpers with their CUDA and Metal accelerators, which no opcode reaches.",
      "roles": ["ivm.syscall-keccak256-hash"]
     },
     "pedersen": {
@@ -3447,27 +3363,27 @@
     },
     "poseidon": {
      "class": "role",
-     "note": "Six-input opcode, accelerators and Kotodama builtins.",
-     "roles": ["ivm.opcode-poseidon6", "bn254-poseidon.native-helpers"]
+     "note": "Host-side BN254 Poseidon helpers (poseidon6 and the pair_hash bridge) with their SIMD and CUDA accelerators and cost policy, backend labels in host tests, and the Kotodama tests that reject the retired crypto::poseidon2 and crypto::poseidon6 spellings; no opcode reaches the helpers.",
+     "roles": ["bn254-poseidon.native-helpers"]
     },
     "poseidon2": {
      "class": "role",
-     "note": "Opcode and accelerators.",
-     "roles": ["ivm.opcode-poseidon2"]
+     "note": "Host-side two-input helper poseidon2 with its batch, SIMD and CUDA forms and cost policy, and the Kotodama tests that reject the retired crypto::poseidon2 spelling; no opcode reaches the helper.",
+     "roles": ["bn254-poseidon.hash2-helper"]
     },
     "sha2-256": {
      "class": "role",
-     "note": "SHA256_HASH syscall, the SHA-256 block opcode and the SHA-256 Merkle tree of guest memory and registers.",
-     "roles": ["ivm.syscall-sha256-hash", "ivm.opcode-sha256block", "ivm.syscall-memory-merkle"]
+     "note": "SHA256_HASH syscall, the SHA-256 Merkle tree of guest memory and registers, and the host-side SHA-256 compression and Merkle helpers with their CUDA and Metal accelerators, which no opcode reaches.",
+     "roles": ["ivm.syscall-sha256-hash", "ivm.syscall-memory-merkle"]
     },
     "sha2-512": {
      "class": "standard-internal",
-     "note": "SHA-512 inside Ed25519 verification opcodes and their accelerators."
+     "note": "SHA-512 inside Ed25519 verification: the VERIFY_SIGNATURE syscall, the host-side batch verification helpers and their accelerators."
     },
     "sha3": {
      "class": "role",
-     "note": "SHA3_HASH syscall and the SHA3 block opcode.",
-     "roles": ["ivm.syscall-sha3-256-hash", "ivm.opcode-sha3block"]
+     "note": "SHA3_HASH syscall and its host implementations.",
+     "roles": ["ivm.syscall-sha3-256-hash"]
     },
     "sm3": {
      "class": "role",
@@ -4380,7 +4296,7 @@
     "poseidon2": {
      "class": "role",
      "note": "Two-input Poseidon accelerator bindings and rejected backend labels.",
-     "roles": ["ivm.opcode-poseidon2"]
+     "roles": ["bn254-poseidon.hash2-helper"]
     },
     "sha2-256": {
      "class": "evidence-metadata",
@@ -4453,7 +4369,7 @@
   "exclude_files": ["scripts/check_zk_primitive_workloads.py", "scripts/tests/check_zk_primitive_workloads_test.py", "scripts/zk_blake3_reference.py", "scripts/zk_bn254_poseidon_reference.py", "scripts/zk_pq_kat_reference.py"],
   "exclude_reason": "The checker, its reference modules and its tests name every primitive as data. They are still scanned for pinned commitment values and commitment types.",
   "scope": {
-   "file_granularity_prefixes": ["crates/fastpq_isi/", "crates/fastpq_prover/", "crates/iroha_zkp_halo2/", "crates/iroha_zkp_poseidon/", "crates/iroha_zkp_vole/", "crates/iroha_parliament_ballot_proof/", "crates/kaigi_zk/", "crates/zk_ace_prover/", "crates/iroha_fhe/", "crates/soranet_pq/", "crates/iroha_core_privacy/", "crates/iroha_core_zk/", "crates/iroha_crypto/", "crates/iroha_plonk/", "crates/iroha_plonk_gadgets/", "crates/iroha_plonk_oracle/", "crates/iroha_pasta/", "crates/ivm/", "crates/ivm_abi/", "crates/iroha_core/src/smartcontracts/ivm/"],
+   "file_granularity_prefixes": ["crates/fastpq_isi/", "crates/fastpq_prover/", "crates/iroha_zkp_halo2/", "crates/iroha_zkp_poseidon/", "crates/iroha_zkp_vole/", "crates/iroha_parliament_ballot_proof/", "crates/kaigi_zk/", "crates/zk_ace_prover/", "crates/iroha_fhe/", "crates/soranet_pq/", "crates/iroha_core_privacy/", "crates/iroha_core_zk/", "crates/iroha_crypto/", "crates/iroha_plonk/", "crates/iroha_plonk_gadgets/", "crates/iroha_plonk_oracle/", "crates/iroha_pasta/", "crates/iroha_core/src/smartcontracts/ivm/", "crates/ivm/", "crates/ivm_abi/"],
    "file_granularity_path_roots": ["crates/", "IrohaSwift/", "kotlin/", "java/", "javascript/", "python/", "csharp/", "integration_tests/"],
    "file_granularity_path_pattern": "privacy|confidential|kaigi|zk|fastpq|ram_?lfe|fhe|mkhe|x509|axt|nullifier|spent|shield|halo2|poseidon|stark|vega|orchard|masp|pgc|verange|jindo|lantern|fcmp|soracloud|bfv|bgv|keyed_commitment|authority_registry|execution_proofs|contract_state_proof",
    "tree_unit_overrides": [
@@ -6169,16 +6085,12 @@
    "crates/ivm/examples/koto_lending_demo.rs": ["iroha-hash"],
    "crates/ivm/examples/mint_or_burn.rs": ["iroha-hash"],
    "crates/ivm/examples/numeric_v1_fixture.rs": ["iroha-hash"],
-   "crates/ivm/examples/sha256.rs": ["sha2-256"],
    "crates/ivm/fixtures/koto_v1/kotodama/028.ko": ["blake2b", "keccak"],
    "crates/ivm/fixtures/koto_v1/kotodama/060.ko": ["poseidon", "poseidon2"],
-   "crates/ivm/src/analysis.rs": ["poseidon", "poseidon2"],
-   "crates/ivm/src/analysis/aggregate.rs": ["poseidon", "poseidon2"],
    "crates/ivm/src/assets/text_v1/metal_keccak_f1600.metal": ["keccak"],
    "crates/ivm/src/assets/text_v1/metal_sha256_compress.metal": ["sha2-256"],
    "crates/ivm/src/assets/text_v1/metal_sha256_leaves.metal": ["sha2-256"],
    "crates/ivm/src/assets/text_v1/metal_sha256_pairs_reduce.metal": ["sha2-256"],
-   "crates/ivm/src/bin/gas_probe.rs": ["sha2-256"],
    "crates/ivm/src/bin/gen_syscalls_doc.rs": ["pedersen"],
    "crates/ivm/src/bin/ivm_fixture_export.rs": ["iroha-hash"],
    "crates/ivm/src/byte_merkle_tree.rs": ["iroha-hash", "sha2-256"],
@@ -6208,20 +6120,16 @@
    "crates/ivm/src/cuda_policy.rs": ["keccak", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/cuda_provenance.rs": ["sha2-256"],
    "crates/ivm/src/game_unit_step.rs": ["iroha-hash"],
-   "crates/ivm/src/gas.rs": ["blake2s", "iroha-hash", "pedersen", "poseidon", "poseidon2", "sha2-256"],
+   "crates/ivm/src/gas.rs": ["iroha-hash", "pedersen"],
    "crates/ivm/src/host.rs": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sha3", "sm3"],
    "crates/ivm/src/host/tests/quantity_pointer_tests.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/src/iso20022.rs": ["sha2-256"],
-   "crates/ivm/src/ivm.rs": ["blake2s", "iroha-hash", "pedersen", "poseidon", "poseidon2", "sha2-256"],
+   "crates/ivm/src/ivm.rs": ["iroha-hash", "pedersen", "sha2-256"],
    "crates/ivm/src/ivm/diagnostic.rs": ["iroha-hash"],
    "crates/ivm/src/ivm/input_cursor.rs": ["iroha-hash"],
    "crates/ivm/src/ivm/literal_table/tests.rs": ["iroha-hash"],
    "crates/ivm/src/ivm/register_logging/batch_tests.rs": ["iroha-hash"],
-   "crates/ivm/src/ivm/register_logging/event_counts.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
-   "crates/ivm/src/ivm/register_logging/event_counts/tests.rs": ["sha2-256"],
    "crates/ivm/src/ivm/tests/runtime_memory.rs": ["sha2-256"],
-   "crates/ivm/src/ivm/trace_logging/change_counts.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
-   "crates/ivm/src/ivm/trace_logging/change_counts/tests.rs": ["blake2s", "sha2-256"],
    "crates/ivm/src/ivm_cache.rs": ["sha2-256"],
    "crates/ivm/src/json.rs": ["iroha-hash"],
    "crates/ivm/src/lib.rs": ["keccak", "pedersen", "poseidon", "poseidon2", "sha2-256"],
@@ -6240,9 +6148,8 @@
    "crates/ivm/src/predecoder_fixtures.rs": ["sha2-256"],
    "crates/ivm/src/prepared/scalar_literal.rs": ["iroha-hash"],
    "crates/ivm/src/private_input.rs": ["iroha-hash", "pedersen"],
-   "crates/ivm/src/proof_coverage/opcodes.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/proof_coverage/syscalls.rs": ["blake2b", "keccak", "sha2-256", "sm3"],
-   "crates/ivm/src/proof_coverage/tests.rs": ["poseidon2", "sha2-256", "sm3"],
+   "crates/ivm/src/proof_coverage/tests.rs": ["sm3"],
    "crates/ivm/src/registers.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/src/registers/fixed_path.rs": ["iroha-hash"],
    "crates/ivm/src/registers/fixed_path/tests.rs": ["iroha-hash", "sha2-256"],
@@ -6255,7 +6162,7 @@
    "crates/ivm/src/value_record/capture.rs": ["iroha-hash"],
    "crates/ivm/src/value_record/materialize_tests.rs": ["iroha-hash"],
    "crates/ivm/src/value_utilities.rs": ["iroha-hash"],
-   "crates/ivm/src/vector.rs": ["blake2s", "keccak", "sha2-256"],
+   "crates/ivm/src/vector.rs": ["keccak", "sha2-256"],
    "crates/ivm/src/vector/metal_ed25519_cost.rs": ["sha2-512"],
    "crates/ivm/src/vector/metal_merkle.rs": ["sha2-256"],
    "crates/ivm/src/vector/metal_merkle/qualification.rs": ["sha2-256"],
@@ -6317,13 +6224,10 @@
    "crates/ivm/tests/cuda_source_contract.rs": ["poseidon"],
    "crates/ivm/tests/default_host_input_publish_tlv.rs": ["iroha-hash"],
    "crates/ivm/tests/ed25519_batch.rs": ["sha2-512"],
-   "crates/ivm/tests/gas_golden.rs": ["blake2s", "iroha-hash", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/tests/gas_schedule_hash.rs": ["blake2b"],
-   "crates/ivm/tests/gpu_determinism.rs": ["sha2-256"],
    "crates/ivm/tests/grouped/group_02.rs": ["keccak", "sha2-256"],
    "crates/ivm/tests/grouped/group_06.rs": ["sha2-256"],
    "crates/ivm/tests/grouped/group_07.rs": ["poseidon", "sha2-256"],
-   "crates/ivm/tests/hardware_determinism.rs": ["sha2-256"],
    "crates/ivm/tests/host_roundtrip.rs": ["iroha-hash"],
    "crates/ivm/tests/host_syscall_coverage.rs": ["iroha-hash"],
    "crates/ivm/tests/input_tlv_alloc.rs": ["iroha-hash"],
@@ -6347,8 +6251,6 @@
    "crates/ivm/tests/metal_sha256.rs": ["sha2-256"],
    "crates/ivm/tests/mock_wsv_instruction_box.rs": ["iroha-hash"],
    "crates/ivm/tests/numeric_syscalls.rs": ["iroha-hash"],
-   "crates/ivm/tests/op_semantics_random.rs": ["sha2-256"],
-   "crates/ivm/tests/opcode_validation.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/tests/pointer_abi_tests.rs": ["iroha-hash"],
    "crates/ivm/tests/pointer_tlv.rs": ["iroha-hash"],
    "crates/ivm/tests/pointer_tlv_neg.rs": ["iroha-hash"],
@@ -6358,7 +6260,7 @@
    "crates/ivm/tests/poseidon_parameter_custody.rs": ["poseidon", "poseidon2"],
    "crates/ivm/tests/poseidon_simd.rs": ["poseidon", "poseidon2"],
    "crates/ivm/tests/predecoder_fixture_verify.rs": ["sha2-256"],
-   "crates/ivm/tests/privacy_enforcement.rs": ["iroha-hash", "poseidon", "poseidon2", "sha2-256"],
+   "crates/ivm/tests/privacy_enforcement.rs": ["iroha-hash"],
    "crates/ivm/tests/prop_skeleton.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/tests/register_log.rs": ["sha2-256"],
    "crates/ivm/tests/registers_compact_helper.rs": ["iroha-hash", "sha2-256"],
@@ -6372,7 +6274,6 @@
    "crates/ivm/tests/syscalls_register_compact.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/tests/tiny_workload_dispatch.rs": ["keccak", "poseidon", "poseidon2"],
    "crates/ivm/tests/tlv_examples.rs": ["blake2b", "iroha-hash"],
-   "crates/ivm/tests/vector_ops.rs": ["sha2-256"],
    "crates/ivm/tests/verify_signature_tlv.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/tests/vrf_verify_batch_syscall.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/tests/vrf_verify_chain.rs": ["iroha-hash"],
@@ -6408,8 +6309,6 @@
    "crates/ivm/tests/zk_verify_syscall.rs": ["iroha-hash"],
    "crates/ivm_abi/src/axt.rs": ["iroha-hash", "poseidon"],
    "crates/ivm_abi/src/contract_call.rs": ["iroha-hash"],
-   "crates/ivm_abi/src/encoding.rs": ["poseidon", "poseidon2"],
-   "crates/ivm_abi/src/instruction.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm_abi/src/metadata.rs": ["iroha-hash"],
    "crates/ivm_abi/src/metadata/literal_table/tests.rs": ["iroha-hash"],
    "crates/ivm_abi/src/numeric_tlv.rs": ["iroha-hash"],
@@ -6422,7 +6321,6 @@
    "crates/ivm_abi/src/syscalls_doc_gen.rs": ["blake2b", "keccak", "pedersen"],
    "crates/ivm_abi/tests/axt_policy_vectors.rs": ["iroha-hash"],
    "crates/ivm_abi/tests/norito_pointer_abi_roundtrip.rs": ["iroha-hash"],
-   "crates/ivm_artifact_admission/src/policy.rs": ["poseidon"],
    "crates/kaigi_zk/src/authorization_v1.rs": ["blake3", "poseidon"],
    "crates/kaigi_zk/src/authorization_v1/tests.rs": ["poseidon"],
    "crates/kaigi_zk/src/lib.rs": ["poseidon"],
@@ -6430,13 +6328,9 @@
    "crates/kaigi_zk/src/tests.rs": ["iroha-hash", "poseidon"],
    "crates/kaigi_zk/src/usage_v1.rs": ["poseidon"],
    "crates/kaigi_zk/src/usage_v1/tests.rs": ["poseidon"],
-   "crates/kotodama_lang/src/compiler.rs": ["blake2b", "iroha-hash", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
    "crates/kotodama_lang/src/compiler/tests.rs": ["blake2b", "iroha-hash", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
-   "crates/kotodama_lang/src/ir.rs": ["blake2b", "keccak", "poseidon", "poseidon2", "sha2-256", "sha3", "sm3"],
-   "crates/kotodama_lang/src/regalloc.rs": ["blake2b", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
    "crates/kotodama_lang/src/secret.rs": ["poseidon", "poseidon2"],
    "crates/kotodama_lang/src/semantic.rs": ["blake2b", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
-   "crates/kotodama_lang/src/ssa.rs": ["blake2b", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
    "crates/kotodama_surface/src/builtins.rs": ["blake2b", "keccak", "poseidon", "poseidon2", "sha2-256", "sm3"],
    "crates/sorafs_manifest/src/pop_credentials/zk.rs": ["blake3", "poseidon"],
    "crates/sorafs_node/src/governance/tests/runtime_and_privacy_publication.rs": ["blake3"],
@@ -6606,7 +6500,7 @@
    "crates/irohad#other": ["blake3", "iroha-hash", "sha2-256", "sha3"],
    "crates/ivm_artifact_admission#other": ["iroha-hash"],
    "crates/izanami#other": ["iroha-hash", "sha3"],
-   "crates/kotodama_lang#other": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sm3"],
+   "crates/kotodama_lang#other": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sha3", "sm3"],
    "crates/kotodama_surface#other": ["blake2b", "keccak", "sha2-256", "sm3"],
    "crates/kotodama_toolchain#other": ["iroha-hash", "sha2-256"],
    "crates/musubi#other": ["blake3", "iroha-hash", "sha2-256", "sha3"],
@@ -6908,12 +6802,6 @@
     }
    },
    "crates/iroha_data_model/src/privacy/protocol.rs": {
-    "PrivacyRootPublicationV1::digest": {
-     "primitives": ["blake3"],
-     "domains": [],
-     "returns": "Result<PrivacyRootPublicationDigestV1, norito::Error>",
-     "role": "privacy.record-digest-blake3"
-    },
     "PrivacyOrchardPoolBootstrapV1::digest": {
      "primitives": ["blake3"],
      "domains": [],
@@ -6945,17 +6833,23 @@
      "role": "privacy.record-digest-blake3",
      "role_note": "Exact borrowed proof bytes are structurally validated and domain/length bound by BLAKE3 only after native verification; this audit digest is not proof authority."
     },
-    "PrivacyPgcAccountBootstrapV1::digest": {
-     "primitives": ["blake3"],
-     "domains": [],
-     "returns": "Result<PrivacyPgcAccountBootstrapDigestV1, norito::Error>",
-     "role": "privacy.record-digest-blake3"
-    },
     "PrivacySecurityClaimV1::computed_digest": {
      "primitives": ["sha2-256"],
      "domains": ["iroha:privacy:security-claim:v1"],
      "returns": "Result<PrivacySecurityClaimDigestV1, norito::Error>",
      "role": "privacy.record-digest-sha256"
+    },
+    "PrivacyRootPublicationV1::digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyRootPublicationDigestV1, norito::Error>",
+     "role": "privacy.record-digest-blake3"
+    },
+    "PrivacyPgcAccountBootstrapV1::digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyPgcAccountBootstrapDigestV1, norito::Error>",
+     "role": "privacy.record-digest-blake3"
     }
    },
    "crates/iroha_data_model/src/privacy/release_manifest.rs": {
@@ -7761,8 +7655,8 @@
    {
     "id": "bn254-poseidon",
     "family": "Original Poseidon over the BN254 scalar field",
-    "roles": ["bn254-poseidon.native-helpers", "fastpq.bn254-poseidon-statement", "axt.binding-poseidon", "ivm.opcode-poseidon2", "ivm.opcode-poseidon6"],
-    "reason": "Native-field algebraic hash of BN254 relations and ABI V1 opcodes."
+    "roles": ["bn254-poseidon.native-helpers", "fastpq.bn254-poseidon-statement", "axt.binding-poseidon", "bn254-poseidon.hash2-helper"],
+    "reason": "Native-field algebraic hash of BN254 relations and of their host-side helpers."
    },
    {
     "id": "halo2-ipa",
@@ -7785,7 +7679,7 @@
    {
     "id": "standard-internal",
     "family": "Hashes fixed by external standards",
-    "roles": ["x509.certificate-sha2", "pq.mlkem-public-key-hash", "pq.mldsa-shake", "ivm.opcode-sha256block", "ivm.opcode-sha3block", "ivm.opcode-blake2s", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-memory-merkle"],
+    "roles": ["x509.certificate-sha2", "pq.mlkem-public-key-hash", "pq.mldsa-shake", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-memory-merkle"],
     "reason": "X.509, FIPS 203, FIPS 204 and ABI V1 define these; digest unification does not reach inside a standardized primitive."
    },
    {
@@ -7971,7 +7865,7 @@
     "id": "BN254-POSEIDON-D3",
     "title": "Fixed-arity capacity and domain mode replaces untagged compression",
     "class": "implemented correction awaiting current qualification",
-    "evidence": "hash2 starts [2*2^64,a,b] and returns coordinate1; hash6 starts [6*2^64,x0..x4], permutes, adds x5 to coordinate1, permutes again and returns coordinate1. Low64 forms remain non-commitment opcode outputs.",
+    "evidence": "hash2 starts [2*2^64,a,b] and returns coordinate1; hash6 starts [6*2^64,x0..x4], permutes, adds x5 to coordinate1, permutes again and returns coordinate1. Low64 forms remain non-commitment helper outputs.",
     "effect": "Selected-source cutover; prior outputs are removed without compatibility paths. No whole F.5 or security qualification follows.",
     "consumer_needles": ["hash2_bytes", "hash2_u64", "hash6_bytes", "hash6_u64", "poseidon6"],
     "owner_task": "F.5",
@@ -8069,19 +7963,15 @@
    "crates/ivm/benches/bench_poseidon.rs": ["poseidon6"],
    "crates/ivm/cuda/poseidon.cu": ["poseidon6"],
    "crates/ivm/fixtures/koto_v1/kotodama/060.ko": ["poseidon6"],
-   "crates/ivm/src/analysis.rs": ["poseidon6"],
-   "crates/ivm/src/analysis/aggregate.rs": ["poseidon6"],
    "crates/ivm/src/cuda.rs": ["poseidon6"],
    "crates/ivm/src/cuda/poseidon_api.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/src/cuda/poseidon_cost.rs": ["poseidon6"],
    "crates/ivm/src/cuda/poseidon_launch.rs": ["poseidon6"],
-   "crates/ivm/src/ivm.rs": ["poseidon6"],
    "crates/ivm/src/lib.rs": ["poseidon6"],
    "crates/ivm/src/poseidon.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/src/poseidon/golden.rs": ["poseidon6"],
    "crates/ivm/src/poseidon/parameter_tests.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/src/zk_poseidon.rs": ["hash2_bytes", "hash2_u64", "iroha_zkp_halo2::poseidon"],
-   "crates/ivm/tests/contract_artifact.rs": ["poseidon6"],
    "crates/ivm/tests/crypto.rs": ["poseidon6"],
    "crates/ivm/tests/cuda_bundle_absence.rs": ["poseidon6"],
    "crates/ivm/tests/cuda_disable_on_mismatch.rs": ["poseidon6"],
@@ -8093,11 +7983,7 @@
    "crates/ivm/tests/poseidon_cuda_parity.rs": ["poseidon6"],
    "crates/ivm/tests/poseidon_parameter_custody.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "hash2_bytes", "hash6_bytes", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/tests/poseidon_simd.rs": ["poseidon6"],
-   "crates/ivm/tests/privacy_enforcement.rs": ["poseidon6"],
    "crates/ivm/tests/tiny_workload_dispatch.rs": ["poseidon6"],
-   "crates/ivm_abi/src/encoding.rs": ["poseidon6"],
-   "crates/ivm_artifact_admission/src/policy.rs": ["poseidon6"],
-   "crates/kotodama_lang/src/compiler.rs": ["poseidon6"],
    "crates/kotodama_lang/src/compiler/tests.rs": ["poseidon6"],
    "crates/kotodama_lang/src/secret.rs": ["poseidon6"],
    "crates/kotodama_lang/src/semantic.rs": ["poseidon6"],
@@ -8213,7 +8099,7 @@
      "replacement_changes": "A command-line flag name."
     }
    ],
-   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/kaigi.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/gas.rs", "crates/ivm/src/ivm.rs", "crates/ivm/src/ivm/register_logging/event_counts.rs", "crates/ivm/src/ivm/tests/read_deferrals.rs", "crates/ivm/src/ivm/trace_logging/change_counts.rs", "crates/ivm/src/proof_coverage/opcodes.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/gas_golden.rs", "crates/ivm/tests/opcode_validation.rs", "crates/ivm/tests/privacy_enforcement.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/ivm_abi/src/instruction.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
+   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/kaigi.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
   },
   "replacement_wire_impact": ["No algorithm replacement is needed for the locked packages: the bytes on the wire are already ML-KEM and ML-DSA.", "Renaming the superseded labels changes Norito variant names, schema identities, JSON tags, configuration keys and SDK codecs listed under wire_visible; first-release rules replace them directly without aliases.", "If a later dependency change replaced the implementation, the encoded lengths under parameter_sets stay fixed by the standards; a deployment that still held round-three keys or signatures would need new keys, because ML-KEM derivation and ML-DSA encodings are not compatible with them."],
   "findings": [
@@ -8435,8 +8321,8 @@
     "flow": "proof",
     "question": "What one in-circuit hash invocation costs on the typed AIR interface for the product roles that must open a digest.",
     "backend_consumers": ["ivm-step-chips", "ram-lfe"],
-    "primitives": ["digest384", "blake2b", "sha2-256", "poseidon", "poseidon2", "sha3", "keccak", "sm3", "iroha-hash"],
-    "roles": ["fastpq.digest384", "fastpq.smt-blake2b-gadget", "notes.sha256-in-circuit", "zk-ace.identity-digest384", "ivm.opcode-sha256block", "ivm.opcode-poseidon2", "ivm.opcode-poseidon6", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-iroha-hash", "ivm.syscall-memory-merkle", "x509.certificate-sha2"],
+    "primitives": ["digest384", "blake2b", "sha2-256", "sha3", "keccak", "sm3", "iroha-hash"],
+    "roles": ["fastpq.digest384", "fastpq.smt-blake2b-gadget", "notes.sha256-in-circuit", "zk-ace.identity-digest384", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-iroha-hash", "ivm.syscall-memory-merkle", "x509.certificate-sha2"],
     "shapes": {
      "invocations": [1, 16, 256, 4096],
      "message_bytes": [32, 64, 96, 256],
@@ -8446,9 +8332,9 @@
     "measured": ["rows, columns and maximum constraint degree per invocation", "witness generation time", "contribution to proof bytes and proving time at the shared-backend shapes"],
     "phases": ["air_cost_flow", "witness_build", "trace_build", "constraint_eval"],
     "note": "Candidate Goldilocks sponge profiles (Poseidon2, RPO, Monolith, Tip5, Anemoi) are prototyped by G.2; this workload measures them for product roles only after G.2 publishes them.",
-    "profiles": ["retained.fastpq.smt-blake2b-gadget", "retained.notes.sha256-in-circuit", "retained.ivm.opcode-sha256block", "bn254.poseidon.x5-t3.v1", "bn254.poseidon.x5-t6.v1", "retained.ivm.syscall-sha256-hash", "retained.ivm.syscall-sha3-256-hash", "retained.ivm.syscall-blake2b256-hash", "retained.ivm.syscall-keccak256-hash", "retained.ivm.syscall-sm3-hash", "retained.ivm.syscall-iroha-hash", "retained.ivm.syscall-memory-merkle", "retained.x509.certificate-sha2"],
+    "profiles": ["retained.fastpq.smt-blake2b-gadget", "retained.notes.sha256-in-circuit", "retained.ivm.syscall-sha256-hash", "retained.ivm.syscall-sha3-256-hash", "retained.ivm.syscall-blake2b256-hash", "retained.ivm.syscall-keccak256-hash", "retained.ivm.syscall-sm3-hash", "retained.ivm.syscall-iroha-hash", "retained.ivm.syscall-memory-merkle", "retained.x509.certificate-sha2"],
     "profiles_not_frozen": ["proof-internal.six-lane-and-sha3-384-transcripts", "goldilocks.in-circuit-digest"],
-    "profile_set_identity": "9660933ebca5e0743eb0f632afb88dfa6a36869e60b091f2a0a64f2fe5d3bad4"
+    "profile_set_identity": "88910f0be1ce6440c6e2c5a0e4b19c581b8cdf37881f0d184ec072e4981384d7"
    },
    {
     "id": "h1.shared-backend.ordinary-effects",
@@ -8811,7 +8697,7 @@
     "flow": "native and proof",
     "question": "What correcting the BN254 round counts costs natively and in a circuit.",
     "primitives": ["poseidon", "poseidon2"],
-    "roles": ["bn254-poseidon.native-helpers", "ivm.opcode-poseidon2", "ivm.opcode-poseidon6"],
+    "roles": ["bn254-poseidon.native-helpers", "bn254-poseidon.hash2-helper"],
     "shapes": {
      "width_3_partial_rounds": [56, 57],
      "width_6_partial_rounds": [56, 57, 60],
@@ -10964,123 +10850,6 @@
     ]
    },
    {
-    "name": "retained.ivm.opcode-sha256block",
-    "kind": "in-circuit-digest",
-    "status": "retained",
-    "identity": "d756c34eabf8ebecb511a1f178542bc019956207080fed9c885a78d5fc60ee25",
-    "role": "ivm.opcode-sha256block",
-    "parameters": [
-     {
-      "key": "profile_version",
-      "type": "u64",
-      "value": 1
-     },
-     {
-      "key": "role",
-      "type": "text",
-      "value": "ivm.opcode-sha256block"
-     },
-     {
-      "key": "primitive",
-      "type": "text",
-      "value": "sha2-256"
-     },
-     {
-      "key": "algorithm",
-      "type": "text",
-      "value": "SHA-256 (FIPS 180-4)"
-     },
-     {
-      "key": "output_bytes",
-      "type": "u64",
-      "value": 32
-     },
-     {
-      "key": "domain_separation",
-      "type": "text",
-      "value": "Raw compression function; the contract owns padding and domain separation."
-     }
-    ]
-   },
-   {
-    "name": "retained.ivm.opcode-sha3block",
-    "kind": "in-circuit-digest",
-    "status": "retained",
-    "identity": "45a576dbcde655f6511d533a27b19eee12dd618d77bfee52dac509380a659b1e",
-    "role": "ivm.opcode-sha3block",
-    "parameters": [
-     {
-      "key": "profile_version",
-      "type": "u64",
-      "value": 1
-     },
-     {
-      "key": "role",
-      "type": "text",
-      "value": "ivm.opcode-sha3block"
-     },
-     {
-      "key": "primitive",
-      "type": "text",
-      "value": "sha3"
-     },
-     {
-      "key": "algorithm",
-      "type": "text",
-      "value": "SHA3-256, SHA3-384 and SHA3-512 (FIPS 202)"
-     },
-     {
-      "key": "output_bytes",
-      "type": "u64",
-      "value": 32
-     },
-     {
-      "key": "domain_separation",
-      "type": "text",
-      "value": "Raw permutation block; the contract owns padding and domain separation."
-     }
-    ]
-   },
-   {
-    "name": "retained.ivm.opcode-blake2s",
-    "kind": "in-circuit-digest",
-    "status": "retained",
-    "identity": "8aa041359a41b12307f7af05ad7419ddd76c31143d25e126736ae4fc3a9b225d",
-    "role": "ivm.opcode-blake2s",
-    "parameters": [
-     {
-      "key": "profile_version",
-      "type": "u64",
-      "value": 1
-     },
-     {
-      "key": "role",
-      "type": "text",
-      "value": "ivm.opcode-blake2s"
-     },
-     {
-      "key": "primitive",
-      "type": "text",
-      "value": "blake2s"
-     },
-     {
-      "key": "algorithm",
-      "type": "text",
-      "value": "BLAKE2s-256 (RFC 7693)"
-     },
-     {
-      "key": "output_bytes",
-      "type": "u64",
-      "value": 16
-     },
-     {
-      "key": "domain_separation",
-      "type": "text",
-      "value": "BLAKE2s-256 of a 64-byte input; the first 16 bytes are written to two registers."
-     }
-    ]
-   },
-   {
     "name": "retained.ivm.syscall-sha256-hash",
     "kind": "in-circuit-digest",
     "status": "retained",
@@ -11811,25 +11580,11 @@
     "disposition": "retained",
     "profiles": ["retained.ledger.merkle-application"]
    },
-   "ivm.opcode-sha256block": {
-    "disposition": "retained",
-    "profiles": ["retained.ivm.opcode-sha256block"]
-   },
-   "ivm.opcode-sha3block": {
-    "disposition": "retained",
-    "profiles": ["retained.ivm.opcode-sha3block"]
-   },
-   "ivm.opcode-poseidon2": {
+   "bn254-poseidon.hash2-helper": {
     "disposition": "frozen-profile",
-    "profiles": ["bn254.poseidon.x5-t3.v1"]
-   },
-   "ivm.opcode-poseidon6": {
-    "disposition": "frozen-profile",
-    "profiles": ["bn254.poseidon.x5-t6.v1"]
-   },
-   "ivm.opcode-blake2s": {
-    "disposition": "retained",
-    "profiles": ["retained.ivm.opcode-blake2s"]
+    "profiles": ["bn254.poseidon.x5-t3.v1"],
+    "required_property": "none as a commitment: no ledger, proof or opcode consumer binds the output; SDK accelerator bindings, benchmarks and tests call the helpers, and the low-64-bit forms must not be used as commitments",
+    "accepted_level": "nothing beyond the frozen profile's unqualified statement for one full field element (about 126.8 bits against classical collision search); the low-64-bit forms claim no level"
    },
    "ivm.syscall-sha256-hash": {
     "disposition": "retained",
@@ -11921,7 +11676,7 @@
     "profile": "bn254.poseidon.x5-t3.v1",
     "correction": "Replace the width-3 table by the exact published instantiation: 8 full and 57 partial rounds with its complete constants and MDS matrix. The 56-round table is not endorsed.",
     "implemented_by": ["F.5", "I.5"],
-    "vectors_required": "Independent vectors of the permutation and of the corrected two-input hash; regenerated ABI V1 outputs of POSEIDON2."
+    "vectors_required": "Independent vectors of the permutation and of the corrected two-input hash; regenerated outputs of the IVM poseidon2 helper."
    },
    {
     "defect": "BN254-POSEIDON-D2",
@@ -11929,7 +11684,7 @@
     "profile": "bn254.poseidon.x5-t6.v1",
     "correction": "Replace the width-6 table by 8 full and 60 partial rounds with the complete constants and MDS matrix of the deployed circomlib width-6 table. The 56-round table is not endorsed.",
     "implemented_by": ["F.5", "I.5"],
-    "vectors_required": "Comparison of the generated table with the fetched circomlib table; independent vectors; regenerated ABI V1 outputs of POSEIDON6 on the CPU, SIMD and CUDA paths."
+    "vectors_required": "Comparison of the generated table with the fetched circomlib table; independent vectors; regenerated outputs of the IVM poseidon6 helper on the CPU, SIMD and CUDA paths."
    },
    {
     "defect": "BN254-POSEIDON-D3",

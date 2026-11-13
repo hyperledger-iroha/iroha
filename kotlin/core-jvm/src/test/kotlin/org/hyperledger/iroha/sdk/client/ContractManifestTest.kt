@@ -374,6 +374,7 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"kind\":\"Decimal\"", "\"kind\":\"U128\""),
             fullResponse().replaceFirst("\"identity\":\"Ledger::TransferError\"", "\"identity\":\"Error<Injected>\""),
             fullResponse().replaceFirst("\"features_bitmap\":0", "\"features_bitmap\":4"),
+            fullResponse().replaceFirst("\"features_bitmap\":0", "\"features_bitmap\":2"),
             fullResponse().replaceFirst("\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),
             fullResponse().replaceFirst(
                 "\"repeats\":{\"Indefinitely\":null}",

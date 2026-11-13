@@ -23,9 +23,8 @@ fn lag(drift: Millis, sc: &Scenario) -> Millis {
     2 * drift + 4 * sc.params.block_time
 }
 
-/// Every machine may report `ExecutorFailed`: the guard's `Failed` answers are local faults.
+/// The guard's original `Failed` answers are expected local faults.
 fn guarded(sc: &mut Scenario, guard: ClockGuard) {
-    sc.checks.may_executor_fail = (0..sc.machines()).collect();
     sc.clock_guard = Some(guard);
 }
 
@@ -1237,4 +1236,43 @@ fn det_ct1_world_retained_execution_rechecks_rewind_before_first_prepare() {
             "the original execution resumes at exact drift equality"
         );
     }
+}
+
+/// O-FAULT accepts only a matching uncertified guard result, never arbitrary failures.
+#[test]
+fn clock_guard_failure_binds_replica_body_rule_and_certified_status() {
+    let mut scenario = Scenario::base("guard_failure_origin", 0, 4);
+    guarded(&mut scenario, ClockGuard::default());
+    let mut world = World::new(scenario);
+    let block_hash = Hash32([9; 32]);
+    world.clock_guard.as_mut().unwrap().events.push(GuardEvent {
+        at: 0,
+        replica: 0,
+        height: 7,
+        block_hash,
+        t: 1,
+        wall: 10_000,
+        proposer: Some(0),
+        rule: GuardRule::StaleDueWork,
+        certified: false,
+    });
+    let failed = |hash, reason: &str| Event::Executed {
+        block_hash: hash,
+        req: 1,
+        outcome: ExecOutcome::Failed(reason.into()),
+    };
+    let event = failed(block_hash, "StaleDueWork");
+    assert_eq!(world.clock_guard_failure(0, &event), Some(7));
+    assert_eq!(world.clock_guard_failure(1, &event), None);
+    assert_eq!(
+        world.clock_guard_failure(0, &failed(Hash32::ZERO, "StaleDueWork")),
+        None
+    );
+    assert_eq!(
+        world.clock_guard_failure(0, &failed(block_hash, "injected")),
+        None
+    );
+    assert_eq!(world.clock_guard_failure(0, &Event::Tick), None);
+    world.clock_guard.as_mut().unwrap().events[0].certified = true;
+    assert_eq!(world.clock_guard_failure(0, &event), None);
 }

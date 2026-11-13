@@ -75,10 +75,7 @@ seiyaku LiteralRoots {
             .iter()
             .any(|function| function.function_name == "private_authority")
     );
-    let authority_word = crate::encoding::wide::encode_sys(
-        crate::instruction::wide::system::SCALL,
-        crate::syscalls::SYSCALL_GET_AUTHORITY as u8,
-    );
+    let authority_word = crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_GET_AUTHORITY);
     for output in [&before, &after] {
         let parsed = crate::metadata::ProgramMetadata::parse(&output.artifact).unwrap();
         assert_eq!(

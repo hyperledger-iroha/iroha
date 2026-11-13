@@ -37,5 +37,15 @@ pub(super) fn prepare(
         .map_err(|error| vm_error("failed to prepare raw contract artifact", error))
 }
 
+/// Root-bound form used by execution planning for a named contract host profile.
+pub(super) fn prepare_in_world(
+    cache: &PreparedContractCache,
+    world: &impl crate::state::WorldReadOnly,
+    bytecode: &[u8],
+) -> Result<ivm::PreparedContract, ExecutionAttemptError<String>> {
+    cache
+        .get_or_prepare_in_world(world, ivm::contract_code_hash(bytecode), bytecode)
+        .map_err(|error| vm_error("failed to prepare raw contract artifact", error))
+}
 #[cfg(test)]
 mod tests;

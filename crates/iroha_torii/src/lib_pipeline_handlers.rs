@@ -812,6 +812,11 @@ where
         .validate_output_merkle_cache()
         .map_err(pipeline_status_projection_error)?;
     for output in block.execution_outputs() {
+        // A governance block-start row runs no trigger: it has neither an execution call
+        // nor a completion.
+        if output.governance_block_start().is_some() {
+            continue;
+        }
         let call_hash = output
             .execution_call_hash(block.hash(), block)
             .map_err(pipeline_status_projection_error)?;

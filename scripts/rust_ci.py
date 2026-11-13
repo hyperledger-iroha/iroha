@@ -913,6 +913,7 @@ TEST_FEATURES = (
     ("iroha_torii", "iroha_torii/test-fixtures"),
     ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
     ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),
+    ("iroha_core", "iroha_core/dev-tools"),
 )
 
 

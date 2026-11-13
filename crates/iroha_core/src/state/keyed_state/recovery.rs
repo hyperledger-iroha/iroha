@@ -426,6 +426,47 @@ mod tests {
     }
 
     #[test]
+    fn keyed_snapshot_successor_replay_reproduces_original_publication() {
+        let (mut chain, snapshot) = keyed_chain_with_snapshot();
+        chain.commit(Vec::new());
+        let original = chain.state().verify_replayed_state_commitment().unwrap();
+        let original_tip = chain.state().view().native_execution_tip().unwrap();
+        let original_snapshot = CapturedStateSnapshot::capture(chain.state()).unwrap();
+        let restored: Arc<State> = Arc::from(decode(&chain, snapshot.as_json()).unwrap());
+        assert_eq!(restored.committed_height(), 2);
+        let prepared = crate::sumeragi::node::prepare(crate::sumeragi::node::PrepareInputs {
+            state: Arc::clone(&restored),
+            events: tokio::sync::broadcast::channel(16).0,
+            genesis: None,
+            genesis_account: chain.genesis_account().clone(),
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+        })
+        .expect("authenticate complete State before replaying its certified successors");
+        assert_eq!(restored.committed_height(), 4);
+        assert_eq!(restored.view().native_execution_tip(), Some(original_tip));
+        assert_eq!(
+            restored.verify_replayed_state_commitment().unwrap(),
+            original
+        );
+        assert_eq!(
+            CapturedStateSnapshot::capture(&restored).unwrap().as_json(),
+            original_snapshot.as_json(),
+            "successor replay reproduces every serialized State field and undo"
+        );
+        assert!(
+            restored
+                .keyed_state_rows(
+                    &chain.committed(4),
+                    &[("state.network_id".to_owned(), Vec::new())],
+                    &restored.ivm_execution_budget(),
+                )
+                .is_ok(),
+            "the replayed height owns its pre-tail execution and serves certified row proofs"
+        );
+        drop(prepared);
+    }
+
+    #[test]
     fn keyed_restore_rejects_state_level_and_world_differences() {
         let (chain, snapshot) = keyed_chain_with_snapshot();
         // A State-level field outside World, which no LtHash root ever covered.
@@ -496,5 +537,69 @@ mod tests {
         // An LtHash State carries no claim and is left untouched.
         let lthash = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
         assert!(!lthash.state().authenticate_restored_keyed_state().unwrap());
+    }
+
+    #[test]
+    fn rejected_snapshot_claim_cannot_advance_the_durable_runtime_floor() {
+        use iroha_data_model::runtime::{
+            checkpoint::{RuntimeAdoptionAnchorV1, RuntimeBoundaryV1},
+            lifecycle::AdoptionRecordV1,
+        };
+
+        let (chain, snapshot) = keyed_chain_with_snapshot();
+        let restored = decode(&chain, snapshot.as_json()).unwrap();
+        let hash = chain.committed(1).block_hash();
+        runtime::activate_additions_for_testing(
+            &restored.world,
+            runtime::catalog::additions::RUNTIME_LIFECYCLE.module,
+        )
+        .unwrap();
+        {
+            // The local snapshot signature cannot authorize a fabricated history
+            // boundary. Change a selected State field too, so its complete claim
+            // necessarily fails independently of the boundary table's profile.
+            let mut topology = restored.commit_topology.block();
+            topology.pop().expect("the fixture committee");
+            topology.commit();
+            let mut world = restored.world.block();
+            world.runtime_boundaries.insert(
+                1,
+                RuntimeBoundaryV1::AdoptionAnchor(RuntimeAdoptionAnchorV1 {
+                    record: AdoptionRecordV1 {
+                        network: chain.network_id(),
+                        height: 1,
+                        block_hash: *<HashOf<BlockHeader> as AsRef<[u8; 32]>>::as_ref(&hash),
+                        predecessor_world_root: [0; 32],
+                        imported_state_root: [0; 32],
+                        committee: [0; 32],
+                        selection: runtime::release_catalog().unwrap().baseline_id,
+                        authorization: [0; 32],
+                    },
+                    attestations: Vec::new(),
+                }),
+            );
+            world.commit();
+        }
+        assert!(runtime::checkpoint::history_boundary(&restored.world_view(), 0).is_some());
+        assert!(chain.kura().history_boundary().is_none());
+        let result = crate::sumeragi::node::prepare(crate::sumeragi::node::PrepareInputs {
+            state: Arc::from(restored),
+            events: tokio::sync::broadcast::channel(1).0,
+            genesis: None,
+            genesis_account: chain.genesis_account().clone(),
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+        });
+        assert!(matches!(
+            result,
+            Err(crate::sumeragi::node::NodeError::Replay { height: 2, .. })
+        ));
+        assert!(chain.kura().history_boundary().is_none());
+        assert!(
+            !chain
+                .kura()
+                .store_root()
+                .join("runtime-history-boundary.norito")
+                .exists()
+        );
     }
 }

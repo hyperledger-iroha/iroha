@@ -1533,6 +1533,10 @@ fn contract_emission_page(
                     "rejected output retains contract emissions".into(),
                 ));
             }
+            // A governance block-start row has no execution call and emits no contract event.
+            if output.governance_block_start().is_some() {
+                continue;
+            }
             let execution_hash = output
                 .execution_call_hash(block.hash(), &*block)
                 .map_err(conversion_error)?;

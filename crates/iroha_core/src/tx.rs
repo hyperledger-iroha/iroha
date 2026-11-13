@@ -3599,21 +3599,23 @@ impl StateBlock<'_> {
     ) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
-        let summary = ivm_cache.summarize_executable(bytes).map_err(|error| {
-            let error = match ExecutionDeferred::try_from_vm_error(error) {
-                Ok(owner) => return ExecutionAttemptError::Deferred(owner),
-                Err(error) => error,
-            };
-            let failure = match error {
-                ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
-                    "unknown syscall number 0x{number:02x} for abi_version 1"
-                )),
-                error => ValidationFail::IvmAdmission(
-                    crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
-                ),
-            };
-            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(failure))
-        })?;
+        let summary = ivm_cache
+            .summarize_executable_in_world(&state_transaction.world, bytes)
+            .map_err(|error| {
+                let error = match ExecutionDeferred::try_from_vm_error(error) {
+                    Ok(owner) => return ExecutionAttemptError::Deferred(owner),
+                    Err(error) => error,
+                };
+                let failure = match error {
+                    ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
+                        "unknown syscall number 0x{number:02x} for abi_version 1"
+                    )),
+                    error => ValidationFail::IvmAdmission(
+                        crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
+                    ),
+                };
+                ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(failure))
+            })?;
         let is_contract = matches!(
             &summary,
             crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_)
@@ -3764,7 +3766,7 @@ impl StateBlock<'_> {
                         ivm::instruction::wide::imm8(op.inst).to_ne_bytes()[0],
                     ))
                 } else if opcode == ivm::instruction::wide::system::SYSTEM {
-                    Some(ivm::encoding::wide::decode_syscallx(op.inst))
+                    Some(ivm::encoding::wide::decode_scall(op.inst))
                 } else {
                     None
                 };
@@ -9959,7 +9961,6 @@ pub mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 4,
             max_cycles: 1_000,
             abi_version,
         }
@@ -10033,7 +10034,6 @@ pub mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 4,
             max_cycles,
             abi_version,
         }
@@ -10093,15 +10093,13 @@ pub mod tests {
     fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, syscall)
-                .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 4,
             max_cycles: 1_000,
             abi_version,
         }
@@ -10112,13 +10110,12 @@ pub mod tests {
     /// Build a minimal program that issues a single extended syscall followed by HALT.
     fn minimal_ivm_program_with_syscallx(abi_version: u8, syscall: u32) -> Vec<u8> {
         let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 4,
             max_cycles: 1_000,
             abi_version,
         }

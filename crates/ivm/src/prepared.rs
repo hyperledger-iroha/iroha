@@ -20,6 +20,7 @@ use owner::{PreparedOwner, PreparedShell};
 pub(crate) struct PreparedContractParts {
     pub(crate) artifact: crate::cache_memory::SharedAllocation<u8>,
     pub(crate) metadata: ProgramMetadata,
+    pub(crate) syscall_policy: crate::SyscallPolicy,
     pub(crate) manifest: ContractManifest,
     pub(crate) header_len: usize,
     pub(crate) code_offset: usize,
@@ -33,6 +34,7 @@ pub(crate) struct PreparedContractParts {
 struct PreparedContractInner {
     artifact: crate::cache_memory::SharedAllocation<u8>,
     metadata: ProgramMetadata,
+    syscall_policy: crate::SyscallPolicy,
     manifest: SharedValue<ContractManifest>,
     header_len: usize,
     code_offset: usize,
@@ -113,6 +115,7 @@ impl PreparedContract {
             inner: shell.initialize(PreparedContractInner {
                 artifact: parts.artifact,
                 metadata: parts.metadata,
+                syscall_policy: parts.syscall_policy,
                 manifest: {
                     let exclusively_owned =
                         parts.manifest.entrypoints.as_ref().is_none_or(|entries| {
@@ -177,6 +180,11 @@ impl PreparedContract {
     #[must_use]
     pub fn metadata(&self) -> &ProgramMetadata {
         &self.inner.metadata
+    }
+    /// Exact named host policy authenticated at artifact admission.
+    #[must_use]
+    pub fn syscall_policy(&self) -> crate::SyscallPolicy {
+        self.inner.syscall_policy
     }
     /// Return the manifest derived from the validated artifact.
     ///

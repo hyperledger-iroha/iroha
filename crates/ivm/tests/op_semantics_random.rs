@@ -1,4 +1,4 @@
-use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction};
+use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
 const CLASSIC_LOAD_OPCODE: u32 = 0x03;
 const CLASSIC_STORE_OPCODE: u32 = 0x23;
 fn run_prog(code_words: &[u32]) -> IVM {
@@ -110,27 +110,4 @@ fn branches_randomized_consistency() {
             }
         }
     }
-}
-#[test]
-fn vector_ops_mode_gating() {
-    let mut meta = ProgramMetadata::default();
-    let mut bytes = meta.encode();
-    let sha = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 16, 32, 0);
-    bytes.extend_from_slice(&sha.to_le_bytes());
-    let mut vm = IVM::new(1_000);
-    vm.load_program(&bytes).unwrap();
-    vm.set_register(32, Memory::HEAP_START);
-    let err = vm.run().expect_err("vector op should be gated");
-    assert!(matches!(err, VMError::VectorExtensionDisabled));
-    meta.mode = ivm::ivm_mode::VECTOR;
-    let mut bytes2 = meta.encode();
-    bytes2.extend_from_slice(&sha.to_le_bytes());
-    bytes2.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm2 = IVM::new(1_000);
-    vm2.load_program(&bytes2).unwrap();
-    vm2.set_register(32, Memory::HEAP_START);
-    vm2.memory
-        .store_bytes(Memory::HEAP_START, &[0u8; 64])
-        .unwrap();
-    vm2.run().expect("vector op succeeds when enabled");
 }

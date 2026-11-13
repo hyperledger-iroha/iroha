@@ -334,7 +334,7 @@ _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
     "crates/ivm/tests/data/control.to",
     "crates/ivm/tests/data/mfc.to",
     "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
     "crates/kotodama_lang/src/samples/asset_ops.to",
     "crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.to",
     "crates/kotodama_lang/src/samples/dex_contract.to",
@@ -368,7 +368,7 @@ _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS = frozenset({
     "crates/iroha_p2p/src/peer/run/granted.rs",
     "crates/iroha_p2p/src/peer/run/payload_codec_tests.rs",
     "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
-    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+    "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
 })
 # Fixed public parser seeds, offsets, codec/checksum goldens, normative grammar,
 # Objective-C source and the embedded Metal library, traced to their source

@@ -1,0 +1,9 @@
+{
+  "message" : "157348512f70229d2ed04a83e358ce8ea0a2125907de8ffcef46ea184a086e80",
+  "nonexportable" : true,
+  "public_key_sec1" : "04fe3eec589263bd2d6e53bbc608c415022c8574ce6a1a99c823f58bbc4fba4c58b4e974d56c80df35fda60f143eda3e58d47613893cbbe88673fdf9adaec97d98",
+  "schema" : "kagemusha-spartan-hardware-probe-v1",
+  "secure_enclave" : true,
+  "signature_der" : "3045022100bf2b76400da541cd8ce21b679e957d4a97b3c25848072dff5a5f43c1e176a06702204be20b37373e4e8741c5e244026023ae30c4e90711162297b2f0d4f6dcd8b15b",
+  "signature_raw_low_s" : "bf2b76400da541cd8ce21b679e957d4a97b3c25848072dff5a5f43c1e176a0674be20b37373e4e8741c5e244026023ae30c4e90711162297b2f0d4f6dcd8b15b"
+}

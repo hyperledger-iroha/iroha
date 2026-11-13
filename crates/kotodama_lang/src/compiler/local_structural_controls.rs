@@ -436,7 +436,7 @@ pub(super) fn split_spill(source: &str) {
         syscalls(&production),
         "every original typed, metered state and numeric consumer stays in exact order"
     );
-    let add = encoding::wide::encode_syscallx(syscalls::SYSCALL_INT_ADD);
+    let add = encoding::wide::encode_scall(syscalls::SYSCALL_INT_ADD);
     let saved_registers = plan
         .used_registers()
         .into_iter()

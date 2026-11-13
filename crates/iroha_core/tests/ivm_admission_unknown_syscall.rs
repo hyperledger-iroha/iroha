@@ -60,7 +60,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(instruction::wide::system::SCALL, unknown_syscall)
+        &encoding::wide::encode_scall(u32::from(unknown_syscall))
             .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -68,7 +68,6 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10,
         abi_version: 1,
     };

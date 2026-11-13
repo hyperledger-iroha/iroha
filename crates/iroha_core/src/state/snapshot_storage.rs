@@ -94,6 +94,45 @@ pub fn serialize_block<
     serialize_maps(store.original_undo_entries(), store.iter(), out);
 }
 
+/// Stream an exact staged map through the checkpoint's bounded destination.
+pub(crate) fn serialize_block_bounded<
+    K: mv::Key + Encode,
+    V: mv::Value + Encode,
+    M: mv::storage::StorageMode<K, V>,
+>(
+    store: &block_field::StorageField<'_, K, V, M>,
+    out: &mut crate::snapshot::checkpoint_capture::encoding::Writer,
+) -> Result<(), json::BoundedJsonError> {
+    use json::JsonWriteSink as _;
+    out.push_str("{\"revert\":[")?;
+    for (index, (key, value)) in store.original_undo_entries().enumerate() {
+        if index != 0 {
+            out.push(',')?;
+        }
+        out.push_str("{\"key\":")?;
+        out.binary(key)?;
+        out.push_str(",\"value\":")?;
+        if let Some(value) = value {
+            out.binary(value)?;
+        } else {
+            out.push_str("null")?;
+        }
+        out.push('}')?;
+    }
+    out.push_str("],\"blocks\":[")?;
+    for (index, (key, value)) in store.iter().enumerate() {
+        if index != 0 {
+            out.push(',')?;
+        }
+        out.push_str("{\"key\":")?;
+        out.binary(key)?;
+        out.push_str(",\"value\":")?;
+        out.binary(value)?;
+        out.push('}')?;
+    }
+    out.push_str("]}")
+}
+
 pub(super) fn decode_blob<T: DecodeAll + Encode>(
     record: SnapshotNoritoBlob,
     field: &str,

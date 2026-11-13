@@ -367,6 +367,7 @@ mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_anonymous_tables;
 pub(crate) mod parliament_candidate_testing;
 pub(crate) mod parliament_registration;
+pub use parliament_registration::{CredentialHistoryErrorV1, resolve_credential_registration_v1};
 mod privacy_transaction_intent;
 mod sccp_forgery_entrypoint;
 pub(crate) mod sccp_pause_entrypoint;
@@ -377,6 +378,7 @@ mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 #[cfg(test)]
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
+pub(crate) mod governance_start;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
 pub use output_capacity::{
@@ -1264,6 +1266,10 @@ macro_rules! with_world_overlay_fields {
             account_signing_keys,
             account_signing_key_reservations,
             runtime_obligations,
+            runtime_deferred_consents,
+            runtime_amx_captures,
+            runtime_game_transfers,
+            runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
             sorafs_authority_proposals,
@@ -1688,6 +1694,9 @@ impl Default for WorldData {
 
 // Quantity storages wrap their child checkpoints; other fields open ordinary ones.
 macro_rules! world_field_transaction {
+    ($field:expr, runtime_selection) => {
+        crate::runtime::execution::SelectionTransaction::new($field.transaction())
+    };
     ($field:expr, sccp_reconciliations) => {
         $field.try_transaction_admitted()?
     };
@@ -3548,6 +3557,14 @@ impl norito::json::JsonKeyCodec for SmartContractCodeUploadKey {
         );
         json::write_json_string(&key, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('"')?;
+        self.write_json_key_content_to(out)?;
+        out.push('"')
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (authority, artifact) = encoded.split_once('|').ok_or_else(|| {
             json::Error::Message("expected authority|dataspace|artifact-hash upload key".into())
@@ -3560,6 +3577,28 @@ impl norito::json::JsonKeyCodec for SmartContractCodeUploadKey {
             })?;
         let artifact_id = ContractArtifactId::decode_json_key(artifact)?;
         Ok(Self::new(authority, artifact_id))
+    }
+}
+impl SmartContractCodeUploadKey {
+    /// Stream the exact composite key without formatting its account or hash into a heap buffer.
+    fn write_json_key_content_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonObjectKey::visit_json_key_text_checked(&self.authority, |chunk| {
+            json::write_json_string_content_to(chunk, out)
+        })?;
+        out.push('|')?;
+        json::visit_json_display_text(&self.artifact_id.dataspace_id.as_u64(), |chunk| {
+            out.push_str(chunk)
+        })?;
+        out.push('|')?;
+        let mut encoded = [0_u8; 2 * Hash::LENGTH];
+        hex::encode_to_slice(self.artifact_id.code_hash.as_ref(), &mut encoded)
+            .map_err(|_| json::BoundedJsonError::Unsupported)?;
+        out.push_str(
+            std::str::from_utf8(&encoded).map_err(|_| json::BoundedJsonError::Unsupported)?,
+        )
     }
 }
 /// Consensus key identifying one chunk within an authority-owned pending upload.
@@ -3597,6 +3636,16 @@ impl norito::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
             self.chunk_index
         );
         json::write_json_string(&key, out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('"')?;
+        self.upload.write_json_key_content_to(out)?;
+        out.push('|')?;
+        json::visit_json_display_text(&self.chunk_index, |chunk| out.push_str(chunk))?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (upload, raw_index) = encoded.rsplit_once('|').ok_or_else(|| {
@@ -3692,6 +3741,12 @@ impl Default for MusubiResolverIndexRevisionV1 {
 impl norito::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.0.to_string(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_display_to(&self.0, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let revision = encoded.parse::<u64>().map_err(|error| {
@@ -4283,6 +4338,24 @@ pub struct WorldData {
         iroha_data_model::runtime::obligation::ObligationId,
         iroha_data_model::runtime::obligation::ObligationRecordV1,
     >,
+    /// Consent captured for deferred execution, installed only by its selected service.
+    pub(crate) runtime_deferred_consents: Storage<
+        iroha_data_model::runtime::deferred::DeferredConsentKeyV1,
+        iroha_data_model::runtime::deferred::DeferredConsentRecordV1,
+    >,
+    /// Original AMX decision and settlement captures, installed only by its selected service.
+    pub(crate) runtime_amx_captures: Storage<
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
+    >,
+    /// Native game transfers and their original completion captures, installed by its service.
+    pub(crate) runtime_game_transfers: Storage<
+        iroha_crypto::Hash,
+        iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Original native escrow execution retained until terminal custody, installed only by its selected service.
+    pub(crate) runtime_escrow_captures:
+        Storage<EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>,
     /// The committed cursor of every migration, keyed by its definition
     /// (`specs/live_runtime_upgrades.md` §5.4); installed only by its selected addition.
     pub(crate) runtime_migrations: Storage<
@@ -5338,6 +5411,30 @@ pub struct WorldBlockFields<'world> {
         'world,
         iroha_data_model::runtime::obligation::ObligationId,
         iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// Consent captured for deferred execution, installed only by its selected service.
+    pub(crate) runtime_deferred_consents: StorageField<
+        'world,
+        iroha_data_model::runtime::deferred::DeferredConsentKeyV1,
+        iroha_data_model::runtime::deferred::DeferredConsentRecordV1,
+    >,
+    /// Original AMX decision and settlement captures, installed only by its selected service.
+    pub(crate) runtime_amx_captures: StorageField<
+        'world,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
+    >,
+    /// Native game transfers and their original completion captures, installed by its service.
+    pub(crate) runtime_game_transfers: StorageField<
+        'world,
+        iroha_crypto::Hash,
+        iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Original native escrow execution retained until terminal custody, installed only by its selected service.
+    pub(crate) runtime_escrow_captures: StorageField<
+        'world,
+        EscrowId,
+        iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
     >,
     /// The committed cursor of every migration.
     pub(crate) runtime_migrations: StorageField<
@@ -6576,6 +6673,10 @@ impl WorldBlock<'_> {
             account_signing_keys,
             account_signing_key_reservations,
             runtime_obligations,
+            runtime_deferred_consents,
+            runtime_amx_captures,
+            runtime_game_transfers,
+            runtime_escrow_captures,
             runtime_migrations,
             runtime_boundaries,
             sorafs_authority_proposals,
@@ -7145,6 +7246,30 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::obligation::ObligationId,
         iroha_data_model::runtime::obligation::ObligationRecordV1,
     >,
+    /// Consent captured for deferred execution, installed only by its selected service.
+    pub(crate) runtime_deferred_consents: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::deferred::DeferredConsentKeyV1,
+        iroha_data_model::runtime::deferred::DeferredConsentRecordV1,
+    >,
+    /// Original AMX decision and settlement captures, installed only by its selected service.
+    pub(crate) runtime_amx_captures: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
+    >,
+    /// Native game transfers and their original completion captures, installed by its service.
+    pub(crate) runtime_game_transfers: StorageTransaction<
+        'block,
+        iroha_crypto::Hash,
+        iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Original native escrow execution retained until terminal custody, installed only by its selected service.
+    pub(crate) runtime_escrow_captures: StorageTransaction<
+        'block,
+        EscrowId,
+        iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
+    >,
     /// The committed cursor of every migration.
     pub(crate) runtime_migrations: StorageTransaction<
         'block,
@@ -7271,8 +7396,7 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::definition::DefinitionDescriptorV1,
     >,
     /// The root's selection for this transaction.
-    pub(crate) runtime_selection:
-        CellTransaction<'block, 'world, iroha_data_model::runtime::definition::RootSelectionV1>,
+    pub(crate) runtime_selection: crate::runtime::execution::SelectionTransaction<'block, 'world>,
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -8858,6 +8982,22 @@ impl<'block> WorldTransaction<'block, '_> {
         &mut self,
         record: &AssetEscrowRecord,
     ) -> Result<Option<AssetEscrowRecord>, Error> {
+        self.insert_asset_escrow_with_capture(record, None)
+    }
+    /// Publish new native custody with the capture prepared before its funding movement.
+    pub(crate) fn insert_captured_asset_escrow_entry(
+        &mut self,
+        record: &AssetEscrowRecord,
+        capture: crate::runtime::native_escrow_capture::PreparedCapture,
+    ) -> Result<Option<AssetEscrowRecord>, Error> {
+        self.insert_asset_escrow_with_capture(record, Some(capture))
+    }
+    fn insert_asset_escrow_with_capture(
+        &mut self,
+        record: &AssetEscrowRecord,
+        capture: Option<crate::runtime::native_escrow_capture::PreparedCapture>,
+    ) -> Result<Option<AssetEscrowRecord>, Error> {
+        let capture = crate::runtime::native_escrow_capture::prepare_write(self, record, capture)?;
         let scope = asset_escrow_scope::prepare_insert(self, record)?;
         let previous = self.asset_escrows.insert(record.id, record.clone());
         if let Some(previous) = previous.as_ref() {
@@ -8865,6 +9005,7 @@ impl<'block> WorldTransaction<'block, '_> {
         }
         self.track_asset_escrow_indexes(record);
         scope.apply(self);
+        capture.apply(self);
         Ok(previous)
     }
     fn settled_vpn_lease_key(record: &VpnLeaseRecordV1) -> Option<(u64, [u8; 32])> {
@@ -9428,6 +9569,30 @@ pub struct WorldView<'world> {
         'world,
         iroha_data_model::runtime::obligation::ObligationId,
         iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// Consent captured for deferred execution, installed only by its selected service.
+    pub(crate) runtime_deferred_consents: StorageView<
+        'world,
+        iroha_data_model::runtime::deferred::DeferredConsentKeyV1,
+        iroha_data_model::runtime::deferred::DeferredConsentRecordV1,
+    >,
+    /// Original AMX decision and settlement captures, installed only by its selected service.
+    pub(crate) runtime_amx_captures: StorageView<
+        'world,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
+    >,
+    /// Native game transfers and their original completion captures, installed by its service.
+    pub(crate) runtime_game_transfers: StorageView<
+        'world,
+        iroha_crypto::Hash,
+        iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    >,
+    /// Original native escrow execution retained until terminal custody, installed only by its selected service.
+    pub(crate) runtime_escrow_captures: StorageView<
+        'world,
+        EscrowId,
+        iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
     >,
     /// The committed cursor of every migration.
     pub(crate) runtime_migrations: StorageView<
@@ -11212,6 +11377,19 @@ impl json::FastJsonWrite for GovernanceProposalStatus {
         };
         json::write_json_string(label, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            GovernanceProposalStatus::Proposed => "Proposed",
+            GovernanceProposalStatus::Rejected => "Rejected",
+            GovernanceProposalStatus::Enacted => "Enacted",
+            GovernanceProposalStatus::Superseded => "Superseded",
+            GovernanceProposalStatus::ExecutionFailed => "ExecutionFailed",
+        };
+        json::write_json_string_to(label, out)
+    }
 }
 impl json::JsonDeserialize for GovernanceProposalStatus {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -11488,6 +11666,17 @@ impl json::FastJsonWrite for GovernanceReferendumStatus {
         };
         json::write_json_string(label, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            GovernanceReferendumStatus::Proposed => "Proposed",
+            GovernanceReferendumStatus::Open => "Open",
+            GovernanceReferendumStatus::Closed => "Closed",
+        };
+        json::write_json_string_to(label, out)
+    }
 }
 impl json::JsonDeserialize for GovernanceReferendumStatus {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -11520,6 +11709,16 @@ impl json::FastJsonWrite for GovernanceReferendumMode {
             GovernanceReferendumMode::Plain => "Plain",
         };
         json::write_json_string(label, out);
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            GovernanceReferendumMode::Zk => "Zk",
+            GovernanceReferendumMode::Plain => "Plain",
+        };
+        json::write_json_string_to(label, out)
     }
 }
 impl json::JsonDeserialize for GovernanceReferendumMode {
@@ -12700,6 +12899,8 @@ pub struct State {
     pub(crate) native_execution_tip: native_execution_tip::TipCell,
     /// Immutable State versions from the original publisher; restored claims cannot populate them.
     keyed_versions: parking_lot::Mutex<keyed_state::KeyedVersions>,
+    /// Local bounded checkpoint consumer; never part of execution or committed State.
+    pub(crate) runtime_checkpoint_capture: crate::snapshot::checkpoint_capture::CapturePublisher,
     /// Current original certified pre-tail cut; absent after decoded snapshot restoration.
     native_world_cut: parking_lot::Mutex<
         Option<
@@ -13296,6 +13497,15 @@ pub struct StateBlockFields<'state> {
     frozen_execution_output_capacity:
         Option<Result<output_capacity::FrozenExecutionOutputCapacity, String>>,
     execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,
+    /// The governance-start output partition of this block, with the rows its block-start
+    /// pass emitted. Present exactly when the block is one of the global chain on a root
+    /// whose selection installs the anonymous Parliament family; the output seal moves the
+    /// rows ahead of every execution row.
+    governance_start_outputs:
+        Option<iroha_data_model::block::output_budget::GovernanceStartOutputBudgetV1>,
+    /// `governance_due_applied` of this block's pass (`specs/sccp.md` §4.7.2): it
+    /// established a casting clock or processed a positioned item.
+    governance_due_applied: bool,
     /// The Sumeragi schedule step of this block (run by the output seal's finalizer).
     pub(crate) sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep,
     /// The lane step of this block (run by the output seal's finalizer).
@@ -13905,6 +14115,13 @@ impl<'state> StateBlock<'state> {
     #[cfg(test)]
     pub(crate) fn json_serialize_committed_external_event_buffer(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.state_ref.world.external_event_buf, out);
+    }
+    /// Serialize the committed event buffer through a checked checkpoint destination.
+    pub(crate) fn json_serialize_committed_external_event_buffer_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonSerialize::json_serialize_to(&self.state_ref.world.external_event_buf, out)
     }
     /// Serialize the replay ledger exactly as this commit will publish it.
     ///
@@ -14550,12 +14767,19 @@ pub struct StateTransaction<'block, 'state> {
     /// Exact signed activation plan admitted by the owner-authorized Taira boundary.
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) taira_activation_entrypoint: Option<[u8; 32]>,
-    /// Whether the instruction being executed is a committed terminal effect of a registered
-    /// obligation (`specs/live_runtime_upgrades.md` §7.2): while it is set, the instruction and
-    /// what it invokes complete that obligation, so admission closure and completion-only do
-    /// not stop them. Ephemeral transaction custody; set and cleared around that instruction
-    /// alone (`crate::runtime::obligations::registry::performing`).
-    pub(crate) completing_obligation: bool,
+    /// Captured call graph of the registered obligation's terminal effect being executed
+    /// (`specs/live_runtime_upgrades.md` §7.2). Admission closure and completion-only permit
+    /// only the bindings this capture reaches; unrelated callback instructions retain ordinary
+    /// admission. Ephemeral custody, set and cleared around that terminal effect alone
+    /// (`crate::runtime::obligations::registry::performing`).
+    pub(crate) completing_obligation:
+        Option<iroha_data_model::runtime::obligation::CompletionCaptureV1>,
+    /// Authoritative native custody context and operation step, restored after nested calls.
+    /// This ephemeral scope never changes or serializes the canonical root selection.
+    pub(crate) native_execution: Option<crate::runtime::execution::NativeExecution>,
+    /// Captured semantics of enclosing deferred bodies, checked at every dynamic call.
+    pub(crate) deferred_expectations:
+        Vec<Option<iroha_data_model::runtime::lifecycle::ExpectationV1>>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
@@ -15307,8 +15531,14 @@ impl<'state> StateView<'state> {
             .triggers()
             .time_triggers()
             .iter()
-            .any(|(_, action)| {
-                time_trigger_action_requires_clock_progress(action, parent_creation_time)
+            .any(|(id, action)| {
+                crate::runtime::deferred_consent::trigger_ready(
+                    &self.world,
+                    id,
+                    u64::try_from(self.height())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                ) && time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
     }
     #[cfg(test)]
@@ -19167,6 +19397,20 @@ pub(crate) use stake_reserves::{
 pub(crate) mod validator_committee;
 
 impl World {
+    /// Seed a nonempty committed event Cell and its distinct predecessor before genesis.
+    #[cfg(test)]
+    pub(crate) fn seed_external_events_for_snapshot_test(
+        &self,
+        previous: Vec<EventBox>,
+        current: Vec<EventBox>,
+    ) {
+        let mut first = self.external_event_buf.block();
+        *first.get_mut() = previous;
+        first.commit();
+        let mut second = self.external_event_buf.block();
+        *second.get_mut() = current;
+        second.commit();
+    }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace an account rekey fixture while maintaining its reverse index.
     pub fn replace_account_rekey_record_for_testing(
@@ -21607,6 +21851,22 @@ macro_rules! world_ro_accessors {
             storage runtime_obligations:
                 iroha_data_model::runtime::obligation::ObligationId
                     => iroha_data_model::runtime::obligation::ObligationRecordV1;
+            /// Immutable consent for deferred execution (read-only).
+            storage runtime_deferred_consents:
+                iroha_data_model::runtime::deferred::DeferredConsentKeyV1
+                    => iroha_data_model::runtime::deferred::DeferredConsentRecordV1;
+            /// Original AMX completion captures (read-only).
+            storage runtime_amx_captures:
+                iroha_data_model::runtime::obligation::ObligationId
+                    => iroha_data_model::runtime::native_amx::NativeAmxCaptureV1;
+            /// Native game transfers and retained completion captures (read-only).
+            storage runtime_game_transfers:
+                iroha_crypto::Hash
+                    => iroha_data_model::runtime::native_game::NativeGameTransferV1;
+            /// Original native escrow completion captures (read-only).
+            storage runtime_escrow_captures:
+                EscrowId
+                    => iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1;
             /// The committed cursor of every migration (read-only).
             storage runtime_migrations:
                 iroha_data_model::runtime::definition::DefinitionId
@@ -25529,6 +25789,10 @@ impl WorldTransaction<'_, '_> {
             account_signing_keys: _,
             account_signing_key_reservations: _,
             runtime_obligations: _,
+            runtime_deferred_consents: _,
+            runtime_amx_captures: _,
+            runtime_game_transfers: _,
+            runtime_escrow_captures: _,
             runtime_migrations: _,
             runtime_boundaries: _,
             sorafs_authority_proposals: _,
@@ -25994,6 +26258,10 @@ impl WorldTransaction<'_, '_> {
         self.account_signing_keys.apply();
         self.account_signing_key_reservations.apply();
         self.runtime_obligations.apply();
+        self.runtime_deferred_consents.apply();
+        self.runtime_amx_captures.apply();
+        self.runtime_game_transfers.apply();
+        self.runtime_escrow_captures.apply();
         self.runtime_migrations.apply();
         self.runtime_boundaries.apply();
         self.sorafs_authority_proposals.apply();
@@ -28661,6 +28929,7 @@ impl State {
             native_execution_tip,
             native_world_cut: parking_lot::Mutex::new(None),
             keyed_versions: parking_lot::Mutex::default(),
+            runtime_checkpoint_capture: Default::default(),
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
                 .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
@@ -30160,10 +30429,12 @@ impl State {
         crate::smartcontracts::isi::sccp::hook::begin_block(&mut sb)
             .map_err(StateBlockStartError::Storage)?;
         crate::smartcontracts::isi::sccp::fast_pause::draw::at_boundary(&mut sb)?;
-        let sccp_pauses =
-            crate::smartcontracts::isi::sccp::governance_clock::advance_reconciliation(&mut sb)?;
-        Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;
-        sccp_pauses.enact(&mut sb)?;
+        // The one positioned pass of the global chain's ordinary carrier: the casting-clock
+        // prelude, then G1 to G3 under one budget. The baseline enactments run between G2c
+        // and the fast-pause enactments of G3, where they always ran.
+        governance_start::run(&mut sb, |sb| {
+            Self::apply_block_start_parliament_enactments(sb, now_h)
+        })?;
         // G4 follows both enactment tracks and remains outside due-work accounting;
         // a same-pass renewal replaces the active record before expiry cleanup.
         crate::smartcontracts::isi::sccp::pause_lifecycle::lapse_after_enactments(&mut sb)
@@ -30987,6 +31258,20 @@ impl State {
         self.contract_query_ivm_cache
             .lock()
             .summarize_program_with_hash(code_hash, bytecode)
+    }
+    /// Prepare a query contract against the same original World view that supplied its bytes.
+    ///
+    /// # Errors
+    /// Returns original artifact admission/resource failures without substituting another root.
+    pub fn prepare_contract_query_program_in_world(
+        &self,
+        world: &impl WorldReadOnly,
+        code_hash: Hash,
+        bytecode: &[u8],
+    ) -> Result<ProgramSummary, ivm::VMError> {
+        self.contract_query_ivm_cache
+            .lock()
+            .summarize_program_with_hash_in_world(world, code_hash, bytecode)
     }
     #[cfg(test)]
     /// Return contract query summary and preparation counters.
@@ -31977,8 +32262,12 @@ impl State {
         parent_creation_time: Duration,
     ) -> bool {
         let world = self.world_view();
-        world.triggers().time_triggers().iter().any(|(_, action)| {
-            time_trigger_action_requires_clock_progress(action, parent_creation_time)
+        let height = self
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        world.triggers().time_triggers().iter().any(|(id, action)| {
+            crate::runtime::deferred_consent::trigger_ready(&world, id, height)
+                && time_trigger_action_requires_clock_progress(action, parent_creation_time)
         })
     }
     #[cfg(test)]
@@ -39913,7 +40202,9 @@ impl<'state> StateBlock<'state> {
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
             taira_activation_entrypoint: None,
-            completing_obligation: false,
+            completing_obligation: None,
+            native_execution: None,
+            deferred_expectations: Vec::new(),
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
             world,
@@ -44029,6 +44320,8 @@ impl StateTransaction<'_, '_> {
             sorafs_repair_entrypoint: _,
             taira_activation_entrypoint: _,
             completing_obligation: _,
+            native_execution: _,
+            deferred_expectations: _,
             committed_fragments,
             touched_lanes,
             mut world,
@@ -44502,6 +44795,9 @@ impl StateTransaction<'_, '_> {
             if scan.candidate_index < scan.candidates.len() || scan.event_index < scan.events.len()
             {
                 scans.push(scan);
+            }
+            if !crate::runtime::deferred_consent::trigger_ready_in_transaction(self, &trg_id) {
+                continue;
             }
             let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
             if max_depth < depth {
@@ -45032,7 +45328,11 @@ impl StateTransaction<'_, '_> {
         else {
             return Ok(None);
         };
-        if let Some(prepared) = self.pipeline_ivm_prepared_cache.get(code_hash) {
+        if let Some(prepared) = self
+            .pipeline_ivm_prepared_cache
+            .get_in_world(&self.world, code_hash)
+            .map_err(crate::smartcontracts::ivm::program_admission_error)?
+        {
             if prepared.artifact() != bytecode.as_ref() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "cached trigger artifact `{code_hash}` does not match authoritative trigger bytecode"
@@ -45050,12 +45350,15 @@ impl StateTransaction<'_, '_> {
             }
             return Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)));
         }
-        let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-            .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+        let parsed = ivm::ProgramMetadata::parse_for_policy(
+            bytecode.as_ref(),
+            crate::smartcontracts::ivm::artifact_policy(&self.world, bytecode.as_ref()),
+        )
+        .map_err(crate::smartcontracts::ivm::program_admission_error)?;
         if parsed.contract_interface.is_some() {
             let prepared = self
                 .pipeline_ivm_prepared_cache
-                .get_or_prepare(code_hash, bytecode.as_ref())
+                .get_or_prepare_in_world(&self.world, code_hash, bytecode.as_ref())
                 .map_err(crate::smartcontracts::ivm::program_admission_error)?;
             if prepared.artifact() != bytecode.as_ref() {
                 return Err(ValidationFail::NotPermitted(format!(
@@ -45096,6 +45399,31 @@ impl StateTransaction<'_, '_> {
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
     fn execute_trigger(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: EventBox,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        let expectation =
+            crate::runtime::deferred_consent::trigger_expectation(self, id, authority, executable)
+                .map_err(ValidationFail::InstructionFailed)?;
+        crate::runtime::deferred_consent::with_scope(self, expectation, |tx| {
+            tx.execute_trigger_with_consent_scope(
+                id,
+                authority,
+                executable,
+                event,
+                step_index,
+                nft_seq_base_override,
+            )
+        })
+    }
+
+    /// Execute the callback while its selected deferred-consent scope is held.
+    fn execute_trigger_with_consent_scope(
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
@@ -45337,7 +45665,7 @@ impl StateTransaction<'_, '_> {
                 let summary = {
                     let mut cache = self.ivm_cache.lock();
                     if let Some(summary) = cache
-                        .cached_program_summary(identity.code_hash)
+                        .cached_program_summary_in_world(&self.world, identity.code_hash)
                         .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     {
                         summary
@@ -45350,7 +45678,11 @@ impl StateTransaction<'_, '_> {
                             )
                             .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
-                                cache.summarize_program_with_hash(identity.code_hash, bytecode)
+                                cache.summarize_program_with_hash_in_world(
+                                    &self.world,
+                                    identity.code_hash,
+                                    bytecode,
+                                )
                             },
                         )
                         .map_err(|error| self.attempt_error_to_validation_fail(error))?
@@ -45386,6 +45718,10 @@ impl StateTransaction<'_, '_> {
                     ))
                     .into());
                 }
+                crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+                    self,
+                    summary.prepared_contract().syscall_policy(),
+                )?;
                 let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
                     self,
                     &summary.metadata,
@@ -45618,6 +45954,10 @@ impl StateTransaction<'_, '_> {
                         ),
                         ResolvedIvmTriggerProgram::Contract(prepared_contract) => {
                             let prepared_contract = prepared_contract.as_ref();
+                            crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+                                self,
+                                prepared_contract.syscall_policy(),
+                            )?;
                             let eff_cycles =
                                 crate::executor::validate_prepared_ivm_execution_policy(
                                     self,

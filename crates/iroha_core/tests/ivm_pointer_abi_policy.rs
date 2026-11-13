@@ -22,7 +22,6 @@ fn domainid_allowed_under_abi_current() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1,
         abi_version: 1,
     };
@@ -46,7 +45,6 @@ fn unknown_pointer_type_rejected_under_current() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1,
         abi_version: 1, // v1
     };

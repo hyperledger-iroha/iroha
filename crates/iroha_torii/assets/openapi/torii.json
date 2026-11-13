@@ -95376,6 +95376,16 @@
             },
             "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Committed state refuses the requested operation (`staking_preparation_refused`). The message is the deterministic reason execution would reject with, such as an absent funded reward entitlement, an unregistered validator or insufficient unreserved funds."
+          },
           "413": {
             "description": "Request exceeds 65536 bytes."
           },

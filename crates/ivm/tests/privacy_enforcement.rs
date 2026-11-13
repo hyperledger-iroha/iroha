@@ -40,10 +40,7 @@ fn private_store_then(target: u32) -> Vec<u8> {
     ])
 }
 fn scall(number: u32) -> u32 {
-    encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(number).expect("test syscall fits compact SCALL"),
-    )
+    encoding::wide::encode_scall(number)
 }
 fn int_private_host(values: &[u64]) -> DefaultHost {
     let records = values
@@ -178,34 +175,6 @@ fn wide_shift_mismatched_tags_fails() {
     assert!(matches!(err, Err(VMError::PrivacyViolation)));
 }
 #[test]
-fn sha256block_private_address_fails() {
-    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
-    let sha = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 0, 1, 0);
-    program.extend_from_slice(&sha.to_le_bytes());
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, Memory::HEAP_START);
-    vm.registers.set_tag(1, true);
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
-}
-#[test]
-fn sha3block_private_address_fails() {
-    let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
-    let sha3 = encoding::wide::encode_rr(instruction::wide::crypto::SHA3BLOCK, 4, 10, 11);
-    program.extend_from_slice(&sha3.to_le_bytes());
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(10, Memory::HEAP_START);
-    vm.set_register(11, Memory::HEAP_START);
-    vm.set_register(4, Memory::HEAP_START);
-    vm.registers.set_tag(10, true);
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
-}
-#[test]
 fn wide_add_mismatched_tags_fails() {
     let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let add = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
@@ -284,47 +253,6 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
     }
 }
 #[test]
-fn zk_assertions_reject_private_predicates_independent_of_truth_value() {
-    for word in [
-        encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0),
-        encoding::wide::encode_ri(instruction::wide::zk::ASSERT_RANGE, 0, 1, 1),
-    ] {
-        let mut expected_remaining = None;
-        for value in [0_u64, 1] {
-            let mut vm = IVM::new(10_000);
-            vm.load_program(&raw_zk_program(&[word]))
-                .expect("load private assertion fixture");
-            vm.set_register(1, value);
-            vm.registers.set_tag(1, true);
-            assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
-            let remaining = vm.remaining_gas();
-            if let Some(expected) = expected_remaining {
-                assert_eq!(remaining, expected, "private assertion leaked through gas");
-            } else {
-                expected_remaining = Some(remaining);
-            }
-        }
-    }
-    let mut expected_remaining = None;
-    for (left, right) in [(7_u64, 7_u64), (7, 8)] {
-        let word = encoding::wide::encode_rr(instruction::wide::zk::ASSERT_EQ, 0, 1, 2);
-        let mut vm = IVM::new(10_000);
-        vm.load_program(&raw_zk_program(&[word]))
-            .expect("load private equality assertion fixture");
-        vm.set_register(1, left);
-        vm.set_register(2, right);
-        vm.registers.set_tag(1, true);
-        vm.registers.set_tag(2, true);
-        assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
-        let remaining = vm.remaining_gas();
-        if let Some(expected) = expected_remaining {
-            assert_eq!(remaining, expected, "private equality leaked through gas");
-        } else {
-            expected_remaining = Some(remaining);
-        }
-    }
-}
-#[test]
 fn wide_addi_propagates_tag() {
     let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 1, 7);
@@ -376,47 +304,6 @@ fn wide_jalr_secret_target_fails() {
     vm.registers.set_tag(1, true);
     let err = vm.run().unwrap_err();
     assert!(matches!(err, VMError::PrivacyViolation));
-}
-#[test]
-fn wide_aesenc_mismatched_tags_fails() {
-    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
-    let aes = encoding::wide::encode_rr(instruction::wide::crypto::AESENC, 20, 10, 12);
-    program.extend_from_slice(&aes.to_le_bytes());
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(10, 0);
-    vm.set_register(11, 0);
-    vm.set_register(12, 0);
-    vm.set_register(13, 0);
-    vm.registers.set_tag(10, true);
-    vm.registers.set_tag(11, true);
-    vm.registers.set_tag(12, false);
-    vm.registers.set_tag(13, false);
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, VMError::PrivacyViolation));
-}
-#[test]
-fn wide_aesdec_propagates_tag() {
-    let mut program = meta_with_mode(ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR).encode();
-    let aes = encoding::wide::encode_rr(instruction::wide::crypto::AESDEC, 20, 10, 12);
-    program.extend_from_slice(&aes.to_le_bytes());
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(10, 0);
-    vm.set_register(11, 0);
-    vm.set_register(12, 0);
-    vm.set_register(13, 0);
-    vm.registers.set_tag(10, true);
-    vm.registers.set_tag(11, true);
-    vm.registers.set_tag(12, true);
-    vm.registers.set_tag(13, true);
-    vm.registers.set_tag(20, false);
-    vm.registers.set_tag(21, false);
-    vm.run().unwrap();
-    assert!(vm.registers.tag(20));
-    assert!(vm.registers.tag(21));
 }
 #[test]
 fn private_input_syscall_marks_result_private() {
@@ -768,132 +655,13 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
     );
 }
 #[test]
-fn poseidon_opcodes_never_declassify_private_operands() {
-    fn program_fetching_private_operands(operands: &[u8], word: u32) -> Vec<u8> {
-        let mut words = Vec::with_capacity(operands.len() * 4 + 1);
-        for (index, register) in operands.iter().copied().enumerate() {
-            words.push(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                10,
-                0,
-                i8::try_from(index).expect("small private-input index"),
-            ));
-            words.push(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                11,
-                0,
-                0,
-            ));
-            words.push(scall(syscalls::SYSCALL_GET_PRIVATE_INPUT));
-            words.push(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                register,
-                10,
-                0,
-            ));
-        }
-        words.push(word);
-        raw_zk_program(&words)
-    }
-    for (label, word, operands) in [
-        (
-            "POSEIDON2",
-            encoding::wide::encode_rr(instruction::wide::crypto::POSEIDON2, 3, 1, 2),
-            vec![1, 2],
-        ),
-        (
-            "POSEIDON6",
-            encoding::wide::encode_poseidon6(3, 20),
-            (20..26).collect(),
-        ),
-    ] {
-        let program = program_fetching_private_operands(&operands, word);
-        let mut all_private = IVM::new(100_000);
-        all_private.set_host(int_private_host(&vec![7; operands.len()]));
-        all_private.load_program(&program).unwrap();
-        assert!(
-            matches!(all_private.run(), Err(VMError::PrivacyViolation)),
-            "{label} accepted all-private operands"
-        );
-        if operands.len() > 1 {
-            let mixed_program = program_fetching_private_operands(&operands[..1], word);
-            let mut mixed = IVM::new(100_000);
-            mixed.set_host(int_private_host(&[11]));
-            mixed.load_program(&mixed_program).unwrap();
-            for (offset, register) in operands.iter().copied().enumerate().skip(1) {
-                mixed.set_register(
-                    usize::from(register),
-                    11 + u64::try_from(offset).expect("small operand index"),
-                );
-            }
-            assert!(
-                matches!(mixed.run(), Err(VMError::PrivacyViolation)),
-                "{label} accepted mixed-visibility operands"
-            );
-        }
-    }
-}
-#[test]
-fn zk_field_operations_propagate_private_tags_and_reject_mixed_visibility() {
-    for opcode in [
-        instruction::wide::zk::FADD,
-        instruction::wide::zk::FSUB,
-        instruction::wide::zk::FMUL,
-    ] {
-        let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
-        let mut private_vm = IVM::new(10_000);
-        private_vm.load_program(&program).unwrap();
-        private_vm.set_register(1, 7);
-        private_vm.set_register(2, 11);
-        private_vm.registers.set_tag(1, true);
-        private_vm.registers.set_tag(2, true);
-        private_vm
-            .run()
-            .unwrap_or_else(|error| panic!("private field opcode {opcode:#x} failed: {error}"));
-        assert!(
-            private_vm.registers.tag(3),
-            "field opcode {opcode:#x} laundered a private result"
-        );
-        let mut mixed_vm = IVM::new(10_000);
-        mixed_vm.load_program(&program).unwrap();
-        mixed_vm.set_register(1, 7);
-        mixed_vm.set_register(2, 11);
-        mixed_vm.registers.set_tag(1, true);
-        let error = mixed_vm.run().expect_err("mixed field operands must trap");
-        assert!(matches!(error, VMError::PrivacyViolation));
-    }
-}
-#[test]
-fn zk_field_inverse_rejects_private_operand_independent_of_invertibility() {
-    let mut expected_remaining = None;
-    for value in [0_u64, 7] {
-        let program = raw_zk_program(&[encoding::wide::encode_rr(
-            instruction::wide::zk::FINV,
-            3,
-            1,
-            0,
-        )]);
-        let mut vm = IVM::new(10_000);
-        vm.load_program(&program).unwrap();
-        vm.set_register(1, value);
-        vm.registers.set_tag(1, true);
-        assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
-        let remaining = vm.remaining_gas();
-        if let Some(expected) = expected_remaining {
-            assert_eq!(remaining, expected, "private inverse leaked through gas");
-        } else {
-            expected_remaining = Some(remaining);
-        }
-    }
-}
-#[test]
-fn zk_field_results_cannot_reach_public_syscall_sinks() {
+fn derived_private_results_cannot_reach_public_syscall_sinks() {
     let program = raw_zk_program(&[
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 0),
         scall(syscalls::SYSCALL_GET_PRIVATE_INPUT),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 10, 0),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 10, 0),
-        encoding::wide::encode_rr(instruction::wide::zk::FADD, 10, 1, 2),
+        encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 10, 1, 2),
         scall(syscalls::SYSCALL_DEBUG_PRINT),
     ]);
     let mut vm = IVM::new(10_000);
@@ -901,7 +669,7 @@ fn zk_field_results_cannot_reach_public_syscall_sinks() {
     vm.load_program(&program).unwrap();
     let error = vm
         .run()
-        .expect_err("field-derived secret must not reach a public syscall");
+        .expect_err("arithmetic-derived secret must not reach a public syscall");
     assert!(matches!(error, VMError::PrivacyViolation));
 }
 #[test]
@@ -954,35 +722,6 @@ fn private_stack_envelope_cannot_be_published_through_a_public_pointer() {
         !vm.registers.tag(10),
         "the pointer register itself is public"
     );
-}
-#[test]
-fn signature_opcodes_reject_private_tlv_header_payload_and_checksum_bytes() {
-    for opcode in [
-        instruction::wide::crypto::ED25519BATCHVERIFY,
-        instruction::wide::crypto::ED25519VERIFY,
-        instruction::wide::crypto::ECDSAVERIFY,
-        instruction::wide::crypto::DILITHIUMVERIFY,
-    ] {
-        for private_offset in [0_u64, 7, 7 + 32] {
-            let program = private_store_then(encoding::wide::encode_rr(opcode, 3, 1, 2));
-            let mut vm = IVM::new(100_000);
-            vm.load_program(&program)
-                .expect("load signature privacy fixture");
-            let pointer = Memory::STACK_START;
-            let envelope = blob_tlv(&[0_u8; 32]);
-            vm.store_bytes(pointer, &envelope)
-                .expect("seed public signature TLV");
-            mark_one_private_stack_byte(&mut vm, pointer + private_offset);
-            for register in [1, 2, 3] {
-                vm.set_register(register, pointer);
-                vm.registers.set_tag(register, false);
-            }
-            assert!(
-                matches!(vm.run(), Err(VMError::PrivacyViolation)),
-                "signature opcode {opcode:#x} converted private TLV bytes at offset {private_offset} into a public verification result"
-            );
-        }
-    }
 }
 #[test]
 fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {

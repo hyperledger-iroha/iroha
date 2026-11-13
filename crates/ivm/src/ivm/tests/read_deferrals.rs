@@ -170,62 +170,6 @@ fn staged_numeric_envelope_reads_keep_operational_errors_and_fault_semantics() {
 }
 
 #[test]
-fn signature_opcodes_never_publish_false_on_preflight_or_validation_read_refusal() {
-    let row_bytes = std::mem::size_of::<crate::AccessRange>();
-    for opcode in [
-        instruction::wide::crypto::ED25519VERIFY,
-        instruction::wide::crypto::ECDSAVERIFY,
-        instruction::wide::crypto::DILITHIUMVERIFY,
-    ] {
-        for prior_reads in [0, 3] {
-            let (mut vm, budget) = funded();
-            let tlv = empty_blob_tlv();
-            vm.memory.preload_input(0, &tlv).unwrap();
-            let instruction = crate::encoding::wide::encode_rr(opcode, 12, 10, 11);
-            let program = [instruction, crate::encoding::wide::encode_halt()]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect::<Vec<_>>();
-            vm.load_code(&program).unwrap();
-            for register in [10, 11, 12] {
-                vm.set_register(register, Memory::INPUT_START);
-            }
-            // Keep the preceding invocation owner alive so run's mandatory
-            // replacement shell cannot refund credit intended for read rows.
-            let previous_log = vm.proof_register_log_handle().unwrap();
-            let shell = zk::SharedRegLog::allocation_layout().size();
-            let base = budget.reserved_bytes();
-            for _ in 0..prior_reads {
-                vm.memory.load_u8(Memory::OUTPUT_START).unwrap();
-            }
-            budget.set_limit_bytes(base + shell + 4 * row_bytes);
-            assert_read_capacity_refusal(vm.run(), 8, &budget);
-            assert_eq!(
-                vm.register(12),
-                Memory::INPUT_START,
-                "no verification decision published"
-            );
-            assert_eq!(vm.pc, 0);
-            assert_eq!(budget.reserved_bytes(), base + shell + 4 * row_bytes);
-            drop(previous_log);
-            assert_eq!(budget.reserved_bytes(), base + 4 * row_bytes);
-            // A separate adequately funded attempt retains the existing false
-            // result for malformed public signature/key payloads.
-            let mut ordinary = quiet_vm(1_000_000);
-            ordinary.memory.preload_input(0, &tlv).unwrap();
-            ordinary.load_code(&program).unwrap();
-            for register in [10, 11, 12] {
-                ordinary.set_register(register, Memory::INPUT_START);
-            }
-            ordinary.run().unwrap();
-            assert_eq!(ordinary.register(12), 0);
-            drop(vm);
-            assert_eq!(budget.reserved_bytes(), 0);
-        }
-    }
-}
-
-#[test]
 fn input_cursor_refusal_does_not_publish_a_partial_prefix_or_overwrite_preloaded_tlvs() {
     let row = std::mem::size_of::<crate::AccessRange>();
     let tlv = empty_blob_tlv();
@@ -419,46 +363,4 @@ fn failed_cold_prepared_load_drops_its_original_pool_before_fresh_owner_retry() 
     );
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
-}
-
-#[test]
-fn batch_signature_opcode_keeps_both_output_registers_on_read_refusal() {
-    let row = std::mem::size_of::<crate::AccessRange>();
-    for prior_reads in [1, 3] {
-        let (mut vm, budget) = funded();
-        let tlv = empty_blob_tlv();
-        vm.memory.preload_input(0, &tlv).unwrap();
-        let instruction = crate::encoding::wide::encode_rr(
-            instruction::wide::crypto::ED25519BATCHVERIFY,
-            12,
-            10,
-            11,
-        );
-        let program = [instruction, crate::encoding::wide::encode_halt()]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>();
-        vm.load_code(&program).unwrap();
-        vm.set_register(10, Memory::INPUT_START);
-        vm.set_register(11, 91);
-        vm.set_register(12, 92);
-        for _ in 0..prior_reads {
-            vm.memory.load_u8(Memory::OUTPUT_START).unwrap();
-        }
-        let occupied = budget.reserved_bytes();
-        budget.set_limit_bytes(occupied);
-        assert_operational(vm.run());
-        assert_eq!(vm.register(11), 91);
-        assert_eq!(vm.register(12), 92);
-        assert_eq!(vm.pc, 0);
-        assert_eq!(budget.reserved_bytes(), occupied);
-        // Reinitializing an attempt with sufficient credit keeps the existing
-        // malformed-public-request result and failure-index convention.
-        budget.set_limit_bytes(occupied + 12 * row);
-        vm.load_code(&program).unwrap();
-        vm.set_gas_limit(1_000_000);
-        vm.run().unwrap();
-        assert_eq!(vm.register(11), 0);
-        assert_eq!(vm.register(12), 0);
-    }
 }

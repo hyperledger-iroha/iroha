@@ -83,7 +83,6 @@ fn make_header() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 4,
         max_cycles: 1_000_000,
         abi_version: 1,
     }
@@ -92,10 +91,7 @@ fn make_header() -> Vec<u8> {
 fn scall_program(syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("syscall id fits in u8"),
-        )
+        &encoding::wide::encode_scall(syscall)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -157,10 +153,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("syscall id fits in u8"),
-        )])
+        .chain([encoding::wide::encode_scall(syscall)])
         .collect()
 }
 /// Effects the program's syscalls queue on a detached `CoreHost`.

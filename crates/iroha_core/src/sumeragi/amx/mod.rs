@@ -76,7 +76,7 @@ use crate::{
 };
 
 /// Retain decoder refusal outside every deterministic instruction/result carrier.
-fn amx_error(error: &AmxError, transaction: &mut StateTransaction<'_, '_>) -> Error {
+pub(crate) fn amx_error(error: &AmxError, transaction: &mut StateTransaction<'_, '_>) -> Error {
     if let Some(resource) = classified_decode_refusal(error)
         && !cfg!(all(test, sumeragi_core_mutation = "HC19"))
     {
@@ -205,6 +205,19 @@ impl Execute for BeginAmxV1 {
             .sumeragi()
             .block_cadence_ms
             .get();
+        if crate::runtime::native_amx_capture::enabled(
+            state_transaction.world.runtime_selection.canonical(),
+        )
+        .map_err(|reason| Error::InvariantViolation(reason.into()))?
+        {
+            return captured::begin(
+                state_transaction,
+                &self.transaction,
+                height,
+                block_time_ms,
+                cadence_ms,
+            );
+        }
         let record = state_transaction
             .world
             .sumeragi_amx
@@ -233,6 +246,13 @@ impl Execute for ExpireAmxV1 {
                     state_transaction,
                 )
             })?;
+        if crate::runtime::native_amx_capture::enabled(
+            state_transaction.world.runtime_selection.canonical(),
+        )
+        .map_err(|reason| Error::InvariantViolation(reason.into()))?
+        {
+            return captured::expire(state_transaction, self.tx, height, block_time_ms);
+        }
         let decision = state_transaction
             .world
             .sumeragi_amx
@@ -281,6 +301,13 @@ pub(crate) fn execute_relay_prepared_original(
     if !known {
         return Ok(());
     }
+    if crate::runtime::native_amx_capture::enabled(
+        state_transaction.world.runtime_selection.canonical(),
+    )
+    .map_err(|reason| Error::InvariantViolation(reason.into()))?
+    {
+        return captured::relay(state_transaction, &instruction.proof, height, block_time_ms);
+    }
     let outcome = state_transaction
         .world
         .sumeragi_amx
@@ -300,6 +327,10 @@ impl Execute for RelayAmxHandoffV1 {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        crate::runtime::native_amx_capture::guard_global_handoff(
+            state_transaction,
+            self.dataspace,
+        )?;
         state_transaction
             .world
             .sumeragi_amx
@@ -347,6 +378,9 @@ impl StateBlock<'_> {
         {
             return Ok(0);
         }
+        let captures =
+            crate::runtime::native_amx_capture::prepare_deadline(self, height, block_time_ms)
+                .map_err(crate::runtime::native_amx_capture::Error::into_amx)?;
         let outcome = self
             .world
             .sumeragi_amx
@@ -354,6 +388,10 @@ impl StateBlock<'_> {
             .expire(height, block_time_ms, |decision| {
                 record(&AmxRecordV1::Decision(decision))
             });
+        let outcome = outcome.map(|decisions| {
+            captures.publish(self);
+            decisions
+        });
         #[cfg(all(test, sumeragi_core_mutation = "HC161"))]
         {
             outcome.map_err(|error| AmxError::Encoding(error.to_string()))
@@ -370,6 +408,7 @@ mod proof_tests;
 #[cfg(test)]
 mod tests;
 
+mod captured;
 mod native;
 pub(crate) use native::VerifiedAmxMovement;
 pub(crate) use native::admit_world_state;

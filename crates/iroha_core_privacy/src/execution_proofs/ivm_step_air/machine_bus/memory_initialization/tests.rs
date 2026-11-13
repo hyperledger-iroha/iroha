@@ -6,12 +6,11 @@ use packet::{AFTER, BEFORE, ENABLED, Event, Space};
 const CELL: u64 = ivm::Memory::STACK_START + 256;
 const BYTES: [u8; 16] = [0x5a; 16];
 
-fn phase(address: u64, length: usize, tracked: bool) -> WritePhase {
+fn phase(address: u64, tracked: bool) -> WritePhase {
     WritePhase::from_fixed_input(
         7,
         19,
         address,
-        length,
         40,
         41,
         tracked.then_some(FrameRegions {
@@ -64,17 +63,17 @@ impl Fixture {
             f.log[..4].copy_from_slice(&[
                 F(p.address & 0xffff_ffff),
                 F(p.address >> 32),
-                F(p.length as u64),
+                F(8),
                 F::ONE,
             ]);
-            for (limb, pair) in BYTES[..p.length].as_chunks::<2>().0.iter().enumerate() {
+            for (limb, pair) in BYTES[..8].as_chunks::<2>().0.iter().enumerate() {
                 f.log[4 + limb] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }
         if active {
             // Byte-set oracle: does not evaluate the AIR's packed-field formula.
             let mut bytes = core::array::from_fn::<_, 16, _>(|i| old & (1 << i) != 0);
-            for address in p.address..p.address + p.length as u64 {
+            for address in p.address..p.address + 8 {
                 bytes[(address % 16) as usize] = true;
             }
             let after = bytes
@@ -119,11 +118,10 @@ impl Fixture {
 }
 
 #[test]
-fn initialization_updates_exact_half_and_wide_byte_sets_without_clearing_prior_bits() {
+fn initialization_updates_exact_half_byte_sets_without_clearing_prior_bits() {
     for old in [0, 1, 0x80, 0xff, 0xff00, 0xaaaa, 0x5555, u16::MAX] {
-        for (address, length, added) in [(CELL, 8, 0xff), (CELL + 8, 8, 0xff00), (CELL, 16, 0xffff)]
-        {
-            let f = Fixture::new(phase(address, length, true), old, true);
+        for (address, added) in [(CELL, 0xff), (CELL + 8, 0xff00)] {
+            let f = Fixture::new(phase(address, true), old, true);
             assert!(f.accepts());
             assert_eq!(f.initialized[BEFORE], F(u64::from(old)));
             assert_eq!(f.initialized[AFTER], F(u64::from(old | added)));
@@ -135,7 +133,7 @@ fn initialization_updates_exact_half_and_wide_byte_sets_without_clearing_prior_b
         (ivm::Memory::HEAP_START + 8, 0xff00),
         (ivm::Memory::HEAP_START + 16, 0xff),
     ] {
-        let f = Fixture::new(phase(address, 8, true), 0, true);
+        let f = Fixture::new(phase(address, true), 0, true);
         assert!(f.accepts());
         assert_eq!(f.initialized[AFTER], F(wanted));
     }
@@ -143,7 +141,7 @@ fn initialization_updates_exact_half_and_wide_byte_sets_without_clearing_prior_b
 
 #[test]
 fn every_initialization_field_and_prior_bit_mutation_is_rejected() {
-    let f = Fixture::new(phase(CELL + 8, 8, true), 0x5555, true);
+    let f = Fixture::new(phase(CELL + 8, true), 0x5555, true);
     assert!(f.accepts());
     for i in 0..WIDTH {
         let mut bad = f.clone();
@@ -162,7 +160,7 @@ fn every_initialization_field_and_prior_bit_mutation_is_rejected() {
 
 #[test]
 fn memory_cell_log_half_and_frame_generation_cannot_be_transplanted() {
-    let f = Fixture::new(phase(CELL + 8, 8, true), 0x81, true);
+    let f = Fixture::new(phase(CELL + 8, true), 0x81, true);
     for i in 0..memory_store::WRITE_LOG_WIDTH {
         let mut bad = f.clone();
         bad.log[i] = bad.log[i].add(F::ONE);
@@ -204,7 +202,7 @@ fn memory_cell_log_half_and_frame_generation_cannot_be_transplanted() {
     }
     // A correlated wrong-half initialized value and byte witness still fail the
     // log address linkage; independent tuple validity cannot substitute a store.
-    let mut bad = Fixture::new(phase(CELL, 8, true), 0x81, true);
+    let mut bad = Fixture::new(phase(CELL, true), 0x81, true);
     bad.memory = f.memory;
     bad.log = f.log;
     assert!(!bad.accepts());
@@ -217,7 +215,7 @@ fn refused_or_untracked_stores_cannot_emit_or_disclose_initialization() {
             if tracked && committed {
                 continue;
             }
-            let f = Fixture::new(phase(CELL, 8, tracked), 0xffff, committed);
+            let f = Fixture::new(phase(CELL, tracked), 0xffff, committed);
             assert!(f.accepts());
             assert_eq!(f.initialized, [F::ZERO; packet::WIDTH]);
             assert_eq!(f.row, [F::ZERO; WIDTH]);
@@ -233,7 +231,7 @@ fn refused_or_untracked_stores_cannot_emit_or_disclose_initialization() {
             }
             if !committed {
                 let mut bad = f;
-                bad.initialized = Fixture::new(phase(CELL, 8, true), 0, true).initialized;
+                bad.initialized = Fixture::new(phase(CELL, true), 0, true).initialized;
                 assert!(!bad.accepts(), "refused STORE must not initialize a result");
             }
         }
@@ -241,23 +239,27 @@ fn refused_or_untracked_stores_cannot_emit_or_disclose_initialization() {
 }
 
 #[test]
-fn adjacent_disjoint_regions_share_cell_bits_but_crossing_writes_are_rejected() {
+fn adjacent_disjoint_regions_share_cell_bits_and_malformed_descriptors_are_rejected() {
     let regions = FrameRegions {
         stack: [CELL - 8, CELL + 8],
         results: [CELL + 8, CELL + 16],
     };
-    let make = |address, length| {
-        WritePhase::from_fixed_input(7, 19, address, length, 40, 41, Some(regions))
-    };
-    let a = Fixture::new(make(CELL, 8).unwrap(), 0, true);
-    let b = Fixture::new(make(CELL + 8, 8).unwrap(), 0xff, true);
+    let make = |address| WritePhase::from_fixed_input(7, 19, address, 40, 41, Some(regions));
+    let a = Fixture::new(make(CELL).unwrap(), 0, true);
+    let b = Fixture::new(make(CELL + 8).unwrap(), 0xff, true);
     assert!(a.accepts() && b.accepts());
     assert_eq!(a.initialized[AFTER], b.initialized[BEFORE]);
     assert_eq!(b.initialized[AFTER], F(0xffff));
-    assert!(
-        make(CELL, 16).is_none(),
-        "crossing disjoint owners is not one permitted write"
-    );
+    // Each eight-byte write belongs to exactly one owner or to neither.
+    for (address, tracked) in [
+        (CELL - 16, false),
+        (CELL - 8, true),
+        (CELL, true),
+        (CELL + 8, true),
+        (CELL + 16, false),
+    ] {
+        assert_eq!(make(address).unwrap().tracked, tracked);
+    }
     for invalid in [
         FrameRegions {
             stack: [CELL + 1, CELL + 16],
@@ -272,23 +274,18 @@ fn adjacent_disjoint_regions_share_cell_bits_but_crossing_writes_are_rejected() 
             ..regions
         },
     ] {
-        assert!(WritePhase::from_fixed_input(7, 19, CELL, 8, 40, 41, Some(invalid)).is_none());
+        assert!(WritePhase::from_fixed_input(7, 19, CELL, 40, 41, Some(invalid)).is_none());
     }
-    assert!(WritePhase::from_fixed_input(7, 19, CELL + 1, 8, 40, 41, None).is_none());
-    assert!(WritePhase::from_fixed_input(7, 19, CELL, 4, 40, 41, None).is_none());
-    assert!(WritePhase::from_fixed_input(7, 19, CELL, 8, 41, 41, None).is_none());
-    assert!(WritePhase::from_fixed_input(7, 19, 1 << 36, 8, 40, 41, None).is_none());
+    assert!(WritePhase::from_fixed_input(7, 19, CELL + 1, 40, 41, None).is_none());
+    assert!(WritePhase::from_fixed_input(7, 19, CELL + 4, 40, 41, None).is_none());
+    assert!(WritePhase::from_fixed_input(7, 19, CELL, 41, 41, None).is_none());
+    assert!(WritePhase::from_fixed_input(7, 19, 1 << 36, 40, 41, None).is_none());
 }
 
 #[test]
 fn initialization_degree_geometry_and_missing_lifecycle_authority_are_explicit() {
     let total = WIDTH + 2 * packet::WIDTH + memory_store::WRITE_LOG_WIDTH;
-    for p in [
-        phase(CELL, 8, true),
-        phase(CELL + 8, 8, true),
-        phase(CELL, 16, true),
-        phase(CELL, 8, false),
-    ] {
+    for p in [phase(CELL, true), phase(CELL + 8, true), phase(CELL, false)] {
         let degree = measured_maximum_affine_degree_v1(
             [71; 32],
             [total, 0, 0, 0, 0],
@@ -321,8 +318,8 @@ fn initialization_degree_geometry_and_missing_lifecycle_authority_are_explicit()
     );
     // No permission, first-state or frame-generation authority is fabricated.
     // The existing bus/lifecycle relation must reject counterfeit old state.
-    let a = Fixture::new(phase(CELL, 8, true), 0, true);
-    let b = Fixture::new(phase(CELL, 8, true), 0xffff, true);
+    let a = Fixture::new(phase(CELL, true), 0, true);
+    let b = Fixture::new(phase(CELL, true), 0xffff, true);
     assert!(a.accepts() && b.accepts());
     assert_ne!(a.initialized[BEFORE], b.initialized[BEFORE]);
     assert_eq!(a.memory[ENABLED], F::ONE);
@@ -331,7 +328,7 @@ fn initialization_degree_geometry_and_missing_lifecycle_authority_are_explicit()
 #[test]
 fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
     use ivm::{encoding::wide as enc, instruction::wide};
-    let p = phase(CELL + 8, 8, true);
+    let p = phase(CELL + 8, true);
     let mut f = Fixture::new(p, 0x1080, true);
     let value = u64::from_le_bytes([0x5a; 8]);
     let mut after = [0x33; 16];
@@ -341,7 +338,7 @@ fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
     for (i, pair) in after.as_chunks::<2>().0.iter().enumerate() {
         f.memory[AFTER + i] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
     }
-    let mut reads = [[F::ZERO; packet::WIDTH]; 3];
+    let mut reads = [[F::ZERO; packet::WIDTH]; 2];
     for (slot, index, value) in [(0, 3, CELL + 8), (1, 1, value)] {
         let mut bytes = [0; 16];
         bytes[..8].copy_from_slice(&value.to_le_bytes());
@@ -362,9 +359,9 @@ fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
         enc::encode_store(wide::memory::STORE64, 3, 1, 0),
         CELL + 8,
         p.vm,
-        [37, 38, 39, 40],
+        [37, 38, 40],
         (100, 0, 0, CELL + 64, 0),
-        (true, true, false),
+        (true, false),
         memory_store::MemoryOutcome::Ready,
     )
     .unwrap();
@@ -378,7 +375,7 @@ fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
         &mut store_residues,
         store,
         &memory_store::witness(0x1234, true),
-        [&reads[0], &reads[1], &reads[2]],
+        [&reads[0], &reads[1]],
         &f.memory,
         &f.log,
         &control,

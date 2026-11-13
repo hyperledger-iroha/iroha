@@ -122,10 +122,7 @@ fn pending_calls_control_unknown_syscalls_and_new_blocks_keep_all_original_zero_
         encode_nop(),
         encoding::wide::encode_halt(),
         encoding::wide::encode_offset24(instruction::wide::control::JMP, 1),
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_STATE_GET as u8,
-        ),
+        encoding::wide::encode_scall(syscalls::SYSCALL_STATE_GET),
         0xff00_0000,
     ] {
         let (mut block, mut code, fixups) = seed();

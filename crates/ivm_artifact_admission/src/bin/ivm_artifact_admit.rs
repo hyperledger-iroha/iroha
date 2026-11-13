@@ -8,7 +8,11 @@
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
 use iroha_fs::{OwnerDirectory, PublishMode};
-use ivm_artifact_admission::{MAX_CONTRACT_IMAGE_BYTES, verify_contract_artifact};
+#[cfg(test)]
+use ivm_artifact_admission::verify_contract_artifact;
+use ivm_artifact_admission::{
+    MAX_CONTRACT_IMAGE_BYTES, verify_contract_artifact_with_declared_profile,
+};
 
 const USAGE: &str = "Usage: ivm_artifact_admit --code-file <artifact.to> --out <absent-manifest.json>\n\
                     Admit one complete V1 contract with the canonical verifier and publish its\n\
@@ -61,7 +65,7 @@ fn admit(inputs: &Inputs) -> Result<(), String> {
         .ok_or("complete contract artifact bound cannot be represented on this host")?;
     let artifact = iroha_fs::read_regular(&inputs.code_file, maximum)
         .map_err(|error| format!("cannot retain contract input: {error}"))?;
-    let verified = verify_contract_artifact(&artifact)
+    let verified = verify_contract_artifact_with_declared_profile(&artifact)
         .map_err(|error| format!("contract admission failed: {error}"))?;
     let manifest = norito::json::to_json_pretty(&verified.manifest)
         .map_err(|error| format!("cannot encode canonical manifest: {error}"))?;

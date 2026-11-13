@@ -47,18 +47,22 @@ fn test_jumps_and_branches() {
     vm2.set_register(4, 12);
     let prog = assemble_words(&[
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 0, 1),
-        encoding::wide::encode_rr(instruction::wide::control::JR, 4, 0, 0),
+        encoding::wide::encode_ri(instruction::wide::control::JALR, 2, 4, 0),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 0, 2),
         HALT_WORD,
     ]);
     vm2.load_program(&prog).unwrap();
-    vm2.run().expect("JR execution failed");
+    vm2.run().expect("JALR execution failed");
     assert_eq!(
         vm2.register(3),
         1,
         "x3 should remain 1 (second addi skipped)"
     );
-    assert_eq!(vm2.register(2), 0, "JR should not set link register");
+    assert_eq!(
+        vm2.register(2),
+        0x00000008,
+        "x2 should contain link address (8)"
+    );
     // 3. Test BEQ and BNE:
     // If x1 == x2, skip the increment; otherwise increment.
     let mut vm3 = IVM::new(u64::MAX);

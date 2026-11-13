@@ -6,7 +6,6 @@ fn artifact_predecode_uses_header_version() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -32,7 +31,6 @@ fn artifact_predecode_rejects_retired_header() {
         version_major: 1,
         version_minor: 0,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     }

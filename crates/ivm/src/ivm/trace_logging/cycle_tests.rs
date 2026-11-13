@@ -40,7 +40,9 @@ fn loaded(original: Option<&AllocationBudget>, words: &[u32], max_cycles: u64) -
 // public row/change layouts, not a guessed tuple or allocator capacity.
 fn delta_bytes(cycles: usize) -> usize {
     let mut delta = zk::DeltaTraceLog::new(None);
-    delta.prepare_batch(cycles, 256, 0, None).unwrap();
+    delta
+        .prepare_batch(cycles, crate::parallel::REGISTER_COUNT, 0, None)
+        .unwrap();
     delta.allocated_bytes().unwrap()
 }
 fn allowance(cycles: u64) -> VmCycleBudget {

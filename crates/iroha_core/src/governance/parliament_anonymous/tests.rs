@@ -31,6 +31,257 @@ fn certified() -> Driver {
     driver
 }
 
+#[test]
+fn restore_height_bounds_every_realized_lifecycle_fact() {
+    let driver = certified();
+    let height = driver.height;
+    assert_eq!(driver.state.validate_restored_height_v1(height), Ok(()));
+    assert_eq!(
+        driver.state.validate_restored_height_v1(height - 1),
+        Err(AnonymousParliamentErrorV1::Restore { field: "height" })
+    );
+    // A single forged future fact must be caught even if another copy of the fact, such
+    // as the certificate's result, still names the original height.
+    macro_rules! future {
+        ($state:ident, $field:expr) => {{
+            let mut $state = driver.state.clone();
+            $field = height + 1;
+            assert_eq!(
+                $state.validate_restored_height_v1(height),
+                Err(AnonymousParliamentErrorV1::Restore { field: "height" }),
+                stringify!($field),
+            );
+            assert_eq!($state.validate_restored_height_v1(height + 1), Ok(()));
+        }};
+    }
+    future!(state, state.qualification.started.as_mut().unwrap().height);
+    future!(state, state.qualification.ended.as_mut().unwrap().height);
+    future!(state, state.generations[0].request_height);
+    future!(state, state.generations[0].slot);
+    let mut future_draw = driver.state.clone();
+    let election::AnonymousGenerationStatusV1::Drawn(draw) = &mut future_draw.generations[0].status
+    else {
+        panic!("certified generation was drawn")
+    };
+    draw.at.height = height + 1;
+    assert_eq!(
+        future_draw.validate_restored_height_v1(height),
+        Err(AnonymousParliamentErrorV1::Restore { field: "height" })
+    );
+    future!(
+        state,
+        state.generations[0].elections[0].request.request_height
+    );
+    future!(
+        state,
+        state.generations[0].elections[0].request.pulse_height
+    );
+    future!(
+        state,
+        state.generations[0].elections[0]
+            .closed
+            .as_mut()
+            .unwrap()
+            .at
+            .height
+    );
+    future!(
+        state,
+        state
+            .bodies
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .sealed_at
+            .height
+    );
+    future!(
+        state,
+        state
+            .bodies
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .sealed
+            .sortition_request
+            .request_height
+    );
+    future!(
+        state,
+        state
+            .bodies
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .sealed
+            .sortition_request
+            .pulse_height
+    );
+    future!(
+        state,
+        state
+            .bodies
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .phases[0]
+            .entered_at
+            .height
+    );
+    future!(
+        state,
+        state
+            .bodies
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .finding
+            .as_mut()
+            .unwrap()
+            .concluded_at
+            .as_mut()
+            .unwrap()
+            .height
+    );
+    future!(
+        state,
+        state
+            .results
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .result_height
+    );
+    future!(
+        state,
+        state
+            .results
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .sealed
+            .sortition_request
+            .request_height
+    );
+    future!(
+        state,
+        state
+            .results
+            .get_mut(&ParliamentBody::RulesCommittee)
+            .unwrap()
+            .sealed
+            .sortition_request
+            .pulse_height
+    );
+    future!(
+        state,
+        state.certificate.as_mut().unwrap().body_bindings[0].result_height
+    );
+
+    let original = driver.state.results[&ParliamentBody::PolicyJury]
+        .ballot()
+        .unwrap()
+        .closure;
+    for field in ["opening", "casting", "closure"] {
+        let mut closure = original;
+        match field {
+            "opening" => closure.opening_anchor.height = height + 1,
+            "casting" => closure.casting_clock_height = height + 1,
+            _ => closure.closure_anchor.height = height + 1,
+        }
+        for owner in ["result", "certificate", "rejection", "confirmation"] {
+            let mut state = driver.state.clone();
+            match owner {
+                "result" => {
+                    let binding = state.results.get_mut(&ParliamentBody::PolicyJury).unwrap();
+                    let AnonymousBodyResultV1::Ballot(ballot) = &mut binding.result else {
+                        panic!("binding jury has a ballot")
+                    };
+                    ballot.closure = closure;
+                }
+                "certificate" => {
+                    let binding = state
+                        .certificate
+                        .as_mut()
+                        .unwrap()
+                        .body_bindings
+                        .iter_mut()
+                        .find(|binding| binding.sealed.body == ParliamentBody::PolicyJury)
+                        .unwrap();
+                    let AnonymousBodyResultV1::Ballot(ballot) = &mut binding.result else {
+                        panic!("binding jury has a ballot")
+                    };
+                    ballot.closure = closure;
+                }
+                "rejection" => {
+                    state.rejection = Some(AnonymousAttemptRejectionV1::Ballot(Box::new(closure)))
+                }
+                _ => {
+                    state.rejection = Some(
+                        AnonymousAttemptRejectionV1::ConfirmationCapacityUnavailable(Box::new(
+                            closure,
+                        )),
+                    )
+                }
+            }
+            assert_eq!(
+                state.validate_restored_height_v1(height),
+                Err(AnonymousParliamentErrorV1::Restore { field: "height" }),
+                "{owner} {field}"
+            );
+        }
+    }
+    for rejection in [
+        AnonymousAttemptRejectionV1::PublicFinding(AnonymousPublicFindingFailureV1 {
+            body: ParliamentBody::RulesCommittee,
+            kind: AnonymousPublicFindingFailureKindV1::WindowExpired,
+            at: test_driver::anchor(height + 1, 0, driver.now_ms),
+        }),
+        AnonymousAttemptRejectionV1::SortitionExhausted(AnonymousSortitionExhaustionV1 {
+            body: ParliamentBody::PolicyJury,
+            kind: election::AnonymousNoRosterKindV1::InsufficientRoster,
+            at: test_driver::anchor(height + 1, 0, driver.now_ms),
+        }),
+    ] {
+        let mut state = driver.state.clone();
+        state.rejection = Some(rejection);
+        assert_eq!(
+            state.validate_restored_height_v1(height),
+            Err(AnonymousParliamentErrorV1::Restore { field: "height" })
+        );
+    }
+    let mut state = driver.state.clone();
+    state.execution = Some(AnonymousExecutionV1 {
+        at: test_driver::anchor(height + 1, 0, driver.now_ms),
+        outcome: AnonymousExecutionOutcomeV1::Enacted,
+    });
+    assert_eq!(
+        state.validate_restored_height_v1(height),
+        Err(AnonymousParliamentErrorV1::Restore { field: "height" })
+    );
+}
+
+#[test]
+fn restore_height_allows_pending_slots_and_deadlines() {
+    let mut driver = Driver::new(RiskTierV1::Standard, 40);
+    driver.block(1);
+    assert!(driver.state.end_qualification_due_ms().unwrap() > driver.now_ms);
+    assert_eq!(
+        driver.state.validate_restored_height_v1(driver.height),
+        Ok(())
+    );
+    driver.step();
+    driver.register_initial();
+    assert!(driver.state.generations[0].slot > driver.height);
+    assert_eq!(
+        driver.state.validate_restored_height_v1(driver.height),
+        Ok(())
+    );
+    let registered_height = driver.height;
+    driver.advance_to_slot();
+    assert_eq!(
+        driver.state.validate_restored_height_v1(registered_height),
+        Err(AnonymousParliamentErrorV1::Restore { field: "height" })
+    );
+    assert_eq!(
+        driver.state.validate_restored_height_v1(driver.height),
+        Ok(())
+    );
+}
+
 /// An attempt whose narrowly approving Policy Jury admitted a Confirmation Jury, now
 /// sealed and in Reflection.
 fn at_confirmation_reflection() -> Driver {

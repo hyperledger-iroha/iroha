@@ -17,7 +17,7 @@ fn fi_link_revision_read_is_available_to_views_and_effectful_entrypoints() {
             .map(|v| u32::from_le_bytes(*v))
             .filter(|w| {
                 instruction::wide::opcode(*w) == instruction::wide::system::SYSTEM
-                    && encoding::wide::decode_syscallx(*w)
+                    && encoding::wide::decode_scall(*w)
                         == syscalls::SYSCALL_ASSET_FI_LINK_REVISION
             })
             .count();

@@ -700,6 +700,11 @@ impl BallotBoardV1 {
         &self.purpose
     }
 
+    /// The proposal content identifier fixed by the original seal and recorded at closure.
+    pub const fn proposal_content_id(&self) -> ProposalContentId {
+        self.proposal_content_id
+    }
+
     /// The 64-byte roster root the body instance was derived from.
     pub fn roster_root(&self) -> &Digest512 {
         &self.roster_root

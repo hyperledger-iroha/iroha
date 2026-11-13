@@ -188,6 +188,27 @@ pub fn write_canonical_base64_json_to<T: NoritoSerialize>(
     }
     output.push('"')
 }
+/// Stream a Norito frame using the active layout flags as padded base64 JSON.
+///
+/// This preserves [`crate::to_bytes`] output while retaining only a three-byte
+/// base64 carry. Serializer-internal scratch must be audited separately.
+#[doc(hidden)]
+pub fn write_frame_base64_json_to<T: NoritoSerialize>(
+    value: &T,
+    output: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    output.push('"')?;
+    {
+        let mut base64 = Base64Writer::new(output);
+        if crate::core::write_frame_to_writer(value, &mut base64).is_err() {
+            return Err(base64
+                .sink_error()
+                .unwrap_or(BoundedJsonError::LengthMismatch));
+        }
+        base64.finish()?;
+    }
+    output.push('"')
+}
 /// Unbounded-destination counterpart of [`write_canonical_base64_json_to`].
 ///
 /// This keeps ordinary JSON bytes identical while avoiding a second
@@ -246,6 +267,37 @@ mod tests {
         let mut actual = String::new();
         write_bare_norito_base64_json(&value, &mut actual);
         assert_eq!(actual, expected);
+    }
+    #[test]
+    fn frame_base64_json_matches_buffered_frame_and_preserves_sink_errors() {
+        struct Framed<'a>(&'a Vec<u64>);
+        impl super::super::JsonSerialize for Framed<'_> {
+            fn json_serialize(&self, out: &mut String) {
+                write_base64_json(&crate::to_bytes(self.0).unwrap(), out);
+            }
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn JsonWriteSink,
+            ) -> Result<(), BoundedJsonError> {
+                write_frame_base64_json_to(self.0, out)
+            }
+        }
+        let value = vec![1_u64, 255, u64::MAX];
+        for flags in [
+            crate::core::default_encode_flags(),
+            crate::core::default_encode_flags() ^ crate::core::header_flags::COMPACT_LEN,
+        ] {
+            let _flags = crate::core::DecodeFlagsGuard::enter(flags);
+            let expected = super::super::to_json(&Framed(&value)).unwrap();
+            assert_eq!(
+                super::super::to_json_bounded(&Framed(&value), expected.len()).unwrap(),
+                expected
+            );
+            assert_eq!(
+                super::super::to_json_bounded(&Framed(&value), expected.len() - 1),
+                Err(BoundedJsonError::BodyTooLarge)
+            );
+        }
     }
     struct CanonicalBase64<'a, T>(&'a T);
     impl<T: NoritoSerialize> super::super::JsonSerialize for CanonicalBase64<'_, T> {

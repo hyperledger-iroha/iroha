@@ -1,6 +1,7 @@
 use super::*;
 use crate::provider_ingest_outbox::{
     ProviderIngestCompletionStateV1, ProviderIngestDeliveryStateV1, ProviderIngestOutboxPolicyV1,
+    ProviderIngestRetryOutcomeV1,
 };
 use crate::{
     FinalizedProviderIngestError, NodeHandle,

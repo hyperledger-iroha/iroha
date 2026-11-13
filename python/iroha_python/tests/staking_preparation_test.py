@@ -1,11 +1,14 @@
 """Native preparation-frame parity and bounded one-dispatch observation transport."""
 
+import json
 import logging
+import struct
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import requests
+from norito.crc64 import crc64
 from norito.errors import (
     ChecksumMismatchError,
     LengthMismatchError,
@@ -48,6 +51,59 @@ def fixture(name="registration"):
         request_bytes,
         response_bytes,
     )
+
+
+REFUSED = "staking_preparation_refused"
+REASON = "Iroha invariant violation: no funded reward entitlement is available to claim"
+
+
+def error_envelope_contract():
+    """Rust-authored ``iroha_torii_shared::ErrorEnvelope`` frames binding the builder."""
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures/privacy/bootle_lantern_issuance_client_v1.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))["errors"]
+
+
+def _leb128(value):
+    out = bytearray()
+    while True:
+        byte, value = value & 0x7F, value >> 7
+        out.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(out)
+
+
+def _field(data):
+    return _leb128(len(data)) + data
+
+
+def _text(value):
+    encoded = value.encode("utf-8")
+    return _field(_leb128(len(encoded)) + encoded)
+
+
+def error_envelope_frame(code, message):
+    """``norito::encode_canonical(&ErrorEnvelope::new(code, message))``."""
+
+    framing = error_envelope_contract()["norito_envelope"]
+    payload = _text(code) + _text(message) + _field(b"\x00")
+    return (
+        b"NRT0\x00\x00"
+        + bytes.fromhex(framing["schema_hash_hex"])
+        + b"\x00"
+        + struct.pack("<QQ", len(payload), crc64(payload))
+        + bytes.fromhex(framing["flags_hex"])
+        + payload
+    )
+
+
+def json_error_envelope(code, message):
+    """``norito::json::to_json(&ErrorEnvelope::new(code, message))`` for escape-free text."""
+
+    return f'{{"code":"{code}","message":"{message}"}}'.encode()
 
 
 def client(url, network, *, timeout=3):
@@ -233,6 +289,72 @@ def test_transport_rejections_are_bounded_closed_and_never_replayed(kind):
             assert failure.value.staking_preparation_body == body
         if early:
             assert server["peer_closed"] and server["body_writes"] == 0
+
+
+def test_refusal_envelope_builder_reproduces_rust_authored_error_envelopes():
+    responses = error_envelope_contract()["responses"]
+    frames = [row for row in responses if row["media_type"] == "application/x-norito"]
+    assert len(frames) == 7
+    for row in frames:
+        assert error_envelope_frame(row["code"], row["code"]) == bytes.fromhex(row["body_hex"])
+    (json_row,) = [row for row in responses if row["media_type"] == "application/json"]
+    assert json_error_envelope(json_row["code"], json_row["code"]) == json_row["body_utf8"].encode()
+
+
+# Envelope classification is not a deadline control; a generous ceiling keeps
+# these cases independent of isolated-worker start-up time on a loaded host.
+ENVELOPE_CASE_TIMEOUT = 120
+
+
+@pytest.mark.parametrize("media_type", ["application/x-norito", "application/json"])
+def test_refusal_surfaces_typed_code_and_exact_reason_without_replay(media_type):
+    request, prepared, _, _ = fixture("claim")
+    body = (
+        error_envelope_frame(REFUSED, REASON)
+        if media_type == "application/x-norito"
+        else json_error_envelope(REFUSED, REASON)
+    )
+    headers = {"Content-Type": media_type, "x-iroha-reject-code": REFUSED}
+    with observation_server(body, status=409, headers=headers) as server:
+        torii = client(server["url"], prepared.network_id, timeout=ENVELOPE_CASE_TIMEOUT)
+        with pytest.raises(requests.HTTPError) as failure:
+            torii.prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+    error = failure.value
+    assert error.response.status_code == 409
+    assert error.staking_preparation_code == REFUSED
+    assert error.staking_preparation_message == REASON
+    assert error.staking_preparation_reject_code == REFUSED
+    assert error.staking_preparation_body == body
+    assert str(error) == f"staking preparation HTTP 409: {REFUSED}: {REASON}"
+
+
+@pytest.mark.parametrize("kind", ["corrupted_norito", "noncanonical_json", "foreign_media"])
+def test_error_bodies_that_are_not_canonical_envelopes_keep_the_generic_failure(kind):
+    request, prepared, _, _ = fixture()
+    body = error_envelope_frame(REFUSED, REASON)
+    media_type = "application/x-norito"
+    if kind == "corrupted_norito":
+        changed = bytearray(body)
+        changed[31] ^= 1
+        body = bytes(changed)
+    if kind == "noncanonical_json":
+        body = json_error_envelope(REFUSED, REASON) + b" "
+        media_type = "application/json"
+    if kind == "foreign_media":
+        media_type = "application/octet-stream"
+    headers = {"Content-Type": media_type, "x-iroha-reject-code": REFUSED}
+    with observation_server(body, status=409, headers=headers) as server:
+        torii = client(server["url"], prepared.network_id, timeout=ENVELOPE_CASE_TIMEOUT)
+        with pytest.raises(requests.HTTPError) as failure:
+            torii.prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+    error = failure.value
+    assert str(error) == "staking preparation HTTP 409"
+    assert error.staking_preparation_body == body
+    assert error.staking_preparation_code is None
+    assert error.staking_preparation_message is None
+    assert error.staking_preparation_reject_code == REFUSED
 
 
 def test_transport_refuses_missing_pin_before_dispatch_and_does_not_retry_transport_error():

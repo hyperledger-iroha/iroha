@@ -612,10 +612,7 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
         atoms: vec![StateValueAtomV1::Bool(true)],
     })
     .expect("canonical state value");
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_STATE_GET).expect("fixture value fits u8"),
-    );
+    let syscall = encoding::wide::encode_scall(ivm_sys::SYSCALL_STATE_GET);
     let program = build_authenticated_test_contract_program_with_states(
         &syscall.to_le_bytes(),
         0,

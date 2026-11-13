@@ -3047,6 +3047,17 @@ fn select_metal_device() -> Option<Device> {
     crate::metal_artifact::admitted_bundle().ok()?;
     Device::system_default().or_else(|| Device::all().into_iter().next())
 }
+/// Refuse an optimized-build Metal diagnostic compiled with debug assertions.
+///
+/// The refusal stays a runtime panic carrying the caller's diagnostic, so debug
+/// builds still compile and list the ignored test.
+#[cfg(all(test, debug_assertions))]
+fn require_optimized_build(message: &str) {
+    panic!("{message}");
+}
+/// Permit an optimized-build Metal diagnostic when debug assertions are compiled out.
+#[cfg(all(test, not(debug_assertions)))]
+fn require_optimized_build(_message: &str) {}
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
     let fanout_override = queue_fanout_override();
     let fanout = fanout_override.unwrap_or_else(|| default_queue_fanout(device));

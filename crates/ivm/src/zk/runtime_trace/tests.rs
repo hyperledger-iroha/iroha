@@ -24,7 +24,7 @@ fn logs(
         scope: Option<&iroha_allocation::AllocationScope<'_>>,
     ) {
         pcs.prepare(8, scope).unwrap();
-        deltas.prepare_batch(2, 256, 255, scope).unwrap();
+        deltas.prepare_batch(2, crate::parallel::REGISTER_COUNT, crate::parallel::REGISTER_COUNT - 1, scope).unwrap();
     }
     match original {
         Some(original) => original.with_deferred_refund_notifications(|scope| {
@@ -267,7 +267,7 @@ fn capture_retains_unobserved_capacity_without_consuming_source_batch() {
     let mut delta = DeltaTraceLog::new(Some(&original));
     original.with_deferred_refund_notifications(|scope| {
         pcs.prepare(19, Some(scope)).unwrap();
-        delta.prepare_batch(3, 256, 1, Some(scope)).unwrap();
+        delta.prepare_batch(3, crate::parallel::REGISTER_COUNT, 1, Some(scope)).unwrap();
     });
     let capture = RuntimeTraceCapture::try_capture(&pcs, &delta).unwrap();
     assert!(capture.pcs().is_empty());
@@ -276,11 +276,11 @@ fn capture_retains_unobserved_capacity_without_consuming_source_batch() {
     assert_eq!(capture.0.rows.capacity(), 4);
     assert_eq!(capture.0.changes.capacity(), 258);
     original.set_limit_bytes(0);
-    let mut registers = [0; 256];
+    let mut registers = [0; crate::parallel::REGISTER_COUNT];
     for pc in [4, 8, 12] {
         registers[7] = pc;
         pcs.record_reserved(pc);
-        delta.record_reserved(pc, registers, [false; 256]);
+        delta.record_reserved(pc, registers, [false; crate::parallel::REGISTER_COUNT]);
     }
     assert_eq!(delta.len(), 3);
     assert_eq!(capture.delta_len(), 0);

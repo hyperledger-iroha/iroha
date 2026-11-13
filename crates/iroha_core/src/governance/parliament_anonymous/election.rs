@@ -752,8 +752,12 @@ impl AnonymousParliamentAttemptStateV1 {
     /// Register the Confirmation Jury's first generation atomically with the narrow Policy
     /// Jury approval closed at `closure_anchor` (design §10): its snapshot is `eligible`
     /// less every sealed Policy Jury member. Returns `false`, changing nothing, when fewer
-    /// than three citizens remain or the redraw budget is spent: the terminal
-    /// `ConfirmationJuryCapacityUnavailable`.
+    /// than three citizens remain, the snapshot exceeds the V1 bounds or the redraw budget
+    /// is spent: the terminal `ConfirmationJuryCapacityUnavailable`.
+    ///
+    /// The registration runs inside a block-start closure, so a snapshot no sortition can
+    /// draw from is an objective lack of capacity that ends the attempt, never an error that
+    /// would abandon every block while the closure stays due.
     pub(super) fn register_confirmation(
         &mut self,
         network_id: &NetworkId,
@@ -761,7 +765,10 @@ impl AnonymousParliamentAttemptStateV1 {
         eligible: Vec<AccountId>,
     ) -> Result<bool, Error> {
         let candidates = self.exclude_policy_jury(eligible)?;
-        if candidates.len() < usize::from(MIN_SEALED_SEATS_V1) || !self.redraw_available()? {
+        if candidates.len() < usize::from(MIN_SEALED_SEATS_V1)
+            || check_snapshot(&candidates).is_err()
+            || !self.redraw_available()?
+        {
             return Ok(false);
         }
         let registration = self.register_generation(

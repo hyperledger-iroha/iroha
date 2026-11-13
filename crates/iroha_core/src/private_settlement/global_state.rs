@@ -20,7 +20,7 @@ use iroha_data_model::nexus::{
     PrivateSettlementNullifierKeyV1, PrivateSettlementOutputKeyV1,
     PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolKeyV1,
     PrivateSettlementPoolStateV1, decode_private_settlement_storage_key_v1,
-    encode_private_settlement_storage_key_v1,
+    encode_private_settlement_storage_key_v1, encode_private_settlement_storage_key_v1_to,
 };
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyNullifierV1;
@@ -178,6 +178,13 @@ macro_rules! impl_private_settlement_json_key_v1 {
             impl norito::json::JsonKeyCodec for $key {
                 fn encode_json_key(&self, out: &mut String) {
                     encode_private_settlement_storage_key_v1(self, out);
+                }
+
+                fn encode_json_key_to(
+                    &self,
+                    out: &mut dyn json::JsonWriteSink,
+                ) -> Result<(), json::BoundedJsonError> {
+                    encode_private_settlement_storage_key_v1_to(self, out)
                 }
 
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
@@ -1955,8 +1962,23 @@ pub mod tests {
     fn private_settlement_json_keys_require_the_exact_owner_and_uppercase_frame() {
         fn check<T>(value: &T)
         where
-            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + norito::json::JsonKeyCodec
+                + PartialEq,
         {
+            struct Key<'a, T>(&'a T);
+            impl<T: norito::json::JsonKeyCodec> norito::json::JsonSerialize for Key<'_, T> {
+                fn json_serialize(&self, out: &mut String) {
+                    self.0.encode_json_key(out);
+                }
+                fn json_serialize_to(
+                    &self,
+                    out: &mut dyn json::JsonWriteSink,
+                ) -> Result<(), json::BoundedJsonError> {
+                    self.0.encode_json_key_to(out)
+                }
+            }
             let bytes = norito::to_bytes(value).expect("key frame");
             let uppercase = hex::encode_upper(&bytes);
             let decoded: T =
@@ -1965,6 +1987,14 @@ pub mod tests {
             let mut encoded = String::new();
             encode_private_settlement_storage_key_v1(value, &mut encoded);
             assert_eq!(encoded, format!("\"{uppercase}\""));
+            assert_eq!(
+                json::to_json_bounded(&Key(value), encoded.len()).unwrap(),
+                encoded
+            );
+            assert_eq!(
+                json::to_json_bounded(&Key(value), encoded.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge),
+            );
             assert!(
                 decode_private_settlement_storage_key_v1::<T>(&uppercase.to_lowercase()).is_err()
             );

@@ -75,7 +75,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        65 + usize::from(cfg!(feature = "telemetry"))
+        66 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),

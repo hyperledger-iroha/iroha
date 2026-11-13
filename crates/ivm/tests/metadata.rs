@@ -10,7 +10,6 @@ fn minimal_contract_artifact() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -59,7 +58,6 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -239,47 +237,54 @@ fn parse_rejects_retired_pointer_layout_abi_hash_at_current_header() {
     ));
 }
 #[test]
-fn parse_accepts_vector_len_without_vector_flag() {
-    // Vector length may be present even if VECTOR bit is off.
+fn parse_accepts_vector_len_without_mode_bits() {
+    // The header keeps its vector-length byte; it needs no mode bit.
     let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.mode = 0; // VECTOR not set
+        m.mode = 0;
         m.vector_length = 8;
     });
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse ok without VECTOR flag");
-    assert_eq!(parsed.metadata.mode & ivm_mode::VECTOR, 0);
+    let parsed = ProgramMetadata::parse(&bytes).expect("parse ok without mode bits");
+    assert_eq!(parsed.metadata.mode, 0);
     assert_eq!(parsed.metadata.vector_length, 8);
 }
 #[test]
-fn parse_accepts_vector_len_with_flag() {
+fn parse_rejects_retired_vector_bit() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.mode = ivm_mode::VECTOR;
+        m.mode = 0x02;
         m.vector_length = 8;
     });
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse vector header");
-    assert_eq!(parsed.metadata.mode & ivm_mode::VECTOR, ivm_mode::VECTOR);
-    assert_eq!(parsed.metadata.vector_length, 8);
+    assert!(match (
+        &(ProgramMetadata::parse(&bytes).unwrap_err()),
+        &(VMError::UnsupportedProgramFeatureBits { bits: 0x02 })
+    ) {
+        (
+            VMError::UnsupportedProgramFeatureBits {
+                bits: actual_field_0,
+            },
+            VMError::UnsupportedProgramFeatureBits {
+                bits: expected_field_0,
+            },
+        ) => actual_field_0 == expected_field_0,
+        _ => false,
+    });
 }
 #[test]
 fn parse_rejects_vector_len_above_abi_max() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.mode = ivm_mode::VECTOR;
         m.vector_length = ivm::VECTOR_LENGTH_MAX + 1;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert!(match (
         &(err),
         &(VMError::ProgramVectorLengthTooLarge {
-            vector_length: ivm::VECTOR_LENGTH_MAX + 1,
             max_allowed: ivm::VECTOR_LENGTH_MAX,
         })
     ) {
         (
             VMError::ProgramVectorLengthTooLarge {
-                vector_length: actual_field_0,
                 max_allowed: actual_field_1,
             },
             VMError::ProgramVectorLengthTooLarge {
-                vector_length: expected_field_0,
                 max_allowed: expected_field_1,
             },
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,

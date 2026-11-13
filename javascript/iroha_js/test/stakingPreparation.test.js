@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { ToriiClient, LocalSigningContext } from "../src/toriiClient.js";
+import { ToriiClient, LocalSigningContext, ToriiHttpError } from "../src/toriiClient.js";
 import { NetworkId } from "../src/networkId.js";
+import { crc64Xz } from "../src/crc64Xz.js";
 import {
   decodeValidatorStakingPreparationFrameV1 as decode,
   encodeValidatorStakingPreparationFrameV1 as encode,
@@ -28,6 +29,33 @@ function client(f, fetchImpl, extra = {}) {
   return new ToriiClient("https://staking.invalid", { localSigningContext: new LocalSigningContext(f.network, 753),
     fetchImpl, maxRetries: 3, retryMethods: ["POST"], ...extra });
 }
+
+// Rust-authored `iroha_torii_shared::ErrorEnvelope` frames bind the envelope builder below.
+const errorEnvelopeContract = JSON.parse(readFileSync(new URL(
+  "../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json", import.meta.url), "utf8")).errors;
+const REFUSED = "staking_preparation_refused";
+const REASON = "Iroha invariant violation: no funded reward entitlement is available to claim";
+function leb128(value) {
+  const out = [];
+  do { out.push((value & 0x7f) | (value > 0x7f ? 0x80 : 0)); value >>>= 7; } while (value > 0);
+  return Buffer.from(out);
+}
+const field = (bytes) => Buffer.concat([leb128(bytes.length), bytes]);
+const text = (value) => field(Buffer.concat([leb128(Buffer.byteLength(value)), Buffer.from(value)]));
+// `norito::encode_canonical(&ErrorEnvelope::new(code, message))`: compact-length code,
+// message and absent-details fields framed under the envelope schema.
+function errorEnvelopeFrame(code, message) {
+  const payload = Buffer.concat([text(code), text(message), field(Buffer.of(0))]);
+  const header = Buffer.alloc(40);
+  header.write("NRT0", 0, "ascii");
+  Buffer.from(errorEnvelopeContract.norito_envelope.schema_hash_hex, "hex").copy(header, 6);
+  header.writeBigUInt64LE(BigInt(payload.length), 23);
+  header.writeBigUInt64LE(crc64Xz(payload), 31);
+  header[39] = Number.parseInt(errorEnvelopeContract.norito_envelope.flags_hex, 16);
+  return Buffer.concat([header, payload]);
+}
+// `norito::json::to_json(&ErrorEnvelope::new(code, message))` for escape-free text.
+const jsonErrorEnvelope = (code, message) => Buffer.from(`{"code":"${code}","message":"${message}"}`);
 
 test("preparation reproduces every Rust request/response frame and pinned Global XOR binding", () => {
   for (const name of names) {
@@ -122,6 +150,58 @@ test("staking transport rejects wrong media, missing binding, cancellation and u
   await assert.rejects(c.preparePublicLanePlan(f.request, f.xor, { signal }), /cancelled/); assert.equal(calls, 0);
   const noPin = new ToriiClient("https://staking.invalid", { fetchImpl: async () => { calls += 1; } });
   await assert.rejects(noPin.preparePublicLanePlan(f.request, f.xor)); assert.equal(calls, 0);
+});
+
+test("refusal envelope builder reproduces every Rust-authored ErrorEnvelope frame", () => {
+  const frames = errorEnvelopeContract.responses.filter(({ media_type: type }) => type === "application/x-norito");
+  assert.equal(frames.length, 7);
+  for (const { code, body_hex: hex } of frames) assert.deepEqual(errorEnvelopeFrame(code, code), Buffer.from(hex, "hex"));
+  const json = errorEnvelopeContract.responses.find(({ media_type: type }) => type === "application/json");
+  assert.deepEqual(jsonErrorEnvelope(json.code, json.code), Buffer.from(json.body_utf8));
+});
+
+test("staking refusal surfaces Torii's typed code and exact reason from Norito and JSON envelopes once", async () => {
+  const f = fixture("claim");
+  for (const [type, body] of [["application/x-norito", errorEnvelopeFrame(REFUSED, REASON)],
+    ["application/json", jsonErrorEnvelope(REFUSED, REASON)]]) {
+    let calls = 0;
+    const c = client(f, async () => {
+      calls += 1;
+      return response(body, 409, { "Content-Type": type, "x-iroha-reject-code": REFUSED });
+    });
+    await assert.rejects(c.preparePublicLanePlan(f.request, f.xor), (error) => {
+      assert.ok(error instanceof ToriiHttpError, `${type}: ${error}`);
+      assert.equal(error.status, 409);
+      assert.equal(error.code, REFUSED);
+      assert.equal(error.rejectCode, REFUSED);
+      assert.equal(error.errorMessage, REASON);
+      assert.equal(error.details, null);
+      assert.ok(error.message.endsWith(`: ${REFUSED} — ${REASON}`), error.message);
+      assert.equal(error.bodyText, type === "application/json" ? body.toString() : null);
+      return true;
+    });
+    assert.equal(calls, 1, type);
+  }
+});
+
+test("staking error bodies that are not canonical envelopes keep their generic failures", async () => {
+  const f = fixture(), frame = errorEnvelopeFrame(REFUSED, REASON);
+  const corrupted = Buffer.from(frame); corrupted[31] ^= 1;
+  for (const [body, type] of [[corrupted, "application/x-norito"], [frame, "application/octet-stream"]]) {
+    let calls = 0; const c = client(f, async () => { calls += 1; return response(body, 409, { "Content-Type": type }); });
+    await assert.rejects(c.preparePublicLanePlan(f.request, f.xor), /staking preparation error response body must be strict UTF-8/);
+    assert.equal(calls, 1);
+  }
+  // Whitespace is not Torii's canonical rendering, so the generic decoder keeps the raw text.
+  const spaced = `${jsonErrorEnvelope(REFUSED, REASON)} `;
+  let calls = 0;
+  const c = client(f, async () => { calls += 1; return response(spaced, 409, { "Content-Type": "application/json" }); });
+  await assert.rejects(c.preparePublicLanePlan(f.request, f.xor), (error) => {
+    assert.ok(error instanceof ToriiHttpError);
+    assert.equal(error.status, 409); assert.equal(error.code, REFUSED); assert.equal(error.bodyText, spaced);
+    return true;
+  });
+  assert.equal(calls, 1);
 });
 
 // These transports deliberately ignore fetch cancellation, as user-supplied

@@ -225,6 +225,12 @@ impl norito::json::JsonKeyCodec for StatePath {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(self.as_ref(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_ref(), out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         Self::parse_for_json_decode(encoded)
     }

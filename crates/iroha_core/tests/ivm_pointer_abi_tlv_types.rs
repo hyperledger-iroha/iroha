@@ -11,13 +11,12 @@ fn program_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
     let scall = instruction::wide::system::SCALL;
     let sys_u8 = u8::try_from(sys).unwrap();
-    code.extend_from_slice(&encoding::wide::encode_sys(scall, sys_u8).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(u32::from(sys_u8)).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10_000,
         abi_version: 1,
     };

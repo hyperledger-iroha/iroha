@@ -17,10 +17,7 @@ fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
     );
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(unassigned).expect("unassigned syscall fits compact encoding"),
-        )
+        &encoding::wide::encode_scall(unassigned)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

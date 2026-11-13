@@ -62,5 +62,5 @@ kotodama-standard	crates/kotodama_lang/src/samples/query_assets_and_save_cursor.
 kotodama-standard	crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.ko	integration_tests/fixtures/ivm/smart_contract_can_filter_queries.to
 kotodama-standard	crates/kotodama_lang/src/samples/threshold_escrow.ko	integration_tests/fixtures/ivm/threshold_escrow.to
 predecoder	0	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to
-predecoder	1	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to
+predecoder	1	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to
 default	v1	defaults/executor.to

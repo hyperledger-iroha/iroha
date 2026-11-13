@@ -302,21 +302,34 @@ behaviour too, so `CanPublishContentBundle`
   root that has not selected the definition executes exactly as the frozen
   baseline does: the Initial executor admits `PublishContentBundle` and
   `RetireContentBundle` in genesis only. A root that selected it also admits,
-  after genesis, publishing by an authority holding the exact unit permission
-  directly or through a role while no `Disabled` restriction names the
-  definition, and retirement by the bundle's creator.
-- **Grants.** On a root that selected the definition, only a
-  `CanSetParameters` holder grants or revokes the permission, on accounts and
-  roles, and it may remove the permission from a role it does not hold. A
-  holder cannot delegate it and may renounce its own direct grant. A `Disabled`
-  restriction refuses new grants and keeps revocation, so the grant set only
-  shrinks while it lasts. §7.1 defines the other restrictions for interfaces
-  and implementations only; they do not change a permission.
-- **Grants made before activation.** A change set that activates or retires
-  the definition lapses while any account or role holds a permission of this
-  name. A token granted under the baseline's rules therefore never becomes
-  publishing authority, and no grant outlives the definition as an opaque token
-  that those rules would let its holder pass on.
+  after genesis, publishing by an account holding the exact unit permission
+  directly while no restriction of any kind names the definition, and
+  retirement by the bundle's creator.
+- **Grants.** On a root that selected the definition, the permission is a
+  direct account grant, the deleted allow-list one entry per account. No role
+  carries it: Core refuses to put it in a role for every executor, so only its
+  issuer confers it. Only a `CanSetParameters` holder grants or revokes it; a
+  holder cannot delegate it and may renounce its own grant. Any restriction
+  (`live_runtime_upgrades.md` §7.1, Permissions) refuses new grants and keeps
+  revocation, so the grant set only shrinks while it lasts.
+- **Activation.** A change set that activates the definition lapses while any
+  account or role holds a permission of this name, so a token granted under
+  the baseline's rules never becomes publishing authority.
+- **Retirement.** A change set that retires the definition lapses while any
+  account or role holds it, or while any content bundle published after
+  genesis remains, expired ones included. Retiring returns
+  `RetireContentBundle` to the baseline's genesis-only rule and nothing prunes
+  expired bundles, so such a bundle would lose its only removal path; a grant
+  left behind would be an unknown token that blocks a later activation.
+  Governance keeps the definition restricted until both clear.
+- **Cleanup.** While the definition is selected, revoking a held direct grant
+  and retiring a bundle published after genesis run as completion work under
+  closed admission and completion-only. A change set that would leave
+  `iroha.revoke` unbound or disabled lapses while a direct grant remains, and
+  one that would do so to `RetireContentBundle` lapses while such a bundle
+  remains. Nothing else waits for them: they pin no completion closure, so a
+  rebinding of either instruction, a kernel or profile change and an executor
+  replacement proceed.
 
 ## Alternatives not proposed
 

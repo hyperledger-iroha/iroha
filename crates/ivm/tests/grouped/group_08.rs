@@ -38,18 +38,10 @@ mod syscalls_register_compact;
 mod tlv_examples;
 #[path = "../trace_mode.rs"]
 mod trace_mode;
-#[path = "../vadd.rs"]
-mod vadd;
 #[path = "../vector_detect.rs"]
 mod vector_detect;
-#[path = "../vector_execution_regression.rs"]
-mod vector_execution_regression;
-#[path = "../vector_gating.rs"]
-mod vector_gating;
 #[path = "../vector_ops.rs"]
 mod vector_ops;
-#[path = "../vector_setvl_par.rs"]
-mod vector_setvl_par;
 #[path = "../verifier.rs"]
 mod verifier;
 #[path = "../verify_signature_tlv.rs"]

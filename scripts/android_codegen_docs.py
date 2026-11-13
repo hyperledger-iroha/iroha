@@ -283,7 +283,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "features_bitmap",
                 "type": "Option<u64>",
-                "description": "Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.",
+                "description": "Compiler-derived, hash-covered V1 execution capability bit (ZK is the only bit); never host SIMD, Metal, or CUDA availability.",
             },
             {
                 "name": "access_set_hints",

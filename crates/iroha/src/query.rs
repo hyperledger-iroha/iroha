@@ -65,6 +65,10 @@ pub(crate) fn validate_transaction_details_bindings(
         || transaction.entrypoint().hash() != entrypoint_hash
         || transaction.output_hash() != &HashOf::new(transaction.output())
         || output.input_index != transaction.entrypoint_proof().leaf_index()
+        // TODO(specs/parliament_private_ballot_design.md §12.3, slice 5): a block whose
+        // start pass committed governance rows places its Network outputs after them, so
+        // this equality refuses such a block's transactions until the response carries the
+        // count of leading governance rows. No network commits such rows before slice 4.
         || output.input_index != transaction.output_proof().leaf_index()
         || (output.result.is_err()
             && (!output.result.batch_transfer_outcomes().is_empty()

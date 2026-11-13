@@ -1709,21 +1709,9 @@ pub async fn handle_runtime_draft_upgrade(
     NoritoJson(request): NoritoJson<RuntimeDraftUpgradeRequest>,
 ) -> Result<RuntimeDraftUpgradeResponse, crate::Error> {
     let qualification = hex_32("qualification", &request.qualification_hex)?;
-    let catalog = iroha_core::runtime::release_catalog()
+    let modules = iroha_core::runtime::draftable_modules()
         .map_err(|error| runtime_conversion_error(format!("release catalog: {error}")))?;
-    let keyed_profile = iroha_data_model::runtime::keyed_state::PROFILE_NAME;
-    if request.addition != keyed_profile
-        && !catalog
-            .additions
-            .iter()
-            .any(|addition| addition.module == request.addition)
-    {
-        let modules: Vec<&str> = catalog
-            .additions
-            .iter()
-            .map(|addition| addition.module)
-            .chain(std::iter::once(keyed_profile))
-            .collect();
+    if !modules.contains(&request.addition.as_str()) {
         return Err(runtime_conversion_error(format!(
             "{} is not an addition of this release, which adds: {}",
             request.addition,
@@ -2866,6 +2854,44 @@ mod tests {
             [SelectionTransitionV1::SetKernel(_)]
         ));
         assert_eq!(keyed.change_set.predecessor, catalog.baseline_id);
+        // A lone Permission definition drafts through the same route.
+        let publishing = handle_runtime_draft_upgrade(
+            state.clone(),
+            NoritoJson(RuntimeDraftUpgradeRequest {
+                addition: iroha_core::runtime::content_publish_permission::MODULE.into(),
+                ..request.clone()
+            }),
+        )
+        .await
+        .expect("draft the content-publishing permission from the current selection");
+        let permission = iroha_core::runtime::content_publish_permission::descriptor()
+            .id()
+            .expect("permission identity");
+        assert!(matches!(
+            &publishing.change_set.transitions[..],
+            [SelectionTransitionV1::Activate(id)] if *id == permission
+        ));
+        assert_eq!(publishing.change_set.predecessor, catalog.baseline_id);
+        // Parameter-only additions have no implementation entry in the catalog.
+        let policies = handle_runtime_draft_upgrade(
+            state.clone(),
+            NoritoJson(RuntimeDraftUpgradeRequest {
+                addition: "iroha.parameter.content_and_router_policy.v1".into(),
+                ..request.clone()
+            }),
+        )
+        .await
+        .expect("draft the committed content and router policies");
+        assert_eq!(policies.change_set.predecessor, catalog.baseline_id);
+        assert_eq!(policies.change_set.transitions.len(), 2);
+        for definition in catalog.parameter_definitions() {
+            assert!(
+                policies
+                    .change_set
+                    .transitions
+                    .contains(&SelectionTransitionV1::Activate(definition))
+            );
+        }
         let unknown = refusal(
             handle_runtime_draft_upgrade(
                 state.clone(),

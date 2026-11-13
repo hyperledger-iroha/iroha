@@ -194,6 +194,19 @@ impl std::fmt::Debug for TipKeys {
 }
 
 impl JsonSerializeTrait for TipKeys {
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('[')?;
+        for (index, key) in self.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            key.json_serialize_to(out)?;
+        }
+        out.push(']')
+    }
     fn json_serialize(&self, out: &mut String) {
         out.push('[');
         for (index, key) in self.iter().enumerate() {
@@ -246,6 +259,16 @@ fn tip_weak_for_tests(tip: &Tip) -> TipWeak {
 }
 
 impl JsonSerializeTrait for BlockInfo {
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push_str("{\"transactions\":")?;
+        self.transactions.json_serialize_to(out)?;
+        out.push_str(",\"height\":")?;
+        self.height.json_serialize_to(out)?;
+        out.push('}')
+    }
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         json::write_json_string("transactions", out);
@@ -774,6 +797,12 @@ mod block {
         ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
         /// The original frozen State capture retains a local resource refusal: {0}
         CaptureDeferred(#[source] crate::state::StateCaptureDeferral),
+        /// The original checkpoint image awaits local durability before publication: {0}
+        CheckpointDeferred(#[source] crate::snapshot::CheckpointDeferral),
+        /// Original local checkpoint reader refusal: {0}
+        CheckpointReadDeferred(#[source] crate::snapshot::TryReadError),
+        /// Permanent checkpoint integrity failure; its original image and cause remain held: {0}
+        CheckpointIntegrity(String),
         /// `TransactionsBlock::insert_block()` was not called
         MissingInsertBlock,
         /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;
@@ -2021,12 +2050,89 @@ mod serialization {
         JsonSerializeTrait::json_serialize(&map, out);
         out.push('}');
     }
+    /// Stream the sorted union of the original history and promoted predecessor tip.
+    /// No temporary history map is allocated while a checkpoint is being prepared.
+    pub(super) fn write_transactions_cut_json_to(
+        current: Option<&Tip>,
+        predecessor: Option<&BlockInfo>,
+        baseline: &HistoryReader<'_>,
+        revert: bool,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        use json::JsonKeyCodec as _;
+        out.push_str("{\"latest_block\":")?;
+        match current {
+            Some(current) => current.json_serialize_to(out)?,
+            None => out.push_str("null")?,
+        }
+        out.push_str(",\"blocks\":{")?;
+        let repeated = predecessor.is_some_and(|previous| {
+            current.is_some_and(|current| {
+                current.height == previous.height && current.transactions == previous.transactions
+            })
+        });
+        let promoted = (!revert && !repeated).then_some(predecessor).flatten();
+        let mut old = baseline
+            .iter()
+            .filter(|(_, height)| {
+                !revert || current.is_none_or(|current| **height < current.height)
+            })
+            .peekable();
+        let mut recent = promoted
+            .into_iter()
+            .flat_map(|previous| {
+                previous
+                    .transactions
+                    .iter()
+                    .map(move |key| (key, previous.height))
+            })
+            .peekable();
+        let mut first = true;
+        loop {
+            let entry = match (old.peek(), recent.peek()) {
+                (None, None) => break,
+                (Some(_), None) => old.next().map(|(key, height)| (key, *height)),
+                (None, Some(_)) => recent.next(),
+                (Some((old_key, _)), Some((new_key, _))) => match old_key.cmp(new_key) {
+                    std::cmp::Ordering::Less => old.next().map(|(key, height)| (key, *height)),
+                    std::cmp::Ordering::Equal => {
+                        old.next();
+                        recent.next()
+                    }
+                    std::cmp::Ordering::Greater => recent.next(),
+                },
+            };
+            if let Some((key, height)) = entry {
+                if !first {
+                    out.push(',')?;
+                }
+                first = false;
+                key.encode_json_key_to(out)?;
+                out.push(':')?;
+                height.json_serialize_to(out)?;
+            }
+        }
+        out.push_str("}}")
+    }
     impl JsonSerializeTrait for TransactionsStorage {
         fn json_serialize(&self, out: &mut String) {
             write_transactions_view_json(&self.view(), out)
         }
     }
     impl JsonSerializeTrait for TransactionsBlock<'_> {
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            let predecessor = self.latest_block_ref.load();
+            write_transactions_cut_json_to(
+                self.current_block.as_ref(),
+                predecessor.as_deref(),
+                &self.baseline,
+                self.revert,
+                out,
+            )
+        }
         fn json_serialize(&self, out: &mut String) {
             write_transactions_block_json(self, out)
         }

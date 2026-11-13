@@ -9,7 +9,7 @@ fn decoded(numbers: &[u32]) -> Vec<DecodedOp> {
         .enumerate()
         .map(|(index, number)| DecodedOp {
             pc: index as u64 * 4,
-            inst: crate::encoding::wide::encode_syscallx(*number),
+            inst: crate::encoding::wide::encode_scall(*number),
         })
         .collect()
 }
@@ -267,13 +267,13 @@ fn diamond_and_loop_match_old_collecting_reference_with_first_key_per_site() {
     let words = [
         crate::encoding::wide::encode_literal(wide::memory::LDLIT, 10, 0),
         copy,
-        crate::encoding::wide::encode_syscallx(crate::syscalls::SYSCALL_STATE_GET),
+        crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_STATE_GET),
         crate::encoding::wide::encode_literal(wide::memory::LDLIT, 10, 0),
         copy,
         crate::encoding::wide::encode_literal(wide::memory::LDLIT, 10, 1),
         copy,
         copy,
-        crate::encoding::wide::encode_syscallx(crate::syscalls::SYSCALL_STATE_SET),
+        crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_STATE_SET),
     ];
     let code: Vec<_> = words
         .into_iter()

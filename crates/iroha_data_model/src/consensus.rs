@@ -374,6 +374,12 @@ impl JsonKeyCodec for ConsensusKeyId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_display_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         let (role_str, name_str) = encoded.split_once(':').ok_or_else(|| {
             norito::json::Error::Message("invalid consensus key id; expected role:name".into())

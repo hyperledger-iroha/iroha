@@ -65,6 +65,23 @@ impl norito::json::JsonKeyCodec for ContractArtifactId {
         norito::json::write_json_string(&key, out);
     }
 
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.push('"')?;
+        norito::json::visit_json_display_text(&self.dataspace_id.as_u64(), |chunk| {
+            out.push_str(chunk)
+        })?;
+        out.push('|')?;
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in self.code_hash.as_ref() {
+            out.push(char::from(HEX[usize::from(byte >> 4)]))?;
+            out.push(char::from(HEX[usize::from(byte & 15)]))?;
+        }
+        out.push('"')
+    }
+
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         let invalid = || {
             norito::json::Error::Message("expected canonical dataspace|artifact-hash key".into())

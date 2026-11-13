@@ -963,7 +963,7 @@ mod prepare_admission;
 #[path = "executor/prepare_admission_tests.rs"]
 mod prepare_admission_tests;
 mod proposal_publication;
-mod publication;
+pub(crate) mod publication;
 mod replay;
 
 /// Exact validation identity permitting transaction isolation; a control refusal never sets it.
@@ -1934,8 +1934,8 @@ impl<'s> Worker<'s> {
             preparation::validation_failure(BlockValidationError::StateView(error))
                 .expect("every State reader refusal has an explicit classification")
         })?;
-        match original_view.latest_block() {
-            Ok(Some(_)) => {}
+        let parent_creation_time = match original_view.latest_block() {
+            Ok(Some(parent)) => parent.header().creation_time(),
             Ok(None) => {
                 return Err(PublicationError::Retryable(
                     "the applied parent block is not available".into(),
@@ -1946,7 +1946,7 @@ impl<'s> Worker<'s> {
                     iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory,
                 )));
             }
-        }
+        };
         let Some(scheduled) = ScheduledAuthority::from_view(&original_view, height) else {
             return Err(PublicationError::Retryable(format!(
                 "no scheduled configuration for height {height}"
@@ -1986,6 +1986,24 @@ impl<'s> Worker<'s> {
                 );
                 Ok(None)
             };
+        }
+        // The immutable parent/input floor is a deterministic rule even while the local
+        // clock refuses this proposal. Reject it first so an invalid Byzantine timestamp
+        // cannot occupy every retry until the view timer expires.
+        if height > 1 && !cfg!(all(test, sumeragi_core_mutation = "HC985")) {
+            let floor =
+                ValidBlock::sumeragi_block_time_floor(iroha_block, parent_creation_time, cadence);
+            match floor {
+                Ok(minimum) if iroha_block.header().creation_time() >= minimum => {}
+                Ok(_) => {
+                    invalid_attempt(height, &"block timestamp precedes its parent/input floor");
+                    return Ok(None);
+                }
+                Err(error) => {
+                    invalid_attempt(height, &error);
+                    return Ok(None);
+                }
+            }
         }
         // CT1 is a local refusal before effects, not deterministic invalidity. The original
         // decoded source remains available for retry after the clock advances or a genuine
@@ -2442,7 +2460,9 @@ impl<'s> Worker<'s> {
             .seal_state_transition()
         {
             Ok(transition) => transition,
-            Err(CutError::Deferred(reason)) => return Err(PublicationError::Deferred(reason.into())),
+            Err(CutError::Deferred(reason)) => {
+                return Err(PublicationError::Deferred(reason.into()));
+            }
             Err(error) => {
                 let reason = format!("original State commitment requires recovery: {error}");
                 self.recovery = Some(reason.clone());
@@ -3474,7 +3494,7 @@ impl<'s> Worker<'s> {
                 return Err(error);
             }
             crate::state::StatePublicationOutcome::RecoveryRequired(reason) => {
-                return Err(reason.to_string().into());
+                return Err(publication::original_refusal(reason));
             }
         }
         let state_events = state_events

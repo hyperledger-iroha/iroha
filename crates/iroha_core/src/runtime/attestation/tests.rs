@@ -104,6 +104,91 @@ fn a_supported_change_set_is_attested_with_the_node_key_for_its_committee() {
 }
 
 #[test]
+fn unfinished_game_export_is_not_drafted_or_signed_without_rewriting_frozen_consensus() {
+    use crate::runtime::catalog::additions::{ENDORSED_RUNTIME_UPGRADE_PROPOSAL, GAME_PARTITIONS};
+    let catalog = release_catalog().unwrap();
+    let world = crate::state::World::new();
+    crate::runtime::activate_additions_for_testing(
+        &world,
+        ENDORSED_RUNTIME_UPGRADE_PROPOSAL.module,
+    )
+    .unwrap();
+    let change = {
+        let view = world.view();
+        assert!(
+            crate::runtime::draft_addition(&view, network(), GAME_PARTITIONS.module, 200, [1; 32])
+                .unwrap_err()
+                .to_string()
+                .contains("export completion custody")
+        );
+        catalog
+            .activation(
+                GAME_PARTITIONS.module,
+                view.runtime_selection(),
+                &PublishedDefinitions(view.runtime_definitions()),
+                network(),
+                200,
+                [1; 32],
+            )
+            .unwrap()
+    };
+    let id = change.id().unwrap();
+    {
+        let mut block = world.block();
+        block.runtime_change_sets.insert(
+            id,
+            ChangeSetRecordV1 {
+                change_set: change.clone(),
+                status: ChangeSetStatusV1::Scheduled,
+                proposed_ms: 0,
+                approved_height: 10,
+                approved_ms: 0,
+                notice: RuntimeNoticeV1 {
+                    blocks: 100,
+                    ms: 0,
+                    approval_cushion_ms: 0,
+                },
+                attestations: Vec::new(),
+            },
+        );
+        block.commit();
+    }
+    let world = world.view();
+    let pairs = validators();
+    let committee = keys(&pairs);
+    assert!(matches!(
+        successor_selection(&world, id),
+        Err(NodeAttestationError::Unqualified { .. })
+    ));
+    assert!(matches!(
+        sign_support(&world, &committee, 42, id, &pairs[0], [1; 32]),
+        Err(NodeAttestationError::Unqualified { .. })
+    ));
+    let selection = successor(
+        &change,
+        id,
+        world.runtime_selection(),
+        &BTreeMap::new(),
+        &PublishedDefinitions(world.runtime_definitions()),
+    )
+    .expect("the frozen consensus kernel retains its original transition semantics");
+    assert_eq!(
+        release_support(catalog, &selection),
+        ReleaseSupport::Supported,
+        "local qualification must not relabel historical code as missing at startup"
+    );
+    assert!(
+        super::super::catalog::unqualified_native_activation(
+            &selection,
+            &selection,
+            &catalog.definitions
+        )
+        .is_none(),
+        "retained historical definitions do not become newly activated"
+    );
+}
+
+#[test]
 fn a_release_that_lacks_a_successor_definition_refuses_to_attest() {
     let change = test_support::add_instruction(network(), 150);
     let id = change.id().expect("change-set identity");
@@ -258,7 +343,7 @@ fn the_release_digest_binds_the_build_and_every_implemented_definition() {
 }
 
 #[test]
-fn the_baseline_activates_the_host_profiles_the_release_implements() {
+fn the_release_advertises_dormant_profiles_while_each_root_requires_its_selection() {
     let catalog = release_catalog().expect("catalog");
     let implemented = release_host_profiles(catalog);
     assert!(
@@ -269,8 +354,22 @@ fn the_baseline_activates_the_host_profiles_the_release_implements() {
         catalog.definitions[id],
         DefinitionDescriptorV1::HostProfile(_)
     )));
+    let required = active_host_profiles(&catalog.baseline, &catalog.definitions);
+    assert_eq!(required.len(), 1);
+    assert!(required.iter().all(|id| implemented.contains(id)));
+    let named = catalog.definitions.iter().find_map(|(id, descriptor)| {
+        matches!(descriptor, DefinitionDescriptorV1::HostProfile(host)
+            if host.abi_hash == ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle))
+            .then_some(*id)
+    }).expect("named lifecycle host is compiled");
+    assert!(implemented.contains(&named));
+    assert!(!required.contains(&named));
+    let mut selected = catalog.baseline.clone();
+    selected.active.push(named);
+    selected.active.sort();
+    selected.active.dedup();
     assert_eq!(
-        active_host_profiles(&catalog.baseline, &catalog.definitions),
+        active_host_profiles(&selected, &catalog.definitions),
         implemented
     );
     let state = crate::state::State::new_for_testing(
@@ -280,7 +379,7 @@ fn the_baseline_activates_the_host_profiles_the_release_implements() {
     );
     assert_eq!(
         committed_host_profiles(&state.world_view()),
-        implemented,
+        required,
         "a World founded on the baseline requires exactly its host profiles"
     );
 }

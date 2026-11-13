@@ -557,7 +557,7 @@ impl WsvHost {
         self.contract_ancestors.push(caller);
         // Nested execution always stages durable state so no failed child flushes a file.
         self.tx_active = true;
-        let run = child.run_with_host_and_parent_cycle_budget(self, vm);
+        let run = child.run_with_host(self);
         let spent = child_limit.saturating_sub(child.remaining_gas());
         if reserve == 0 {
             vm.set_syscall_spendable_gas(child.remaining_gas().saturating_add(*boundary_gas));

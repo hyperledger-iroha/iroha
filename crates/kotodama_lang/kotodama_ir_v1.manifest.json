@@ -78,8 +78,6 @@
     "Mean",
     "Isqrt",
     "LoadVar",
-    "Poseidon2",
-    "Poseidon6",
     "Pubkgen",
     "Valcom",
     "PrivateNumericValcom",
@@ -128,7 +126,6 @@
     "TupleGet",
     "CreateNftsForAllUsers",
     "SetExecutionDepth",
-    "SetVl",
     "Call",
     "CallMulti",
     "SetAccountDetail",
@@ -467,7 +464,6 @@
     "mixed_value_and_divergent_function_tails_have_no_reachable_unit_return",
     "lower_pointer_constructors_to_datarefs",
     "lower_bytes_literal_to_dataref",
-    "source_cannot_lower_setvl_builtin",
     "lower_trigger_event_builtin",
     "lower_resolve_account_alias_builtin",
     "lower_resolve_account_alias_builtin_uses_string_literal",
@@ -576,7 +572,6 @@
     "mixed_value_and_divergent_function_tails_have_no_reachable_unit_return",
     "lower_pointer_constructors_to_datarefs",
     "lower_bytes_literal_to_dataref",
-    "source_cannot_lower_setvl_builtin",
     "lower_trigger_event_builtin",
     "lower_resolve_account_alias_builtin",
     "lower_resolve_account_alias_builtin_uses_string_literal",
@@ -1954,7 +1949,7 @@
   "map_fallback_routes": [],
   "take2_routing_sha256": "b1650954f4a7561a74585cf95f8896cbf504b7a828e957ddb4caaf2cc2d06c11",
   "source": {
-    "bytes": 428021,
-    "sha256": "39a5d425b80a77c00ae1f225ef9f677f6425d7a3f7f9b1677b2626fdda66e0fa"
+    "bytes": 426486,
+    "sha256": "ca34645565b7f7d7bbb73793259b755e795f8466b07d0388de8637c78bfbfc43"
   }
 }

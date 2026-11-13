@@ -346,7 +346,7 @@ fn private_divceil_mean_square_multiply_and_padding_keep_distinct_original_cell_
         enc::encode_rr(wide::arithmetic::MUL, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::DIV, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 4, 4, 3),
-        enc::encode_rr(wide::system::GETGAS, 5, 4, 5),
+        enc::encode_rr(wide::arithmetic::SUB, 5, 4, 3),
     ];
     let (program, recorder, _) =
         shifts::capture(&instructions, &[(2, 17, false), (3, 3, false)], 100, 100);

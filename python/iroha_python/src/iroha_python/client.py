@@ -195,6 +195,7 @@ from ._privacy_backends import (
     _require_production_verify_backend_label,
     _verifier_backend_registry_tag_v1,
 )
+from ._torii_error_envelope import decode_typed_error_envelope_v1
 from .address import (
     I105_DISCRIMINANT_MAX,
     AccountAddress,
@@ -7848,7 +7849,8 @@ class ContractManifest:
             raise TypeError("manifest `features_bitmap` must be an unsigned integer")
         elif not 0 <= features_raw <= 0xFFFFFFFFFFFFFFFF:
             raise TypeError("manifest `features_bitmap` must be a u64")
-        elif features_raw > 3:
+        elif features_raw > 1:
+            # ZK (bit 0) is the only Kotodama V1 capability bit.
             raise TypeError(
                 "manifest `features_bitmap` contains unsupported Kotodama V1 feature bits"
             )
@@ -8507,6 +8509,29 @@ class PipelineRecoverySidecar:
         return cls(format=format_label, height=height, dag=dag, txs=txs)
 
 
+# `IvmFaultKindV1` unit categories in codec-index order; `Numeric` (10) and
+# `PointerAbi` (11) carry the exact subtype codes below.
+_IVM_UNIT_FAULT_KINDS = frozenset((
+    "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
+    "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow",
+    "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt", "NullifierAlreadyUsed",
+    "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+    "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
+    "CallDepthExceeded", "ControlFlowViolation",
+))
+# `NumericFaultV1` codes in ABI tag order (1..=14).
+_IVM_NUMERIC_FAULT_CODES = frozenset((
+    "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
+    "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
+    "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+))
+# `PointerAbiFaultV1` codes in ABI tag order (1..=11).
+_IVM_POINTER_ABI_FAULT_CODES = frozenset((
+    "InvalidAddress", "UnknownType", "TypeNotAllowed", "WrongType", "InvalidEnvelopeVersion", "OversizedLength",
+    "TruncatedEnvelope", "PayloadHashMismatch", "MalformedFrame", "SchemaMismatch", "NonCanonical",
+))
+
+
 def _normalize_ivm_fault(value: Any) -> Mapping[str, Any]:
     def record(item: Any, fields: set[str], context: str) -> Mapping[str, Any]:
         if not isinstance(item, Mapping) or set(item) != fields:
@@ -8518,7 +8543,7 @@ def _normalize_ivm_fault(value: Any) -> Mapping[str, Any]:
             raise ValueError(f"{context} must be u{bits}")
         return item
 
-    def unit(item: Any, allowed: set[str], context: str) -> Mapping[str, Any]:
+    def unit(item: Any, allowed: set[str] | frozenset[str], context: str) -> Mapping[str, Any]:
         tag = record(item, {"kind", "value"}, context)
         if not isinstance(tag["kind"], str) or tag["kind"] not in allowed or tag["value"] is not None:
             raise ValueError(f"{context} must be a known unit fault tag")
@@ -8527,11 +8552,11 @@ def _normalize_ivm_fault(value: Any) -> Mapping[str, Any]:
     fault = record(value, {"kind", "site"}, "IVM fault")
     kind = record(fault["kind"], {"kind", "value"}, "IVM fault.kind")
     if kind["kind"] == "Numeric":
-        kind = {"kind": "Numeric", "value": unit(kind["value"], {'ScaleOverflow', 'ExactDivisionScaleOverflow', 'QuantityUnderflow', 'NegativeSquareRoot', 'InvalidRoundingMode', 'InvalidFailureMode', 'NegativeQuantity', 'ReservedRegisterNonZero', 'RepeatingDecimal', 'InexactConversion', 'InvalidScale', 'DivisionByZero', 'MantissaOverflow'}, "IVM numeric fault")}
+        kind = {"kind": "Numeric", "value": unit(kind["value"], _IVM_NUMERIC_FAULT_CODES, "IVM numeric fault")}
     elif kind["kind"] == "PointerAbi":
-        kind = {"kind": "PointerAbi", "value": unit(kind["value"], {'OversizedLength', 'TruncatedEnvelope', 'WrongType', 'InvalidAddress', 'NonCanonical', 'TypeNotAllowed', 'MalformedFrame', 'PayloadHashMismatch', 'SchemaMismatch', 'UnknownType', 'InvalidEnvelopeVersion'}, "IVM pointer fault")}
+        kind = {"kind": "PointerAbi", "value": unit(kind["value"], _IVM_POINTER_ABI_FAULT_CODES, "IVM pointer fault")}
     else:
-        kind = unit(kind, {'VectorExtensionDisabled', 'InvalidVectorLength', 'ReentrantCall', 'AssertionFailed', 'MemoryLimitExceeded', 'AmxBudgetExceeded', 'OutOfGas', 'MissingHalt', 'GasCostOverflow', 'MemoryOutOfBounds', 'PrivacyViolation', 'DecodeError', 'InvalidOpcode', 'CallDepthExceeded', 'UnsupportedSyscall', 'ExceededMaxCycles', 'InvalidMetadata', 'NoritoInvalid', 'UnknownSyscall', 'PermissionDenied', 'ZkExtensionDisabled', 'HostOutputItemsExceeded', 'MemoryAccessViolation', 'AbiTypeNotAllowed', 'NullifierAlreadyUsed', 'MisalignedAccess', 'RegisterOutOfBounds', 'HostOutputBytesExceeded'}, "IVM fault.kind")
+        kind = unit(kind, _IVM_UNIT_FAULT_KINDS, "IVM fault.kind")
     site = record(fault["site"], {"code_hash", "selector", "position"}, "IVM fault.site")
     code_hash = _normalize_32_byte_hex(site["code_hash"], "IVM fault.site.code_hash")
     selector = record(site["selector"], {"kind", "value"}, "IVM fault.site.selector")
@@ -11839,9 +11864,35 @@ class _AccountCollections(AccountsCollection):
 
 
 class _StakingPreparationHTTPError(requests.HTTPError):
-    """Failed preparation response retaining its bounded original body."""
+    """Failed preparation response retaining its bounded original body.
+
+    A body that is Torii's canonical error envelope (Norito or JSON) also
+    exposes its code and message: a plan that committed state refuses is HTTP
+    409 with code ``staking_preparation_refused`` and the exact reason
+    execution would reject with. Any other body leaves both ``None``. The
+    ``x-iroha-reject-code`` header is kept whenever Torii sends one.
+    """
 
     staking_preparation_body: bytes
+    staking_preparation_code: Optional[str]
+    staking_preparation_message: Optional[str]
+    staking_preparation_reject_code: Optional[str]
+
+    @classmethod
+    def from_response(cls, response: requests.Response, body: bytes) -> _StakingPreparationHTTPError:
+        """Classify one bounded non-200 body without reading the stream again."""
+
+        envelope = decode_typed_error_envelope_v1(response.headers.get("Content-Type"), body)
+        code, message = (None, None) if envelope is None else envelope
+        detail = "" if envelope is None else f": {code}: {message}"
+        error = cls(f"staking preparation HTTP {response.status_code}{detail}", response=response)
+        error.staking_preparation_body = body
+        error.staking_preparation_code = code
+        error.staking_preparation_message = message
+        error.staking_preparation_reject_code = (
+            response.headers.get("x-iroha-reject-code") or ""
+        ).strip() or None
+        return error
 
 
 class ToriiClient(
@@ -15842,6 +15893,13 @@ class ToriiClient(
         after completion or failure. A private Requests worker owns blocking
         I/O under the original absolute deadline on POSIX. Unsupported custom
         Sessions/adapters are rejected before dispatch; there is no fallback.
+
+        A non-200 raises ``requests.HTTPError`` retaining the bounded body as
+        ``staking_preparation_body``. A plan that committed state refuses is
+        HTTP 409 whose ``staking_preparation_code`` and
+        ``staking_preparation_reject_code`` are ``staking_preparation_refused``
+        and whose ``staking_preparation_message`` is the exact reason execution
+        would reject with; any canonical Torii error envelope is decoded so.
         """
         started_ns = time.monotonic_ns()
         from .requests_deadline import _remaining, check_preparation_inputs
@@ -15874,9 +15932,7 @@ class ToriiClient(
             if length is not None and int(length) != len(raw):
                 raise ValueError("staking preparation response length mismatch")
             if response.status_code != 200:
-                error = _StakingPreparationHTTPError(f"staking preparation HTTP {response.status_code}", response=response)
-                error.staking_preparation_body = raw
-                raise error
+                raise _StakingPreparationHTTPError.from_response(response, raw)
             prepared = decode_staking_preparation_frame_v1(StakingPreparationV1, raw)
             validated = validate_staking_preparation_v1(prepared, request, network, xor_asset_definition_id)
             _remaining(deadline_ns)

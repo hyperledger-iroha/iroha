@@ -3,7 +3,7 @@
 //! The original atomic destination joins public straight-line arithmetic and bit
 //! instructions, admitted LDI64 and initialized public-stack LOAD64. STORE64
 //! and root JALR retain their original memory,
-//! lifecycle and control packets. Private/wide loads and faults remain open;
+//! lifecycle and control packets. Private loads and faults remain open;
 //! no diagnostic tag event or caller-provided literal is admitted here.
 
 use super::super::{packet, private_dispatch};

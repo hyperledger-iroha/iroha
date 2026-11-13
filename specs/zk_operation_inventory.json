@@ -847,12 +847,17 @@
     "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
    },
    "anonymous_ballot": {
-    "scope": "full",
-    "reason": "Instructions of the anonymous Parliament family (specs/parliament_private_ballot_design.md section 12.3): the credential registration verifies `pi_reg`."
+    "scope": "partial",
+    "pattern": "Credential",
+    "reason": "Instructions of the anonymous Parliament family (specs/parliament_private_ballot_design.md sections 8.1 and 12.3): the credential registration verifies `pi_reg`. Attempt creation (CreateAnonymousParliamentAttemptV1) and the account-signed transitions (SubmitAnonymousParliamentTransitionV1) record facts and intents for the reducer; they verify no proof and carry no ZK or FHE relation."
    },
    "runtime_obligation": {
     "scope": "out",
     "reason": "Kernel registration and completion of runtime obligations, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_obligation.rs, specs/live_runtime_upgrades.md section 7.2). An owner commits the exact instructions that complete its obligation; it verifies no proof and carries no ZK or FHE relation."
+   },
+   "runtime_deferred": {
+    "scope": "out",
+    "reason": "Explicit current-binding consent for a new deferred trigger registration or multisig proposal, the `iroha.runtime.deferred_consent.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_deferred.rs, crates/iroha_core/src/runtime/deferred_consent.rs). The signer opts into execution-time bindings in an ordinary signed transaction; it verifies no proof and carries no ZK or FHE relation."
    },
    "runtime_boundary": {
     "scope": "out",
@@ -11953,14 +11958,7 @@
       "symbol": "enforce_manifest_is_pre_registered(state_ro, tx.payload(), summary.code_hash)?;"
      }
     ],
-    "in_circuit": {"none": "No invocation relation is registered; step chips are components (M.1 inventory)."},
-    "primitive_roles": [
-     {"inventory": "primitive", "key": "digest_roles/ivm.opcode-sha256block"},
-     {"inventory": "primitive", "key": "digest_roles/ivm.opcode-sha3block"},
-     {"inventory": "primitive", "key": "digest_roles/ivm.opcode-poseidon2"},
-     {"inventory": "primitive", "key": "digest_roles/ivm.opcode-poseidon6"},
-     {"inventory": "primitive", "key": "digest_roles/ivm.opcode-blake2s"}
-    ]
+    "in_circuit": {"none": "No invocation relation is registered; step chips are components (M.1 inventory)."}
    },
    {
     "product": "ram_lfe",

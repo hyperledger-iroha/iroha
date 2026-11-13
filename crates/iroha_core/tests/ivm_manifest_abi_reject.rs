@@ -71,7 +71,6 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 4,
         abi_version,
     };
@@ -92,7 +91,7 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
 fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, syscall).to_le_bytes(),
+        &encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes(),
     );
     for instruction in [
         ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
@@ -106,7 +105,6 @@ fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 5,
         abi_version,
     };

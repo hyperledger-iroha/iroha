@@ -1413,6 +1413,9 @@ fn first_genesis_execution_error(
             ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
                 format!("time output#{index}")
             }
+            ExecutionOutputV1::GovernanceBlockStart(_) => {
+                format!("governance block-start output#{index}")
+            }
         };
         Some(format!("{source}: {error}; details: {error:?}"))
     })

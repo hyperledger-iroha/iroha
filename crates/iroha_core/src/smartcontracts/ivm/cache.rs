@@ -217,7 +217,19 @@ impl PreparedContractCache {
         code_hash: Hash,
         bytecode: &[u8],
     ) -> Result<ivm::PreparedContract, ivm::VMError> {
-        self.get_or_prepare_with_status(code_hash, bytecode)
+        self.get_or_prepare_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Prepare under the exact named profile selected by the caller's execution root.
+    ///
+    /// # Errors
+    /// Returns the original admission/refusal error, including on a cache-policy mismatch.
+    pub fn get_or_prepare_for_policy(
+        &self,
+        code_hash: Hash,
+        bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
+    ) -> Result<ivm::PreparedContract, ivm::VMError> {
+        self.get_or_prepare_with_status_for_policy(code_hash, bytecode, policy)
             .map(|(contract, _)| contract)
     }
     /// Resolve an already prepared artifact by its trusted content address.
@@ -227,8 +239,20 @@ impl PreparedContractCache {
     /// performs neither a bytecode clone nor another parse/hash/predecode pass.
     #[must_use]
     pub fn get(&self, code_hash: Hash) -> Option<ivm::PreparedContract> {
+        self.get_for_policy(code_hash, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Resolve trusted content only under the requested exact named profile.
+    #[must_use]
+    pub fn get_for_policy(
+        &self,
+        code_hash: Hash,
+        policy: ivm::SyscallPolicy,
+    ) -> Option<ivm::PreparedContract> {
         self.with_store(|store| {
             let contract = store.entries.get(&code_hash).cloned()?;
+            if contract.syscall_policy() != policy {
+                return None;
+            }
             store.stats.hits = store.stats.hits.saturating_add(1);
             store.touch(code_hash);
             Some(contract)
@@ -239,8 +263,18 @@ impl PreparedContractCache {
         code_hash: Hash,
         bytecode: &[u8],
     ) -> Result<(ivm::PreparedContract, bool), ivm::VMError> {
+        self.get_or_prepare_with_status_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
+    }
+    fn get_or_prepare_with_status_for_policy(
+        &self,
+        code_hash: Hash,
+        bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
+    ) -> Result<(ivm::PreparedContract, bool), ivm::VMError> {
         self.execution_budget
-            .with_deferred_refund_notifications(|_| self.prepare_with_claim(code_hash, bytecode))
+            .with_deferred_refund_notifications(|_| {
+                self.prepare_with_claim(code_hash, bytecode, policy)
+            })
     }
 
     // The caller's original-pool notification scope encloses this entire
@@ -249,6 +283,7 @@ impl PreparedContractCache {
         &self,
         code_hash: Hash,
         bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
     ) -> Result<(ivm::PreparedContract, bool), ivm::VMError> {
         let cached = self.with_store(|store| {
             loop {
@@ -266,6 +301,7 @@ impl PreparedContractCache {
             }
         });
         if let Some(contract) = cached {
+            require_prepared_policy(&contract, policy)?;
             return Ok((contract, false));
         }
         let mut claim = PreparationClaim {
@@ -273,8 +309,12 @@ impl PreparedContractCache {
             code_hash,
             active: true,
         };
-        let prepared = ivm::prepare_contract_with_memory_budget(bytecode, &self.execution_budget)
-            .map_err(ivm::ContractArtifactError::into_vm_error);
+        let prepared = ivm::prepare_contract_with_memory_budget_for_policy(
+            bytecode,
+            &self.execution_budget,
+            policy,
+        )
+        .map_err(ivm::ContractArtifactError::into_vm_error);
         #[cfg(test)]
         preparation_refund_tests::panic_after_preparation_if_requested();
         self.with_store(|store| {
@@ -1008,9 +1048,20 @@ impl IvmCache {
     /// # Errors
     /// Returns [`ivm::VMError`] if the bytecode is not a valid deployable contract.
     pub fn summarize_program(&mut self, bytecode: &[u8]) -> Result<ProgramSummary, ivm::VMError> {
+        self.summarize_program_for_policy(bytecode, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Summarize under an explicit profile selected by the root, including warm-cache checks.
+    ///
+    /// # Errors
+    /// Returns the original artifact or resource error.
+    pub fn summarize_program_for_policy(
+        &mut self,
+        bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
+    ) -> Result<ProgramSummary, ivm::VMError> {
         let code_hash = ivm::contract_code_hash(bytecode);
         self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
-        self.summarize_program_with_hash(code_hash, bytecode)
+        self.summarize_program_with_hash_for_policy(code_hash, bytecode, policy)
     }
     /// Validate and summarize either a self-describing contract or a generic ABI-bound IVM program.
     ///
@@ -1025,11 +1076,25 @@ impl IvmCache {
         &mut self,
         bytecode: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        let header = ProgramMetadata::parse_header(bytecode)?;
+        self.summarize_executable_for_policy(bytecode, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Validate a program under an explicitly selected named profile.
+    ///
+    /// # Errors
+    /// Returns the same artifact/refusal errors; named lifecycle profiles require CNTR.
+    pub fn summarize_executable_for_policy(
+        &mut self,
+        bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
+    ) -> Result<ExecutableProgramSummary, ivm::VMError> {
+        let header = ProgramMetadata::parse_header_for_policy(bytecode, policy)?;
         if header.declares_contract_interface() {
-            self.summarize_program(bytecode)
+            self.summarize_program_for_policy(bytecode, policy)
                 .map(ExecutableProgramSummary::Contract)
         } else {
+            if policy != ivm::SyscallPolicy::AbiV1 {
+                return Err(ivm::VMError::InvalidMetadata);
+            }
             self.summarize_generic_program(bytecode)
                 .map(ExecutableProgramSummary::Generic)
         }
@@ -1155,20 +1220,32 @@ impl IvmCache {
         code_hash: Hash,
         bytecode: &[u8],
     ) -> Result<ProgramSummary, ivm::VMError> {
-        if let Some(hit) = self.cached_program_summary(code_hash)? {
+        self.summarize_program_with_hash_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Summarize trusted content under an exact root-selected profile.
+    ///
+    /// # Errors
+    /// Returns the original artifact/refusal error; a cache hit never overrides policy.
+    pub fn summarize_program_with_hash_for_policy(
+        &mut self,
+        code_hash: Hash,
+        bytecode: &[u8],
+        policy: ivm::SyscallPolicy,
+    ) -> Result<ProgramSummary, ivm::VMError> {
+        if let Some(hit) = self.cached_program_summary_for_policy(code_hash, policy)? {
             return Ok(hit);
         }
         let key = SummaryKey::new(code_hash);
         let (prepared, prepared_now) = self
             .prepared_contracts
-            .get_or_prepare_with_status(code_hash, bytecode)?;
+            .get_or_prepare_with_status_for_policy(code_hash, bytecode, policy)?;
         if prepared_now {
             self.stats.preparations = self.stats.preparations.saturating_add(1);
         }
         let metadata = prepared.metadata().clone();
         let code_offset = prepared.code_offset();
         let header_len = prepared.header_len();
-        let meta_hash = Hash::new(metadata.encode());
+        let meta_hash = Hash::new(metadata.encode_for_policy(prepared.syscall_policy()));
         // Contract preparation has already compared the authenticated CNTR
         // binding with the local descriptor. Preserve the artifact-carried
         // value here so manifest checks never substitute node-local metadata.
@@ -1200,10 +1277,22 @@ impl IvmCache {
         &mut self,
         code_hash: Hash,
     ) -> Result<Option<ProgramSummary>, ivm::VMError> {
+        self.cached_program_summary_for_policy(code_hash, ivm::SyscallPolicy::AbiV1)
+    }
+    /// Read a summary only if its authenticated header matches the requested profile.
+    ///
+    /// # Errors
+    /// Returns an exact ABI mismatch or the existing immutable-cache conflict.
+    pub fn cached_program_summary_for_policy(
+        &mut self,
+        code_hash: Hash,
+        policy: ivm::SyscallPolicy,
+    ) -> Result<Option<ProgramSummary>, ivm::VMError> {
         let key = SummaryKey::new(code_hash);
         let Some(hit) = self.with_local(|local| local.summaries.get(&key).cloned()) else {
             return Ok(None);
         };
+        require_prepared_policy(&hit.prepared, policy)?;
         self.prepared_contracts.publish(hit.prepared.clone())?;
         self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
         self.touch_summary(key);
@@ -1976,7 +2065,7 @@ mod tests {
             ..ivm::ProgramMetadata::default()
         }
         .encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(0x00ff_ffff).to_le_bytes());
+        program.extend_from_slice(&ivm::encoding::wide::encode_scall(0x00ff_ffff).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         assert!(
             IvmCache::new().summarize_generic_program(&program).is_err(),
@@ -2011,7 +2100,7 @@ mod tests {
                 ..ivm::ProgramMetadata::default()
             }
             .encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let error = IvmCache::new()
                 .summarize_generic_program(&program)
@@ -2035,7 +2124,7 @@ mod tests {
                 ..ivm::ProgramMetadata::default()
             }
             .encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             IvmCache::new()
                 .summarize_generic_program(&program)
@@ -2960,3 +3049,258 @@ mod preparation_refund_tests;
 #[cfg(test)]
 #[path = "cache/range_tests.rs"]
 mod range_tests;
+
+/// Cache ownership is independent of root admission; exact requested policy remains mandatory.
+fn require_prepared_policy(
+    contract: &ivm::PreparedContract,
+    policy: ivm::SyscallPolicy,
+) -> Result<(), ivm::VMError> {
+    if contract.syscall_policy() == policy {
+        return Ok(());
+    }
+    Err(ivm::VMError::ArtifactAbiHashMismatch {
+        expected: ivm::syscalls::compute_abi_hash(policy),
+        actual: ivm::syscalls::compute_abi_hash(contract.syscall_policy()),
+    })
+}
+
+impl PreparedContractCache {
+    /// Prepare original bytes with the exact policy admitted by this execution root.
+    ///
+    /// # Errors
+    /// Returns the original parser/preparation/refusal error, including warm-policy mismatches.
+    pub(crate) fn get_or_prepare_in_world(
+        &self,
+        world: &impl crate::state::WorldReadOnly,
+        code_hash: Hash,
+        bytes: &[u8],
+    ) -> Result<ivm::PreparedContract, ivm::VMError> {
+        self.get_or_prepare_for_policy(code_hash, bytes, super::artifact_policy(world, bytes))
+    }
+    /// Resolve a warm artifact without byte parsing, preserving the requesting root's policy.
+    pub(crate) fn get_in_world(
+        &self,
+        world: &impl crate::state::WorldReadOnly,
+        code_hash: Hash,
+    ) -> Result<Option<ivm::PreparedContract>, ivm::VMError> {
+        let found = self.with_store(|store| store.entries.get(&code_hash).cloned());
+        let Some(contract) = found else {
+            return Ok(None);
+        };
+        let policy = contract.syscall_policy();
+        if !super::named_policy_selected(world, policy) {
+            require_prepared_policy(&contract, ivm::SyscallPolicy::AbiV1)?;
+        }
+        Ok(self.get_for_policy(code_hash, policy))
+    }
+}
+impl IvmCache {
+    /// Summarize the original artifact under the exact root-selected policy.
+    pub(crate) fn summarize_executable_in_world(
+        &mut self,
+        world: &impl crate::state::WorldReadOnly,
+        bytes: &[u8],
+    ) -> Result<ExecutableProgramSummary, ivm::VMError> {
+        self.summarize_executable_for_policy(bytes, super::artifact_policy(world, bytes))
+    }
+    /// Summarize trusted content with its original root's explicit policy.
+    pub(crate) fn summarize_program_with_hash_in_world(
+        &mut self,
+        world: &impl crate::state::WorldReadOnly,
+        code_hash: Hash,
+        bytes: &[u8],
+    ) -> Result<ProgramSummary, ivm::VMError> {
+        if let Some(hit) = self.cached_program_summary_in_world(world, code_hash)? {
+            return Ok(hit);
+        }
+        self.summarize_program_with_hash_for_policy(
+            code_hash,
+            bytes,
+            super::artifact_policy(world, bytes),
+        )
+    }
+    /// Read a warm summary without letting shared cache residency authorize an inactive profile.
+    pub(crate) fn cached_program_summary_in_world(
+        &mut self,
+        world: &impl crate::state::WorldReadOnly,
+        code_hash: Hash,
+    ) -> Result<Option<ProgramSummary>, ivm::VMError> {
+        let key = SummaryKey::new(code_hash);
+        let Some(hit) = self.with_local(|local| local.summaries.get(&key).cloned()) else {
+            return Ok(None);
+        };
+        let policy = hit.prepared.syscall_policy();
+        if !super::named_policy_selected(world, policy) {
+            require_prepared_policy(&hit.prepared, ivm::SyscallPolicy::AbiV1)?;
+        }
+        self.cached_program_summary_for_policy(code_hash, policy)
+    }
+}
+
+impl IvmCache {
+    /// Prepare and summarize a contract using the exact policy selected by its original root.
+    pub(crate) fn summarize_program_in_world(
+        &mut self,
+        world: &impl crate::state::WorldReadOnly,
+        bytes: &[u8],
+    ) -> Result<ProgramSummary, ivm::VMError> {
+        self.summarize_program_for_policy(bytes, super::artifact_policy(world, bytes))
+    }
+}
+
+#[cfg(test)]
+mod named_profile_tests {
+    use super::*;
+    fn artifact() -> Vec<u8> {
+        let bytes = super::tests::minimal_program();
+        let parsed = ivm::ProgramMetadata::parse(&bytes).unwrap();
+        let mut interface = parsed.contract_interface.unwrap();
+        interface.abi_hash =
+            ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+        let mut named = parsed
+            .metadata
+            .encode_for_policy(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+        named.extend(interface.encode_section());
+        named.extend_from_slice(&bytes[parsed.code_offset..]);
+        named
+    }
+    #[test]
+    fn named_profile_query_cache_hits_and_misses_enforce_effective_restrictions() {
+        use crate::{
+            smartcontracts::ivm::host::{QueryStateRef, QueryStateRefOps as _},
+            state::{StateReadOnly as _, WorldReadOnly as _},
+        };
+        use iroha_data_model::runtime::definition::{
+            DefinitionDescriptorV1, RestrictionEntryV1, RestrictionV1,
+        };
+        let world = crate::state::World::new();
+        for module in [
+            crate::runtime::catalog::additions::RUNTIME_LIFECYCLE.module,
+            crate::runtime::catalog::additions::CONTRACT_LIFECYCLE.module,
+        ] {
+            crate::runtime::activate_additions_for_testing(&world, module).unwrap();
+        }
+        let bytes = artifact();
+        let hash = ivm::contract_code_hash(&bytes);
+        let cache = PreparedContractCache::with_capacity(4);
+        let original = cache
+            .get_or_prepare_in_world(&world.view(), hash, &bytes)
+            .unwrap();
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            hash,
+        );
+        let mut block = world.block();
+        let named = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+        let profile = *block.runtime_selection.get().active.iter().find(|id| matches!(
+            block.runtime_definitions.get(id), Some(DefinitionDescriptorV1::HostProfile(profile)) if profile.abi_hash == named
+        )).unwrap();
+        block.contract_code.insert(artifact_id, bytes);
+        block
+            .runtime_selection
+            .get_mut()
+            .restrictions
+            .push(RestrictionEntryV1 {
+                definition: profile,
+                restriction: RestrictionV1::CompletionOnly(0),
+            });
+        block
+            .runtime_selection
+            .get_mut()
+            .restrictions
+            .sort_by_key(|restriction| restriction.definition);
+        block.commit();
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let query = QueryStateRef::View(&view);
+        assert_eq!(
+            query.prepare_contract_cache_hit(&cache, hash).unwrap_err(),
+            ivm::VMError::PermissionDenied
+        );
+        let cold = PreparedContractCache::with_capacity(4);
+        assert_eq!(
+            query
+                .prepare_contract_cache_miss(&cold, artifact_id)
+                .unwrap_err(),
+            ivm::VMError::PermissionDenied
+        );
+        assert_eq!(
+            original.syscall_policy(),
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        assert_eq!(view.height(), 0);
+        assert!(view.world().runtime_selection().active.contains(&profile));
+    }
+    #[test]
+    fn named_profile_warm_cache_never_borrows_another_roots_authority() {
+        let baseline = crate::state::World::new();
+        let selected = crate::state::World::new();
+        crate::runtime::activate_additions_for_testing(
+            &selected,
+            crate::runtime::catalog::additions::RUNTIME_LIFECYCLE.module,
+        )
+        .unwrap();
+        crate::runtime::activate_additions_for_testing(
+            &selected,
+            crate::runtime::catalog::additions::CONTRACT_LIFECYCLE.module,
+        )
+        .unwrap();
+        let bytes = artifact();
+        let hash = ivm::contract_code_hash(&bytes);
+        let prepared = PreparedContractCache::with_capacity(4);
+        assert!(
+            prepared
+                .get_or_prepare_in_world(&baseline.view(), hash, &bytes)
+                .is_err()
+        );
+        let first = prepared
+            .get_or_prepare_in_world(&selected.view(), hash, &bytes)
+            .unwrap();
+        assert_eq!(
+            first.syscall_policy(),
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        assert!(prepared.get_or_prepare(hash, &[]).is_err());
+        assert!(prepared.get(hash).is_none());
+        assert!(prepared.get_in_world(&baseline.view(), hash).is_err());
+        assert!(
+            prepared
+                .get_in_world(&selected.view(), hash)
+                .unwrap()
+                .is_some()
+        );
+        let mut summaries = IvmCache::with_prepared_contract_cache(4, prepared);
+        summaries
+            .summarize_program_with_hash_in_world(&selected.view(), hash, &bytes)
+            .unwrap();
+        assert!(summaries.cached_program_summary(hash).is_err());
+        assert!(
+            summaries
+                .cached_program_summary_in_world(&baseline.view(), hash)
+                .is_err()
+        );
+        assert!(
+            summaries
+                .summarize_program_with_hash_in_world(&selected.view(), hash, &[])
+                .is_ok()
+        );
+        assert!(
+            summaries
+                .summarize_executable_in_world(&baseline.view(), &bytes)
+                .is_err()
+        );
+        assert!(
+            summaries
+                .summarize_executable_in_world(&selected.view(), &bytes)
+                .is_ok()
+        );
+        assert_eq!(
+            super::super::artifact_policy(&selected.view(), b"short"),
+            ivm::SyscallPolicy::AbiV1
+        );
+    }
+}

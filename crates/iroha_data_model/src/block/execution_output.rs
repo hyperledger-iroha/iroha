@@ -19,7 +19,12 @@ use norito::codec::{Decode, Encode};
 use super::BlockHeader;
 use crate::{
     events::{time::TimeEvent, trigger_completed::TriggerCompletedOutcome},
-    governance::anonymous_ballot::AnonymousBallotRejectionV1,
+    governance::anonymous_ballot::{
+        AnonymousBallotRejectionV1, GOVERNANCE_START_OUTPUT_BYTES_V1,
+        GOVERNANCE_START_OUTPUT_ROWS_V1, GOVERNANCE_START_PRELUDE_ROWS_V1,
+        GOVERNANCE_START_ROWS_PER_ITEM_V1, GovernanceBlockStartEventV1,
+        GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1,
+    },
     transaction::{
         error::TransactionRejectionReason,
         signed::{ExecutionStep, TransactionEntrypoint, TransactionResult},
@@ -320,6 +325,11 @@ pub enum ExecutionOutputV1 {
     PipelineWithLifecycle(PipelineExecutionOutputV2),
     /// Explicit complete lifecycle coverage for a post-activation Time invocation.
     TimeWithLifecycle(TimeExecutionOutputV2),
+    /// One committed output of the governance block-start pass
+    /// (`specs/parliament_private_ballot_design.md` §12.3). Appended after all earlier tags.
+    /// These rows precede every Network row of their block, in emission order, and belong to
+    /// no input, invocation or execution call.
+    GovernanceBlockStart(GovernanceBlockStartOutputV1),
 }
 
 /// Full execution result for one network source; the input body is not duplicated.
@@ -496,6 +506,15 @@ enum ExecutionOutputRef<'a> {
     Network(&'a NetworkExecutionOutputV1),
     Pipeline(&'a PipelineExecutionOutputV1),
     Time(&'a TimeExecutionOutputV1),
+    /// A governance block-start row: no input, invocation, result or completion.
+    Governance(&'a GovernanceBlockStartOutputV1),
+}
+
+/// The result every governance block-start row projects: applied, with an empty trace. The
+/// pass applies its transition before it emits the row, and the row itself is the record.
+fn governance_start_result() -> &'static TransactionResult {
+    static APPLIED: std::sync::OnceLock<TransactionResult> = std::sync::OnceLock::new();
+    APPLIED.get_or_init(|| TransactionResult::new(Ok(Vec::new())))
 }
 
 /// Borrowed random access to the complete network-input projection.
@@ -553,7 +572,17 @@ impl ExecutionOutputV1 {
     pub fn network(&self) -> Option<&NetworkExecutionOutputV1> {
         match self.execution_ref() {
             ExecutionOutputRef::Network(row) => Some(row),
-            ExecutionOutputRef::Pipeline(_) | ExecutionOutputRef::Time(_) => None,
+            ExecutionOutputRef::Pipeline(_)
+            | ExecutionOutputRef::Time(_)
+            | ExecutionOutputRef::Governance(_) => None,
+        }
+    }
+
+    /// Borrow the governance block-start output of a governance-start row.
+    pub fn governance_block_start(&self) -> Option<&GovernanceBlockStartOutputV1> {
+        match self {
+            Self::GovernanceBlockStart(output) => Some(output),
+            _ => None,
         }
     }
 
@@ -565,13 +594,17 @@ impl ExecutionOutputV1 {
             Self::NetworkWithLifecycle(row) => ExecutionOutputRef::Network(&row.execution),
             Self::PipelineWithLifecycle(row) => ExecutionOutputRef::Pipeline(&row.execution),
             Self::TimeWithLifecycle(row) => ExecutionOutputRef::Time(&row.execution),
+            Self::GovernanceBlockStart(row) => ExecutionOutputRef::Governance(row),
         }
     }
 
     /// Borrow explicit lifecycle coverage; `None` means historical, not empty.
     pub fn trigger_lifecycle(&self) -> Option<&TriggerLifecycleEffectsV1> {
         match self {
-            Self::Network(_) | Self::Pipeline(_) | Self::Time(_) => None,
+            Self::Network(_)
+            | Self::Pipeline(_)
+            | Self::Time(_)
+            | Self::GovernanceBlockStart(_) => None,
             Self::NetworkWithLifecycle(row) => Some(&row.trigger_lifecycle),
             Self::PipelineWithLifecycle(row) => Some(&row.trigger_lifecycle),
             Self::TimeWithLifecycle(row) => Some(&row.trigger_lifecycle),
@@ -704,6 +737,7 @@ impl ExecutionOutputV1 {
         }
         let (trigger, diagnostic, completions) = match self.execution_ref() {
             ExecutionOutputRef::Network(output) => return output.completions.is_empty(),
+            ExecutionOutputRef::Governance(_) => return false,
             ExecutionOutputRef::Pipeline(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
@@ -731,7 +765,7 @@ impl ExecutionOutputV1 {
         use crate::transaction::error::TransactionRejectionReason;
 
         let (trigger, diagnostic, completions) = match self.execution_ref() {
-            ExecutionOutputRef::Network(_) => return false,
+            ExecutionOutputRef::Network(_) | ExecutionOutputRef::Governance(_) => return false,
             ExecutionOutputRef::Pipeline(output) => (
                 &output.invocation.trigger,
                 &output.failure_root,
@@ -760,12 +794,14 @@ impl ExecutionOutputV1 {
                         if reason == INTERNAL_REJECTION_DIAGNOSTIC_OMITTED))
     }
 
-    /// Borrow the one full result without projecting away its receipts.
+    /// Borrow the one full result without projecting away its receipts. A governance
+    /// block-start row has no execution: it projects the applied empty trace.
     pub fn result(&self) -> &TransactionResult {
         match self.execution_ref() {
             ExecutionOutputRef::Network(NetworkExecutionOutputV1 { result, .. })
             | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { result, .. })
             | ExecutionOutputRef::Time(TimeExecutionOutputV1 { result, .. }) => result,
+            ExecutionOutputRef::Governance(_) => governance_start_result(),
         }
     }
 
@@ -775,6 +811,7 @@ impl ExecutionOutputV1 {
             ExecutionOutputRef::Network(NetworkExecutionOutputV1 { completions, .. })
             | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { completions, .. })
             | ExecutionOutputRef::Time(TimeExecutionOutputV1 { completions, .. }) => completions,
+            ExecutionOutputRef::Governance(_) => &[],
         }
     }
 
@@ -802,6 +839,9 @@ impl ExecutionOutputV1 {
             ExecutionOutputRef::Time(TimeExecutionOutputV1 { invocation, .. }) => {
                 invocation.execution_call_hash(proposal)
             }
+            ExecutionOutputRef::Governance(_) => {
+                Err("a governance block-start output has no execution call".into())
+            }
         }
     }
 
@@ -824,6 +864,19 @@ impl ExecutionOutputV1 {
             return Err("execution output proposal height is zero".into());
         }
         let internal = match self.execution_ref() {
+            ExecutionOutputRef::Governance(output) => {
+                // The pass that emitted the row is not authenticated here: only its anchor
+                // kind, its block and its own row cap. The partition and the order of the
+                // rows of one block are checked over the complete collection.
+                output.validate().map_err(|error| error.to_string())?;
+                if output.anchor.height() != proposal_height {
+                    return Err("governance block-start output names another block".into());
+                }
+                if governance_start_row_bytes(self)? > output.row_cap_bytes() {
+                    return Err("governance block-start output exceeds its row cap".into());
+                }
+                return Ok(());
+            }
             ExecutionOutputRef::Network(NetworkExecutionOutputV1 {
                 input_index,
                 result,
@@ -992,6 +1045,9 @@ impl ExecutionOutputV1 {
                 ExecutionOutputRef::Time(row) => {
                     TriggerLifecycleOwnerV1::Time(&row.invocation.trigger)
                 }
+                ExecutionOutputRef::Governance(_) => {
+                    unreachable!("a governance block-start row returned before its trace")
+                }
             };
             trace.validate_structure(
                 owner,
@@ -1006,8 +1062,9 @@ impl ExecutionOutputV1 {
 
 /// Check canonical source/phase order and top-level call ownership.
 ///
-/// Exactly one Network row precedes internal rows for each supplied network
-/// input. Pipeline candidates and Time schedule positions may have gaps after
+/// Governance block-start rows come first and fit their partition
+/// ([`validate_governance_start_rows_v1`]). Exactly one Network row precedes internal rows
+/// for each supplied network input. Pipeline candidates and Time schedule positions may have gaps after
 /// actual use-time skips. Internal events/actions remain untrusted claims.
 /// Only anonymous Network inputs may repeat a call hash, with each occurrence
 /// still owned by its unique source index. Every other call hash remains unique.
@@ -1029,6 +1086,8 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     {
         return Err("execution output position exceeds u32".into());
     }
+    let governance_rows = validate_governance_start_rows_v1(outputs, proposal_height)?;
+    let outputs = &outputs[governance_rows..];
     let mut network_count = 0_usize;
     let mut phase = 0_u8;
     let mut previous_pipeline = None;
@@ -1071,6 +1130,9 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 previous_time = Some(invocation.schedule_index);
                 time_event = Some(invocation.event);
             }
+            ExecutionOutputRef::Governance(_) => {
+                return Err("governance block-start output follows an execution row".into());
+            }
         }
         let (call, anonymous_network) = match output.execution_ref() {
             ExecutionOutputRef::Network(row) => {
@@ -1098,6 +1160,114 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     Ok(())
 }
 
+/// Complete canonical frame length of one governance block-start row: every limit of the
+/// governance-start partition is measured on the complete [`ExecutionOutputV1`] row frame.
+fn governance_start_row_bytes(row: &ExecutionOutputV1) -> Result<u64, String> {
+    u64::try_from(norito::canonical_frame_len(row).map_err(|error| error.to_string())?)
+        .map_err(|_| "governance block-start row length exceeds u64".into())
+}
+
+/// Count the governance block-start rows that lead `outputs`.
+#[must_use]
+pub fn governance_start_row_count_v1(outputs: &[ExecutionOutputV1]) -> usize {
+    outputs
+        .iter()
+        .take_while(|output| matches!(output, ExecutionOutputV1::GovernanceBlockStart(_)))
+        .count()
+}
+
+/// Check the governance block-start rows that lead `outputs` against the governance-start
+/// partition of the block at `proposal_height`, and return how many there are.
+///
+/// The prelude's casting clocks come first, at most
+/// [`GOVERNANCE_START_PRELUDE_ROWS_V1`] and one per scope. The rows of the positioned items
+/// follow in processing order: positions never decrease, a position has at most
+/// [`GOVERNANCE_START_ROWS_PER_ITEM_V1`] rows, and its first row is its receipt. Every row
+/// names this block and one block time and fits its own cap; together they fit
+/// [`GOVERNANCE_START_OUTPUT_ROWS_V1`] rows and [`GOVERNANCE_START_OUTPUT_BYTES_V1`] complete
+/// row bytes. This is a shape check: it does not authenticate the pass that emitted the rows.
+///
+/// # Errors
+/// The first rule a row violates.
+pub fn validate_governance_start_rows_v1(
+    outputs: &[ExecutionOutputV1],
+    proposal_height: u64,
+) -> Result<usize, String> {
+    let count = governance_start_row_count_v1(outputs);
+    if count > GOVERNANCE_START_OUTPUT_ROWS_V1 as usize {
+        return Err("governance block-start rows exceed their partition".into());
+    }
+    let mut bytes = 0_u64;
+    let mut timestamp_ms = None;
+    let mut clocked = BTreeSet::new();
+    // The position of the last positioned row and how many rows it has so far.
+    let mut position: Option<(u32, u32)> = None;
+    for row in &outputs[..count] {
+        let ExecutionOutputV1::GovernanceBlockStart(output) = row else {
+            unreachable!("counted as a leading governance block-start row")
+        };
+        output.validate().map_err(|error| error.to_string())?;
+        if output.anchor.height() != proposal_height {
+            return Err("governance block-start output names another block".into());
+        }
+        if timestamp_ms.is_some_and(|first| first != output.anchor.timestamp_ms()) {
+            return Err("governance block-start outputs name two block times".into());
+        }
+        let row_bytes = governance_start_row_bytes(row)?;
+        if row_bytes > output.row_cap_bytes() {
+            return Err("governance block-start output exceeds its row cap".into());
+        }
+        timestamp_ms = Some(output.anchor.timestamp_ms());
+        bytes = bytes
+            .checked_add(row_bytes)
+            .filter(|bytes| *bytes <= GOVERNANCE_START_OUTPUT_BYTES_V1)
+            .ok_or("governance block-start rows exceed their byte partition")?;
+        match (&output.anchor, &output.event) {
+            (
+                GovernanceOutputAnchorV1::CastingClockPrelude { .. },
+                GovernanceBlockStartEventV1::CastingClockEstablished(clock),
+            ) => {
+                if position.is_some() {
+                    return Err("a casting clock follows a positioned governance output".into());
+                }
+                if !clocked.insert(clock.scope)
+                    || clocked.len() > GOVERNANCE_START_PRELUDE_ROWS_V1 as usize
+                {
+                    return Err("the casting-clock prelude repeats a scope or exceeds K".into());
+                }
+            }
+            (GovernanceOutputAnchorV1::Pass(anchor), event) => {
+                position = Some(match position {
+                    Some((previous, _)) if anchor.position < previous => {
+                        return Err("governance block-start positions decrease".into());
+                    }
+                    Some((previous, rows)) if anchor.position == previous => {
+                        if rows >= GOVERNANCE_START_ROWS_PER_ITEM_V1 || event.is_receipt() {
+                            return Err(
+                                "a positioned governance item emits a receipt, then at most one output"
+                                    .into(),
+                            );
+                        }
+                        (previous, rows + 1)
+                    }
+                    _ => {
+                        if !event.is_receipt() {
+                            return Err(
+                                "a positioned governance item must emit its receipt first".into()
+                            );
+                        }
+                        (anchor.position, 1)
+                    }
+                });
+            }
+            (GovernanceOutputAnchorV1::CastingClockPrelude { .. }, _) => {
+                unreachable!("validated: only a casting clock carries the prelude anchor")
+            }
+        }
+    }
+    Ok(count)
+}
+
 /// Require explicit lifecycle coverage for every output in one complete block.
 ///
 /// This adds carrier and complete Action-frame validation requirements to all
@@ -1111,7 +1281,8 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
 /// only under those original block/input checks; it says nothing about old history.
 ///
 /// # Errors
-/// Refuses historical or mixed carriers and any malformed output collection.
+/// Refuses historical or mixed carriers and any malformed output collection. Leading
+/// governance block-start rows are outside this coverage: they run no trigger.
 pub fn validate_execution_outputs_with_lifecycle_v1<
     S: ExecutionInputs + ?Sized,
     V: TriggerLifecycleActionValidatorV1 + ?Sized,
@@ -1159,11 +1330,13 @@ pub fn validate_execution_outputs_with_lifecycle_budget_v1<
         return Err("lifecycle Action frame validation range already refused".into());
     }
     let result = (|| {
-        for output in outputs {
+        // Governance block-start rows run no trigger and carry no lifecycle journal.
+        let executions = &outputs[governance_start_row_count_v1(outputs)..];
+        for output in executions {
             output.require_trigger_lifecycle()?;
         }
         validate_execution_outputs_v1(outputs, proposal, proposal_height, network_inputs)?;
-        for output in outputs {
+        for output in executions {
             output
                 .require_trigger_lifecycle()?
                 .validate_action_frames(budget, action_validator)?;

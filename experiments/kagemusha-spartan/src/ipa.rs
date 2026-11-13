@@ -41,10 +41,10 @@ pub struct Gens<C: PastaCurve> {
 /// (`ZKS_KBENCH=roundcommit`: 0.19 ms against 0.51 ms for the generic MSM).
 const ROUND_WINDOW: usize = 9;
 
-/// Whether the review lane's prover kernels are off (`ZKS_KERN=old`): the
-/// same binary then runs the earlier code paths, for A/B runs.
+/// The backend has one pinned prover implementation. Benchmark environment
+/// variables cannot change a native wallet's cryptographic execution path.
 pub fn old_kernels() -> bool {
-    std::env::var("ZKS_KERN").as_deref() == Ok("old")
+    false
 }
 
 impl<C: PastaCurve> Gens<C> {

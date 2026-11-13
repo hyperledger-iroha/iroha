@@ -670,8 +670,7 @@ fn authenticate_with_activation_policy(
                 lifecycle_trace::check_occurrence(
                     output,
                     &trigger,
-                    registered_height,
-                    registered_ms,
+                    (registered_height, registered_ms),
                     retry,
                     time_ms,
                     disposition,

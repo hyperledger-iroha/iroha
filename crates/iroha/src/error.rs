@@ -251,6 +251,18 @@ impl Error {
             _ => None,
         }
     }
+
+    /// One valid `Retry-After` delta of a Torii rejection, with or without an envelope.
+    ///
+    /// A hint for caller policy; it never causes a retry.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Api { error, .. } => error.retry_after(),
+            Self::Http { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 /// Largest response body inspected for a Torii error envelope.
@@ -293,6 +305,13 @@ impl ApiError {
     #[must_use]
     pub fn with_details(mut self, details: ApiErrorDetails) -> Self {
         self.details = Some(details);
+        self
+    }
+
+    /// Attach a `Retry-After` hint.
+    #[must_use]
+    pub const fn with_retry_after(mut self, retry_after: Duration) -> Self {
+        self.retry_after = Some(retry_after);
         self
     }
 

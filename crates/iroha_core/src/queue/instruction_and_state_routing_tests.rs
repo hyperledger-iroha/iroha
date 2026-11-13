@@ -5,7 +5,6 @@ fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1,
         abi_version: 1,
     }
@@ -160,7 +159,6 @@ fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles,
         abi_version,
     }

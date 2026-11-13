@@ -27,6 +27,278 @@ fn initial_snapshot_generation_owned_root_without_current_is_not_found() {
 }
 
 #[test]
+fn unpointed_signed_generation_discovery_keeps_custody_identity_and_floor_checks() {
+    let root = tempdir().unwrap();
+    let key = checked_random_snapshot_keypair();
+    let (_, published) = publish_test_snapshot_generation(root.path(), b"signed original", &key);
+    let chain = ChainId::from(TEST_CHAIN_ID);
+    let network = snapshot_test_network_id();
+    let candidates =
+        restorable_snapshot_generations(root.path(), 1, 0, key.public_key(), &chain, network)
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        candidates.names,
+        vec![SnapshotLocation::Generation(published.name.clone())]
+    );
+    let selected = bind_snapshot_generation_with_mode(
+        root.path(),
+        1024,
+        TEST_CHUNK_SIZE,
+        false,
+        Some(&published.name),
+    )
+    .unwrap();
+    selected.verify_selection_unchanged().unwrap();
+    assert!(matches!(
+        bind_snapshot_generation_with_mode(root.path(), 1024, TEST_CHUNK_SIZE, true, None),
+        Err(TryReadError::NotFound),
+    ));
+    assert!(
+        restorable_snapshot_generations(root.path(), 1, 1, key.public_key(), &chain, network)
+            .unwrap()
+            .unwrap()
+            .names
+            .is_empty()
+    );
+    assert!(
+        restorable_snapshot_generations(
+            root.path(),
+            1,
+            0,
+            key.public_key(),
+            &ChainId::from("foreign"),
+            network
+        )
+        .unwrap()
+        .is_none()
+    );
+    let wrong_key = checked_random_snapshot_keypair();
+    assert!(
+        restorable_snapshot_generations(root.path(), 1, 0, wrong_key.public_key(), &chain, network)
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(
+        root.path().join(SNAPSHOT_CURRENT_FILE_NAME),
+        format!("{}\n", published.name),
+    )
+    .unwrap();
+    assert!(matches!(
+        selected.verify_selection_unchanged(),
+        Err(TryReadError::SnapshotBindingChanged(_))
+    ));
+    selected.verify_generation_unchanged().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn unpointed_signed_generation_discovery_rejects_directory_aliases() {
+    let root = tempdir().unwrap();
+    let foreign = tempdir().unwrap();
+    let key = checked_random_snapshot_keypair();
+    let generations = root.path().join(SNAPSHOT_GENERATIONS_DIR_NAME);
+    std::os::unix::fs::symlink(foreign.path(), &generations).unwrap();
+    assert!(matches!(
+        restorable_snapshot_generations(
+            root.path(),
+            1,
+            0,
+            key.public_key(),
+            &ChainId::from(TEST_CHAIN_ID),
+            snapshot_test_network_id()
+        ),
+        Err(TryReadError::SnapshotBindingChanged(_)),
+    ));
+}
+
+#[tokio::test]
+async fn retained_checkpoint_restores_at_floor_after_rolling_generation_is_removed() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let floor = crate::state::upgrade_checkpoint::UpgradeCheckpointV1 {
+        height: chain.height(),
+        block_hash: chain.state().latest_block_hash_fast().unwrap(),
+    };
+    let committed_ms = chain
+        .state()
+        .view()
+        .native_execution_tip
+        .get()
+        .expect("original native tip")
+        .creation_time_ms();
+    let name = std::fs::read_to_string(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
+    checkpoint_store::keep(
+        root.path(),
+        &root
+            .path()
+            .join(SNAPSHOT_GENERATIONS_DIR_NAME)
+            .join(name.trim_end()),
+        floor.height,
+        committed_ms,
+        defaults::snapshot::MAX_PAYLOAD_BYTES,
+        TEST_CHUNK_SIZE,
+    )
+    .unwrap();
+    // Both independently held copies still satisfy strict single-link file custody.
+    bind_current_snapshot_generation(
+        root.path(),
+        defaults::snapshot::MAX_PAYLOAD_BYTES.get() as u64,
+        TEST_CHUNK_SIZE,
+    )
+    .unwrap();
+    chain.commit(Vec::new());
+    chain.kura().record_history_boundary(&floor).unwrap();
+    std::fs::remove_file(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
+    std::fs::remove_dir_all(root.path().join(SNAPSHOT_GENERATIONS_DIR_NAME)).unwrap();
+    let budget = snapshot_read_budget_for_testing();
+    let mut restored = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("a retained checkpoint at the exact durable floor remains restorable after rolling GC");
+    authenticate_native_snapshot(chain.state(), &mut restored);
+    assert_eq!(restored.committed_height() as u64, floor.height);
+    assert_eq!(restored.latest_block_hash_fast(), Some(floor.block_hash));
+    let retained = checkpoint_store::checkpoints_dir(root.path())
+        .join(format!("{}-{committed_ms}", floor.height));
+    let renamed = checkpoint_store::checkpoints_dir(root.path()).join(format!(
+        "{}-{}",
+        floor.height,
+        committed_ms + 1
+    ));
+    std::fs::rename(&retained, &renamed).unwrap();
+    let error = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .err()
+    .expect("renaming a retained checkpoint cannot change its authenticated committed time");
+    assert!(
+        matches!(error, TryReadError::SnapshotGenerationInvalid { .. }),
+        "{error:?}"
+    );
+    std::fs::rename(&renamed, &retained).unwrap();
+    let newer = crate::state::upgrade_checkpoint::UpgradeCheckpointV1 {
+        height: chain.height(),
+        block_hash: chain.state().latest_block_hash_fast().unwrap(),
+    };
+    chain.kura().record_history_boundary(&newer).unwrap();
+    let error = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| panic!("an older retained checkpoint cannot cross the durable floor"),
+    )
+    .err()
+    .expect("retained checkpoints must obey the same floor as rolling generations");
+    assert!(
+        matches!(error, TryReadError::InvalidSnapshotBoundary(_)),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn held_checkpoints_bound_sidecars_and_parent_custody() {
+    let root = tempdir().unwrap();
+    let store = root.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), &store, &key, TEST_CHUNK_SIZE).unwrap();
+    let name = std::fs::read_to_string(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
+    let committed_ms = chain
+        .state()
+        .view()
+        .native_execution_tip
+        .get()
+        .expect("original native tip")
+        .creation_time_ms();
+    checkpoint_store::keep(
+        &store,
+        &store
+            .join(SNAPSHOT_GENERATIONS_DIR_NAME)
+            .join(name.trim_end()),
+        chain.height(),
+        committed_ms,
+        defaults::snapshot::MAX_PAYLOAD_BYTES,
+        TEST_CHUNK_SIZE,
+    )
+    .unwrap();
+    let config = Config {
+        mode: Mode::ReadWrite,
+        create_every_ms: defaults::snapshot::CREATE_EVERY.into(),
+        store_dir: WithOrigin::inline(store.clone()),
+        merkle_chunk_size_bytes: TEST_CHUNK_SIZE,
+        max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
+        max_read_buffer_bytes: defaults::snapshot::MAX_READ_BUFFER_BYTES,
+        resources: SnapshotResourcePolicy::default(),
+        verification_public_key: None,
+        signing_private_key: None,
+        upgrade_checkpoint: iroha_config::parameters::user::SnapshotUpgradeCheckpoint::default(),
+    };
+    let checkpoints = checkpoints::SnapshotCheckpoints::from_config(
+        &config,
+        key.public_key().clone(),
+        snapshot_read_budget_for_testing(),
+    );
+    let held = || {
+        checkpoints.held(
+            chain.state().chain_id_ref(),
+            *chain.state().network_id_ref(),
+        )
+    };
+    assert_eq!(held().unwrap().len(), 1);
+    let directory = checkpoint_store::checkpoints_dir(&store);
+    let digest_path = directory
+        .join(format!("{}-{committed_ms}", chain.height()))
+        .join(SNAPSHOT_DIGEST_FILE_NAME);
+    let digest = std::fs::read(&digest_path).unwrap();
+    for invalid in [
+        vec![b'0'; SNAPSHOT_DIGEST_MAX_BYTES as usize + 1],
+        b"00\n".to_vec(),
+    ] {
+        std::fs::write(&digest_path, invalid).unwrap();
+        assert!(held().unwrap().is_empty());
+    }
+    std::fs::write(&digest_path, digest).unwrap();
+    assert_eq!(held().unwrap().len(), 1);
+    #[cfg(unix)]
+    {
+        let moved = store.join("moved-checkpoints");
+        std::fs::rename(&directory, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &directory).unwrap();
+        assert!(matches!(
+            held(),
+            Err(TryReadError::SnapshotBindingChanged(_))
+        ));
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::rename(&moved, &directory).unwrap();
+        let moved_store = root.path().join("moved-store");
+        std::fs::rename(&store, &moved_store).unwrap();
+        std::os::unix::fs::symlink(&moved_store, &store).unwrap();
+        assert!(matches!(
+            held(),
+            Err(TryReadError::SnapshotBindingChanged(_))
+        ));
+    }
+}
+
+#[test]
 fn initial_snapshot_generation_current_without_generations_is_fatal_io() {
     let root = tempdir().expect("owned snapshot root");
     let pointer_path = root.path().join(SNAPSHOT_CURRENT_FILE_NAME);
@@ -1952,7 +2224,7 @@ async fn native_snapshot_at_the_kura_tip_waits_for_its_certified_successor() {
     );
 }
 #[tokio::test]
-async fn native_snapshot_restores_its_world_against_the_certified_successor() {
+async fn native_snapshot_authenticates_complete_state_against_the_certified_successor() {
     let root = tempdir().unwrap();
     let mut chain = native_snapshot_chain();
     chain.commit(Vec::new());
@@ -1960,10 +2232,9 @@ async fn native_snapshot_restores_its_world_against_the_certified_successor() {
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
     let snapshot_tip = chain.state().latest_block_hash_fast();
-    let snapshot_root = chain.state().verify_world_state_accumulator().unwrap();
     chain.commit(Vec::new());
     let budget = snapshot_read_budget_for_testing();
-    let restored = strict_snapshot_read_for_custody_test(
+    let mut restored = strict_snapshot_read_for_custody_test(
         root.path(),
         chain.state(),
         chain.kura(),
@@ -1971,15 +2242,29 @@ async fn native_snapshot_restores_its_world_against_the_certified_successor() {
         &budget,
         &|_| Ok(()),
     )
-    .expect("the certified successor authenticates the restored World");
+    .expect("the certified successor supplies the complete-State root claim");
     assert_eq!(restored.committed_height(), 3);
     assert_eq!(restored.latest_block_hash_fast(), snapshot_tip);
+    authenticate_native_snapshot(chain.state(), &mut restored);
+    assert!(!restored.authenticate_restored_keyed_state().unwrap());
+}
+#[tokio::test]
+async fn native_world_only_snapshot_is_refused_even_with_a_certified_successor() {
+    let root = tempdir().unwrap();
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+        crate::sumeragi::test_chain::TestChainConfig::new(crate::state::World::new(), 1_000),
+    )
+    .unwrap();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    // Even original, locally signed bytes with a matching World root leave State-level
+    // fields unauthenticated. Refuse before the initializer or durable journal recovery.
+    let original_root = chain.state().verify_world_state_accumulator().unwrap();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    chain.commit(Vec::new());
     assert_eq!(
-        restored.verify_world_state_accumulator().unwrap(),
-        snapshot_root
-    );
-    assert_eq!(
-        snapshot_root.as_ref(),
+        original_root.as_ref(),
         chain
             .committed(4)
             .commitment()
@@ -1987,34 +2272,6 @@ async fn native_snapshot_restores_its_world_against_the_certified_successor() {
             .parent_world_state_root
             .as_ref()
     );
-}
-#[tokio::test]
-async fn native_snapshot_with_a_tampered_world_is_refused_against_its_successor() {
-    let root = tempdir().unwrap();
-    let mut chain = native_snapshot_chain();
-    chain.commit(Vec::new());
-    chain.commit(Vec::new());
-    let key = checked_random_snapshot_keypair();
-    // Change one hex digit of the stored accumulator in place, keeping the canonical field
-    // order: the World no longer matches what it claims to commit.
-    let mut tampered = exact_snapshot_payload_bytes(chain.state());
-    let payload = std::str::from_utf8(&tampered).unwrap();
-    let cell = payload
-        .find("\"state_accumulator\":")
-        .expect("snapshot World carries its state accumulator");
-    let value = cell
-        + payload[cell..]
-            .find("\"blocks\":\"")
-            .expect("the accumulator Cell holds a hex payload")
-        + "\"blocks\":\"".len();
-    let end = value + payload[value..].find('"').expect("hex payload ends");
-    tampered[end - 1] = if tampered[end - 1] == b'0' {
-        b'1'
-    } else {
-        b'0'
-    };
-    write_snapshot_bundle_from_bytes(root.path(), &tampered, &key);
-    chain.commit(Vec::new());
     let budget = snapshot_read_budget_for_testing();
     let error = strict_snapshot_read_for_custody_test(
         root.path(),
@@ -2022,12 +2279,12 @@ async fn native_snapshot_with_a_tampered_world_is_refused_against_its_successor(
         chain.kura(),
         &key,
         &budget,
-        &|_| Ok(()),
+        &|_| panic!("World-only State must be refused before initialization"),
     )
     .err()
-    .expect("a World that differs from its certified root never restores");
+    .expect("a World-only root never authenticates complete State");
     assert!(
-        matches!(&error, TryReadError::WorldAuthentication(reason) if reason.contains("stored World state root")),
+        matches!(&error, TryReadError::NativeExecutionReplayRequired),
         "{error:?}"
     );
     assert_eq!(budget.reserved_bytes(), 0);
@@ -2057,7 +2314,7 @@ async fn restart_cost_probe() {
     chain.commit(Vec::new());
     let budget = snapshot_read_budget_for_testing();
     let started = std::time::Instant::now();
-    let restored = strict_snapshot_read_for_custody_test(
+    let mut restored = strict_snapshot_read_for_custody_test(
         root.path(),
         chain.state(),
         chain.kura(),
@@ -2066,6 +2323,7 @@ async fn restart_cost_probe() {
         &|_| Ok(()),
     )
     .expect("restore below the Kura tip");
+    authenticate_native_snapshot(chain.state(), &mut restored);
     eprintln!(
         "snapshot restore at height {}: {:?}",
         restored.committed_height(),
@@ -2099,7 +2357,7 @@ async fn current_snapshot_above_the_kura_tip_restores_an_older_generation() {
     // Kura lost the blocks after the anchor's successor, so the current snapshot is above its
     // durable tip; the older generation and the retained blocks restore the node.
     let lane_manifests = chain.state().lane_manifests.read().clone();
-    let restored = try_read_snapshot_with_initializer(
+    let mut restored = try_read_snapshot_with_initializer(
         &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
@@ -2121,6 +2379,7 @@ async fn current_snapshot_above_the_kura_tip_restores_an_older_generation() {
         &snapshot_read_budget_for_testing(),
     )
     .expect("the older generation below the Kura tip restores");
+    authenticate_native_snapshot(chain.state(), &mut restored);
     assert_eq!(restored.committed_height(), anchor_height);
     assert_eq!(restored.latest_block_hash_fast(), anchor_tip);
 }
@@ -2137,7 +2396,7 @@ async fn shutdown_snapshot_at_the_tip_restores_the_newest_older_generation() {
     // The shutdown snapshot at the Kura tip becomes current; GC retains the older anchor.
     try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
     let budget = snapshot_read_budget_for_testing();
-    let restored = strict_snapshot_read_for_custody_test(
+    let mut restored = strict_snapshot_read_for_custody_test(
         root.path(),
         chain.state(),
         chain.kura(),
@@ -2146,12 +2405,13 @@ async fn shutdown_snapshot_at_the_tip_restores_the_newest_older_generation() {
         &|_| Ok(()),
     )
     .expect("the newest generation below the Kura tip restores");
+    authenticate_native_snapshot(chain.state(), &mut restored);
     assert_eq!(restored.committed_height(), 3);
     assert_eq!(restored.latest_block_hash_fast(), anchor_tip);
     drop(restored);
     // A same-height republication after restart keeps the anchor for the next restart.
     try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
-    let again = strict_snapshot_read_for_custody_test(
+    let mut again = strict_snapshot_read_for_custody_test(
         root.path(),
         chain.state(),
         chain.kura(),
@@ -2160,5 +2420,58 @@ async fn shutdown_snapshot_at_the_tip_restores_the_newest_older_generation() {
         &|_| Ok(()),
     )
     .expect("a second restart without new blocks still restores the anchor");
+    authenticate_native_snapshot(chain.state(), &mut again);
     assert_eq!(again.committed_height(), 3);
+}
+
+#[tokio::test]
+async fn durable_runtime_floor_refuses_an_older_signed_snapshot_before_initialization() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let key = checked_random_snapshot_keypair();
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    chain.commit(Vec::new());
+    let floor = crate::state::upgrade_checkpoint::UpgradeCheckpointV1 {
+        height: chain.height(),
+        block_hash: chain.state().latest_block_hash_fast().unwrap(),
+    };
+    chain.kura().record_history_boundary(&floor).unwrap();
+    assert!(chain.kura().upgrade_checkpoint().is_none());
+    let budget = snapshot_read_budget_for_testing();
+    let error = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| panic!("a signed older snapshot cannot cross the learned floor"),
+    )
+    .err()
+    .expect("no eligible generation reaches the runtime floor");
+    assert!(
+        matches!(error, TryReadError::InvalidSnapshotBoundary(_)),
+        "{error:?}"
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(chain.kura().history_boundary(), Some(floor));
+
+    // Once an original snapshot at the floor has its certified successor, it
+    // restores normally without deleting or lowering the durable record.
+    try_write_snapshot(chain.state(), root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    chain.commit(Vec::new());
+    let mut restored = strict_snapshot_read_for_custody_test(
+        root.path(),
+        chain.state(),
+        chain.kura(),
+        &key,
+        &budget,
+        &|_| Ok(()),
+    )
+    .expect("an authenticated snapshot at the exact floor remains eligible");
+    authenticate_native_snapshot(chain.state(), &mut restored);
+    assert_eq!(restored.committed_height() as u64, floor.height);
+    assert_eq!(restored.latest_block_hash_fast(), Some(floor.block_hash));
+    assert_eq!(chain.kura().history_boundary(), Some(floor));
 }

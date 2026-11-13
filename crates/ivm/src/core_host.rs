@@ -2291,7 +2291,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 0,
             abi_version: 1,
         }
@@ -3414,10 +3413,7 @@ mod tests {
         let outer = make_pointer_tlv(PointerType::NoritoBytes, &inner);
         let ptr = vm.alloc_input_tlv(&outer).expect("allocate wrapped Int");
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -3598,10 +3594,7 @@ mod tests {
     fn json_get_json_quote_reserves_heap_sized_pointer_output() {
         let host = CoreHost::new();
         let mut vm = IVM::new(u64::MAX);
-        let syscall = crate::encoding::wide::encode_sys(
-            crate::instruction::wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_JSON_GET_JSON).expect("syscall fits u8"),
-        );
+        let syscall = crate::encoding::wide::encode_scall(syscalls::SYSCALL_JSON_GET_JSON);
         let mut program = syscall.to_le_bytes().to_vec();
         program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&program).expect("load JSON getter program");
@@ -3964,10 +3957,7 @@ mod tests {
                 &norito::to_bytes(&json).expect("encode JSON"),
             ))
             .expect("allocate JSON TLV");
-        let scall = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_SCHEMA_ENCODE).expect("syscall id fits in u8"),
-        );
+        let scall = encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE);
         let program = assemble_program(&[scall, encoding::wide::encode_halt()]);
         vm.load_program(&program).expect("load schema program");
         vm.set_register(10, schema_ptr);
@@ -4319,10 +4309,7 @@ mod tests {
     #[test]
     fn pointer_from_norito_rejects_noncanonical_int_frames() {
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO),
             encoding::wide::encode_halt(),
         ]);
         for payload in [
@@ -4360,10 +4347,7 @@ mod tests {
         );
         assert_eq!(direct_vm.register(10), 1);
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_TLV_EQ as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_TLV_EQ),
             encoding::wide::encode_halt(),
         ]);
         let mut vm = IVM::new(u64::MAX);
@@ -4497,14 +4481,8 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, b"wonderland"))
             .expect("alloc tlv");
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_TO_NORITO as u8,
-            ),
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_TO_NORITO),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -4593,10 +4571,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_JSON_DECODE as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -4630,10 +4605,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_NAME_DECODE as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -4646,10 +4618,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -4664,15 +4633,9 @@ mod tests {
         vm.set_host(CoreHost::new());
         let ptr = vm.alloc_input_tlv(&make_tlv(b"reuse")).expect("alloc tlv");
         let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV),
             encoding::wide::encode_rr(instruction::wide::arithmetic::XOR, 10, 10, 10),
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            ),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV),
             encoding::wide::encode_halt(),
         ]);
         vm.load_program(&program).expect("load program");
@@ -4822,7 +4785,7 @@ mod tests {
                     &norito::to_bytes(&key).expect("encode exact-number key"),
                 ))
                 .expect("allocate exact-number key");
-            let scall = encoding::wide::encode_syscallx(syscall);
+            let scall = encoding::wide::encode_scall(syscall);
             vm.load_program(&assemble_program(&[scall, encoding::wide::encode_halt()]))
                 .expect("load exact-number getter program");
             vm.set_register(10, json_ptr);

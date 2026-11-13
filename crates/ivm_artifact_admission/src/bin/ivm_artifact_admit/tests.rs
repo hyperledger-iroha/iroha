@@ -165,3 +165,27 @@ fn links_and_unsafe_output_parents_are_rejected() {
     );
     assert!(!unsafe_parent.join("manifest.json").exists());
 }
+
+#[test]
+fn named_profile_publication_uses_its_exact_manifest_and_refuses_unknown_identity() {
+    let (_directory, inputs, _) = fixture();
+    let mut artifact = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
+            host_policy: ivm_abi::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ..Default::default()
+        },
+    )
+    .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")
+    .unwrap();
+    let verified = verify_contract_artifact_with_declared_profile(&artifact).unwrap();
+    std::fs::write(&inputs.code_file, &artifact).unwrap();
+    admit(&inputs).unwrap();
+    let actual: iroha_data_model::smart_contract::manifest::ContractManifest =
+        norito::json::from_slice(&std::fs::read(&inputs.out).unwrap()).unwrap();
+    assert_eq!(actual, verified.manifest);
+    std::fs::remove_file(&inputs.out).unwrap();
+    artifact[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+    std::fs::write(&inputs.code_file, artifact).unwrap();
+    assert!(admit(&inputs).is_err());
+    assert!(!inputs.out.exists());
+}

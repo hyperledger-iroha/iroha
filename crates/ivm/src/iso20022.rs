@@ -1,6 +1,6 @@
-//! ISO 20022 message handling opcodes and bridge parser support.
+//! ISO 20022 message handling helpers and bridge parser support.
 //!
-//! The module keeps a compact in-memory message stack for IVM opcodes while providing deterministic
+//! The module keeps a compact in-memory message stack for host integrations while providing deterministic
 //! XML and key-value parsing for the ISO bridge. XML payloads are bound to their declared ISO
 //! message definition through `MsgDefIdr` and `Document` XSD namespaces before schema-table
 //! validation is applied. Network transport is deliberately outside this module and outside
@@ -26,7 +26,7 @@ struct IsoMessage {
     message_type: String,
     /// Flat map of field name to encoded value.
     fields: HashMap<String, Vec<u8>>,
-    /// Counters for `MSG_ADD` to emulate repeating fields.
+    /// Counters for `msg_add` to emulate repeating fields.
     repeats: HashMap<String, usize>,
     /// Digest of the real XML source from which the fields were materialised.
     xml_source_sha256: Option<[u8; 32]>,

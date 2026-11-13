@@ -16,33 +16,28 @@ fn render_header_layout_markdown() -> String {
          \x20 - 4: `version_major: u8`\n\
          \x20 - 5: `version_minor: u8`\n\
          \x20 - 6: `mode: u8` (feature bits; see below)\n\
-         \x20 - 7: `vector_length: u8`\n\
-         \x20 - 8..16: `max_cycles: u64` (little‑endian)\n\
-         \x20 - 16: `abi_version: u8`\n\
-         \x20 - 17..49: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)\n",
+         \x20 - 7..15: `max_cycles: u64` (little‑endian ZK trace bound; zero without `ZK`)\n\
+         \x20 - 15: `abi_version: u8`\n\
+         \x20 - 16..48: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)\n",
         ivm::HEADER_SIZE
     )
 }
 fn render_header_policy_markdown() -> String {
     // Known bits from the public ivm_mode re-export
     let zk = ivm::ivm_mode::ZK;
-    let vec = ivm::ivm_mode::VECTOR;
-    let known_bits = zk | vec;
+    let known_bits = zk;
     let accepted_major = 1u8;
-    let vector_len_max = 64u8;
     let mut md = String::new();
     md.push_str("| Field | Policy |\n");
     md.push_str("|---|---|\n");
     md.push_str(&format!("| version_major | {accepted_major} |\n"));
     md.push_str("| version_minor | 1 (sole current header for every profile) |\n");
     md.push_str(&format!(
-        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}) |\n"
+        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}) |\n"
     ));
     // First release: only ABI v1 is accepted.
+    md.push_str("| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
     md.push_str("| abi_version | 1 |\n");
-    md.push_str(&format!(
-        "| vector_length | 0 or 1..={vector_len_max} (0 selects runtime default; independent of VECTOR bit) |\n"
-    ));
     md
 }
 fn header_doc_paths(source_dir: &Path) -> Vec<PathBuf> {

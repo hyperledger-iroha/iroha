@@ -227,6 +227,20 @@ pub fn encode_private_settlement_storage_key_v1<T: norito::NoritoSerialize>(
     json::write_json_string(&hex::encode_upper(encoded), out);
 }
 
+/// Stream the exact uppercase Norito-frame key through a checked JSON sink.
+///
+/// This preserves the active layout flags used by
+/// [`encode_private_settlement_storage_key_v1`] without allocating a frame or hex buffer.
+///
+/// # Errors
+/// Returns the original sink refusal or a framing error represented as a length mismatch.
+pub fn encode_private_settlement_storage_key_v1_to<T: norito::NoritoSerialize>(
+    key: &T,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    json::write_frame_json_hex_to(key, out)
+}
+
 /// Decode the exact canonical uppercase Norito-frame key of a private-settlement table.
 /// # Errors
 /// Invalid hex, schema/layout mismatch, malformed frame, or noncanonical spelling.
@@ -259,6 +273,12 @@ macro_rules! private_settlement_json_key {
         impl norito::json::JsonKeyCodec for $key {
             fn encode_json_key(&self, out: &mut String) {
                 encode_private_settlement_storage_key_v1(self, out);
+            }
+            fn encode_json_key_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                encode_private_settlement_storage_key_v1_to(self, out)
             }
             fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                 decode_private_settlement_storage_key_v1(encoded)

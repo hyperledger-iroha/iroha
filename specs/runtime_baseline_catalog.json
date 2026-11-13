@@ -1,6 +1,6 @@
 {
   "note": "Baseline definitions of the live-upgrade foundation (specs/live_runtime_upgrades.md §3.1). Frozen once a running network installs them; regenerate only before that with `cargo test -p iroha_core --lib regenerate_runtime_baseline_catalog -- --ignored`.",
-  "selection": "56c2328657d63a48e18c7d1bac5ae8f2406e6e71249a630ece7b504d0f9cd491",
+  "selection": "11bc31dcbf492f25ce99e3f96ebdd4bd5f2d7afab68d123b147cf87e62a396d9",
   "definitions": [
     {"kind": "Interface", "name": "consensus::DisableConsensusKey", "id": "02b17a32ea043d02049ad37083f06c4fdd419fc32dceb82dcf964224259e99f1"},
     {"kind": "Interface", "name": "consensus::RegisterConsensusKey", "id": "11a24316a3e10f5ece346b988bb3e9b4ab5c159131d588739537a870cc48dc67"},
@@ -769,7 +769,7 @@
     {"kind": "Permission", "name": "CanUseContractPermission", "id": "38ef307f0a7af614b74f1cb0ca1e2327de6c5103e8f778f9e9896911fbdc7843"},
     {"kind": "Permission", "name": "CanVoteOracleChangeStage", "id": "458bac5b11856f8bdf236248078f1c0a6c23355c8ac666a68e5f50582cb59c07"},
     {"kind": "Parameter", "name": "iroha.parameters.v1", "id": "5799e910327dea79fc74719e5a193d4aa5ca223ccbe534fb149c0a730d789fbf"},
-    {"kind": "HostProfile", "name": "abi.v1", "id": "d50c38a8d0d0a229f54a43f9f7568fd45561774cb58f40668eb703ae79611b99"},
+    {"kind": "HostProfile", "name": "abi.v1", "id": "ed693adbe3eaaf382dc1af66bea993a1c27b7a6089186d88dd3be2083e81bca9"},
     {"kind": "ServicesProfile", "name": "services", "id": "df9320c3d3c3f67939cda3b4789c9714121daa8d8c7e1950ba8d098d4d1c5d63"},
     {"kind": "CommitmentProfile", "name": "iroha.world.lthash16.v1", "id": "e72462a84469a7f415d7bfe309709e33b0db46a511470b81168c1e80c2a729af"},
     {"kind": "Kernel", "name": "iroha.kernel.v1", "id": "8fc5a2ff9a64b1c8f29b3edaa819d38bcb875509960bf101895958ef9776108b"}

@@ -9,7 +9,7 @@ const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 4] = [
 
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
-/// The total-byte owner enumerates these declared trees, eight fixed root files. In particular,
+/// The total-byte owner enumerates these declared trees, nine fixed root files. In particular,
 /// Consensus WAL/body/certificate files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
 /// is also excluded; it is not a retained data-budget artifact. No entire-store-root
@@ -130,7 +130,7 @@ impl Kura {
         PHYSICAL_RESOURCE_OWNED_TREE_NAMES.map(|name| self.store_root.join(name))
     }
 
-    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 8] {
+    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 9] {
         let root = &self.store_root;
         let query = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let projection = root.join(crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE);
@@ -144,6 +144,7 @@ impl Kura {
             geometry.with_extension("norito.restore.tmp"),
             geometry,
             root.join(membership_storage::SEGMENT_NAME),
+            root.join(runtime_boundary::FILE_NAME),
         ]
     }
 
@@ -182,6 +183,7 @@ impl Kura {
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
             membership_storage::SEGMENT_NAME,
+            runtime_boundary::FILE_NAME,
         ].contains(&stable)
             || (name.starts_with("lane_geometry_journal.norito")
                 && lane_geometry::resource_evidence_file_kind(name).is_some())

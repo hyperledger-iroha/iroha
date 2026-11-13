@@ -416,7 +416,7 @@ fn native_prefix_refusal_preserves_destinations_and_full_backing_erasure() {
 #[test]
 #[ignore = "common22 native-prefix complete-cost A/B, actual Metal, optimized build, run alone"]
 fn required_metal_common22_native_prefix_complete_cost() {
-    assert!(!cfg!(debug_assertions), "use optimized build");
+    require_optimized_build("use optimized build");
     select_metal_device().expect("actual Metal required");
     let rows = 1 << 22;
     let root = goldilocks_pow(7, (FIELD_MODULUS - 1) >> 22);

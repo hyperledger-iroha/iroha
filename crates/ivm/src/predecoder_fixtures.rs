@@ -59,15 +59,13 @@ fn mixed_metadata_variants() -> [ProgramMetadata; 2] {
             version_major: 1,
             version_minor: 1,
             mode: 0x00,
-            vector_length: 0,
             max_cycles: 0,
             abi_version: 1,
         },
         ProgramMetadata {
             version_major: 1,
             version_minor: 1,
-            mode: 0x03,
-            vector_length: 8,
+            mode: 0x01,
             max_cycles: 1_000,
             abi_version: 1,
         },
@@ -81,11 +79,10 @@ pub fn generated_predecoder_mixed_artifacts() -> Vec<(String, Vec<u8>)> {
         .into_iter()
         .map(|metadata| {
             let name = format!(
-                "artifact_v{}_{}_mode{:02x}_vlen{}_cycles{}_abi{}.to",
+                "artifact_v{}_{}_mode{:02x}_cycles{}_abi{}.to",
                 metadata.version_major,
                 metadata.version_minor,
                 metadata.mode,
-                metadata.vector_length,
                 metadata.max_cycles,
                 metadata.abi_version
             );
@@ -162,10 +159,6 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
                 norito::json::Value::from(m.version_minor),
             ),
             ("mode".to_owned(), norito::json::Value::from(m.mode)),
-            (
-                "vector_length".to_owned(),
-                norito::json::Value::from(m.vector_length),
-            ),
             (
                 "max_cycles".to_owned(),
                 norito::json::Value::from(m.max_cycles),

@@ -1342,3 +1342,62 @@ def test_crypto_policy_migration_does_not_close_qualification_or_retain_old_cata
             "                    return Err(crate::Error::HandshakeCryptoMismatch);") in peer
     assert any(test["name"] == "sm_syscalls_ignore_local_crypto_preferences"
                for test in local["tests"])
+
+
+def test_native_lifecycle_evidence_does_not_hide_deployment_bootstrap_authority() -> None:
+    """Proofs of committed selection and a compiled deployment waiver have separate owners."""
+    evidence = entry(CENSUS, "runtime.lifecycle_selection_evidence")
+    assert (evidence["status"], evidence["owner"]) == ("not_a_gate", None)
+    assert {site[0] for site in evidence["sites"]} == {
+        "crates/iroha_core/src/query/native_receipts.rs",
+        "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+        "crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs",
+        "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+    }
+    bootstrap = entry(CENSUS, "privacy.taira_bootstrap_authority")
+    assert (bootstrap["status"], bootstrap["owner"]) == ("open", "F.4")
+    assert bootstrap["sites"] == [[
+        "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "activation", "activation", 1,
+    ]]
+    source = (ROOT / bootstrap["path"]).read_text()
+    assert ("if !crate::runtime::taira_activation::certified_pool_bootstrap(\n"
+            "            state_transaction,\n"
+            "            &self.bootstrap,\n"
+            "        ) {\n"
+            "            ensure_privacy_governance(authority, state_transaction)?;") in source
+    boundary = (ROOT / "crates/iroha_core/src/runtime/taira_activation.rs").read_text()
+    assert "plan.authorization_digest != AUTHORIZATION_DIGEST" in boundary
+    assert "chain_id.to_string() == TAIRA_CHAIN && network.as_bytes() == &TAIRA_NETWORK" in boundary
+    assert "selection == plan.change_set.successor" in boundary
+
+
+def test_bootstrap_authority_cannot_be_closed_or_lose_its_source_anchor(tree_scan) -> None:
+    """Recounting a named activation site does not qualify its authorization exception."""
+    done = edited(lambda census: entry(census, "privacy.taira_bootstrap_authority").update(
+        status="done"))
+    assert_fails(tree_scan, done,
+                 "entry privacy.taira_bootstrap_authority: a done entry names a test or a removed construct")
+    stale = edited(lambda census: entry(census, "privacy.taira_bootstrap_authority")["anchors"][0].update(
+        contains="plan.authorization_digest != RETIRED_AUTHORIZATION_DIGEST"))
+    assert_fails(tree_scan, stale, "RETIRED_AUTHORIZATION_DIGEST")
+
+
+def test_parliament_purpose_validation_keeps_production_qualification_open() -> None:
+    """Candidate stage and shape checks cannot stand in for the production release pin."""
+    purpose_path = "crates/iroha_data_model/src/governance/anonymous_ballot/purpose.rs"
+    gate = entry(CENSUS, "voting.anonymous_ballot_qualification")
+    assert (gate["status"], gate["owner"]) == ("open", "P.8")
+    assert [purpose_path, "qualification", "qualification", 20] in gate["sites"]
+    lifecycle = entry(CENSUS, "voting.anonymous_ballot_lifecycle_policy")
+    assert lifecycle["status"] == "not_a_gate"
+    assert [purpose_path, "chain_condition", "production", 1] in lifecycle["sites"]
+    assert [purpose_path, "unavailable", "unsupported", 2] in lifecycle["sites"]
+    purpose = (ROOT / purpose_path).read_text()
+    assert ("pub const fn is_production(&self) -> bool {\n"
+            "        matches!(self, Self::Qualified(_))") in purpose
+    assert "self.require_production_with(PARLIAMENT_BALLOT_QUALIFICATION_V1)" in purpose
+    assert "Self::Qualified(digest) if qualification == Some(*digest) => Ok(())" in purpose
+    core = (ROOT / "crates/iroha_core/src/governance/parliament_anonymous.rs").read_text()
+    assert "GovernanceAttemptStatusV1::Certified => !self.purpose.is_production()" in core
+    assert "certificate.require_production()?;" in core

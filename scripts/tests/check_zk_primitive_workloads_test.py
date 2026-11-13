@@ -233,7 +233,7 @@ class ScanChecks(TreeFixture):
             self.assertEqual(use["class"], "proof-internal", consumer)
             self.assertIn("privacy-substrate.outer-sha3-384", use["roles"], consumer)
         # IVM syscall primitives are classified under the ivm consumer.
-        for primitive in ("blake2b", "blake2s", "keccak", "sha3", "sm3", "sha2-256", "iroha-hash", "pedersen"):
+        for primitive in ("blake2b", "keccak", "sha3", "sm3", "sha2-256", "iroha-hash", "pedersen"):
             self.assertEqual(self.spec["consumers"]["ivm"]["uses"][primitive]["class"], "role", primitive)
         self.assertIn("streebog", files["crates/iroha_crypto/src/signature/gost.rs"])
         self.assertIn("crates/ivm/src/host.rs", files)
@@ -270,11 +270,11 @@ class ScanChecks(TreeFixture):
 
     def test_a_role_must_be_listed_by_its_consumer(self) -> None:
         spec = self.mutated()
-        spec["consumers"]["ivm"]["uses"]["blake2s"]["roles"] = []
-        spec["consumers"]["ivm"]["uses"]["blake2s"]["class"] = "label-only"
+        spec["consumers"]["ivm"]["uses"]["sm3"]["roles"] = []
+        spec["consumers"]["ivm"]["uses"]["sm3"]["class"] = "label-only"
         self.assertReported(
             self.consumer_errors(spec),
-            "role ivm.opcode-blake2s: consumer ivm does not list it under its use of blake2s",
+            "role ivm.syscall-sm3-hash: consumer ivm does not list it under its use of sm3",
         )
         spec = self.mutated()
         self.role(spec, "kaigi.authorization-identity")["consumer"] = "axt"

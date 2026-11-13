@@ -20,7 +20,7 @@ fn prepare(
 }
 fn first(log: &mut DeltaTraceLog, original: &AllocationBudget) {
     prepare(log, 1, 0, 0, original).unwrap();
-    log.record_reserved(12, [0; 256], [false; 256]);
+    log.record_reserved(12, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
 }
 
 #[test]
@@ -30,8 +30,8 @@ fn private_changes_do_not_select_physical_span_or_growth_geometry() {
         let original = AllocationBudget::new(LIMIT);
         let mut log = DeltaTraceLog::new(Some(&original));
         first(&mut log, &original);
-        let mut values = [0; 256];
-        let mut tags = [false; 256];
+        let mut values = [0; crate::parallel::REGISTER_COUNT];
+        let mut tags = [false; crate::parallel::REGISTER_COUNT];
         let mut geometry = Vec::new();
         for step in 1..=20 {
             prepare(&mut log, 3, 2, 0, &original).unwrap();
@@ -70,13 +70,13 @@ fn borrowed_logical_rows_preserve_the_exact_previous_trace_hash_input() {
     let mut log = DeltaTraceLog::new(Some(&original));
     let mut previous: Option<RegisterState> = None;
     let mut reference = Vec::new();
-    let mut values = [0; 256];
-    let mut tags = [false; 256];
+    let mut values = [0; crate::parallel::REGISTER_COUNT];
+    let mut tags = [false; crate::parallel::REGISTER_COUNT];
     for pc in 0u64..12 {
         prepare(&mut log, 1, 256, 0, &original).unwrap();
         values[7] = pc.wrapping_mul(19);
         tags[255] = pc % 2 == 1;
-        let changes: Vec<_> = (0..256)
+        let changes: Vec<_> = (0..crate::parallel::REGISTER_COUNT)
             .filter(|&index| {
                 previous.as_ref().is_none_or(|last| {
                     last.gpr[index] != values[index] || last.tags[index] != tags[index]
@@ -158,7 +158,7 @@ fn complete_dual_backing_growth_refuses_atomically_with_original_release_source(
     assert_eq!(original.peak_reserved_bytes(), old + demand);
     assert_eq!(original.reserved_bytes(), demand);
     for pc in 0..7 {
-        log.record_reserved(pc, [0; 256], [false; 256]);
+        log.record_reserved(pc, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     }
     assert_eq!(log.len(), 8);
 }
@@ -205,12 +205,12 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
     let foreign = AllocationBudget::new(LIMIT);
     let mut log = DeltaTraceLog::new(Some(&original));
     assert!(
-        matches!(log.prepare_batch(1, 256, 0, None), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
     foreign.with_deferred_refund_notifications(|scope| {
-        assert!(matches!(log.prepare_batch(1, 256, 0, Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        assert!(matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
             )));
         assert!(matches!(log.reset(Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
@@ -231,8 +231,8 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
-    log.record_reserved(4, [0; 256], [false; 256]);
-    log.record_reserved(8, [0; 256], [false; 256]);
+    log.record_reserved(4, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(8, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     original.set_limit_bytes(0);
     log.scrub();
     prepare(&mut log, 2, 0, 0, &original).unwrap();
@@ -269,7 +269,7 @@ fn snapshot_preserves_prepaid_public_spans_and_independent_final_owner() {
     original.set_limit_bytes(0);
     for pc in 0..3 {
         log.record_reserved(pc, [3; 256], [true; 256]);
-        copied.record_reserved(pc, [9; 256], [false; 256]);
+        copied.record_reserved(pc, [9; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     }
     assert_ne!(log.entry(1), copied.entry(1));
     assert_eq!(log.entry(2).unwrap().changes, &[]);
@@ -332,12 +332,12 @@ fn discarding_snapshot_pending_credit_does_not_cancel_the_original_batch() {
     assert_eq!(original.reserved_bytes(), 2 * credit);
     original.set_limit_bytes(0);
     copied.discard_unobserved();
-    let mut values = [0; 256];
+    let mut values = [0; crate::parallel::REGISTER_COUNT];
     values[7] = 19;
-    log.record_reserved(16, values, [false; 256]);
-    log.record_reserved(20, values, [false; 256]);
+    log.record_reserved(16, values, [false; crate::parallel::REGISTER_COUNT]);
+    log.record_reserved(20, values, [false; crate::parallel::REGISTER_COUNT]);
     prepare(&mut copied, 1, 0, 0, &original).unwrap();
-    copied.record_reserved(24, [0; 256], [false; 256]);
+    copied.record_reserved(24, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     assert_eq!(log.entry(1).unwrap().changes, &[(7, 19, false)]);
     assert!(copied.entry(1).unwrap().changes.is_empty());
     assert_eq!(log.len(), 3);
@@ -411,7 +411,7 @@ fn partial_private_change_copy_unwind_scrubs_new_backing_and_keeps_original_cred
     );
     assert!(log.pending.is_none());
     prepare(&mut log, 1, 256, 0, &original).unwrap();
-    log.record_reserved(45, [0; 256], [false; 256]);
+    log.record_reserved(45, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     assert_eq!(log.entry(1).unwrap().changes.len(), 256);
     drop(log);
     assert_eq!(original.reserved_bytes(), 0);
@@ -425,10 +425,9 @@ fn diagnostic_capture_rejects_corrupt_indices_without_a_raw_row_constructor() {
     let before = original.reserved_bytes();
     // Corruption is confined to the canonical owner's private test module;
     // consumers cannot construct or mutate live owned delta rows.
-    log.changes.as_mut_slice()[7].0 = 256;
+    log.changes.as_mut_slice()[7].0 = crate::parallel::REGISTER_COUNT;
     let source = crate::zk::DiagnosticTraceSource {
         registers: crate::zk::DiagnosticRegisterSource::Deltas(&log),
-        constraints: &[],
         memory_events: &[],
         register_events: &[],
         steps: &[],

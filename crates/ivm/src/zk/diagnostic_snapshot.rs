@@ -3,7 +3,7 @@
 //! These records are diagnostics, not an execution proof. Runtime delta sources
 //! retain their original funded owner; detached captures prepay their own backing.
 
-use super::{Constraint, DeltaTraceLog, MemEvent, RegEvent, RegisterState, StepEntry};
+use super::{DeltaTraceLog, MemEvent, RegEvent, RegisterState, StepEntry};
 use crate::{
     VMError,
     error::ExecutionDeferral,
@@ -25,8 +25,6 @@ pub enum DiagnosticRegisterSource<'a> {
 pub struct DiagnosticTraceSource<'a> {
     /// Per-cycle register data.
     pub registers: DiagnosticRegisterSource<'a>,
-    /// Recorded assertions.
-    pub constraints: &'a [Constraint],
     /// Ordered memory events and their path snapshots.
     pub memory_events: &'a [MemEvent],
     /// Ordered register events and authentication paths.
@@ -91,7 +89,6 @@ pub struct DiagnosticRegisterEvent<'a> {
 /// initialized private values before the fixed allocations release their credit.
 pub struct DiagnosticTraceSnapshot {
     states: ExecutionBuffer<RegisterState>,
-    constraints: ExecutionBuffer<Constraint>,
     memory_events: ExecutionBuffer<MemoryRow>,
     register_events: ExecutionBuffer<RegisterRow>,
     paths: ExecutionBuffer<[u8; 32]>,
@@ -166,14 +163,17 @@ impl DiagnosticTraceSource<'_> {
         if let DiagnosticRegisterSource::Deltas(rows) = &self.registers
             && rows
                 .entries()
-                .any(|row| row.changes.iter().any(|(index, _, _)| *index >= 256))
+                .any(|row| {
+                    row.changes
+                        .iter()
+                        .any(|(index, _, _)| *index >= crate::parallel::REGISTER_COUNT)
+                })
         {
             return Err(VMError::DecodeError);
         }
         let mut plan = ExecutionMemoryPlan::array::<RegisterState>(self.state_count())
             .map_err(|_| unavailable())?;
         for child in [
-            ExecutionMemoryPlan::array::<Constraint>(self.constraints.len()),
             ExecutionMemoryPlan::array::<MemoryRow>(self.memory_events.len()),
             ExecutionMemoryPlan::array::<RegisterRow>(self.register_events.len()),
             ExecutionMemoryPlan::array::<[u8; 32]>(self.path_count()?),
@@ -212,8 +212,6 @@ impl DiagnosticTraceSource<'_> {
         let mut snapshot = DiagnosticTraceSnapshot {
             states: ExecutionBuffer::new(self.state_count(), &mut lease)
                 .map_err(|_| unavailable())?,
-            constraints: ExecutionBuffer::new(self.constraints.len(), &mut lease)
-                .map_err(|_| unavailable())?,
             memory_events: ExecutionBuffer::new(self.memory_events.len(), &mut lease)
                 .map_err(|_| unavailable())?,
             register_events: ExecutionBuffer::new(self.register_events.len(), &mut lease)
@@ -234,8 +232,8 @@ impl DiagnosticTraceSource<'_> {
             }
             DiagnosticRegisterSource::Deltas(rows) => {
                 let mut scratch = ExpansionState {
-                    gpr: [0; 256],
-                    tags: [false; 256],
+                    gpr: [0; crate::parallel::REGISTER_COUNT],
+                    tags: [false; crate::parallel::REGISTER_COUNT],
                 };
                 for row in rows.entries() {
                     for &(index, value, tag) in row.changes {
@@ -249,9 +247,6 @@ impl DiagnosticTraceSource<'_> {
                     });
                 }
             }
-        }
-        for row in self.constraints {
-            snapshot.constraints.push_reserved(*row);
         }
         for row in self.memory_events {
             let (written, address, value, size, path, root) = memory_parts(row);
@@ -293,8 +288,8 @@ impl DiagnosticTraceSource<'_> {
 }
 
 struct ExpansionState {
-    gpr: [u64; 256],
-    tags: [bool; 256],
+    gpr: [u64; crate::parallel::REGISTER_COUNT],
+    tags: [bool; crate::parallel::REGISTER_COUNT],
 }
 impl Drop for ExpansionState {
     fn drop(&mut self) {
@@ -307,10 +302,6 @@ impl DiagnosticTraceSnapshot {
     /// Borrow expanded cycle states without detaching their owner.
     pub fn states(&self) -> &[RegisterState] {
         self.states.as_slice()
-    }
-    /// Borrow the recorded constraints.
-    pub fn constraints(&self) -> &[Constraint] {
-        self.constraints.as_slice()
     }
     /// Borrow the recorded step roots.
     pub fn steps(&self) -> &[StepEntry] {
@@ -390,24 +381,6 @@ impl Drop for DiagnosticTraceSnapshot {
         }
         for path in self.paths.as_mut_slice() {
             erase(path);
-        }
-        for constraint in self.constraints.as_mut_slice() {
-            match constraint {
-                Constraint::Zero { reg, cycle } => {
-                    erase(reg);
-                    erase(cycle);
-                }
-                Constraint::Eq { reg1, reg2, cycle } => {
-                    erase(reg1);
-                    erase(reg2);
-                    erase(cycle);
-                }
-                Constraint::Range { reg, bits, cycle } => {
-                    erase(reg);
-                    erase(bits);
-                    erase(cycle);
-                }
-            }
         }
         for step in self.steps.as_mut_slice() {
             erase(&mut step.pc);

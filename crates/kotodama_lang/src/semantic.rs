@@ -8143,6 +8143,8 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
         ),
         Builtin::ScExecuteSubmitBallot
+        | Builtin::RegisterRuntimeObligation
+        | Builtin::CompleteRuntimeObligation
         | Builtin::PresentX509
         | Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
@@ -8323,13 +8325,10 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         }
         Builtin::Isqrt => M::NameSuffix(" expects (int)"),
         Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => M::NameSuffix(" expects (int, int)"),
-        Builtin::Poseidon2 => M::SourceNameSuffix(" expects two int arguments"),
         Builtin::Valcom => {
             M::SourceNameSuffix(" expects two typed Secret<int|decimal|quantity> arguments")
         }
-        Builtin::Poseidon6 => M::SourceNameSuffix(" expects six int args"),
         Builtin::Pubkgen => M::SourceNameSuffix(" expects one int arg"),
-        Builtin::SetVl => M::Static("setvl expects one int arg"),
         Builtin::GetInt => M::NameSuffix(" expects (Json, Name)"),
         Builtin::GetDecimal => M::NameSuffix(" expects (Json, Name)"),
         Builtin::GetQuantity => M::NameSuffix(" expects (Json, Name)"),
@@ -18887,17 +18886,6 @@ mod tests {
             parse("seiyaku Demo { view fn inspect() authorize(anyone) { debug::info(42); } }")
                 .expect("parse debug logging in a view");
         analyze(&program).expect("debug::info is diagnostics-only and allowed in views");
-    }
-    #[test]
-    fn vector_length_control_is_not_a_source_builtin() {
-        let program = parse("fn f() { runtime::set_vector_length(8); }").expect("parse setvl");
-        let error = analyze(&program).expect_err("vector metadata is compiler-owned");
-        assert!(
-            error
-                .message
-                .contains("unknown function or builtin `runtime::set_vector_length`"),
-            "{error:?}"
-        );
     }
     analyze_ok_tests! { trigger_event_accepts_no_args: "fn f() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }" => "parse trigger_event", "trigger_event should type-check"; }
     analyze_reject_contains_diagnostic_tests! { public_entrypoints_reject_trigger_event: "seiyaku Demo { permission InspectTrigger;  kotoage fn f() authorize(InspectTrigger) { let _ev = context::trigger_event(); } }" => "parse public trigger_event", err = "public trigger_event should fail", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }

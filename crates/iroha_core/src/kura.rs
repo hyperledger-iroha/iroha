@@ -12,6 +12,7 @@ mod lane_storage;
 mod membership_storage;
 #[cfg(windows)]
 mod native_sidecar_transaction;
+mod runtime_boundary;
 use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
@@ -420,6 +421,8 @@ pub struct Kura {
     /// Last block of this chain that its predecessor release executed, when the chain adopted the
     /// live-upgrade foundation there (`state::upgrade_checkpoint`).
     upgrade_checkpoint: std::sync::OnceLock<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
+    /// Highest history boundary this store has learned, loaded before snapshot selection.
+    runtime_history_boundary: Mutex<Option<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>>,
 }
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
@@ -1623,7 +1626,10 @@ impl Kura {
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: None,
             upgrade_checkpoint: std::sync::OnceLock::new(),
+            runtime_history_boundary: Mutex::new(None),
         });
+
+        kura.load_runtime_history_boundary()?;
 
         if config.init_mode == InitMode::Strict {
             kura.recover_journal_owned_lane_instances_on_startup()?;
@@ -1843,6 +1849,7 @@ impl Kura {
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: Some(temp_store_dir),
             upgrade_checkpoint: std::sync::OnceLock::new(),
+            runtime_history_boundary: Mutex::new(None),
         })
     }
     /// Attach a telemetry sink for storage and durable finality reporting.
@@ -6809,19 +6816,35 @@ impl Kura {
     pub fn set_upgrade_checkpoint(
         &self,
         checkpoint: &crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         let stored = usize::try_from(checkpoint.height)
             .ok()
             .and_then(NonZeroUsize::new)
             .and_then(|height| self.get_block_hash(height));
         if stored.is_some_and(|stored| stored != checkpoint.block_hash) {
-            return Err("the block stored at the upgrade checkpoint height has another hash");
+            return Err(
+                "the block stored at the upgrade checkpoint height has another hash".into(),
+            );
+        }
+        if self
+            .upgrade_checkpoint
+            .get()
+            .is_some_and(|recorded| recorded != checkpoint)
+        {
+            return Err("Kura already records a different upgrade checkpoint".into());
+        }
+        // A still-empty joining store retains configuration in memory until its
+        // canonical journal reaches the checkpoint; an existing chain remembers
+        // adoption durably even if the operator removes that configuration later.
+        if stored.is_some() {
+            self.record_history_boundary(checkpoint)
+                .map_err(|error| error.to_string())?;
         }
         let recorded = self.upgrade_checkpoint.get_or_init(|| *checkpoint);
         if recorded == checkpoint {
             Ok(())
         } else {
-            Err("Kura already records a different upgrade checkpoint")
+            Err("Kura already records a different upgrade checkpoint".into())
         }
     }
     /// The upgrade checkpoint of this chain, when it adopted the foundation from a predecessor

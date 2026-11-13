@@ -1099,10 +1099,7 @@ fn ivm_syscall_charges_fees() {
     install_pipeline_gas_fixture(&mut state, pipeline);
     let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
-    let scall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_DEBUG_PRINT).expect("syscall id fits in u8"),
-    );
+    let scall = encoding::wide::encode_scall(ivm_sys::SYSCALL_DEBUG_PRINT);
     let mut program = ProgramMetadata {
         max_cycles: 1_000,
         ..ProgramMetadata::default()
@@ -1293,7 +1290,6 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1_000_000,
         abi_version: 1,
     };

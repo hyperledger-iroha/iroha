@@ -8,17 +8,16 @@ use super::{
 };
 use crate::{
     PreparedArgumentRecord, ProgramMetadata,
-    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_syscallx},
+    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_scall},
     host::{DefaultHost, IVMHost},
-    instruction::wide::{arithmetic as a, crypto as v},
+    instruction::wide::arithmetic as a,
 };
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{any::Any, cell::Cell, sync::Arc};
 
 fn generic(original: &AllocationBudget, words: &[u32], mode: TraceMode, cycles: u64) -> IVM {
     let mut image = ProgramMetadata {
-        mode: crate::ivm_mode::ZK | crate::ivm_mode::VECTOR,
-        vector_length: 64,
+        mode: crate::ivm_mode::ZK,
         max_cycles: cycles,
         ..ProgramMetadata::default()
     }
@@ -139,49 +138,6 @@ fn strict_root_keeps_the_post_clear_epoch_and_initial_argument_observation() {
 }
 
 #[test]
-fn original_vector_changes_precede_narrow_zero_destination_and_terminal_observations() {
-    let original = AllocationBudget::new(LIMIT);
-    let mut vm = generic(
-        &original,
-        &[
-            encode_rr(v::VADD32, 2, 0, 1),
-            encode_ri(a::ADDI, 0, 0, 0),
-            encode_halt(),
-        ],
-        TraceMode::DeltaRegisters,
-        8,
-    );
-    for register in 32..160 {
-        vm.registers.set(register, register as u64);
-    }
-    let initial = vm.pc;
-    vm.run_with_host(&mut DefaultHost::default()).unwrap();
-    let trace = vm.delta_register_trace();
-    assert_eq!(trace.len(), 3);
-    assert_eq!(trace.entry(0).unwrap().pc, initial);
-    assert_eq!(trace.entry(0).unwrap().changes.len(), 256);
-    assert_eq!(trace.entry(1).unwrap().changes.len(), 64);
-    assert!(
-        trace
-            .entry(1)
-            .unwrap()
-            .changes
-            .iter()
-            .all(|(r, _, _)| (160..224).contains(r))
-    );
-    assert!(trace.entry(2).unwrap().changes.is_empty());
-    assert_eq!(vm.trace_log.len(), 8);
-    assert!(
-        vm.trace_log
-            .entries()
-            .skip(1)
-            .all(|row| row.changes.is_empty())
-    );
-    drop(vm);
-    assert_eq!(original.reserved_bytes(), 0);
-}
-
-#[test]
 fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
     for (opcode, cycles) in [(a::DIV_CEIL, 12), (a::GCD, 12), (a::ISQRT, 6), (a::MEAN, 3)] {
         let original = AllocationBudget::new(LIMIT);
@@ -247,7 +203,7 @@ fn actual_syscall_value_and_tag_only_net_changes_use_one_public_full_span() {
     let mut vm = generic(
         &original,
         &[
-            encode_syscallx(crate::syscalls::SYSCALL_ABORT),
+            encode_scall(crate::syscalls::SYSCALL_ABORT),
             encode_ri(a::ADDI, 0, 0, 0),
             encode_halt(),
         ],
@@ -299,7 +255,7 @@ fn actual_non_zk_host_mode_replacement_is_local_refusal_not_unfunded_append() {
     let mut vm = generic(
         &original,
         &[
-            encode_syscallx(crate::syscalls::SYSCALL_ABORT),
+            encode_scall(crate::syscalls::SYSCALL_ABORT),
             encode_halt(),
         ],
         TraceMode::DeltaRegisters,
@@ -326,7 +282,7 @@ fn actual_zk_host_custody_violation_is_a_local_invariant_deferral() {
     let mut vm = generic(
         &original,
         &[
-            encode_syscallx(crate::syscalls::SYSCALL_ABORT),
+            encode_scall(crate::syscalls::SYSCALL_ABORT),
             encode_halt(),
         ],
         TraceMode::DeltaRegisters,
@@ -373,7 +329,7 @@ impl IVMHost for ShrinkOriginalHost {
 #[test]
 fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect() {
     let original = AllocationBudget::new(LIMIT);
-    let syscall = encode_syscallx(crate::syscalls::SYSCALL_ABORT);
+    let syscall = encode_scall(crate::syscalls::SYSCALL_ABORT);
     let add = encode_ri(a::ADDI, 7, 7, 1);
     let mut vm = generic(
         &original,
@@ -409,7 +365,7 @@ fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect()
 
 #[test]
 fn payable_padding_refuses_before_effects_but_unpayable_padding_preserves_oog() {
-    let syscall = encode_syscallx(crate::syscalls::SYSCALL_ABORT);
+    let syscall = encode_scall(crate::syscalls::SYSCALL_ABORT);
     for payable in [false, true] {
         let original = AllocationBudget::new(LIMIT);
         let mut vm = generic(&original, &[syscall, encode_halt()], TraceMode::Off, 64);

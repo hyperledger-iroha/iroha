@@ -3,7 +3,7 @@ use super::PublicationError;
 use crate::state::storage_transactions::{MembershipAdmissionError, TransactionsBlockError};
 use crate::sumeragi::driver::traits::PublicationDeferral;
 
-pub(super) fn original_refusal(error: TransactionsBlockError) -> PublicationError {
+pub(crate) fn original_refusal(error: TransactionsBlockError) -> PublicationError {
     if cfg!(all(test, sumeragi_core_mutation = "HC63")) {
         return PublicationError::Retryable(error.to_string());
     }
@@ -13,6 +13,15 @@ pub(super) fn original_refusal(error: TransactionsBlockError) -> PublicationErro
         }
         TransactionsBlockError::CaptureDeferred(original) => {
             PublicationDeferral::StateCapture(original)
+        }
+        TransactionsBlockError::CheckpointDeferred(original) => {
+            PublicationDeferral::Checkpoint(original)
+        }
+        TransactionsBlockError::CheckpointReadDeferred(original) => {
+            PublicationDeferral::CheckpointRead(original)
+        }
+        TransactionsBlockError::CheckpointIntegrity(diagnostic) => {
+            return PublicationError::RecoveryRequired(diagnostic);
         }
         TransactionsBlockError::BlockHashesBusy(wait) => PublicationDeferral::BlockHashesBusy(wait),
         TransactionsBlockError::PublicationBusy(wait) => PublicationDeferral::PublicationBusy(wait),
@@ -26,5 +35,7 @@ pub(super) fn original_refusal(error: TransactionsBlockError) -> PublicationErro
 
 #[cfg(test)]
 mod capture_refusal_tests;
+#[cfg(test)]
+mod checkpoint_refusal_tests;
 #[cfg(test)]
 mod tests;

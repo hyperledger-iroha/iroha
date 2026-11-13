@@ -150,7 +150,7 @@ fn exact_owner_summary_matches_all_ancestors_across_nested_calls_and_returns() {
                 tables(argument, result, 1),
                 TOP
             ),
-            Err(VMError::AssertionFailed)
+            Err(VMError::ControlFlowViolation)
         ));
         frames.record_write(argument + 7, 1);
         frames
@@ -184,7 +184,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
     assert!(!rejected.validate());
     assert!(matches!(
         frames.enter_root(TOP, &rejected, tables(0, 0, 0), TOP),
-        Err(VMError::AssertionFailed)
+        Err(VMError::ControlFlowViolation)
     ));
     assert!(frames.is_empty());
     assert_equivalent(&frames);
@@ -215,7 +215,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
         assert_eq!(frames.frames.len(), depth + 1);
         assert!(matches!(
             frames.prepare_child(stack.start, &rejected, tables(0, 0, 0), top),
-            Err(VMError::AssertionFailed)
+            Err(VMError::ControlFlowViolation)
         ));
         assert_eq!(frames.frames.len(), depth + 1);
         frames
@@ -226,7 +226,7 @@ fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_
         // Empty stack ownership cannot host another callable's result slot.
         assert!(matches!(
             frames.prepare_child(stack.start, &leaf, result_table(stack.start), top),
-            Err(VMError::AssertionFailed)
+            Err(VMError::ControlFlowViolation)
         ));
         assert_eq!(frames.frames.len(), depth + 2);
         assert!(frames.finish(stack.start, stack.start, 1).is_err());
@@ -296,7 +296,7 @@ fn owner_summary_requires_authenticated_child_lifecycle_not_supplied_descriptors
             tables(foreign_argument, foreign_result, 1),
             TOP
         ),
-        Err(VMError::AssertionFailed)
+        Err(VMError::ControlFlowViolation)
     ));
     // Deliberately bypass the native constructor to model an unbound witness.
     // A valid root descriptor in a foreign machine is not child authority here.

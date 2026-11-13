@@ -42,7 +42,7 @@ use super::{
 };
 use crate::{
     runtime::catalog::additions::PARLIAMENT_ANONYMOUS,
-    smartcontracts::{Execute, isi::parliament_anonymous::registration_refusal},
+    smartcontracts::{Execute, isi::parliament_anonymous::anonymous_refusal},
     state::{
         State, StateTransaction, World, WorldReadOnly,
         parliament_anonymous_tables::{AnonymousTablesRestoreError, validate_cut},
@@ -308,6 +308,12 @@ fn restore_accepts_exactly_the_tables_the_reducer_produces() {
     fill(&world, &driver, &records, &[(scope, board.clone())]);
     validate_cut(&world.view(), &network(), driver.height)
         .expect("the reducer's own tables restore");
+    // Even with every credential already in history, this earlier cut did not seal its
+    // juries. The cut check must inspect attempt anchors, not only credential locators.
+    assert!(matches!(
+        validate_cut(&world.view(), &network(), driver.height - 1),
+        Err(AnonymousTablesRestoreError::Invalid(message)) if message.contains("height")
+    ));
     // A cut below the registrations' blocks did not execute them.
     assert!(matches!(
         validate_cut(&world.view(), &network(), driver.height - 2),
@@ -445,6 +451,100 @@ fn restore_accepts_exactly_the_tables_the_reducer_produces() {
 }
 
 #[test]
+fn restore_refuses_future_board_anchors_and_corpus_before_rebuilding() {
+    use super::test_driver::{anchor, public_bodies};
+    use iroha_data_model::governance::anonymous_ballot::{
+        AdmissionNonceV1, AdmissionStampV1, AnonymousBallotCorpusEntryV1, BallotChoiceV1,
+        Digest512, NullifierV1, ProofProfileIdV1, VoteAuthorizationV1,
+    };
+
+    let mut driver = drawn_small_jury();
+    let mut records = Vec::new();
+    register(&mut driver, &mut records, 0..4);
+    answer_public_bodies(&mut driver);
+    let outcomes = close_invitations(&mut driver, &records);
+    let sealed = jury_effect(&outcomes).board.as_ref().unwrap().board.clone();
+    for body in public_bodies() {
+        driver.conclude_public(body);
+    }
+    driver.deliberate(JURY);
+    let mut board = BallotBoardV1::restore(sealed).expect("sealed board");
+    let scope = *board.scope();
+    let opening_ms = board.schedule_opening(driver.now_ms).expect("opening time");
+    board
+        .open(anchor(driver.height + 1, 0, opening_ms))
+        .expect("open");
+    let opened = board.record();
+    let world = activated_world();
+    fill(&world, &driver, &records, &[(scope, opened)]);
+    validate_cut(&world.view(), &network(), driver.height + 1)
+        .expect("the opening block does not yet have a casting clock");
+    assert!(matches!(
+        validate_cut(&world.view(), &network(), driver.height + 2),
+        Err(AnonymousTablesRestoreError::Invalid(message))
+            if message.contains("missing its mandatory casting clock")
+    ));
+    board
+        .establish_casting_clock(driver.height + 2, opening_ms + 1)
+        .expect("clock");
+    let height = driver.height + 3;
+    board
+        .close(anchor(height, 0, board.closing_ms().unwrap()))
+        .expect("close");
+    driver
+        .state
+        .close_ballot(driver.id(), *board.closure().unwrap(), &network(), Vec::new)
+        .expect("the empty ballot rejects the attempt");
+    let record = board.record();
+    let world = activated_world();
+    fill(&world, &driver, &records, &[(scope, record.clone())]);
+    validate_cut(&world.view(), &network(), height).expect("all board heights are in the cut");
+
+    for field in [
+        "opening",
+        "clock",
+        "closure opening",
+        "closure clock",
+        "closure",
+        "corpus",
+    ] {
+        let mut future = record.clone();
+        match field {
+            "opening" => future.opening.as_mut().unwrap().height = height + 1,
+            "clock" => future.casting_clock.as_mut().unwrap().height = height + 1,
+            "closure opening" => {
+                future.closure.as_mut().unwrap().opening_anchor.height = height + 1
+            }
+            "closure clock" => future.closure.as_mut().unwrap().casting_clock_height = height + 1,
+            "closure" => future.closure.as_mut().unwrap().closure_anchor.height = height + 1,
+            _ => future.entries.push(AnonymousBallotCorpusEntryV1 {
+                scope,
+                vote: BallotChoiceV1::Aye,
+                nullifier: NullifierV1::new([7; 128]),
+                auth_v: VoteAuthorizationV1::new([8; 64]),
+                profile_id: ProofProfileIdV1::V1,
+                stamp: AdmissionStampV1 {
+                    nonce: AdmissionNonceV1::new([9; 32]),
+                },
+                envelope_digest: Digest512::new([10; 64]),
+                height: height + 1,
+                input_index: 0,
+            }),
+        }
+        let world = activated_world();
+        fill(&world, &driver, &records, &[(scope, future)]);
+        assert!(
+            matches!(
+                validate_cut(&world.view(), &network(), height),
+                Err(AnonymousTablesRestoreError::Invalid(message))
+                    if message.contains("above restored height")
+            ),
+            "{field}"
+        );
+    }
+}
+
+#[test]
 fn only_a_refusal_the_node_cannot_decide_defers() {
     let driver = drawn_small_jury();
     let state = state_with(&driver);
@@ -459,7 +559,7 @@ fn only_a_refusal_the_node_cannot_decide_defers() {
     ] {
         let mut block = state.block(header(&driver));
         let mut tx = block.transaction();
-        let _ = registration_refusal(&error, &mut tx);
+        let _ = anonymous_refusal(&error, &mut tx);
         assert_eq!(tx.is_execution_deferred(), defers, "{error:?}");
     }
 }
@@ -577,5 +677,8 @@ fn the_executor_runs_a_registration_only_as_the_sole_instruction_of_its_input() 
             .accepted_assignments(election)
             .is_ok_and(|accepted| accepted.contains(&assignment)),
         "the seat is accepted with its credential"
+    );
+    crate::state::parliament_registration::assert_registration_history(
+        &chain, &context, assignment, &record, &sole, &batch,
     );
 }

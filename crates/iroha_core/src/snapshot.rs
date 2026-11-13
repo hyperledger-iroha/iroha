@@ -1,5 +1,4 @@
 //! This module contains [`State`] snapshot actor service.
-#[cfg(test)]
 use crate::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
@@ -44,6 +43,9 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+pub(crate) mod checkpoint_capture;
+pub use checkpoint_capture::CheckpointDeferral;
+mod checkpoint_pending;
 pub(crate) mod checkpoint_store;
 pub mod checkpoints;
 mod errors;
@@ -109,6 +111,9 @@ pub(crate) enum SnapshotCaptureError {
     /// The World cannot be written through its runtime selection.
     #[error("cannot write the World through its runtime selection: {0}")]
     Selection(String),
+    /// Checked checkpoint serialization refused its byte cap or allocation.
+    #[error("bounded checkpoint serialization failed: {0}")]
+    BoundedEncoding(norito::json::BoundedJsonError),
     /// Canonical snapshot encoding or projection was rejected.
     #[error("invalid canonical State snapshot encoding: {0}")]
     #[cfg(test)]
@@ -133,7 +138,8 @@ impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
             SnapshotCaptureError::Runtime(error) => {
                 Self::StateView(crate::state::StateViewError::Runtime(*error))
             }
-            error @ SnapshotCaptureError::Selection(_) => {
+            error @ (SnapshotCaptureError::Selection(_)
+            | SnapshotCaptureError::BoundedEncoding(_)) => {
                 Self::ExecutionStatePublication(error.to_string())
             }
             #[cfg(test)]
@@ -153,6 +159,14 @@ impl From<SnapshotCaptureError> for crate::state::storage_transactions::Transact
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
                 ),
             )) => Self::ExecutionDeferred(reason),
+            SnapshotCaptureError::BoundedEncoding(
+                norito::json::BoundedJsonError::AllocationFailed,
+            ) => {
+                Self::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+            }
+            SnapshotCaptureError::BoundedEncoding(norito::json::BoundedJsonError::BodyTooLarge) => {
+                Self::ExecutionDeferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
+            }
             SnapshotCaptureError::Runtime(error) => match *error {
                 crate::state::LaneLifecycleError::NposPolicy(
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
@@ -163,6 +177,7 @@ impl From<SnapshotCaptureError> for crate::state::storage_transactions::Transact
         }
     }
 }
+#[derive(Clone)]
 struct CapturedSnapshotIdentity {
     serialized_hash: Hash,
     native_tip: Option<crate::state::NativeExecutionTip>,
@@ -194,6 +209,25 @@ pub(crate) struct CapturedStateSnapshot {
     identity: CapturedSnapshotIdentity,
 }
 impl CapturedStateSnapshot {
+    /// Capture the exact finalized publication overlay, before any later block can replace it.
+    /// The caller owns the publication fence and has completed every deterministic tail write.
+    pub(crate) fn capture_finalized(
+        state: &StateBlock<'_>,
+        maximum: usize,
+    ) -> Result<Self, SnapshotCaptureError> {
+        let json = checkpoint_capture::encoding::finalized(state, maximum)?;
+        let identity = CapturedSnapshotIdentity {
+            serialized_hash: Hash::new(json.as_bytes()),
+            native_tip: *state.native_execution_tip.get(),
+            native_tip_undo: *state.native_execution_tip.original_undo(),
+            chain_id: state.chain_id.clone(),
+            network_id: state.network_id,
+            height: state.block_hashes().len(),
+            tip: state.block_hashes().last().copied(),
+            sccp_policy_hash: crate::state::sccp_genesis_policy_hash_v1(),
+        };
+        Ok(Self { json, identity })
+    }
     /// Capture once; a concurrent publication returns a typed retryable refusal.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn capture(state: &State) -> Result<Self, SnapshotCaptureError> {
@@ -985,8 +1019,6 @@ impl SnapshotMaker {
                 },
                 move |startup_recovery, shutdown_signal| async move {
                     if let Some(mut maker) = snapshot_maker {
-                        // The loop looks for a checkpoint height at the tip every poll and
-                        // writes the periodic snapshot once its interval has passed.
                         let poll = maker.create_every.min(checkpoint_store::CHECKPOINT_POLL);
                         let shutting_down = shutdown_signal.clone();
                         Self::run_snapshot_loop(poll, startup_recovery, shutdown_signal, || {
@@ -1108,6 +1140,9 @@ impl SnapshotMaker {
     /// snapshot; all writer generation-validation reads share that finite pool.
     /// The first tick publishes the recovered state even when no new block has
     /// arrived: constructing a writer does not establish an existing publication.
+    /// Construct before native startup replay: its synchronous owner pumps mandatory
+    /// checkpoint images through the bounded queue. The same maker then reaches the live
+    /// maintenance child, whose rolling writes and retention wait for successful recovery.
     /// Might return [`None`] if the configuration is not suitable for _making_ snapshots.
     pub fn from_config(
         config: &Config,
@@ -1116,6 +1151,12 @@ impl SnapshotMaker {
         read_buffer_budget: AllocationBudget,
     ) -> Option<Self> {
         if let Mode::ReadWrite = config.mode {
+            let mut checkpoints = checkpoint_store::MakerCheckpoints::default();
+            checkpoints.receiver = Some(
+                state
+                    .runtime_checkpoint_capture
+                    .arm(config.max_payload_bytes),
+            );
             Some(Self {
                 state,
                 create_every: config.create_every_ms.get(),
@@ -1127,10 +1168,17 @@ impl SnapshotMaker {
                 resource_policy: config.resources,
                 read_buffer_budget,
                 commit_evidence_refusal: None,
-                checkpoints: checkpoint_store::MakerCheckpoints::default(),
+                checkpoints,
             })
         } else {
             None
+        }
+    }
+}
+impl Drop for SnapshotMaker {
+    fn drop(&mut self) {
+        if self.checkpoints.receiver.is_some() {
+            self.state.runtime_checkpoint_capture.stop();
         }
     }
 }
@@ -1621,12 +1669,20 @@ struct SnapshotGenerationBytes {
     fast_manifest: Vec<u8>,
     merkle: Vec<u8>,
 }
+/// Explicit immutable storage locations; never inferred from payload layouts or aliases.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SnapshotLocation {
+    Generation(String),
+    Checkpoint { name: String, digest: String },
+    PendingCheckpoint { name: String, digest: String },
+}
 struct BoundSnapshotGeneration {
     store_dir: PathBuf,
     store_dir_identity: StableSnapshotFileIdentity,
     generations_dir: PathBuf,
     generations_dir_identity: StableSnapshotFileIdentity,
-    pointer: BoundSnapshotFile,
+    pointer: Option<BoundSnapshotFile>,
+    checkpoint_identity: Option<(u64, u64)>,
     snapshot_directory: PathBuf,
     snapshot_identity: StableSnapshotFileIdentity,
     payload: BoundSnapshotFile,
@@ -1726,8 +1782,9 @@ fn bind_current_snapshot_generation_emergency_fast(
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
     bind_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, true, None)
 }
-/// Bind the generation the current pointer names, or the explicitly `named` older generation.
-/// The pointer stays bound either way, so a concurrent publication is detected.
+/// Bind the current generation or an explicitly named immutable generation.
+/// Strict recovery can name a durable checkpoint before the first rolling pointer exists;
+/// the pointer's observed presence or absence remains bound against concurrent publication.
 fn bind_snapshot_generation_with_mode(
     store_dir: &Path,
     payload_limit: u64,
@@ -1735,21 +1792,73 @@ fn bind_snapshot_generation_with_mode(
     emergency_fast: bool,
     named: Option<&str>,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
+    let location = named.map(|name| SnapshotLocation::Generation(name.to_owned()));
+    bind_snapshot_location_with_mode(
+        store_dir,
+        payload_limit,
+        merkle_chunk_size,
+        emergency_fast,
+        location.as_ref(),
+    )
+}
+
+fn bind_snapshot_location_with_mode(
+    store_dir: &Path,
+    payload_limit: u64,
+    merkle_chunk_size: NonZeroUsize,
+    emergency_fast: bool,
+    location: Option<&SnapshotLocation>,
+) -> Result<BoundSnapshotGeneration, TryReadError> {
     let store_dir_identity = direct_snapshot_directory_identity(store_dir)?;
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
-    let Some((pointer, pointer_bytes)) =
-        bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
-    else {
-        // An owned snapshot root exists before its first publication (including
-        // after a public reset). Without a committed pointer there is no snapshot;
-        // the writer has not necessarily created the generations directory yet.
-        return Err(TryReadError::NotFound);
+    let bound_pointer = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?;
+    let (pointer, pointer_bytes, current) = match bound_pointer {
+        Some((pointer, bytes)) => {
+            let current = parse_snapshot_current_pointer(&bytes, &pointer_path)?;
+            (Some(pointer), Some(bytes), Some(current))
+        }
+        None if location.is_some() && !emergency_fast => (None, None, None),
+        None => return Err(TryReadError::NotFound),
     };
-    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
+    let selected = location
+        .cloned()
+        .unwrap_or_else(|| SnapshotLocation::Generation(current.expect("current generation")));
+    let (generations_dir, entry_name, digest_hex, checkpoint_identity) = match selected {
+        SnapshotLocation::Generation(digest) => (
+            store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME),
+            digest.clone(),
+            digest,
+            None,
+        ),
+        SnapshotLocation::Checkpoint { name, digest }
+        | SnapshotLocation::PendingCheckpoint { name, digest } => {
+            let pending = matches!(location, Some(SnapshotLocation::PendingCheckpoint { .. }));
+            let identity = checkpoint_store::parse_entry_name(&name).ok_or_else(|| {
+                TryReadError::SnapshotGenerationInvalid {
+                    path: store_dir.to_path_buf(),
+                    reason: "checkpoint name is not canonical".to_owned(),
+                }
+            })?;
+            (
+                if pending {
+                    store_dir.join(checkpoint_pending::DIRECTORY)
+                } else {
+                    checkpoint_store::checkpoints_dir(store_dir)
+                },
+                name,
+                digest,
+                Some(identity),
+            )
+        }
+    };
     let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
-    let current = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
-    let digest_hex = named.map_or(current, str::to_owned);
-    let snapshot_directory = generations_dir.join(&digest_hex);
+    if !canonical_snapshot_digest_name(&digest_hex) {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: generations_dir,
+            reason: "generation name is not a canonical SHA-256 digest".to_owned(),
+        });
+    }
+    let snapshot_directory = generations_dir.join(entry_name);
     let snapshot_identity = direct_snapshot_directory_identity(&snapshot_directory)?;
     if !snapshot_generation_has_exact_artifact_inventory(&snapshot_directory)? {
         return Err(TryReadError::SnapshotGenerationInvalid {
@@ -1773,13 +1882,13 @@ fn bind_snapshot_generation_with_mode(
         &snapshot_directory.join(SNAPSHOT_DIGEST_FILE_NAME),
         SNAPSHOT_DIGEST_MAX_BYTES,
     )?;
-    if named.is_none() && digest_bytes != pointer_bytes {
+    if location.is_none() && Some(digest_bytes.as_slice()) != pointer_bytes.as_deref() {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: digest.path.clone(),
             reason: "generation digest differs from the canonical current pointer".to_owned(),
         });
     }
-    if named.is_some() && digest_bytes != format!("{digest_hex}\n").as_bytes() {
+    if location.is_some() && digest_bytes != format!("{digest_hex}\n").as_bytes() {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: digest.path.clone(),
             reason: "generation digest differs from its generation name".to_owned(),
@@ -1816,6 +1925,7 @@ fn bind_snapshot_generation_with_mode(
         generations_dir,
         generations_dir_identity,
         pointer,
+        checkpoint_identity,
         snapshot_directory,
         snapshot_identity,
         payload: payload.clone(),
@@ -1829,8 +1939,19 @@ fn bind_snapshot_generation_with_mode(
     })
 }
 impl BoundSnapshotGeneration {
+    fn verify_pointer_unchanged(&self) -> Result<(), TryReadError> {
+        if let Some(pointer) = &self.pointer {
+            return verify_bound_snapshot_file(pointer);
+        }
+        let path = self.store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(TryReadError::IO(error, path)),
+            Ok(_) => Err(TryReadError::SnapshotBindingChanged(path)),
+        }
+    }
     fn verify_selection_unchanged(&self) -> Result<(), TryReadError> {
-        verify_bound_snapshot_file(&self.pointer)?;
+        self.verify_pointer_unchanged()?;
         self.verify_generation_unchanged()
     }
     fn verify_generation_unchanged(&self) -> Result<(), TryReadError> {
@@ -1853,7 +1974,7 @@ impl BoundSnapshotGeneration {
     }
 
     fn verify_emergency_fast_selection_unchanged(&self) -> Result<(), TryReadError> {
-        verify_bound_snapshot_file(&self.pointer)?;
+        self.verify_pointer_unchanged()?;
         if direct_snapshot_directory_identity(&self.store_dir)? != self.store_dir_identity
             || direct_snapshot_directory_identity(&self.generations_dir)?
                 != self.generations_dir_identity
@@ -2989,18 +3110,19 @@ fn require_certified_successor(
 
 /// Signed generations of this chain whose World the next Kura block certifies, newest first.
 struct RestorableGenerations {
-    /// Eligible generation names: this chain and network, and an empty State or a committed
+    /// Eligible typed locations: this chain and network, and an empty State or a committed
     /// height below the Kura tip.
-    names: Vec<String>,
-    /// Signed height of the current generation when it is not eligible: the snapshot at the
-    /// Kura tip, or one above it after Kura lost its tail.
+    names: Vec<SnapshotLocation>,
+    /// Signed height of the current generation when ineligible, or the newest unpointed
+    /// generation when no rolling pointer exists: at the Kura tip or above a lost tail.
     current_height: Option<u64>,
 }
 
 /// Select restore candidates from each generation's bounded signed recovery manifest, without
 /// reading any payload; the bundle reader then binds and authenticates a candidate in full.
-/// `None` means no snapshot was ever published. Unreadable, unsigned or foreign older
-/// generations are skipped, never repaired or removed.
+/// The first checkpoint may be durable before any rolling pointer. `None` means no signed
+/// generation of this chain was found. Unreadable, unsigned or foreign older generations
+/// are skipped, never repaired or removed.
 ///
 /// A generation below `history_boundary` is not a candidate: blocks at or below the boundary
 /// are never re-executed, so no State below it can catch up
@@ -3013,56 +3135,137 @@ fn restorable_snapshot_generations(
     expected_chain_id: &ChainId,
     expected_network_id: NetworkId,
 ) -> Result<Option<RestorableGenerations>, TryReadError> {
+    let store_identity = direct_snapshot_directory_identity(store_dir)?;
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
-    let Some((_, pointer_bytes)) = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
-    else {
-        return Ok(None);
-    };
-    let current = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
-    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
-    let entries = std::fs::read_dir(&generations_dir)
-        .map_err(|error| TryReadError::IO(error, generations_dir.clone()))?;
+    let pointer = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?;
+    let current = pointer
+        .as_ref()
+        .map(|(_, bytes)| parse_snapshot_current_pointer(bytes, &pointer_path))
+        .transpose()?;
     let mut eligible = Vec::new();
     let mut current_height = None;
     let mut current_settled = false;
-    for (scanned, entry) in entries.enumerate() {
-        if scanned == SNAPSHOT_GENERATION_GC_MAX_ENTRIES {
-            return Err(TryReadError::SnapshotGenerationInvalid {
-                path: generations_dir,
-                reason: "generation entry count exceeds the hard scan bound".to_owned(),
-            });
-        }
-        let entry = entry.map_err(|error| TryReadError::IO(error, generations_dir.clone()))?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
+    let mut signed_generation_found = false;
+    let mut scanned = 0;
+    let mut containers = Vec::new();
+    // Pending slots are a distinct bounded spool, never aliases for retained authority.
+    checkpoint_pending::entries(store_dir)
+        .map_err(|error| TryReadError::IO(error, store_dir.join(checkpoint_pending::DIRECTORY)))?;
+    for (checkpoints, pending, directory) in [
+        (false, false, store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME)),
+        (true, false, checkpoint_store::checkpoints_dir(store_dir)),
+        (true, true, store_dir.join(checkpoint_pending::DIRECTORY)),
+    ] {
+        let identity = match direct_snapshot_directory_identity(&directory) {
+            Ok(identity) => identity,
+            Err(TryReadError::IO(error, _))
+                if (checkpoints || current.is_none())
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
         };
-        if !canonical_snapshot_digest_name(&name) {
-            continue;
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| TryReadError::IO(error, directory.clone()))?;
+        for entry in entries {
+            if scanned == SNAPSHOT_GENERATION_GC_MAX_ENTRIES {
+                return Err(TryReadError::SnapshotGenerationInvalid {
+                    path: directory,
+                    reason: "snapshot candidate entry count exceeds the hard scan bound".to_owned(),
+                });
+            }
+            scanned += 1;
+            let entry = entry.map_err(|error| TryReadError::IO(error, directory.clone()))?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let checkpoint_height = checkpoints
+                .then(|| checkpoint_store::parse_entry_name(&name))
+                .flatten();
+            if (checkpoints && checkpoint_height.is_none())
+                || (!checkpoints && !canonical_snapshot_digest_name(&name))
+                || direct_snapshot_directory_identity(&entry.path()).is_err()
+            {
+                continue;
+            }
+            let Some(manifest) = signed_generation_manifest(&entry.path(), verification_key) else {
+                if pending {
+                    return Err(TryReadError::SnapshotGenerationInvalid {
+                        path: entry.path(),
+                        reason: "pending checkpoint signed manifest is invalid".to_owned(),
+                    });
+                }
+                continue;
+            };
+            if manifest.chain_id != *expected_chain_id
+                || manifest.network_id != expected_network_id
+                || checkpoint_height.is_some_and(|(height, _)| height != manifest.committed_height)
+            {
+                continue;
+            }
+            let location = if checkpoints {
+                let path = entry.path().join(SNAPSHOT_DIGEST_FILE_NAME);
+                let Ok((_, bytes)) = bind_required_snapshot_file(&path, SNAPSHOT_DIGEST_MAX_BYTES)
+                else {
+                    continue;
+                };
+                let Ok(digest) = parse_snapshot_current_pointer(&bytes, &path) else {
+                    continue;
+                };
+                if pending {
+                    SnapshotLocation::PendingCheckpoint {
+                        name: name.clone(),
+                        digest,
+                    }
+                } else {
+                    SnapshotLocation::Checkpoint {
+                        name: name.clone(),
+                        digest,
+                    }
+                }
+            } else {
+                SnapshotLocation::Generation(name.clone())
+            };
+            signed_generation_found = true;
+            let height = manifest.committed_height;
+            let is_current = !checkpoints && current.as_ref() == Some(&name);
+            current_settled |= is_current;
+            if height < history_boundary {
+                continue;
+            }
+            // Empty State needs no certificate; a positive height needs its successor.
+            if height == 0 || u64::try_from(block_count).is_ok_and(|count| height < count) {
+                eligible.push((height, is_current, location));
+            } else if is_current || current.is_none() {
+                current_height = current_height.max(Some(height));
+            }
         }
-        let Some(manifest) = signed_generation_manifest(&entry.path(), verification_key) else {
-            continue;
-        };
-        if manifest.chain_id != *expected_chain_id || manifest.network_id != expected_network_id {
-            continue;
+        containers.push((directory, identity));
+    }
+    if direct_snapshot_directory_identity(store_dir)? != store_identity {
+        return Err(TryReadError::SnapshotBindingChanged(
+            store_dir.to_path_buf(),
+        ));
+    }
+    for (directory, identity) in containers {
+        if direct_snapshot_directory_identity(&directory)? != identity {
+            return Err(TryReadError::SnapshotBindingChanged(directory));
         }
-        let height = manifest.committed_height;
-        let is_current = name == current;
-        current_settled |= is_current;
-        if height < history_boundary {
-            continue;
-        }
-        // An empty State needs no certificate; a positive height needs its successor in Kura.
-        if height == 0 || u64::try_from(block_count).is_ok_and(|count| height < count) {
-            eligible.push((height, is_current, name));
-        } else if is_current {
-            current_height = Some(height);
-        }
+    }
+    if let Some((pointer, _)) = &pointer {
+        verify_bound_snapshot_file(pointer)?;
+    }
+    if current.is_none() && !signed_generation_found {
+        return Ok(None);
     }
     // Newest first; at an equal height the current generation, then by name.
     eligible.sort_unstable_by(|left, right| right.cmp(left));
     // A current generation that no signed manifest of this chain settles (missing, unsigned,
     // unreadable or foreign) is read first, so restore reports exactly why it is unusable.
-    let unsettled = (!current_settled).then_some(current);
+    let unsettled = current
+        .filter(|_| !current_settled)
+        .map(SnapshotLocation::Generation);
     Ok(Some(RestorableGenerations {
         names: unsettled
             .into_iter()
@@ -3100,11 +3303,18 @@ fn signed_generation_manifest(
     Some(decoded)
 }
 
+#[derive(Clone, Copy)]
+enum SnapshotRestorePurpose {
+    Startup,
+    CheckpointReconciliation,
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle<F>(
     execution_budget: &AllocationBudget,
     generation: &BoundSnapshotGeneration,
+    purpose: SnapshotRestorePurpose,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
     configured_nexus: &iroha_config::parameters::actual::Nexus,
@@ -3128,6 +3338,15 @@ where
         .join(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
     let fast_manifest =
         decode_emergency_fast_manifest(&generation.bytes.fast_manifest, &manifest_path)?;
+    if generation
+        .checkpoint_identity
+        .is_some_and(|(height, _)| height != fast_manifest.committed_height)
+    {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: generation.snapshot_directory.clone(),
+            reason: "signed checkpoint height differs from its directory".to_owned(),
+        });
+    }
     if fast_manifest.payload_len != generation.payload.len {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: manifest_path,
@@ -3281,8 +3500,16 @@ where
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let decoded_state =
-        seed.into_state_from_json_str_with_configured_nexus(input, configured_nexus.clone());
+    let decoded_state = match purpose {
+        SnapshotRestorePurpose::Startup => {
+            seed.into_state_from_json_str_with_configured_nexus(input, configured_nexus.clone())
+        }
+        SnapshotRestorePurpose::CheckpointReconciliation => seed
+            .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+                input,
+                configured_nexus.clone(),
+            ),
+    };
     let mut state = decoded_state.map_err(|err| {
         iroha_logger::warn!(
             ?err,
@@ -3302,6 +3529,14 @@ where
             "snapshot height exceeds the canonical u64 height domain".to_owned(),
         )
     })?;
+    if let Some(boundary) = kura.history_boundary()
+        && snapshot_height_u64 < boundary.height
+    {
+        return Err(TryReadError::InvalidSnapshotBoundary(format!(
+            "snapshot height {snapshot_height_u64} is below durable runtime history boundary {}",
+            boundary.height,
+        )));
+    }
     if fast_manifest.chain_id != *state.chain_id_ref()
         || fast_manifest.network_id != *state.network_id_ref()
         || fast_manifest.committed_height != snapshot_height_u64
@@ -3339,6 +3574,17 @@ where
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
     reconcile_snapshot_hash_height_with_kura(&snapshot_hashes, block_count, kura)?;
+    if let Some((height, committed_ms)) = generation.checkpoint_identity {
+        let native_tip = *state.view().native_execution_tip.get();
+        if !native_tip
+            .is_some_and(|tip| tip.height() == height && tip.creation_time_ms() == committed_ms)
+        {
+            return Err(TryReadError::SnapshotGenerationInvalid {
+                path: generation.snapshot_directory.clone(),
+                reason: "checkpoint directory differs from the restored native tip".to_owned(),
+            });
+        }
+    }
     iroha_logger::info!(
         snapshot_height,
         kura_height = block_count,
@@ -3406,7 +3652,8 @@ pub fn try_read_snapshot(
 /// The caller supplies the original execution pool before State exists; restore
 /// and its subsequent runtime caches retain that exact owner.
 ///
-/// Signatures are required unconditionally. A positive-height World requires original replay.
+/// Signatures are required unconditionally. A positive-height snapshot requires a certified
+/// complete-State root; World-only snapshots require original replay instead.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
@@ -3415,8 +3662,9 @@ pub fn try_read_snapshot(
 /// Returns a typed error for missing or unreadable artifacts, changed file
 /// bindings, invalid canonical payload/signature/Merkle or chain identity,
 /// inconsistent State/Kura history, or failed State/ZK initialization. Positive
-/// height requires original execution replay; local allocation and execution
-/// refusals retain their original categories.
+/// height without a complete-State commitment requires original execution replay. Keyed
+/// snapshots remain claims until node preparation authenticates their complete State;
+/// local allocation and execution refusals retain their original categories.
 pub fn try_read_snapshot_with_limits(
     execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
@@ -3509,6 +3757,7 @@ where
             let outcome = try_read_snapshot_bundle(
                 execution_budget,
                 &generation,
+                SnapshotRestorePurpose::Startup,
                 kura,
                 lane_manifests,
                 configured_nexus,
@@ -3531,7 +3780,7 @@ where
         let Some(restorable) = restorable_snapshot_generations(
             store_dir,
             block_count,
-            kura.upgrade_checkpoint()
+            kura.history_boundary()
                 .map_or(0, |checkpoint| checkpoint.height),
             verification_key,
             expected_chain_id,
@@ -3553,18 +3802,19 @@ where
         }
         let live_query_store = live_query_store_lazy();
         let mut first_failure = None;
-        for name in &restorable.names {
-            let read = bind_snapshot_generation_with_mode(
+        for location in &restorable.names {
+            let read = bind_snapshot_location_with_mode(
                 store_dir,
                 payload_limit,
                 merkle_chunk_size,
                 false,
-                Some(name),
+                Some(location),
             )
             .and_then(|generation| {
                 let outcome = try_read_snapshot_bundle(
                     execution_budget,
                     &generation,
+                    SnapshotRestorePurpose::Startup,
                     kura,
                     lane_manifests,
                     configured_nexus,
@@ -3589,7 +3839,7 @@ where
                 Err(error) if error.halts_restore() => return Err(error),
                 Err(error) => {
                     iroha_logger::warn!(
-                        generation = %name,
+                        ?location,
                         %error,
                         "Skipping an unusable snapshot generation"
                     );
@@ -3598,6 +3848,14 @@ where
             }
         }
         Err(first_failure.unwrap_or_else(|| {
+            if let Some(boundary) = kura.history_boundary()
+                && restorable.current_height.is_none_or(|height| height < boundary.height)
+            {
+                return TryReadError::InvalidSnapshotBoundary(format!(
+                    "no authenticated snapshot is available at or above durable runtime history boundary {}",
+                    boundary.height,
+                ));
+            }
             restorable.current_height.map_or_else(
                 || TryReadError::SnapshotGenerationInvalid {
                     path: store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME),
@@ -4849,6 +5107,7 @@ fn try_write_snapshot_with_limit_and_policy(
                     &(captured.json.into_bytes()),
                     captured.identity,
                     read_buffer_budget,
+                    true,
                 )
             })
         })
@@ -4886,6 +5145,7 @@ fn try_write_snapshot_payload_with_limit(
             snapshot_bytes,
             captured.identity,
             read_buffer_budget,
+            true,
         )
         .map(|_| ())
     })
@@ -4902,6 +5162,7 @@ fn try_write_snapshot_payload_with_limit_locked(
     snapshot_bytes: &[u8],
     identity: CapturedSnapshotIdentity,
     read_buffer_budget: &AllocationBudget,
+    publish_current: bool,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
     identity.validate_bytes(snapshot_bytes)?;
     ensure_snapshot_identity_is_backed_by_kura(state, &identity)?;
@@ -5003,15 +5264,17 @@ fn try_write_snapshot_payload_with_limit_locked(
         merkle_limit,
         signing_key.public_key(),
     )?;
-    publish_snapshot_current_pointer(
-        store_dir,
-        directory_identity,
-        &generation,
-        max_payload_bytes,
-        merkle_chunk_size,
-        signing_key.public_key(),
-        read_buffer_budget,
-    )?;
+    if publish_current {
+        publish_snapshot_current_pointer(
+            store_dir,
+            directory_identity,
+            &generation,
+            max_payload_bytes,
+            merkle_chunk_size,
+            signing_key.public_key(),
+            read_buffer_budget,
+        )?;
+    }
     // TODO(S6/S9): native execution-owned checkpoint compaction must authenticate
     // the close frontier and retained replay roots. Durable snapshot publication
     // alone does not authorize physical lane storage deletion.
@@ -5111,11 +5374,10 @@ fn ensure_snapshot_commit_evidence(
         ));
     }
     // The signed bytes are a local cache of one original State generation; a local signature
-    // authenticates bytes, not execution. R binds the complete World state (the successor's
-    // parent World state root), but no accelerated restore checks a snapshot against it yet,
-    // so original replay reproduces the complete World before consensus starts. TODO(S9):
-    // accelerated restore verifies the World against that certified root; publication here
-    // authorizes nothing.
+    // authenticates bytes, not execution. Under the keyed profile, node preparation must
+    // rebuild the complete selected State and match the successor's certified parent root.
+    // A World-only commitment cannot authorize a nonempty restored State, which must be
+    // reconstructed by original certified replay. Snapshot publication authorizes neither.
     Ok(())
 }
 

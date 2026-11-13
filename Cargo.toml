@@ -464,6 +464,8 @@ clippy.while_let_loop = "allow"
 
 [workspace]
 resolver = "2"
+# This path dependency retains its independently managed experiment workspace.
+exclude = ["experiments/kagemusha-spartan"]
 default-members = [
     "crates/irohad/bins",
     "crates/iroha_cli/bins",

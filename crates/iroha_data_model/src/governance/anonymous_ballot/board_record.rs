@@ -266,6 +266,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_receipt_digest_frames_the_complete_stored_record() {
+        use sha3::{Digest as _, Sha3_512};
+
+        use crate::governance::anonymous_ballot::{
+            digests::board_record_digest_v1,
+            framing::{enc, frame_bytes},
+        };
+
+        let stored = record(5);
+        let framed =
+            frame_bytes(b"PARL/BOARD-RECORD/v1", &[&enc(&stored).expect("enc")]).expect("frame");
+        assert_eq!(
+            board_record_digest_v1(&stored),
+            Ok(Digest512::new(Sha3_512::digest(&framed).into()))
+        );
+        let mut scheduled = stored.clone();
+        scheduled.opening_at_ms = Some(500_000);
+        assert_ne!(
+            board_record_digest_v1(&scheduled),
+            board_record_digest_v1(&stored),
+            "every field of the stored record enters its receipt digest"
+        );
+    }
+
     fn entry(nullifier: u8, height: u64, input_index: u32) -> AnonymousBallotCorpusEntryV1 {
         AnonymousBallotCorpusEntryV1::from_envelope(
             &test_fixtures::envelope(BallotChoiceV1::Aye, nullifier),

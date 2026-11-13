@@ -55,6 +55,13 @@ impl norito::json::JsonKeyCodec for PrivacyProtocolPolicyKeyV1 {
         norito::json::write_json_string(&self.canonical_json_key(), out);
     }
 
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_canonical_json_hex_to(self, out)
+    }
+
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         let invalid =
             || norito::json::Error::Message("invalid canonical protocol policy key".into());
@@ -87,6 +94,35 @@ impl norito::json::JsonObjectKey for PrivacyProtocolPolicyKeyV1 {
         mut visitor: impl FnMut(&str) -> Result<(), E>,
     ) -> Result<(), E> {
         visitor(&self.canonical_json_key())
+    }
+    fn visit_json_key_text_checked(
+        &self,
+        mut visitor: impl FnMut(&str) -> Result<(), norito::json::BoundedJsonError>,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        // This key's binary frame is fixed-size; stream its text through the same bounded
+        // codec and omit only the two surrounding quote characters.
+        struct KeyContent<'a, F> {
+            visitor: &'a mut F,
+        }
+        impl<F: FnMut(&str) -> Result<(), norito::json::BoundedJsonError>>
+            norito::json::JsonWriteSink for KeyContent<'_, F>
+        {
+            fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
+                if value == '"' {
+                    return Ok(());
+                }
+                (self.visitor)(value.encode_utf8(&mut [0; 4]))
+            }
+            fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
+                (self.visitor)(value)
+            }
+        }
+        norito::json::JsonKeyCodec::encode_json_key_to(
+            self,
+            &mut KeyContent {
+                visitor: &mut visitor,
+            },
+        )
     }
 }
 

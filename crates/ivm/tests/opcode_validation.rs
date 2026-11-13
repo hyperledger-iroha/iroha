@@ -1,26 +1,12 @@
 //! Opcode validation checks for instruction slots.
 use ivm::instruction;
 
-#[test]
-fn first_release_crypto_opcode_layout_is_dense() {
-    assert_eq!(
-        [
-            instruction::wide::crypto::SHA256BLOCK,
-            instruction::wide::crypto::SHA3BLOCK,
-            instruction::wide::crypto::POSEIDON2,
-            instruction::wide::crypto::POSEIDON6,
-            instruction::wide::crypto::AESENC,
-            instruction::wide::crypto::AESDEC,
-            instruction::wide::crypto::BLAKE2S,
-            instruction::wide::crypto::ED25519VERIFY,
-            instruction::wide::crypto::ED25519BATCHVERIFY,
-            instruction::wide::crypto::ECDSAVERIFY,
-            instruction::wide::crypto::DILITHIUMVERIFY,
-        ],
-        [
-            0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A,
-        ]
-    );
+/// Opcode bytes the first release assigns. Every other byte is unassigned.
+const fn is_assigned_opcode(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        0x01..=0x2A | 0x30 | 0x31 | 0x34 | 0x35 | 0x40..=0x46 | 0x48..=0x4B | 0x60 | 0x62
+    )
 }
 
 #[test]
@@ -44,29 +30,14 @@ fn first_release_extension_opcodes_are_valid_but_unassigned_slots_are_invalid() 
             "compact direct-transfer opcode 0x{opcode:02x} must ship in ABI v1"
         );
     }
-    for opcode in [
-        0x8B,
-        0x8C,
-        0x8D,
-        0x8E,
-        0x8F,
-        instruction::wide::iso20022::MSG_CREATE,
-        instruction::wide::iso20022::MSG_CLONE,
-        instruction::wide::iso20022::MSG_SET,
-        instruction::wide::iso20022::MSG_GET,
-        instruction::wide::iso20022::MSG_ADD,
-        instruction::wide::iso20022::MSG_REMOVE,
-        instruction::wide::iso20022::MSG_CLEAR,
-        instruction::wide::iso20022::MSG_PARSE,
-        instruction::wide::iso20022::MSG_SERIALIZE,
-        instruction::wide::iso20022::MSG_VALIDATE,
-        instruction::wide::iso20022::MSG_SIGN,
-        instruction::wide::iso20022::MSG_VERIFY_SIG,
-        instruction::wide::iso20022::MSG_SEND,
-        instruction::wide::iso20022::ENCODE_STR,
-        instruction::wide::iso20022::DECODE_STR,
-        instruction::wide::iso20022::VALIDATE_FORMAT,
-    ] {
+    for opcode in u8::MIN..=u8::MAX {
+        if is_assigned_opcode(opcode) {
+            assert!(
+                instruction::wide::is_valid_opcode(opcode),
+                "assigned opcode 0x{opcode:02x} must be valid in ABI v1"
+            );
+            continue;
+        }
         assert!(
             !instruction::wide::is_valid_opcode(opcode),
             "unassigned opcode 0x{opcode:02x} must be invalid in ABI v1"

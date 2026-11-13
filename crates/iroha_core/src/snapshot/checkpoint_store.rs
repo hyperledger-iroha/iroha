@@ -4,51 +4,47 @@
 //! A checkpoint at height `h` is the published State after block `h`, where `h` is the first
 //! block committed in a cadence interval of the policy. When the snapshot maker publishes a
 //! generation at such a height, it keeps that generation's five canonical artifacts under
-//! `checkpoints/<height>-<committed_ms>` as hard links, beside the rolling generations that a
-//! restart restores from. The rolling GC never touches this directory, and keeping a checkpoint
-//! copies no bytes and re-hashes nothing.
+//! `checkpoints/<height>-<committed_ms>` as private independent files, beside the rolling
+//! generations that a restart restores from. The rolling GC never touches this directory.
+//! Bounded copying preserves each artifact's exact bytes and single-link custody.
 //!
 //! After each new checkpoint the store keeps what the policy retains (the floor's own
 //! checkpoint, the newest one, every one younger than `retain_all_ms` and one per
 //! `retain_spacing_ms` above the floor) and every floor still waiting out its notice, and
 //! removes the rest. A root without a committed policy produces and keeps no checkpoint.
 //!
-//! Production does not hold back block publication: the maker writes the tip when it finds the
-//! tip at a checkpoint height, and if the next block publishes first the capture is overtaken
-//! and that node holds no checkpoint at that height (a floor needs every validator to hold it).
-//! TODO(§7.3): capture the published State of a checkpoint height from a view pinned at its
-//! publication, so a chain whose blocks commit faster than a capture still yields every
-//! checkpoint.
+//! The publication owner captures exact canonical bytes from the finalized overlay at each
+//! checkpoint height. The writer durably copies the five signed artifacts into a private
+//! two-slot pending spool before acknowledging visibility. Queueing, signing, and disk I/O
+//! run outside State/World writers and the commit fence; failure retains the original image.
+//! Original visibility or strict post-recovery authentication authorizes atomic promotion
+//! into this retained store. Pending artifacts never authorize retention or a startup floor.
 
 use std::{
     collections::BTreeSet,
-    num::NonZeroUsize,
+    io::{Read as _, Seek as _, Write as _},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
-use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::BlockHeader, parameter::RuntimeCheckpointPolicyV1,
-    runtime::checkpoint::RuntimeBoundaryV1,
+    parameter::RuntimeCheckpointPolicyV1, runtime::checkpoint::RuntimeBoundaryV1,
 };
-use mv::storage::StorageReadOnly as _;
 
 use super::{
-    SNAPSHOT_CURRENT_FILE_NAME, SNAPSHOT_CURRENT_MAX_BYTES, SNAPSHOT_DIGEST_FILE_NAME,
-    SNAPSHOT_FAST_MANIFEST_FILE_NAME, SNAPSHOT_FILE_NAME, SNAPSHOT_GENERATION_GC_MAX_ENTRIES,
-    SNAPSHOT_GENERATIONS_DIR_NAME, SNAPSHOT_MERKLE_FILE_NAME, SNAPSHOT_SIGNATURE_FILE_NAME,
-    SnapshotMaker, bind_snapshot_file, parse_snapshot_current_pointer, signed_generation_manifest,
+    SNAPSHOT_DIGEST_FILE_NAME, SNAPSHOT_FAST_MANIFEST_FILE_NAME, SNAPSHOT_FILE_NAME,
+    SNAPSHOT_GENERATION_GC_MAX_ENTRIES, SNAPSHOT_MERKLE_FILE_NAME, SNAPSHOT_SIGNATURE_FILE_NAME,
+    SnapshotMaker,
 };
-use crate::state::{State, StateReadOnly, WorldReadOnly};
 
-/// How often the snapshot maker looks for a checkpoint height at the tip.
+/// How often the snapshot maker drains original checkpoint captures.
 pub(crate) const CHECKPOINT_POLL: Duration = Duration::from_millis(500);
 
 /// The directory of a snapshot store that holds its checkpoints.
 pub(crate) const CHECKPOINTS_DIR_NAME: &str = "checkpoints";
 
 /// The five canonical artifacts of a generation, which a checkpoint keeps.
+#[cfg(test)]
 const ARTIFACTS: [&str; 5] = [
     SNAPSHOT_FILE_NAME,
     SNAPSHOT_DIGEST_FILE_NAME,
@@ -73,26 +69,6 @@ pub(crate) struct CheckpointSchedule {
 }
 
 impl CheckpointSchedule {
-    /// The schedule of the root `state` executes, if it has activated the lifecycle State and
-    /// committed a well-formed checkpoint policy.
-    pub(crate) fn of(state: &State) -> Option<Self> {
-        let now_ms = state.latest_block_creation_time_ms_fast()?;
-        let view = state.view();
-        let world = view.world();
-        let policy = crate::runtime::checkpoint::committed_policy(
-            world.runtime_selection(),
-            WorldReadOnly::parameters(world),
-        )?;
-        Some(Self::new(
-            policy,
-            world
-                .runtime_boundaries()
-                .iter()
-                .map(|(_, boundary)| boundary),
-            now_ms,
-        ))
-    }
-
     /// The schedule `policy` sets with the root's `boundaries` at committed time `now_ms`.
     pub(crate) fn new<'a>(
         policy: RuntimeCheckpointPolicyV1,
@@ -118,12 +94,6 @@ impl CheckpointSchedule {
         }
     }
 
-    /// Whether the block committed at `committed_ms`, whose parent was committed at
-    /// `parent_ms`, is a checkpoint height.
-    pub(crate) const fn is_checkpoint(&self, parent_ms: u64, committed_ms: u64) -> bool {
-        self.policy.is_checkpoint(parent_ms, committed_ms)
-    }
-
     /// The heights of `held` checkpoints (height and committed time, sorted by height) the store
     /// keeps: what the policy retains and every floor waiting out its notice.
     pub(crate) fn retained(&self, held: &[(u64, u64)]) -> BTreeSet<u64> {
@@ -142,132 +112,144 @@ impl CheckpointSchedule {
     }
 }
 
-/// A tip the snapshot maker classified: its hash, and its height, committed time and the
-/// schedule in force when it is a checkpoint height.
-type ClassifiedTip = (HashOf<BlockHeader>, Option<(u64, u64, CheckpointSchedule)>);
-
-/// The snapshot maker's checkpoint bookkeeping.
-#[derive(Debug, Default)]
+/// The snapshot maker's checkpoint bookkeeping. A failed write retains its original image.
+#[derive(Default)]
 pub(crate) struct MakerCheckpoints {
     /// When the maker last wrote its periodic snapshot.
     last_periodic: Option<Instant>,
-    /// The tip the maker last classified. Committed State changes only with the tip, so the
-    /// maker reads it once per tip.
-    classified: Option<ClassifiedTip>,
-    /// Height of the last checkpoint the maker kept, or tried to keep: it tries once per height.
-    kept: Option<u64>,
+    pub(super) receiver:
+        Option<std::sync::mpsc::Receiver<std::sync::Arc<super::checkpoint_capture::CheckpointJob>>>,
+    pending: Option<std::sync::Arc<super::checkpoint_capture::CheckpointJob>>,
 }
 
 impl SnapshotMaker {
-    /// One tick of the maker: write the tip when it sits at a checkpoint height of the root's
-    /// committed policy, or when the periodic interval has passed or the node shuts down, and
-    /// keep a checkpoint it wrote.
+    /// Arm the exact configured writer for certified replay. The caller owns both replay and
+    /// this writer, so no separate worker, live recapture or successful-startup claim is needed.
+    pub(crate) fn begin_checkpoint_replay(
+        &mut self,
+        state: &std::sync::Arc<crate::state::State>,
+    ) -> Result<(), super::CheckpointDeferral> {
+        if !std::sync::Arc::ptr_eq(&self.state, state) || self.checkpoints.receiver.is_none() {
+            return Err(super::CheckpointDeferral::Persistence {
+                height: state.committed_height() as u64,
+                kind: std::io::ErrorKind::InvalidInput,
+            });
+        }
+        self.state.runtime_checkpoint_capture.activate();
+        self.state.runtime_checkpoint_capture.writer_ready();
+        Ok(())
+    }
+
+    /// Drain only original replay jobs after publication released all its fences. Failed
+    /// writes retain their exact image and typed I/O refusal. Certified visibility permits
+    /// atomic relocation, but no rolling pointer, retention or orphan reconciliation runs.
+    pub(crate) fn checkpoint_replay_step(
+        &mut self,
+    ) -> Result<(), crate::state::storage_transactions::TransactionsBlockError> {
+        loop {
+            let pending = self.checkpoints.pending.take().or_else(|| {
+                self.checkpoints
+                    .receiver
+                    .as_ref()
+                    .and_then(|receiver| receiver.try_recv().ok())
+            });
+            let Some(job) = pending else {
+                return Ok(());
+            };
+            if job.abandoned() {
+                continue;
+            }
+            if job.needs_write() {
+                let result = self.persist_pending_checkpoint(&job.capture);
+                job.acknowledge(result);
+                if let Some(refusal) = job.take_refusal() {
+                    self.checkpoints.pending = Some(job);
+                    return Err(refusal);
+                }
+            }
+            if job.visible() {
+                if let Err(error) = self.promote_replayed_checkpoint(&job.capture) {
+                    let refusal = error.into_publication(job.capture.height);
+                    self.checkpoints.pending = Some(job);
+                    return Err(refusal);
+                }
+            } else {
+                self.checkpoints.pending = Some(job);
+                return Ok(());
+            }
+        }
+    }
+
+    /// Persist every original publication image in order, then perform ordinary rolling work.
+    /// A local I/O failure retains the image and the bounded producer backpressures instead
+    /// of replacing a required checkpoint with a later tip.
     pub(super) fn tick(&mut self, shutting_down: bool) {
-        let due = self.due_checkpoint();
+        self.state.runtime_checkpoint_capture.writer_ready();
+        let owned = self
+            .checkpoints
+            .pending
+            .as_ref()
+            .map(|job| (job.capture.height, job.capture.committed_ms));
+        if let Err(error) =
+            tokio::task::block_in_place(|| self.reconcile_pending_checkpoints(owned))
+        {
+            iroha_logger::warn!(%error, "Pending checkpoint reconciliation refused; preserving every candidate");
+            let job = self.checkpoints.pending.take().or_else(|| {
+                self.checkpoints
+                    .receiver
+                    .as_ref()
+                    .and_then(|receiver| receiver.try_recv().ok())
+            });
+            if let Some(job) = job {
+                if job.needs_write() {
+                    job.acknowledge(Err(error));
+                }
+                self.checkpoints.pending = Some(job);
+            }
+            return;
+        }
+        loop {
+            let pending = self.checkpoints.pending.take().or_else(|| {
+                self.checkpoints
+                    .receiver
+                    .as_ref()
+                    .and_then(|receiver| receiver.try_recv().ok())
+            });
+            let Some(job) = pending else {
+                break;
+            };
+            if job.abandoned() {
+                continue;
+            }
+            if job.needs_write() {
+                let result =
+                    tokio::task::block_in_place(|| self.persist_pending_checkpoint(&job.capture));
+                if let Err(error) = &result {
+                    iroha_logger::warn!(height = job.capture.height, %error, "Retaining original checkpoint for durability retry");
+                }
+                job.acknowledge(result);
+            }
+            if job.visible() {
+                if let Err(error) =
+                    tokio::task::block_in_place(|| self.promote_visible_checkpoint(&job.capture))
+                {
+                    iroha_logger::warn!(height = job.capture.height, %error, "Retaining visible checkpoint for promotion retry");
+                    self.checkpoints.pending = Some(job);
+                    return;
+                }
+            } else {
+                self.checkpoints.pending = Some(job);
+                break;
+            }
+        }
         let periodic = shutting_down
             || self
                 .checkpoints
                 .last_periodic
                 .is_none_or(|at| at.elapsed() >= self.create_every);
-        if due.is_none() && !periodic {
-            return;
-        }
         if periodic {
             self.checkpoints.last_periodic = Some(Instant::now());
-        }
-        self.create_snapshot();
-        if let Some((height, committed_ms, tip, schedule)) = due
-            && self.latest_block_hash == Some(tip)
-        {
-            self.keep_checkpoint(&schedule, height, committed_ms);
-        }
-    }
-
-    /// The tip's height, committed time and hash, with the schedule in force, when it is a
-    /// checkpoint height the maker has not kept yet.
-    fn due_checkpoint(&mut self) -> Option<(u64, u64, HashOf<BlockHeader>, CheckpointSchedule)> {
-        let latest = self.state.latest_block_hash_fast()?;
-        if self
-            .checkpoints
-            .classified
-            .as_ref()
-            .is_none_or(|(tip, _)| *tip != latest)
-        {
-            self.checkpoints.classified = Some(self.classify_tip(latest));
-        }
-        let (tip, classified) = self.checkpoints.classified.as_ref()?;
-        let (height, committed_ms, schedule) = classified.as_ref()?;
-        (self.checkpoints.kept != Some(*height))
-            .then(|| (*height, *committed_ms, *tip, schedule.clone()))
-    }
-
-    /// The committed tip's hash, and its height, committed time and the schedule in force if the
-    /// root's committed policy makes it a checkpoint height: the first block committed in its
-    /// cadence interval. A root without a committed policy has no checkpoint height; `latest`
-    /// names a tip without a native execution record.
-    fn classify_tip(&self, latest: HashOf<BlockHeader>) -> ClassifiedTip {
-        let schedule = CheckpointSchedule::of(&self.state);
-        let view = self.state.view();
-        let Some(tip) = StateReadOnly::native_execution_tip(&view) else {
-            return (latest, None);
-        };
-        let Some(schedule) = schedule else {
-            return (tip.iroha_hash(), None);
-        };
-        let height = tip.height();
-        let committed_ms = tip.creation_time_ms();
-        let parent_ms = match *view.native_execution_tip_predecessor.get() {
-            Some(Some(parent)) if parent.height().checked_add(1) == Some(height) => {
-                Some(parent.creation_time_ms())
-            }
-            _ => usize::try_from(height.saturating_sub(1))
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .and_then(|parent| {
-                    view.kura()
-                        .get_block(parent, &self.read_buffer_budget)
-                        .ok()
-                        .flatten()
-                })
-                .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok()),
-        };
-        let checkpoint = parent_ms
-            .filter(|parent_ms| schedule.is_checkpoint(*parent_ms, committed_ms))
-            .map(|_| (height, committed_ms, schedule));
-        (tip.iroha_hash(), checkpoint)
-    }
-
-    /// Keep the current generation, which the maker just published at checkpoint `height`, as a
-    /// checkpoint, then apply the schedule's retention.
-    fn keep_checkpoint(&mut self, schedule: &CheckpointSchedule, height: u64, committed_ms: u64) {
-        let result = (|| -> Result<Vec<u64>, String> {
-            let pointer_path = self.store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
-            let (_, pointer) = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)
-                .map_err(|error| error.to_string())?
-                .ok_or("no current snapshot generation")?;
-            let name = parse_snapshot_current_pointer(&pointer, &pointer_path)
-                .map_err(|error| error.to_string())?;
-            let generation = self
-                .store_dir
-                .join(SNAPSHOT_GENERATIONS_DIR_NAME)
-                .join(name);
-            let manifest = signed_generation_manifest(&generation, self.signing_key.public_key())
-                .ok_or("the current generation's manifest does not verify")?;
-            if manifest.committed_height != height {
-                return Err("the current generation is not at the checkpoint height".into());
-            }
-            keep(&self.store_dir, &generation, height, committed_ms)
-                .map_err(|error| error.to_string())?;
-            retain(&self.store_dir, schedule).map_err(|error| error.to_string())
-        })();
-        self.checkpoints.kept = Some(height);
-        match result {
-            Ok(removed) => {
-                iroha_logger::info!(height, ?removed, "Kept a runtime checkpoint");
-            }
-            Err(error) => {
-                iroha_logger::warn!(height, %error, "Failed to keep a runtime checkpoint");
-            }
+            self.create_snapshot();
         }
     }
 }
@@ -334,21 +316,76 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
     std::fs::File::open(path)?.sync_all()
 }
 
-/// Keep the published generation at `generation_dir`, of the State after the block at
-/// checkpoint height `height` committed at `committed_ms`, as a checkpoint of the store at
-/// `store_dir`. The artifacts are hard links, so this copies no bytes; keeping the same
-/// checkpoint again changes nothing.
+/// Test fixture: keep the published generation at `generation_dir`, of the State after the
+/// block at checkpoint height `height` committed at `committed_ms`, directly as a retained
+/// checkpoint of the store at `store_dir`. Production never retains a generation this way: it
+/// promotes the original capture from the pending spool once visibility authorizes it. Bounded
+/// copies keep both the source generation and retained checkpoint single-linked. Keeping an
+/// identical checkpoint again verifies it without rewriting it.
 ///
 /// # Errors
-/// The directory cannot be created, an artifact cannot be linked, or the result cannot be made
-/// durable.
+/// The directory or artifacts violate custody, an artifact exceeds its configured bound or
+/// changes during copying, or the result cannot be made durable.
+#[cfg(test)]
 pub(crate) fn keep(
     store_dir: &Path,
     generation_dir: &Path,
     height: u64,
     committed_ms: u64,
+    max_payload_bytes: std::num::NonZeroUsize,
+    merkle_chunk_size: std::num::NonZeroUsize,
 ) -> std::io::Result<()> {
-    let directory = checkpoints_dir(store_dir);
+    copy_to_container(
+        store_dir,
+        generation_dir,
+        CHECKPOINTS_DIR_NAME,
+        height,
+        committed_ms,
+        max_payload_bytes,
+        merkle_chunk_size,
+    )
+}
+
+/// Copy the same canonical private artifacts into an explicit checkpoint container.
+/// The caller owns any pending quota and whether committed retention is authorized.
+pub(super) fn copy_to_container(
+    store_dir: &Path,
+    generation_dir: &Path,
+    container: &str,
+    height: u64,
+    committed_ms: u64,
+    max_payload_bytes: std::num::NonZeroUsize,
+    merkle_chunk_size: std::num::NonZeroUsize,
+) -> std::io::Result<()> {
+    let invalid = |error: super::TryReadError| match error {
+        super::TryReadError::IO(original, _) => original,
+        other => std::io::Error::new(std::io::ErrorKind::InvalidData, other.to_string()),
+    };
+    let store_identity = super::direct_snapshot_directory_identity(store_dir).map_err(invalid)?;
+    let source_identity =
+        super::direct_snapshot_directory_identity(generation_dir).map_err(invalid)?;
+    let payload_limit = u64::try_from(max_payload_bytes.get()).unwrap_or(u64::MAX);
+    let payload = bind_copy_source(&generation_dir.join(SNAPSHOT_FILE_NAME), payload_limit)?;
+    let merkle_limit = super::snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
+    let mut sources = vec![(SNAPSHOT_FILE_NAME, payload)];
+    for (artifact, limit) in [
+        (SNAPSHOT_DIGEST_FILE_NAME, super::SNAPSHOT_DIGEST_MAX_BYTES),
+        (
+            SNAPSHOT_SIGNATURE_FILE_NAME,
+            super::SNAPSHOT_SIGNATURE_MAX_BYTES,
+        ),
+        (
+            SNAPSHOT_FAST_MANIFEST_FILE_NAME,
+            super::SNAPSHOT_FAST_MANIFEST_MAX_BYTES,
+        ),
+        (SNAPSHOT_MERKLE_FILE_NAME, merkle_limit),
+    ] {
+        sources.push((
+            artifact,
+            bind_copy_source(&generation_dir.join(artifact), limit)?,
+        ));
+    }
+    let directory = store_dir.join(container);
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -357,9 +394,57 @@ pub(crate) fn keep(
         builder.mode(0o700);
     }
     builder.create(&directory)?;
+    sync_directory(store_dir)?;
+    let directory_identity =
+        super::direct_snapshot_directory_identity(&directory).map_err(invalid)?;
     let name = entry_name(height, committed_ms);
     let destination = directory.join(&name);
-    if destination.is_dir() {
+    let exists = match std::fs::symlink_metadata(&destination) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    if exists {
+        super::direct_snapshot_directory_identity(&destination).map_err(invalid)?;
+        if !super::snapshot_generation_has_exact_artifact_inventory(&destination)
+            .map_err(invalid)?
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "checkpoint artifact inventory changed",
+            ));
+        }
+        for (artifact, source) in &sources {
+            let retained = bind_copy_source(&destination.join(artifact), source.max_bytes)?;
+            if retained.len != source.len || retained.bytes_sha256 != source.bytes_sha256 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "retained checkpoint differs from its generation",
+                ));
+            }
+        }
+        if super::direct_snapshot_directory_identity(store_dir).map_err(invalid)? != store_identity
+            || super::direct_snapshot_directory_identity(generation_dir).map_err(invalid)?
+                != source_identity
+            || super::direct_snapshot_directory_identity(&directory).map_err(invalid)?
+                != directory_identity
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "checkpoint directory changed during verification",
+            ));
+        }
+        for (_, source) in &sources {
+            source.handle.sync_all()?;
+        }
+        for (artifact, source) in &sources {
+            bind_copy_source(&destination.join(artifact), source.max_bytes)?
+                .handle
+                .sync_all()?;
+        }
+        sync_directory(&destination)?;
+        sync_directory(&directory)?;
+        sync_directory(store_dir)?;
         return Ok(());
     }
     let staging = directory.join(format!("{STAGING_PREFIX}{name}"));
@@ -370,12 +455,85 @@ pub(crate) fn keep(
     }
     builder.recursive(false);
     builder.create(&staging)?;
-    for artifact in ARTIFACTS {
-        std::fs::hard_link(generation_dir.join(artifact), staging.join(artifact))?;
+    let staging_identity = super::direct_snapshot_directory_identity(&staging).map_err(invalid)?;
+    for (artifact, source) in &sources {
+        copy_artifact(source, &staging.join(artifact))?;
+    }
+    if super::direct_snapshot_directory_identity(store_dir).map_err(invalid)? != store_identity
+        || super::direct_snapshot_directory_identity(generation_dir).map_err(invalid)?
+            != source_identity
+        || super::direct_snapshot_directory_identity(&directory).map_err(invalid)?
+            != directory_identity
+        || super::direct_snapshot_directory_identity(&staging).map_err(invalid)? != staging_identity
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "checkpoint directory changed during copying",
+        ));
     }
     sync_directory(&staging)?;
     std::fs::rename(&staging, &destination)?;
     sync_directory(&directory)
+}
+
+fn bind_copy_source(path: &Path, maximum: u64) -> std::io::Result<super::BoundSnapshotFile> {
+    super::bind_snapshot_file_handle(path, maximum)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "checkpoint artifact is missing",
+        )
+    })
+}
+
+/// Copy one pre-bound artifact with fixed scratch, exact length/digest, and private custody.
+fn copy_artifact(source: &super::BoundSnapshotFile, destination: &Path) -> std::io::Result<()> {
+    use sha2::{Digest as _, Sha256};
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut output = options.open(destination)?;
+    let mut input = source.handle.as_ref();
+    input.seek(std::io::SeekFrom::Start(0))?;
+    let mut remaining = source.len;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8 * 1024];
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
+        let read = input.read(&mut buffer[..requested])?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "checkpoint artifact shortened during copying",
+            ));
+        }
+        output.write_all(&buffer[..read])?;
+        digest.update(&buffer[..read]);
+        remaining -= read as u64;
+    }
+    let mut excess = [0_u8; 1];
+    let actual: [u8; 32] = digest.finalize().into();
+    if input.read(&mut excess)? != 0 || source.bytes_sha256 != Some(actual) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "checkpoint artifact changed during copying",
+        ));
+    }
+    super::verify_bound_snapshot_file_metadata_at(&source.path, source)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?;
+    output.sync_all()?;
+    let retained = bind_copy_source(destination, source.max_bytes)?;
+    if retained.len != source.len || retained.bytes_sha256 != Some(actual) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "checkpoint copy differs from its source",
+        ));
+    }
+    Ok(())
 }
 
 /// Remove the checkpoints of the store at `store_dir` that `schedule` no longer retains, and
@@ -511,6 +669,8 @@ mod tests {
     #[test]
     fn a_kept_checkpoint_survives_its_generation_and_retention_removes_the_rest() {
         let store = tempfile::tempdir().unwrap();
+        let maximum = std::num::NonZeroUsize::new(1024 * 1024).unwrap();
+        let chunk = std::num::NonZeroUsize::new(4096).unwrap();
         let mut generations = Vec::new();
         for height in [10_u64, 20, 30] {
             let generation = store.path().join("generations").join(format!("g{height}"));
@@ -518,9 +678,41 @@ mod tests {
             for artifact in ARTIFACTS {
                 std::fs::write(generation.join(artifact), format!("{artifact}@{height}")).unwrap();
             }
-            keep(store.path(), &generation, height, height * HOUR_MS).unwrap();
+            keep(
+                store.path(),
+                &generation,
+                height,
+                height * HOUR_MS,
+                maximum,
+                chunk,
+            )
+            .unwrap();
             // Keeping it again changes nothing.
-            keep(store.path(), &generation, height, height * HOUR_MS).unwrap();
+            keep(
+                store.path(),
+                &generation,
+                height,
+                height * HOUR_MS,
+                maximum,
+                chunk,
+            )
+            .unwrap();
+            for artifact in ARTIFACTS {
+                let source =
+                    bind_copy_source(&generation.join(artifact), maximum.get() as u64).unwrap();
+                let retained = bind_copy_source(
+                    &checkpoints_dir(store.path())
+                        .join(entry_name(height, height * HOUR_MS))
+                        .join(artifact),
+                    maximum.get() as u64,
+                )
+                .unwrap();
+                assert_eq!(source.bytes_sha256, retained.bytes_sha256);
+                assert_ne!(
+                    source.identity, retained.identity,
+                    "checkpoint must have independent custody"
+                );
+            }
             generations.push(generation);
         }
         // The rolling GC removes a generation; its checkpoint keeps every artifact.
@@ -556,5 +748,25 @@ mod tests {
             [10, 30]
         );
         assert!(!checkpoints_dir(store.path()).join(".staging-40-1").exists());
+    }
+
+    #[test]
+    fn checkpoint_copy_refuses_oversized_or_changed_source_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let source_path = root.path().join("source");
+        std::fs::write(&source_path, b"original").unwrap();
+        assert!(bind_copy_source(&source_path, 7).is_err());
+        let source = bind_copy_source(&source_path, 8).unwrap();
+        std::fs::write(&source_path, b"tampered").unwrap();
+        assert!(copy_artifact(&source, &root.path().join("copy")).is_err());
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("alias");
+            std::os::unix::fs::symlink(&source_path, &alias).unwrap();
+            assert!(bind_copy_source(&alias, 8).is_err());
+            std::fs::remove_file(&alias).unwrap();
+            std::fs::hard_link(&source_path, &alias).unwrap();
+            assert!(bind_copy_source(&source_path, 8).is_err());
+        }
     }
 }

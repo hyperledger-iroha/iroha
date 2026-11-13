@@ -264,7 +264,11 @@ pub fn contain(
                 && record.containment.incident == containment.incident
         })
         .map(|(renewed_id, record)| (*renewed_id, record.clone()));
-    let mut selection = state_transaction.world.runtime_selection.get().clone();
+    let mut selection = state_transaction
+        .world
+        .runtime_selection
+        .canonical()
+        .clone();
     let contained = if let Some((renewed_id, mut renewed)) = renewed {
         if renewed.containment.targets != containment.targets
             || renewed.containment.kind != containment.kind
@@ -328,6 +332,16 @@ pub fn contain(
             return Err(invalid(
                 "every target is already restricted at least as much",
             ));
+        }
+        // Only the selected native custody service adds this protection. Its orderbook
+        // parents have no scoped completion capability, so containment must preserve
+        // their ordinary admission just as governed activation does.
+        // This is only the new AdmissionClosed/CompletionOnly parent gate, not a
+        // general obligation-stranding check or a change to emergency quarantine.
+        if super::native_escrow_capture::live_orderbook_count(&*state_transaction.world) != 0
+            && let Some(reason) = super::native_escrow_capture::orderbook_admission_gap(&selection)
+        {
+            return Err(invalid(&reason));
         }
         *state_transaction.world.runtime_selection.get_mut() = selection;
         (contained, None)

@@ -433,7 +433,8 @@ impl Core {
     /// The condition of `request_proposal` and of `Status.want_proposal` (§6.11): not awaiting,
     /// `L(h, view) ≠ me`, no proposal of `(h, view)` held, and a late entry or evidence that the
     /// proposal exists (a verified vote of view `view` in the pools, a `PrepareQC` of
-    /// `(h, view)`, or a peer's latest `Status` reporting a proposal hash for `(h, view)`).
+    /// `(h, view)`, a peer's latest `Status` reporting a proposal hash for `(h, view)`,
+    /// or an authenticated original-leader manifest for this round and parent).
     fn wants_proposal(&self) -> bool {
         if self.awaiting || self.halted.is_some() || self.proposal.is_some() {
             return false;
@@ -446,7 +447,8 @@ impl Core {
     }
 
     fn proposal_evidence(&self) -> bool {
-        self.votes.any_in_view(self.view)
+        self.manifest_hint
+            || self.votes.any_in_view(self.view)
             || self.has_pqc_of_view()
             || self.peers.values().any(|peer| {
                 peer.height == self.height && peer.view == self.view && peer.proposal_hash.is_some()

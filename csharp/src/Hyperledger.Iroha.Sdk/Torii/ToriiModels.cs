@@ -5842,12 +5842,6 @@ public sealed record class ToriiContractViewMemory
 
     [JsonPropertyName("store64")]
     public ulong Store64 { get; init; }
-
-    [JsonPropertyName("load128")]
-    public ulong Load128 { get; init; }
-
-    [JsonPropertyName("store128")]
-    public ulong Store128 { get; init; }
 }
 
 [JsonConverter(typeof(ToriiContractViewAnalysisJsonConverter))]

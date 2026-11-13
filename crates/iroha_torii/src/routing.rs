@@ -28065,7 +28065,7 @@ fn prepare_contract_call(
         )
     })?;
     let program = state
-        .prepare_contract_query_program(binding, code_bytes.as_ref())
+        .prepare_contract_query_program_in_world(&world, binding, code_bytes.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
@@ -28757,7 +28757,7 @@ pub struct ContractViewVmDiagnosticDto {
     #[norito(default)]
     pub current_function: Option<String>,
     #[norito(default)]
-    pub opcode: Option<u16>,
+    pub opcode: Option<u8>,
     #[norito(default)]
     pub syscall: Option<u32>,
     pub predecoded_loaded: bool,
@@ -39936,6 +39936,8 @@ fn native_contract_emission_source_is_visible(
             PipelineEventPositionV1::BlockApproved => true,
         },
         ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
+        // A governance block-start output names no account, input or session.
+        ExecutionOutputV1::GovernanceBlockStart(_) => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -43843,7 +43845,6 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version: 1,
         };
@@ -43925,7 +43926,6 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version: 1,
         };
@@ -58709,7 +58709,7 @@ fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, opcode)
+        &ivm::encoding::wide::encode_scall(u32::from(opcode))
             .to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());

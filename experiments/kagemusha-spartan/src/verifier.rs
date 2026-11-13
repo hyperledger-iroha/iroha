@@ -737,6 +737,8 @@ pub struct CircuitTrace<C: PastaCurve> {
     pub link_io: Vec<(usize, F<C>)>,
     pub phase2: Vec<F<C>>,
     pub late_digest: Option<F<C>>,
+    /// Program-authenticated destinations of each late proof word.
+    pub late_slots: Vec<usize>,
     pub fixed: Vec<Aff<C>>,
     /// The first fixed rows that are the wallet's (their commitments the
     /// instance's, not the key's).
@@ -911,6 +913,7 @@ fn trace_with<C: PastaCurve>(
                 link_io,
                 phase2,
                 late_digest,
+                late_slots: c.late_slots(),
                 fixed: fixed.to_vec(),
                 wallet_rows: c.wallet_rows(),
                 io_full: io_full.clone(),
@@ -1030,7 +1033,8 @@ fn trace_with<C: PastaCurve>(
     let c = ch(&mut t, Kind::Endo);
     let lhs = (C::from(proof.ipa.g_final) + u_point * b_final) * proof.ipa.z1
         + C::from(gens.h) * proof.ipa.z2;
-    let accepts = lhs == C::from(proof.ipa.a) + folded * c;
+    let accepts = !bool::from(C::from(proof.ipa.a).is_identity())
+        && lhs == C::from(proof.ipa.a) + folded * c;
     Trace {
         challenges: log,
         header,

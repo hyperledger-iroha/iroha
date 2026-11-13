@@ -3,17 +3,14 @@
 use super::*;
 use crate::{
     IVM, ProgramMetadata,
-    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_sys, encode_syscallx},
-    instruction::wide::{
-        arithmetic as a, control as c, crypto as v, memory as m, system as s, zk as z,
-    },
+    encoding::wide::{encode_halt, encode_ri, encode_rr, encode_sys, encode_scall},
+    instruction::wide::{arithmetic as a, control as c, memory as m, system as s},
 };
 use iroha_allocation::AllocationBudget;
 
-fn observed(word: u32, lanes: u8, initialize: impl FnOnce(&mut IVM)) -> usize {
+fn observed(word: u32, initialize: impl FnOnce(&mut IVM)) -> usize {
     let mut program = ProgramMetadata {
-        mode: crate::ivm_mode::ZK | crate::ivm_mode::VECTOR,
-        vector_length: lanes,
+        mode: crate::ivm_mode::ZK,
         max_cycles: 64,
         ..ProgramMetadata::default()
     }
@@ -36,7 +33,7 @@ fn observed(word: u32, lanes: u8, initialize: impl FnOnce(&mut IVM)) -> usize {
 #[test]
 fn every_admitted_opcode_has_a_finite_public_geometry_bound() {
     for opcode in u8::MIN..=u8::MAX {
-        let result = instruction(encode_rr(opcode, 7, 5, 6), 64, true, true);
+        let result = instruction(encode_rr(opcode, 7, 5, 6), true, true);
         assert_eq!(
             result.is_ok(),
             wide::is_valid_opcode(opcode),
@@ -80,9 +77,6 @@ fn scalar_bounds_match_real_value_reads_and_separate_tag_writes() {
         a::DIV_CEIL,
         a::GCD,
         a::MEAN,
-        z::FADD,
-        z::FSUB,
-        z::FMUL,
     ];
     let unary = [
         a::ADDI,
@@ -98,13 +92,12 @@ fn scalar_bounds_match_real_value_reads_and_separate_tag_writes() {
         a::CTZ,
         a::ISQRT,
         a::ABS,
-        z::FINV,
     ];
     for destination in [0, 5, 6, 255] {
         for (opcodes, reads) in [(&binary[..], 2), (&unary[..], 1)] {
             for &opcode in opcodes {
                 let word = encode_rr(opcode, destination, 5, 6);
-                let actual = observed(word, 4, |vm| {
+                let actual = observed(word, |vm| {
                     vm.set_register(5, 9);
                     vm.set_register(6, 3);
                 });
@@ -113,7 +106,7 @@ fn scalar_bounds_match_real_value_reads_and_separate_tag_writes() {
                     reads + if destination == 0 { 0 } else { 2 },
                     "opcode {opcode:#04x}, r{destination}"
                 );
-                assert_eq!(instruction(word, 4, false, false).unwrap(), actual);
+                assert_eq!(instruction(word, false, false).unwrap(), actual);
             }
         }
     }
@@ -129,11 +122,11 @@ fn conditional_moves_reserve_the_public_maximum_before_the_condition_is_read() {
                 } else {
                     encode_ri(opcode, destination, 6, -7)
                 };
-                let actual = observed(word, 4, |vm| {
+                let actual = observed(word, |vm| {
                     vm.set_register(5, 13);
                     vm.set_register(6, condition);
                 });
-                let maximum = instruction(word, 4, false, false).unwrap();
+                let maximum = instruction(word, false, false).unwrap();
                 if condition == 0 {
                     assert_eq!(actual, 1);
                     assert!(actual <= maximum);
@@ -142,49 +135,6 @@ fn conditional_moves_reserve_the_public_maximum_before_the_condition_is_read() {
                 }
             }
         }
-    }
-}
-
-#[test]
-fn vector_bounds_cover_scalar_tails_and_the_maximum_public_lane_count() {
-    for lanes in [1u8, 2, 4, 6, 64] {
-        for opcode in [v::VADD32, v::VADD64, v::VAND, v::VXOR, v::VOR, v::VROT32] {
-            if opcode == v::VADD64 && !lanes.is_multiple_of(2) {
-                continue;
-            }
-            let word = encode_rr(opcode, 2, 0, 1);
-            let actual = observed(word, lanes, |vm| {
-                for register in 32..32 + 2 * usize::from(lanes) {
-                    vm.set_register(register, register as u64);
-                }
-            });
-            assert_eq!(
-                actual,
-                usize::from(lanes) * if opcode == v::VROT32 { 3 } else { 4 }
-            );
-            assert_eq!(
-                instruction(word, usize::from(lanes), false, false).unwrap(),
-                actual
-            );
-        }
-    }
-}
-
-#[test]
-fn sha_state_lanes_are_bounded_independently_of_the_public_stride() {
-    for lanes in [1u8, 2, 4, 64] {
-        let word = encode_rr(v::SHA256BLOCK, 0, 5, 0);
-        let actual = observed(word, lanes, |vm| {
-            vm.set_register(5, crate::Memory::HEAP_START);
-            vm.memory
-                .store_bytes(crate::Memory::HEAP_START, &[0x5a; 64])
-                .unwrap();
-        });
-        assert_eq!(actual, 1 + 6 * usize::from(lanes.min(4)));
-        assert_eq!(
-            instruction(word, usize::from(lanes), false, false).unwrap(),
-            actual
-        );
     }
 }
 
@@ -209,8 +159,8 @@ fn strict_call_and_root_subtrees_include_all_descriptor_reads() {
         (encode_rr(c::JALS, 0, 0, 1), 2, 11),
         (encode_rr(c::JALR, 0, 1, 0), 1, 6),
     ] {
-        assert_eq!(instruction(word, 4, false, false).unwrap(), loose);
-        assert_eq!(instruction(word, 4, true, false).unwrap(), strict);
+        assert_eq!(instruction(word, false, false).unwrap(), loose);
+        assert_eq!(instruction(word, true, false).unwrap(), strict);
     }
 }
 
@@ -234,12 +184,12 @@ fn syscall_budget_contains_both_restore_and_host_net_change_paths() {
         assert!(bound >= initial + 5 * output_only);
         assert!(bound >= initial + 3 * output_only + 255);
         assert_eq!(
-            instruction(encode_syscallx(number), 4, false, false).unwrap(),
+            instruction(encode_scall(number), false, false).unwrap(),
             bound
         );
         if let Ok(number8) = u8::try_from(number) {
             assert_eq!(
-                instruction(encode_sys(s::SCALL, number8), 4, false, false).unwrap(),
+                instruction(encode_scall(u32::from(number8)), false, false).unwrap(),
                 bound
             );
         }
@@ -264,39 +214,27 @@ fn native_observations_count_original_before_and_delayed_after_reads_even_for_r0
         ] {
             let word = encode_rr(opcode, destination, 5, 6);
             assert_eq!(
-                instruction(word, 4, true, true).unwrap(),
-                instruction(word, 4, true, false).unwrap() + extra
+                instruction(word, true, true).unwrap(),
+                instruction(word, true, false).unwrap() + extra
             );
         }
     }
     // Unsupported native observations do not invent private packet work.
-    for opcode in [a::DIV, a::CMOV, s::GETGAS, c::BEQ] {
+    for opcode in [a::DIV, a::CMOV, c::BEQ] {
         assert_eq!(native_observations(encode_rr(opcode, 7, 5, 6)), 0);
     }
 }
 
 #[test]
-fn malformed_or_unrepresentable_geometry_cannot_wrap_a_reservation() {
-    assert!(matches!(
-        instruction(encode_rr(0xff, 7, 5, 6), 4, false, false),
-        Err(VMError::InvalidOpcode(_))
-    ));
-    for opcode in [v::VADD32, v::VROT32] {
-        assert!(matches!(
-            instruction(encode_rr(opcode, 2, 0, 1), usize::MAX, false, false),
-            Err(VMError::AllocationDeferred(
-                AllocationRefusal::DemandOverflow
-            ))
-        ));
-    }
-    assert_eq!(
-        instruction(encode_rr(v::VADD32, 2, 0, 1), 0, false, false).unwrap(),
-        4
-    );
-    for (bits, rows) in [(0, 1), (64, 1), (65, 0), (255, 0)] {
-        assert_eq!(
-            instruction(encode_rr(z::ASSERT_RANGE, 0, 5, bits), 4, false, false).unwrap(),
-            rows
+fn an_unassigned_opcode_reserves_nothing_and_reports_its_opcode_byte() {
+    for opcode in [0x00, 0x61, 0x70, 0x87, 0xa0, 0xff] {
+        assert!(
+            matches!(
+                instruction(encode_rr(opcode, 7, 5, 6), false, false),
+                // The opcode byte, not the operand bits (0x0506).
+                Err(VMError::InvalidOpcode(reported)) if reported == opcode
+            ),
+            "{opcode:#04x}"
         );
     }
 }

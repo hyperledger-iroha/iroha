@@ -22,7 +22,7 @@ pub(super) struct TrapSnapshot {
     pub(super) source_index: Option<usize>,
     pub(super) budget: VmBudgetSnapshot,
     pub(super) entrypoint_pc: Option<u64>,
-    pub(super) opcode: Option<u16>,
+    pub(super) opcode: Option<u8>,
     pub(super) syscall: Option<u32>,
     pub(super) predecoded_loaded: bool,
     pub(super) predecoded_hit: Option<bool>,
@@ -227,17 +227,17 @@ impl IVM {
             VMError::UnsupportedProgramAbiVersion { .. } => {
                 VmTrapKind::UnsupportedProgramAbiVersion
             }
-            VMError::ProgramVectorLengthTooLarge { .. } => VmTrapKind::ProgramVectorLengthTooLarge,
+            VMError::MissingMaxCycles => VmTrapKind::MissingMaxCycles,
+            VMError::MaxCyclesWithoutZk { .. } => VmTrapKind::MaxCyclesWithoutZk,
             VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
             VMError::GenericSyscallNotAllowed { .. } => VmTrapKind::GenericSyscallNotAllowed,
-            VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
             VMError::MissingHalt => VmTrapKind::MissingHalt,
-            VMError::VectorExtensionDisabled
-            | VMError::ZkExtensionDisabled
-            | VMError::NullifierAlreadyUsed
-            | VMError::PermissionDenied
-            | VMError::ReentrantCall
-            | VMError::CallDepthExceeded => VmTrapKind::PermissionDenied,
+            VMError::NullifierAlreadyUsed | VMError::PermissionDenied => {
+                VmTrapKind::PermissionDenied
+            }
+            VMError::ReentrantCall => VmTrapKind::ReentrantCall,
+            VMError::CallDepthExceeded => VmTrapKind::CallDepthExceeded,
+            VMError::ControlFlowViolation => VmTrapKind::ControlFlowViolation,
             VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
             VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
             VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,

@@ -12,8 +12,6 @@ mod encoding;
 mod expanded_instruction;
 #[path = "../field_dispatch.rs"]
 mod field_dispatch;
-#[path = "../field_ops.rs"]
-mod field_ops;
 #[path = "../gas.rs"]
 mod gas;
 #[path = "../gas_bench_policy.rs"]
@@ -32,8 +30,6 @@ mod gas_schedule;
 mod gas_schedule_hash;
 #[path = "../gpu_determinism.rs"]
 mod gpu_determinism;
-#[path = "../hardware_determinism.rs"]
-mod hardware_determinism;
 #[path = "../host_roundtrip.rs"]
 mod host_roundtrip;
 #[path = "../host_syscall_coverage.rs"]

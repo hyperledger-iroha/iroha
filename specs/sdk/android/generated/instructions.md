@@ -539,7 +539,7 @@ Optional metadata attached to smart-contract deployments; hash fields must match
 | `code_hash` | `Option<Hash>` | Domain-separated canonical hash of the complete deployable `.to` artifact, including its execution header, `CNTR`, literals, and code. |
 | `abi_hash` | `Option<Hash>` | Hash of the syscall/pointer ABI surface for the supplied `abi_version` (see `specs/ivm_header.md`). |
 | `compiler_fingerprint` | `Option<String>` | Compiler + toolchain note recorded for provenance. |
-| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability. |
+| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capability bit (ZK is the only bit); never host SIMD, Metal, or CUDA availability. |
 | `access_set_hints` | `Option<AccessSetHints>` | Advisory read/write key hints for the scheduler. |
 | `entrypoints` | `Option<Vec<EntrypointDescriptor>>` | Optional entrypoint descriptors advertised by the compiler. |
 

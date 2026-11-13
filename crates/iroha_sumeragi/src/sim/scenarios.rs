@@ -1458,6 +1458,9 @@ pub fn f34(seed: u64) -> Scenario {
         }
     }
     sc.checks.progress = 8;
+    // Finish the fixed height target under its original O-LIVE deadlines; slow apply
+    // and seven crashed leaders can outlast the minimum observation interval.
+    sc.checks.complete_progress = true;
     sc
 }
 
@@ -1671,7 +1674,6 @@ pub fn f39(seed: u64) -> Scenario {
         wall_offsets,
         leads,
     });
-    sc.checks.may_executor_fail = (0..n).collect();
     sc.demotion_window = 8;
     if variant == 2 {
         sc.heal_at = 45_000;

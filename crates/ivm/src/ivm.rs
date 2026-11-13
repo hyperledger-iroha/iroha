@@ -1,14 +1,12 @@
 //! Core IVM struct implementing the complete Iroha VM v1.1 specification.
 //!
 //! The VM handles instruction decoding, gas accounting, memory safety and
-//! optional zero-knowledge padding exactly as defined by the spec. All opcodes,
-//! including field arithmetic, vector operations and advanced control flow are
-//! supported and `MAXCYCLES` is enforced when a cycle limit is set.
+//! optional zero-knowledge padding exactly as defined by the spec. Every admitted
+//! opcode is a scalar, memory, control-flow or syscall instruction, and `MAXCYCLES`
+//! is enforced when a cycle limit is set.
 //!
-//! This implementation incorporates the updated architecture with 256 tagged
-//! registers and basic hardware feature detection. Vector operations use a
-//! deterministic logical lane count capped by the ABI, with hardware helpers
-//! kept behind byte-identical fallbacks.
+//! The machine has 32 tagged registers. Hardware feature detection selects only
+//! throughput implementations of host-side helpers, behind byte-identical fallbacks.
 use crate::{
     SyscallPolicy,
     contract_return_stack::ContractReturnStack,
@@ -37,7 +35,7 @@ use crate::{
     },
     vector,
     vector::SimdChoice,
-    zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog},
+    zk::{self, DeltaTraceLog, MemEvent, MemLog},
 };
 #[path = "call_runtime.rs"]
 mod call_runtime;
@@ -78,10 +76,6 @@ thread_local! {
     static REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REFUSE_CALL_RETURN_RESERVATION_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-/// Upper bound on logical vector length supported by the VM.
-const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
-/// Default logical vector length when not specified by metadata.
-const DEFAULT_VECTOR_LENGTH: usize = 4;
 /// Canonical instruction width for first-release IVM bytecode.
 const WIDE_INSTRUCTION_LEN: u64 = 4;
 /// Number of prepared instruction streams retained outside the decode cache.
@@ -136,22 +130,6 @@ struct HostRegisterLogIsolation {
     zk_mode: bool,
 }
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
-fn default_vector_length() -> usize {
-    DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
-}
-fn setvl_length(raw: usize) -> Result<usize, VMError> {
-    let vl = if raw == 0 { 1 } else { raw };
-    if vl > LOGICAL_VECTOR_MAX {
-        return Err(VMError::InvalidVectorLength { vector_length: vl });
-    }
-    Ok(vl)
-}
-fn validate_vadd64_length(vl: usize) -> Result<(), VMError> {
-    if vl == 0 || !vl.is_multiple_of(2) {
-        return Err(VMError::InvalidVectorLength { vector_length: vl });
-    }
-    Ok(())
-}
 fn isqrt_u64(mut n: u64) -> u64 {
     // Shift to the highest power-of-four <= n.
     let mut bit = 1u64 << 62;
@@ -170,14 +148,32 @@ fn isqrt_u64(mut n: u64) -> u64 {
     }
     res
 }
+/// A zero divisor of a register division.
+const DIVISION_BY_ZERO: VMError =
+    VMError::NumericFault(crate::numeric::NumericFaultV1::DivisionByZero);
+/// A signed 64-bit register result outside `i64` (`i64::MIN / -1`, `ABS(i64::MIN)`).
+const REGISTER_INTEGER_OVERFLOW: VMError =
+    VMError::NumericFault(crate::numeric::NumericFaultV1::RegisterIntegerOverflow);
 fn checked_div_i64(num: i64, denom: i64) -> Result<i64, VMError> {
-    num.checked_div(denom).ok_or(VMError::AssertionFailed)
+    if denom == 0 {
+        return Err(DIVISION_BY_ZERO);
+    }
+    num.checked_div(denom).ok_or(REGISTER_INTEGER_OVERFLOW)
 }
 fn checked_rem_i64(num: i64, denom: i64) -> Result<i64, VMError> {
-    num.checked_rem(denom).ok_or(VMError::AssertionFailed)
+    if denom == 0 {
+        return Err(DIVISION_BY_ZERO);
+    }
+    num.checked_rem(denom).ok_or(REGISTER_INTEGER_OVERFLOW)
 }
 fn checked_abs_i64(value: i64) -> Result<i64, VMError> {
-    value.checked_abs().ok_or(VMError::AssertionFailed)
+    value.checked_abs().ok_or(REGISTER_INTEGER_OVERFLOW)
+}
+fn checked_div_u64(num: u64, denom: u64) -> Result<u64, VMError> {
+    num.checked_div(denom).ok_or(DIVISION_BY_ZERO)
+}
+fn checked_rem_u64(num: u64, denom: u64) -> Result<u64, VMError> {
+    num.checked_rem(denom).ok_or(DIVISION_BY_ZERO)
 }
 fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     let q = checked_div_i64(num, denom)?;
@@ -185,7 +181,7 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     if r == 0 {
         Ok(q)
     } else if (r > 0 && denom > 0) || (r < 0 && denom < 0) {
-        q.checked_add(1).ok_or(VMError::AssertionFailed)
+        q.checked_add(1).ok_or(REGISTER_INTEGER_OVERFLOW)
     } else {
         Ok(q)
     }
@@ -675,6 +671,18 @@ impl From<IvmConfigBuilder> for IvmBuilder {
         IvmBuilder::from_config_builder(builder)
     }
 }
+/// Reject an unassigned opcode or a set reserved operand bit.
+///
+/// # Errors
+/// Returns [`VMError::InvalidOpcode`] for an unassigned opcode byte and
+/// [`VMError::DecodeError`] for a word whose format-reserved bits are set.
+pub(crate) fn validate_instruction_word(word: u32) -> Result<(), VMError> {
+    match instruction::wide::validate_word(word) {
+        Ok(_) => Ok(()),
+        Err(instruction::wide::WordError::InvalidOpcode(op)) => Err(VMError::InvalidOpcode(op)),
+        Err(instruction::wide::WordError::ReservedBits) => Err(VMError::DecodeError),
+    }
+}
 #[derive(Clone, Copy)]
 struct PreparedOp {
     inst: u32,
@@ -686,13 +694,10 @@ impl PreparedOp {
         if !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
             return Err(VMError::DecodeError);
         }
-        let wide_op = instruction::wide::opcode(op.inst);
-        if !instruction::wide::is_valid_opcode(wide_op) {
-            return Err(VMError::InvalidOpcode((op.inst & 0xFFFF) as u16));
-        }
+        validate_instruction_word(op.inst)?;
         Ok(Self {
             inst: op.inst,
-            wide_op,
+            wide_op: instruction::wide::opcode(op.inst),
             base_gas: gas::cost_of(op.inst),
         })
     }
@@ -923,11 +928,10 @@ fn validate_generic_program_syscalls(
     decoded: &[crate::ivm_cache::DecodedOp],
 ) -> Result<(), VMError> {
     for op in decoded {
-        let number = match instruction::wide::opcode(op.inst) {
-            instruction::wide::system::SCALL => u32::from(instruction::wide::imm8(op.inst) as u8),
-            instruction::wide::system::SYSTEM => crate::encoding::wide::decode_syscallx(op.inst),
-            _ => continue,
-        };
+        if instruction::wide::opcode(op.inst) != instruction::wide::system::SCALL {
+            continue;
+        }
+        let number = instruction::wide::syscall_number(op.inst);
         if !crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number) {
             return Err(VMError::UnknownSyscall(number));
         }
@@ -983,6 +987,7 @@ pub(crate) fn prepare_instruction_stream(
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
+    syscall_policy: SyscallPolicy,
     contract_interface:
         Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
@@ -1137,125 +1142,9 @@ impl std::fmt::Display for RuntimeTemplateResetError {
     }
 }
 impl std::error::Error for RuntimeTemplateResetError {}
-/// One finite allowance of completed architectural VM cycles shared by a source's runs.
+/// Architectural cycles one completed instruction contributes to a ZK trace.
 ///
-/// This is a non-cloneable owner, not source authentication or a host-work budget.
-/// Each scoped run consumes the same allowance, including nested VMs and ZK padding.
-/// Failed instructions release their pending reservation; previously completed cycles
-/// remain consumed. Dropping this owner closes every retained runtime reference.
-#[derive(Debug)]
-pub struct VmCycleBudget {
-    shared: Arc<SharedVmCycleBudget>,
-}
-#[derive(Debug)]
-struct SharedVmCycleBudget {
-    limit: u64,
-    state: parking_lot::Mutex<VmCycleBudgetState>,
-}
-#[derive(Debug, Default)]
-struct VmCycleBudgetState {
-    consumed: u64,
-    reserved: u64,
-    refused: bool,
-    closed: bool,
-}
-impl VmCycleBudget {
-    /// Create an explicit finite allowance. The caller owns source/policy authentication.
-    pub fn new(limit: std::num::NonZeroU64) -> Self {
-        Self {
-            shared: Arc::new(SharedVmCycleBudget {
-                limit: limit.get(),
-                state: parking_lot::Mutex::new(VmCycleBudgetState::default()),
-            }),
-        }
-    }
-    /// The immutable finite allowance established by the owner.
-    pub fn limit(&self) -> u64 {
-        self.shared.limit
-    }
-    /// Completed architectural cycles, including completed nested execution and ZK padding.
-    pub fn consumed(&self) -> u64 {
-        self.shared.state.lock().consumed
-    }
-    /// Cycles available for another dispatch, excluding active parent reservations.
-    pub fn remaining(&self) -> u64 {
-        let state = self.shared.state.lock();
-        self.shared.limit - state.consumed - state.reserved
-    }
-    /// Whether the owner is open and has no local runtime-ownership fault.
-    ///
-    /// This is independent of deterministic cycle exhaustion.
-    pub fn is_open(&self) -> bool {
-        !self.shared.state.lock().closed
-    }
-    /// Whether any dispatch or padding reservation was refused for lack of cycles.
-    ///
-    /// Exact-fit successful execution has zero remaining cycles without exhaustion.
-    pub fn exhausted(&self) -> bool {
-        self.shared.state.lock().refused
-    }
-}
-impl Drop for VmCycleBudget {
-    fn drop(&mut self) {
-        self.shared.state.lock().closed = true;
-    }
-}
-impl SharedVmCycleBudget {
-    fn ensure_healthy(&self) -> Result<(), VMError> {
-        let state = self.state.lock();
-        if state.closed {
-            Err(VMError::HostUnavailable)
-        } else if state.refused {
-            Err(VMError::ExceededMaxCycles)
-        } else {
-            Ok(())
-        }
-    }
-    fn reserve(&self, cycles: u64) -> Result<VmCycleReservation<'_>, VMError> {
-        let mut state = self.state.lock();
-        if state.closed {
-            return Err(VMError::HostUnavailable);
-        }
-        if state.refused || cycles > self.limit - state.consumed - state.reserved {
-            state.refused = true;
-            return Err(VMError::ExceededMaxCycles);
-        }
-        state.reserved += cycles;
-        Ok(VmCycleReservation {
-            shared: self,
-            cycles,
-            pending: true,
-        })
-    }
-}
-struct VmCycleReservation<'a> {
-    shared: &'a SharedVmCycleBudget,
-    cycles: u64,
-    pending: bool,
-}
-impl VmCycleReservation<'_> {
-    fn complete(mut self, actual: Option<u64>) -> Result<(), VMError> {
-        let mut state = self.shared.state.lock();
-        state.reserved -= self.cycles;
-        self.pending = false;
-        if actual != Some(self.cycles) {
-            // A lifecycle mutation or a new opcode with an unreviewed cycle cost
-            // cannot turn an inaccurate reservation into accepted execution.
-            state.closed = true;
-            return Err(VMError::HostUnavailable);
-        }
-        state.consumed += self.cycles;
-        Ok(())
-    }
-}
-impl Drop for VmCycleReservation<'_> {
-    fn drop(&mut self) {
-        if self.pending {
-            self.shared.state.lock().reserved -= self.cycles;
-        }
-    }
-}
-/// Reservation cost matching the completed-cycle increments in the dispatch table.
+/// Cycles bound only ZK-mode traces (the header `max_cycles`); gas bounds all execution.
 fn completed_instruction_cycles(opcode: u8) -> u64 {
     match opcode {
         instruction::wide::arithmetic::ISQRT => 6,
@@ -1295,12 +1184,9 @@ pub struct IVM {
     argument_decode_prepaid_gas: Option<u64>,
     pub(crate) captured_root_tables: Option<call_runtime::CapturedRootTables>,
     cycles: u64,
-    /// Scoped shared cycle allowance; runtime resets cannot replenish it.
-    active_cycle_budget: Option<Arc<SharedVmCycleBudget>>,
     halted: bool,
     constraint_failed: bool,
     contract_abort_error: Option<CompletedContractAbort>,
-    constraints: zk::ConstraintLog,
     mem_log: MemLog,
     reg_log: Option<zk::SharedRegLog>,
     /// Whether a host callback currently owns `&mut IVM` with a detached
@@ -1322,13 +1208,14 @@ pub struct IVM {
     trace_mode: TraceMode,
     pc_trace: zk::PcTraceLog,
     delta_trace: zk::DeltaTraceLog,
-    vector_enabled: bool,
     /// Maximum number of 64-bit lanes supported natively by the host CPU.
     max_vector_lanes: usize,
-    /// Current logical vector length for vector operations.
-    vector_length: usize,
     max_cycles: u64,
     metadata: ProgramMetadata,
+    syscall_policy: SyscallPolicy,
+    /// A partially installed image must never run with mismatched code and policy.
+    /// Only a complete successful load can clear this quarantine; reset cannot.
+    program_image_valid: bool,
     code_hash: [u8; 32],
     contract_interface:
         Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
@@ -1441,8 +1328,6 @@ impl IVM {
     pub fn new_with_config(config: IvmConfig) -> Self {
         IVM::new_from_config(config)
     }
-    /// First general register index used to hold vector register data.
-    const VECTOR_BASE: usize = 32;
     /// Play a short tune on the default audio device.
     ///
     /// The tune is synthesized in-process and played with the platform's
@@ -1583,11 +1468,9 @@ impl IVM {
             argument_decode_prepaid_gas: None,
             captured_root_tables: None,
             cycles: 0,
-            active_cycle_budget: None,
             halted: false,
             constraint_failed: false,
             contract_abort_error: None,
-            constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
             reg_log: Some(zk::SharedRegLog::try_new(memory_budget)?),
             host_trace_log_detached: false,
@@ -1598,11 +1481,11 @@ impl IVM {
             trace_mode: TraceMode::Off,
             pc_trace: zk::PcTraceLog::new(memory_budget),
             delta_trace: zk::DeltaTraceLog::new(memory_budget),
-            vector_enabled: false,
             max_vector_lanes,
-            vector_length: default_vector_length(),
             max_cycles: 0,
             metadata: ProgramMetadata::default(),
+            syscall_policy: SyscallPolicy::AbiV1,
+            program_image_valid: true,
             code_hash: [0u8; 32],
             contract_interface: None,
             call_layouts: None,
@@ -1714,10 +1597,10 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
+        self.program_image_valid = false;
         self.scrub_private_state()?;
         self.metadata = ProgramMetadata::default();
-        self.vector_enabled = false;
-        self.vector_length = default_vector_length();
+        self.syscall_policy = SyscallPolicy::AbiV1;
         self.max_cycles = 0;
         self.zk_mode = false;
         // Preserve INPUT/STACK contents but reset HEAP/OUTPUT for a clean run.
@@ -1750,6 +1633,7 @@ impl IVM {
         self.cycles = 0;
         self.memory.commit();
         self.memory.mark_template_clean();
+        self.program_image_valid = true;
         Ok(())
     }
     /// Validate the canonical program and its complete static execution policy.
@@ -1764,6 +1648,16 @@ impl IVM {
     pub fn validate_program(program: &[u8]) -> Result<(), VMError> {
         program_load::prepare(program, None)
     }
+    /// Validate under an explicitly selected named ABI V1 host profile.
+    ///
+    /// # Errors
+    /// Preserves the loader's exact protocol rejection or original local resource refusal.
+    pub fn validate_program_for_policy(
+        program: &[u8],
+        policy: SyscallPolicy,
+    ) -> Result<(), VMError> {
+        program_load::prepare_for_policy(program, None, policy)
+    }
 
     /// Load a program (bytecode) into the VM's code memory.
     pub fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
@@ -1773,6 +1667,16 @@ impl IVM {
             self.program_parse_attempts = self.program_parse_attempts.saturating_add(1);
         }
         program_load::prepare(program, Some(self))
+    }
+    /// Load a program under one explicitly selected named ABI V1 host profile.
+    /// Root-owned callers must derive the policy from their committed selection.
+    pub fn load_program_for_policy(
+        &mut self,
+        program: &[u8],
+        policy: SyscallPolicy,
+    ) -> Result<(), VMError> {
+        self.last_diagnostic = None;
+        program_load::prepare_for_policy(program, Some(self), policy)
     }
     /// Load an already validated and prepared contract without reparsing it.
     ///
@@ -1840,6 +1744,7 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
+            syscall_policy: contract.syscall_policy(),
             contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table,
@@ -1868,25 +1773,23 @@ impl IVM {
                 call_runtime::CallLayouts::prepare(interface, self.memory.allocation_budget())
             })
             .transpose()?;
+        // From this point onward a local refusal can leave a partial image.
+        // Keep execution quarantined until code, policy and every owner agree.
+        self.program_image_valid = false;
         self.scrub_private_state()?;
         self.memory.call_frames.clear();
         self.captured_root_tables = None;
         self.call_layouts = call_layouts;
         self.metadata = image.metadata.clone();
+        self.syscall_policy = image.syscall_policy;
         self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
         self.literal_table = image.literal_table;
-        self.vector_enabled = image.metadata.mode & crate::metadata::mode::VECTOR != 0;
         self.max_cycles = image.metadata.max_cycles;
         self.zk_mode = image.metadata.mode & crate::metadata::mode::ZK != 0;
         if self.zk_mode && self.max_cycles == 0 {
             self.max_cycles = zk::MAX_CYCLES;
         }
-        self.vector_length = if image.metadata.vector_length == 0 {
-            default_vector_length()
-        } else {
-            usize::from(image.metadata.vector_length)
-        };
         // Overlay code while preserving INPUT/STACK contents that may have
         // been preloaded by the host/tests. HEAP/OUTPUT are cleared per load.
         self.predecoded = image.predecoded;
@@ -1911,7 +1814,6 @@ impl IVM {
         self.halted = false;
         self.constraint_failed = false;
         self.contract_abort_error = None;
-        self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         if let Some(log) = &self.reg_log {
             log.lock().scrub();
@@ -1926,7 +1828,15 @@ impl IVM {
         self.recompute_input_bump_from_memory()?;
         self.memory.commit();
         self.memory.mark_template_clean();
+        self.program_image_valid = true;
         Ok(())
+    }
+    fn ensure_complete_program_image(&self) -> Result<(), VMError> {
+        if self.program_image_valid {
+            Ok(())
+        } else {
+            Err(VMError::InvalidMetadata)
+        }
     }
     /// Set the gas limit for execution.
     pub fn set_gas_limit(&mut self, limit: u64) {
@@ -1969,7 +1879,7 @@ impl IVM {
             return Ok(());
         }
         if self.contract_return_stack.len() >= MAX_CONTRACT_CALL_DEPTH {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::CallDepthExceeded);
         }
         #[cfg(test)]
         if REFUSE_CALL_RETURN_RESERVATION_FOR_TEST.with(|refuse| refuse.replace(false)) {
@@ -2006,6 +1916,10 @@ impl IVM {
             });
         }
         let inst = decoder::decode(&self.memory, self.pc)?;
+        if instruction::wide::validate_word(inst) == Err(instruction::wide::WordError::ReservedBits)
+        {
+            return Err(VMError::DecodeError);
+        }
         let wide_op = instruction::wide::opcode(inst);
         Ok(FetchedOp {
             inst,
@@ -2035,18 +1949,15 @@ impl IVM {
     fn zk_trace_collection_enabled(&self) -> bool {
         zk::scoped_reg_logger_enabled().unwrap_or(self.zk_mode && self.zk_trace_enabled)
     }
+    /// Destination tag of a two-source register operation: private when either source is.
+    ///
+    /// Joining never declassifies a value, so mixing public and private operands is permitted;
+    /// operations whose control flow or trap behavior depends on a value require public
+    /// operands separately ([`Self::zk_require_public_trap_operands`]).
     #[inline]
-    fn zk_match_tags(&self, rs1: usize, rs2: usize) -> Result<Option<bool>, VMError> {
-        if self.zk_mode {
-            let tag_a = self.registers.tag(rs1);
-            let tag_b = self.registers.tag(rs2);
-            if tag_a != tag_b {
-                return Err(VMError::PrivacyViolation);
-            }
-            Ok(Some(tag_a))
-        } else {
-            Ok(None)
-        }
+    fn zk_join_tags(&self, rs1: usize, rs2: usize) -> Option<bool> {
+        self.zk_mode
+            .then(|| self.registers.tag(rs1) || self.registers.tag(rs2))
     }
     /// Reject private operands before an operation whose trap behavior depends on their values. A
     /// private divide-by-zero, failed assertion, or inverse failure would otherwise reveal a
@@ -2520,44 +2431,6 @@ impl IVM {
         self.ensure_owned_tlv_range(ptr, total)?;
         Ok((len, hdr[2]))
     }
-    /// Charge the byte-linear portion of a direct signature opcode before
-    /// checksum hashing or cryptographic verification.
-    ///
-    /// All operands are inspected even after a malformed public pointer so a
-    /// later private operand still fails with `PrivacyViolation`. Aliased
-    /// operands are charged independently because validation scans each role.
-    fn preflight_signature_opcode_payloads(&mut self, pointers: [u64; 3]) -> Result<bool, VMError> {
-        let mut payload_lengths = [0_u64; 3];
-        let mut malformed = false;
-        for (index, pointer) in pointers.into_iter().enumerate() {
-            match self.inspect_owned_public_tlv_header(pointer) {
-                Ok((length, version)) => {
-                    if version == 1 {
-                        payload_lengths[index] = length;
-                    } else {
-                        // Version rejection is fixed-header work. It precedes
-                        // checksum hashing, so it must not receive the
-                        // byte-linear surcharge.
-                        malformed = true;
-                    }
-                }
-                Err(VMError::PrivacyViolation) => return Err(VMError::PrivacyViolation),
-                Err(error) if error.execution_deferral().is_some() => return Err(error),
-                Err(_) => malformed = true,
-            }
-        }
-        if malformed {
-            return Ok(false);
-        }
-        let extra_gas = crate::gas::signature_opcode_extra_gas(
-            payload_lengths[0],
-            payload_lengths[1],
-            payload_lengths[2],
-        )
-        .ok_or(VMError::GasCostOverflow)?;
-        self.debit_gas(extra_gas)?;
-        Ok(true)
-    }
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let (len, _) = self.inspect_owned_public_tlv_header(ptr)?;
@@ -2591,19 +2464,6 @@ impl IVM {
             Err(err) => Err(err),
         }
     }
-    /// Validate a public cryptographic operand with a boolean result for malformed TLVs.
-    /// Privacy violations and operational refusals never become verification failures.
-    fn validate_public_crypto_tlv(
-        &self,
-        ptr: u64,
-    ) -> Result<Option<crate::pointer_abi::Tlv<'_>>, VMError> {
-        match self.validate_tlv(ptr) {
-            Ok(tlv) => Ok(Some(tlv)),
-            Err(VMError::PrivacyViolation) => Err(VMError::PrivacyViolation),
-            Err(error) if error.execution_deferral().is_some() => Err(error),
-            Err(_) => Ok(None),
-        }
-    }
     /// Validate a pointer-ABI TLV in the INPUT region and return its decoded view.
     pub fn validate_input_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let input_end = Memory::INPUT_START
@@ -2632,11 +2492,11 @@ impl IVM {
     }
     /// Effective syscall policy for the currently loaded program.
     ///
-    /// The first release only accepts ABI v1 programs, so loaded programs
-    /// always use the canonical v1 syscall surface.
+    /// Both named policies use ABI V1. The admitted header's exact identity survives
+    /// warm prepared loads and snapshots; no current-root or cache heuristic selects it.
     pub fn syscall_policy(&self) -> SyscallPolicy {
         debug_assert_eq!(self.metadata.abi_version, 1);
-        SyscallPolicy::AbiV1
+        self.syscall_policy
     }
     /// Reset registers, PC and cycles while preserving loaded program and host.
     ///
@@ -2668,7 +2528,6 @@ impl IVM {
         self.halted = false;
         self.constraint_failed = false;
         self.contract_abort_error = None;
-        self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         if let Some(log) = &self.reg_log {
             log.lock().scrub();
@@ -2689,11 +2548,6 @@ impl IVM {
         self.last_staged_syscall = None;
         self.argument_decode_prepaid_gas = None;
         self.captured_root_tables = None;
-        self.vector_length = if self.metadata.vector_length == 0 {
-            default_vector_length()
-        } else {
-            usize::from(self.metadata.vector_length)
-        };
         Ok(())
     }
     /// Capture the current post-load state as a reusable execution baseline.
@@ -2708,6 +2562,7 @@ impl IVM {
     /// Defers locally if the baseline owns live call frames or any owned
     /// memory/register snapshot cannot be reserved.
     pub fn try_runtime_template(&mut self) -> Result<RuntimeTemplate, VMError> {
+        self.ensure_complete_program_image()?;
         // Exclusive access prevents interior read-log or Merkle-cache growth
         // between the allocation plan and the copy. No caller-supplied pool can
         // substitute equal-looking limits for the original State pool.
@@ -2836,7 +2691,6 @@ impl IVM {
     pub fn try_retain_cache_allocations(&mut self) -> bool {
         if self.contract_debug.is_some()
             || self.last_diagnostic.is_some()
-            || !matches!(self.constraints.allocated_bytes(), Ok(0))
             || !matches!(self.mem_log.allocated_bytes(), Ok(0))
             || !matches!(self.trace_log.allocated_bytes(), Ok(0))
             || !matches!(self.step_log.allocated_bytes(), Ok(0))
@@ -2846,7 +2700,6 @@ impl IVM {
             return false;
         }
         self.host = None;
-        self.active_cycle_budget = None;
         self.contract_return_stack.compact_for_cache();
         let Some(log) = self.reg_log.as_ref() else {
             return false;
@@ -2978,39 +2831,9 @@ impl IVM {
             message: message.map(String::into_boxed_str),
         });
     }
-    /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
-    pub fn vector_register(&self, idx: usize) -> [u32; 4] {
-        let stride = self.vector_length.max(1);
-        let start = Self::VECTOR_BASE + idx * stride;
-        let mut out = [0u32; 4];
-        if start >= 256 {
-            return out;
-        }
-        let lanes = stride.min(4).min(256 - start);
-        for (lane, slot) in out.iter_mut().enumerate().take(lanes) {
-            *slot = self.registers.get(start + lane) as u32;
-        }
-        out
-    }
-    /// Set the contents of a vector register.
-    pub fn set_vector_register(&mut self, idx: usize, values: [u32; 4]) {
-        let stride = self.vector_length.max(1);
-        let start = Self::VECTOR_BASE + idx * stride;
-        if start >= 256 {
-            return;
-        }
-        let lanes = stride.min(4).min(256 - start);
-        for (lane, value) in values.iter().enumerate().take(lanes) {
-            self.registers.set(start + lane, u64::from(*value));
-        }
-    }
     /// Maximum vector lanes supported by hardware.
     pub fn max_vector_lanes(&self) -> usize {
         self.max_vector_lanes
-    }
-    /// Current logical vector length.
-    pub fn vector_length(&self) -> usize {
-        self.vector_length
     }
     /// Replace the host environment used for syscalls.
     pub fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
@@ -3138,7 +2961,6 @@ impl IVM {
             let register_log = register_log.as_deref().unwrap_or(&empty);
             let source = zk::DiagnosticTraceSource {
                 registers: zk::DiagnosticRegisterSource::Deltas(&self.trace_log),
-                constraints: &self.constraints.list,
                 memory_events: &self.mem_log.events,
                 register_events: register_log.as_slice(),
                 steps: self.step_log.as_slice(),
@@ -3172,33 +2994,6 @@ impl IVM {
                 hasher.update((*index as u64).to_le_bytes());
                 hasher.update(value.to_le_bytes());
                 hasher.update([u8::from(*tag)]);
-            }
-        }
-        Self::finish_digest(hasher)
-    }
-    fn hash_constraints(constraints: &[Constraint]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"ivm-summary:constraints:v1");
-        hasher.update((constraints.len() as u64).to_le_bytes());
-        for constraint in constraints {
-            match *constraint {
-                Constraint::Zero { reg, cycle } => {
-                    hasher.update([0]);
-                    hasher.update((reg as u64).to_le_bytes());
-                    hasher.update(cycle.to_le_bytes());
-                }
-                Constraint::Eq { reg1, reg2, cycle } => {
-                    hasher.update([1]);
-                    hasher.update((reg1 as u64).to_le_bytes());
-                    hasher.update((reg2 as u64).to_le_bytes());
-                    hasher.update(cycle.to_le_bytes());
-                }
-                Constraint::Range { reg, bits, cycle } => {
-                    hasher.update([2]);
-                    hasher.update((reg as u64).to_le_bytes());
-                    hasher.update([bits]);
-                    hasher.update(cycle.to_le_bytes());
-                }
             }
         }
         Self::finish_digest(hasher)
@@ -3304,7 +3099,6 @@ impl IVM {
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(self.delta_trace.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.trace_log.len()).unwrap_or(u64::MAX))
-            .saturating_add(u64::try_from(self.constraints.list.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.mem_log.events.len()).unwrap_or(u64::MAX))
             .saturating_add(
                 u64::try_from(
@@ -3340,7 +3134,6 @@ impl IVM {
             pc_trace_hash: Self::hash_pc_trace(self.pc_trace.as_slice()),
             delta_trace_hash: Self::hash_delta_trace(&self.delta_trace),
             register_trace_hash: Self::hash_delta_trace(&self.trace_log),
-            constraint_hash: Self::hash_constraints(&self.constraints.list),
             memory_log_hash: Self::hash_memory_log(&self.mem_log.events),
             register_log_hash: Self::hash_register_log(register_log.as_slice()),
             step_log_hash: Self::hash_step_log(self.step_log.as_slice()),
@@ -3351,13 +3144,11 @@ impl IVM {
             pc_trace_len: self.pc_trace.as_slice().len() as u64,
             delta_trace_len: self.delta_trace.len() as u64,
             register_trace_len: self.trace_log.len() as u64,
-            constraint_len: self.constraints.list.len() as u64,
             memory_log_len: self.mem_log.events.len() as u64,
             register_log_len: register_log.as_slice().len() as u64,
             step_log_len: self.step_log.as_slice().len() as u64,
             zk_mode: self.zk_mode,
             halted: self.halted,
-            constraint_failed: self.constraint_failed,
         }
     }
     /// Get the Merkle root of the register file.
@@ -3390,10 +3181,6 @@ impl IVM {
     /// Access per-cycle Merkle roots collected during the last run.
     pub fn step_log(&self) -> &[zk::StepEntry] {
         self.step_log.as_slice()
-    }
-    /// Access constraints logged during execution.
-    pub fn constraints(&self) -> &[Constraint] {
-        &self.constraints.list
     }
     #[inline]
     pub(crate) fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
@@ -3506,6 +3293,7 @@ impl IVM {
         number: u32,
         prepared_log: Option<&register_logging::PreparedHostRegisterLog>,
     ) -> Result<(), VMError> {
+        self.ensure_complete_program_image()?;
         if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
             return Err(VMError::UnknownSyscall(number));
         }
@@ -3732,7 +3520,11 @@ impl IVM {
             self.last_staged_syscall = Some(context);
         }
     }
-    fn record_host_register_changes(&self, values_before: &[u64; 256], tags_before: &[bool; 256]) {
+    fn record_host_register_changes(
+        &self,
+        values_before: &[u64; crate::parallel::REGISTER_COUNT],
+        tags_before: &[bool; crate::parallel::REGISTER_COUNT],
+    ) {
         let values_after = self.registers.snapshot();
         let tags_after = self.registers.snapshot_tags();
         for index in 1..values_after.len() {
@@ -3752,6 +3544,7 @@ impl IVM {
     /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
         self.last_diagnostic = None;
+        self.ensure_complete_program_image()?;
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
         };
@@ -3816,61 +3609,6 @@ impl IVM {
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
-    /// Run with the caller's single finite allowance for completed architectural cycles.
-    ///
-    /// Reusing a VM or running another Batch segment does not replenish `budget`.
-    /// Core owns the signed-source binding and must use ordinary `run_with_host`
-    /// for separately executed trigger callbacks. Gas and per-program cycle checks
-    /// remain independent. A refused shared reservation returns `ExceededMaxCycles`.
-    pub fn run_with_host_and_cycle_budget(
-        &mut self,
-        host: &mut dyn IVMHost,
-        budget: &VmCycleBudget,
-    ) -> Result<(), VMError> {
-        self.run_with_host_and_shared_cycles(host, Arc::clone(&budget.shared))
-    }
-    /// Run a nested VM with the active parent's exact cycle allowance, if present.
-    ///
-    /// Hosts must use this for nested contract dispatch rather than creating a new
-    /// allowance or deriving one from a remaining-cycle scalar.
-    pub fn run_with_host_and_parent_cycle_budget(
-        &mut self,
-        host: &mut dyn IVMHost,
-        parent: &IVM,
-    ) -> Result<(), VMError> {
-        match &parent.active_cycle_budget {
-            Some(shared) => self.run_with_host_and_shared_cycles(host, Arc::clone(shared)),
-            None => self.run_with_host(host),
-        }
-    }
-    fn run_with_host_and_shared_cycles(
-        &mut self,
-        host: &mut dyn IVMHost,
-        shared: Arc<SharedVmCycleBudget>,
-    ) -> Result<(), VMError> {
-        self.last_diagnostic = None;
-        if self
-            .active_cycle_budget
-            .as_ref()
-            .is_some_and(|active| !Arc::ptr_eq(active, &shared))
-        {
-            // Rebinding a runtime retained by another active source is a local
-            // host ownership error, not deterministic capacity exhaustion.
-            shared.state.lock().closed = true;
-            if let Some(active) = &self.active_cycle_budget {
-                active.state.lock().closed = true;
-            }
-            return Err(VMError::HostUnavailable);
-        }
-        shared.ensure_healthy()?;
-        let previous = self.active_cycle_budget.replace(shared);
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| self.run_with_host(host)));
-        self.active_cycle_budget = previous;
-        match result {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
     #[inline]
     fn commit_memory_after_run_if_needed(&mut self) {
         if self.zk_trace_collection_enabled() {
@@ -3882,7 +3620,6 @@ impl IVM {
             pc: self.pc,
             gas_remaining: self.gas_remaining,
             cycles: self.cycles,
-            vector_length: self.vector_length,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
             registers: self.registers.snapshot(),
@@ -3895,12 +3632,7 @@ impl IVM {
         mut recorder: Option<&mut DiagnosticStepRecorder>,
     ) -> Result<(), VMError> {
         self.last_diagnostic = None;
-        // Keep a local reference through host callbacks/lifecycle changes. This
-        // owner never comes from program bytes or a warmed runtime template.
-        let cycle_budget = self.active_cycle_budget.clone();
-        if let Some(budget) = &cycle_budget {
-            budget.ensure_healthy()?;
-        }
+        self.ensure_complete_program_image()?;
         // Admit the next logger before changing guest state or clearing the
         // preceding invocation. Invalid detached custody is severed without allocation.
         self.prepare_invocation_register_log()?;
@@ -3943,16 +3675,15 @@ impl IVM {
                 PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
             self.begin_root_call(host)?;
             let mut last_logged_cycle = 0;
-            let mut pending_cycles: Option<(u64, VmCycleReservation<'_>)> = None;
             let mut pending_register_batch = None;
             // Fetch-Decode-Execute loop
             loop {
+                // A host callback may attempt a reload and handle its error.
+                // That cannot authorize another instruction from a partial image.
+                self.ensure_complete_program_image()?;
                 fault_position = iroha_data_model::executor::fault::IvmFaultPositionV1::Execute {
                     pc_offset: self.pc.saturating_sub(self.program_prefix_len),
                 };
-                if let Some((before, reservation)) = pending_cycles.take() {
-                    reservation.complete(self.cycles.checked_sub(before))?;
-                }
                 if let Some(step) = pending_step.take() {
                     recorder
                         .as_deref_mut()
@@ -3977,7 +3708,10 @@ impl IVM {
                 if unlikely(self.pc == self.memory.code_len()) {
                     return Err(VMError::MissingHalt);
                 }
-                if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
+                // Gas bounds ordinary execution. Only ZK mode has a cycle bound:
+                // its fixed trace length, taken from the program header.
+                if unlikely(self.zk_mode && self.max_cycles != 0 && self.cycles >= self.max_cycles)
+                {
                     return Err(VMError::ExceededMaxCycles);
                 }
                 self.record_trace_prefetch(&invocation_trace)?;
@@ -3993,15 +3727,10 @@ impl IVM {
                 }
                 let length = WIDE_INSTRUCTION_LEN;
                 let wide_op = fetched.wide_op;
-                if !instruction::wide::is_valid_opcode(wide_op) {
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
-                }
-                // Determine the gas cost for this operation and deduct it.
-                // Scale vector op costs by the current logical vector length.
-                let Some(cost) =
-                    gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length)
-                else {
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                // The gas schedule prices exactly the admitted opcodes, so a missing
+                // price is the invalid-opcode rejection.
+                let Some(cost) = fetched.base_gas else {
+                    return Err(VMError::InvalidOpcode(wide_op));
                 };
                 if let Some(step) = pending_step.as_mut() {
                     step.priced(cost);
@@ -4019,52 +3748,18 @@ impl IVM {
                         }
                         // Shell, shared-cycle and native capture demand all precede
                         // base gas and execute under the same observation quota.
-                        let prepared_host_log = matches!(
-                            wide_op,
-                            instruction::wide::system::SCALL | instruction::wide::system::SYSTEM
-                        )
-                        .then(|| vm.prepare_host_register_log())
-                        .transpose()?;
-                        if let Some(budget) = &cycle_budget {
-                            let reservation =
-                                budget.reserve(completed_instruction_cycles(wide_op))?;
-                            pending_cycles = Some((vm.cycles, reservation));
-                        }
+                        let prepared_host_log = (wide_op == instruction::wide::system::SCALL)
+                            .then(|| vm.prepare_host_register_log())
+                            .transpose()?;
                         vm.native_preflight_step(instr, cost)?;
                         Ok(prepared_host_log)
                     })?;
                 self.gas_remaining -= cost;
-                // Execute the instruction
-                let opcode = instr & 0x7F;
-                // Dispatch via the canonical wide (8-bit opcode) instruction table. Classic
-                // encodings are no longer executable; unknown opcodes trap with `InvalidOpcode`.
+                // Dispatch on the primary opcode byte; unadmitted values trap with
+                // `InvalidOpcode` carrying that byte.
                 match wide_op {
-                    instruction::wide::system::GETGAS => {
-                        let rd = instruction::wide::rd(instr);
-                        self.registers.set(rd, self.gas_remaining);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
-                        self.cycles += 1;
-                        continue;
-                    }
                     instruction::wide::system::SCALL => {
-                        let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                        if !host_allows_syscall_masked(host, self.syscall_policy(), imm8) {
-                            return Err(VMError::UnknownSyscall(imm8));
-                        }
-                        self.execute_syscall_with_register_log(
-                            host,
-                            imm8,
-                            prepared_host_log.as_ref(),
-                        )?;
-                        self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::system::SYSTEM => {
-                        let number = crate::encoding::wide::decode_syscallx(instr);
+                        let number = instruction::wide::syscall_number(instr);
                         if !host_allows_syscall_masked(host, self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
@@ -4081,7 +3776,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self
                             .registers
                             .get(rs1)
@@ -4096,7 +3791,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self
                             .registers
                             .get(rs1)
@@ -4111,7 +3806,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self.registers.get(rs1) & self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4123,7 +3818,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self.registers.get(rs1) | self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4135,7 +3830,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self.registers.get(rs1) ^ self.registers.get(rs2);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4147,7 +3842,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self.registers.get(rs1) << (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4159,7 +3854,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self.registers.get(rs1) >> (self.registers.get(rs2) & 0x3f);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4171,7 +3866,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = ((self.registers.get(rs1) as i64)
                             >> (self.registers.get(rs2) & 0x3f))
                             as u64;
@@ -4185,7 +3880,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let val = self
                             .registers
                             .get(rs1)
@@ -4200,7 +3895,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64 as i128;
                         let b = self.registers.get(rs2) as i64 as i128;
                         let val = ((a * b) >> 64) as u64;
@@ -4214,7 +3909,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let prod = (self.registers.get(rs1) as u128)
                             .wrapping_mul(self.registers.get(rs2) as u128);
                         let val = (prod >> 64) as u64;
@@ -4228,7 +3923,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64 as i128;
                         let b = self.registers.get(rs2) as u64 as i128;
                         let val = ((a * b) >> 64) as u64;
@@ -4243,7 +3938,7 @@ impl IVM {
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
                         self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
                         let val = checked_div_i64(num, denom)?;
@@ -4258,12 +3953,9 @@ impl IVM {
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
                         self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let denom = self.registers.get(rs2);
-                        if denom == 0 {
-                            return Err(VMError::AssertionFailed);
-                        }
-                        let val = self.registers.get(rs1) / denom;
+                        let tag = self.zk_join_tags(rs1, rs2);
+                        let val =
+                            checked_div_u64(self.registers.get(rs1), self.registers.get(rs2))?;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
@@ -4275,7 +3967,7 @@ impl IVM {
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
                         self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
                         let val = checked_rem_i64(num, denom)?;
@@ -4290,12 +3982,9 @@ impl IVM {
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
                         self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let denom = self.registers.get(rs2);
-                        if denom == 0 {
-                            return Err(VMError::AssertionFailed);
-                        }
-                        let val = self.registers.get(rs1) % denom;
+                        let tag = self.zk_join_tags(rs1, rs2);
+                        let val =
+                            checked_rem_u64(self.registers.get(rs1), self.registers.get(rs2))?;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
                         self.pc = self.pc.wrapping_add(WIDE_INSTRUCTION_LEN);
@@ -4306,7 +3995,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let lhs = self.registers.get(rs1) as i64;
                         let rhs = self.registers.get(rs2) as i64;
                         self.registers.set(rd, u64::from(lhs < rhs));
@@ -4319,7 +4008,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let lhs = self.registers.get(rs1);
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs < rhs));
@@ -4332,7 +4021,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let lhs = self.registers.get(rs1);
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs == rhs));
@@ -4345,7 +4034,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let lhs = self.registers.get(rs1);
                         let rhs = self.registers.get(rs2);
                         self.registers.set(rd, u64::from(lhs != rhs));
@@ -4423,7 +4112,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let src = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(src);
-                        let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
+                        let sh = instruction::wide::rotate_amount(instr);
                         let val = self.registers.get(src).rotate_left(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4435,7 +4124,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let src = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(src);
-                        let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
+                        let sh = instruction::wide::rotate_amount(instr);
                         let val = self.registers.get(src).rotate_right(sh);
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4492,7 +4181,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64;
                         let b = self.registers.get(rs2) as i64;
                         self.registers
@@ -4506,7 +4195,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64;
                         let b = self.registers.get(rs2) as i64;
                         self.registers
@@ -4534,7 +4223,7 @@ impl IVM {
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
                         self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
                         let val = div_ceil_i64(num, denom)?;
@@ -4548,7 +4237,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64;
                         let b = self.registers.get(rs2) as i64;
                         let g = gcd_i64(a, b);
@@ -4562,7 +4251,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let tag = self.zk_join_tags(rs1, rs2);
                         let a = self.registers.get(rs1) as i64;
                         let b = self.registers.get(rs2) as i64;
                         let sum = (a as i128) + (b as i128);
@@ -4577,7 +4266,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(rs1);
-                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        let imm = i64::from(instruction::wide::imm14(instr));
                         let val = (self.registers.get(rs1) as i64).wrapping_add(imm) as u64;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4589,7 +4278,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(rs1);
-                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let imm = i64::from(instruction::wide::imm14(instr)) as u64;
                         let val = self.registers.get(rs1) & imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4601,7 +4290,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(rs1);
-                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let imm = i64::from(instruction::wide::imm14(instr)) as u64;
                         let val = self.registers.get(rs1) | imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4613,7 +4302,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let tag = self.zk_unary_tag(rs1);
-                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let imm = i64::from(instruction::wide::imm14(instr)) as u64;
                         let val = self.registers.get(rs1) ^ imm;
                         self.registers.set(rd, val);
                         self.zk_apply_tag(rd, tag);
@@ -4624,7 +4313,7 @@ impl IVM {
                     instruction::wide::arithmetic::CMOVI => {
                         let rd = instruction::wide::rd(instr);
                         let cond = instruction::wide::rs1(instr);
-                        let imm = i64::from(instruction::wide::imm8(instr)) as u64;
+                        let imm = i64::from(instruction::wide::imm14(instr)) as u64;
                         if self.zk_mode && self.registers.tag(cond) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4681,7 +4370,7 @@ impl IVM {
                     instruction::wide::memory::LOAD64 => {
                         let rd = instruction::wide::rd(instr);
                         let base = instruction::wide::rs1(instr);
-                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        let imm = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && self.registers.tag(base) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4702,45 +4391,10 @@ impl IVM {
                         self.cycles += 1;
                         continue;
                     }
-                    instruction::wide::memory::LOAD128 => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let rd_lo = instruction::wide::rd(instr);
-                        let base = instruction::wide::rs1(instr);
-                        let rd_hi = instruction::wide::rs2(instr);
-                        if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if rd_lo >= 256 || rd_hi >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let addr = self.registers.get(base);
-                        if !addr.is_multiple_of(16) {
-                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
-                        }
-                        let value = self.memory.load_u128(addr)?;
-                        let tag = self.memory_load_privacy_tag(addr, 16)?;
-                        self.memory.diagnostic_classify_last_access(
-                            addr,
-                            16,
-                            DiagnosticMemoryAccessKind::Read,
-                            tag,
-                        );
-                        self.registers.set(rd_lo, value as u64);
-                        self.registers.set(rd_hi, (value >> 64) as u64);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd_lo, tag);
-                            self.registers.set_tag(rd_hi, tag);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
                     instruction::wide::memory::STORE64 => {
-                        let base = instruction::wide::rd(instr);
-                        let rs = instruction::wide::rs1(instr);
-                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        let base = instruction::wide::store_base(instr);
+                        let rs = instruction::wide::store_value(instr);
+                        let imm = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && self.registers.tag(base) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4755,38 +4409,9 @@ impl IVM {
                         self.cycles += 1;
                         continue;
                     }
-                    instruction::wide::memory::STORE128 => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let base = instruction::wide::rd(instr);
-                        let rs_lo = instruction::wide::rs1(instr);
-                        let rs_hi = instruction::wide::rs2(instr);
-                        if self.zk_mode && self.registers.tag(base) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if rs_lo >= 256 || rs_hi >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let addr = self.registers.get(base);
-                        if !addr.is_multiple_of(16) {
-                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
-                        }
-                        let lo = self.registers.get(rs_lo);
-                        let hi = self.registers.get(rs_hi);
-                        let tag = self.zk_match_tags(rs_lo, rs_hi)?.unwrap_or(false);
-                        self.validate_memory_store_privacy(addr, 16, tag)?;
-                        self.preflight_memory_store_privacy(addr, 16, tag)?;
-                        let value = ((hi as u128) << 64) | lo as u128;
-                        self.memory.store_u128(addr, value)?;
-                        self.record_memory_store_privacy(addr, 16, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
                     instruction::wide::control::HALT => {
                         if self.strict_return_integrity {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::ControlFlowViolation);
                         }
                         self.halted = true;
                         self.cycles += 1;
@@ -4795,142 +4420,10 @@ impl IVM {
                         // trace flushing, which may unwind while allocating.
                         continue;
                     }
-                    instruction::wide::crypto::SETVL => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        self.vector_length = setvl_length(instruction::wide::rs2(instr))?;
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::VADD32 | instruction::wide::crypto::VADD64 => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        if wide_op == instruction::wide::crypto::VADD64 {
-                            validate_vadd64_length(vl)?;
-                            // Process full 128-bit chunks through the vector helpers when possible.
-                            let mut lane = 0usize;
-                            while lane + 4 <= vl {
-                                let mut a = [0u32; 4];
-                                let mut b = [0u32; 4];
-                                for offset in 0..4 {
-                                    let idx = lane + offset;
-                                    if self.zk_mode {
-                                        let a_tag = self.registers.tag(rs + idx);
-                                        let b_tag = self.registers.tag(rt + idx);
-                                        if a_tag != b_tag {
-                                            return Err(VMError::PrivacyViolation);
-                                        }
-                                        self.registers.set_tag(rd + idx, a_tag);
-                                    }
-                                    a[offset] = self.registers.get(rs + idx) as u32;
-                                    b[offset] = self.registers.get(rt + idx) as u32;
-                                }
-                                // Enforce pair tag alignment for zk mode (lo/hi halves must share a tag).
-                                if self.zk_mode {
-                                    for pair in 0..2 {
-                                        let lo = lane + pair * 2;
-                                        let hi = lo + 1;
-                                        let tag_lo = self.registers.tag(rd + lo);
-                                        let tag_hi = self.registers.tag(rd + hi);
-                                        if tag_lo != tag_hi {
-                                            return Err(VMError::PrivacyViolation);
-                                        }
-                                    }
-                                }
-                                let sum = vector::vadd64(a, b);
-                                for (offset, value) in sum.iter().enumerate() {
-                                    let idx = lane + offset;
-                                    self.registers.set(rd + idx, u64::from(*value));
-                                }
-                                lane += 4;
-                            }
-                            // Handle any remaining pairs with the scalar fallback.
-                            let pairs = (vl - lane) / 2;
-                            for pair in 0..pairs {
-                                let lo_idx = lane + pair * 2;
-                                let hi_idx = lo_idx + 1;
-                                let a_lo = self.registers.get(rs + lo_idx) & 0xffff_ffff;
-                                let a_hi = self.registers.get(rs + hi_idx) & 0xffff_ffff;
-                                let b_lo = self.registers.get(rt + lo_idx) & 0xffff_ffff;
-                                let b_hi = self.registers.get(rt + hi_idx) & 0xffff_ffff;
-                                if self.zk_mode {
-                                    let a_lo_tag = self.registers.tag(rs + lo_idx);
-                                    let a_hi_tag = self.registers.tag(rs + hi_idx);
-                                    let b_lo_tag = self.registers.tag(rt + lo_idx);
-                                    let b_hi_tag = self.registers.tag(rt + hi_idx);
-                                    if a_lo_tag != a_hi_tag
-                                        || b_lo_tag != b_hi_tag
-                                        || a_lo_tag != b_lo_tag
-                                    {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + lo_idx, a_lo_tag);
-                                    self.registers.set_tag(rd + hi_idx, a_lo_tag);
-                                }
-                                let a = (a_hi << 32) | a_lo;
-                                let b = (b_hi << 32) | b_lo;
-                                let sum = a.wrapping_add(b);
-                                self.registers.set(rd + lo_idx, sum & 0xffff_ffff);
-                                self.registers.set(rd + hi_idx, sum >> 32);
-                            }
-                        } else {
-                            let mut lane = 0usize;
-                            while lane + 4 <= vl {
-                                let mut a = [0u32; 4];
-                                let mut b = [0u32; 4];
-                                for offset in 0..4 {
-                                    let idx = lane + offset;
-                                    if self.zk_mode {
-                                        let taga = self.registers.tag(rs + idx);
-                                        let tagb = self.registers.tag(rt + idx);
-                                        if taga != tagb {
-                                            return Err(VMError::PrivacyViolation);
-                                        }
-                                        self.registers.set_tag(rd + idx, taga);
-                                    }
-                                    a[offset] = self.registers.get(rs + idx) as u32;
-                                    b[offset] = self.registers.get(rt + idx) as u32;
-                                }
-                                let sum = vector::vadd32(a, b);
-                                for (offset, value) in sum.iter().enumerate() {
-                                    let idx = lane + offset;
-                                    self.registers.set(rd + idx, u64::from(*value));
-                                }
-                                lane += 4;
-                            }
-                            for idx in lane..vl {
-                                let a = self.registers.get(rs + idx) as u32;
-                                let b = self.registers.get(rt + idx) as u32;
-                                if self.zk_mode {
-                                    let taga = self.registers.tag(rs + idx);
-                                    let tagb = self.registers.tag(rt + idx);
-                                    if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + idx, taga);
-                                }
-                                self.registers.set(rd + idx, u64::from(a.wrapping_add(b)));
-                            }
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
                     instruction::wide::control::BEQ => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4949,7 +4442,7 @@ impl IVM {
                     instruction::wide::control::BNE => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4968,7 +4461,7 @@ impl IVM {
                     instruction::wide::control::BLT => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -4987,7 +4480,7 @@ impl IVM {
                     instruction::wide::control::BGE => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -5006,7 +4499,7 @@ impl IVM {
                     instruction::wide::control::BLTU => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -5025,7 +4518,7 @@ impl IVM {
                     instruction::wide::control::BGEU => {
                         let rs = instruction::wide::rd(instr);
                         let rt = instruction::wide::rs1(instr);
-                        let offset = i64::from(instruction::wide::imm8(instr));
+                        let offset = i64::from(instruction::wide::imm14(instr));
                         if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
                             return Err(VMError::PrivacyViolation);
                         }
@@ -5041,27 +4534,15 @@ impl IVM {
                         self.cycles += 1;
                         continue;
                     }
-                    instruction::wide::control::JR => {
-                        let rs = instruction::wide::rd(instr);
-                        if self.zk_mode && self.registers.tag(rs) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if self.strict_return_integrity {
-                            return Err(VMError::AssertionFailed);
-                        }
-                        self.pc = self.registers.get(rs);
-                        self.cycles += 1;
-                        continue;
-                    }
                     instruction::wide::control::JALR => {
                         let rd = instruction::wide::rd(instr);
                         let rs = instruction::wide::rs1(instr);
                         if self.zk_mode && self.registers.tag(rs) {
                             return Err(VMError::PrivacyViolation);
                         }
-                        let imm = i64::from(instruction::wide::imm8(instr));
+                        let imm = i64::from(instruction::wide::imm14(instr));
                         if self.strict_return_integrity && !(rd == 0 && rs == 1 && imm == 0) {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::ControlFlowViolation);
                         }
                         let raw_target = self.registers.get(rs).wrapping_add_signed(imm);
                         let target =
@@ -5069,14 +4550,14 @@ impl IVM {
                         if self.strict_return_integrity {
                             if let Some(expected) = self.contract_return_stack.last().copied() {
                                 if target != expected {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::ControlFlowViolation);
                                 }
                             } else {
                                 if self.contract_outer_return_pc != Some(target) {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::ControlFlowViolation);
                                 }
                                 if target != self.memory.code_len() {
-                                    return Err(VMError::AssertionFailed);
+                                    return Err(VMError::ControlFlowViolation);
                                 }
                             }
                             self.finish_call()?;
@@ -5098,11 +4579,11 @@ impl IVM {
                     }
                     instruction::wide::control::JAL => {
                         let rd = instruction::wide::rd(instr);
-                        let imm = instruction::wide::imm16(instr) as i64;
+                        let imm = i64::from(instruction::wide::jal_offset(instr));
                         let return_pc = self.pc.wrapping_add(length);
                         if self.strict_return_integrity {
                             if rd != 0 && rd != 1 {
-                                return Err(VMError::AssertionFailed);
+                                return Err(VMError::ControlFlowViolation);
                             }
                             if rd == 1 {
                                 self.begin_child_call(((self.pc as i64) + (imm * 4)) as u64)?;
@@ -5136,898 +4617,17 @@ impl IVM {
                         self.cycles += 1;
                         continue;
                     }
-                    instruction::wide::crypto::VAND => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let mut lane = 0usize;
-                        while lane + 4 <= vl {
-                            let mut a = [0u32; 4];
-                            let mut b = [0u32; 4];
-                            for offset in 0..4 {
-                                let idx = lane + offset;
-                                if self.zk_mode {
-                                    let taga = self.registers.tag(rs + idx);
-                                    let tagb = self.registers.tag(rt + idx);
-                                    if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + idx, taga);
-                                }
-                                a[offset] = self.registers.get(rs + idx) as u32;
-                                b[offset] = self.registers.get(rt + idx) as u32;
-                            }
-                            let out = vector::vand(a, b);
-                            for (offset, value) in out.iter().enumerate() {
-                                let idx = lane + offset;
-                                self.registers.set(rd + idx, u64::from(*value));
-                            }
-                            lane += 4;
-                        }
-                        for idx in lane..vl {
-                            if self.zk_mode {
-                                let taga = self.registers.tag(rs + idx);
-                                let tagb = self.registers.tag(rt + idx);
-                                if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                self.registers.set_tag(rd + idx, taga);
-                            }
-                            let a = self.registers.get(rs + idx) as u32;
-                            let b = self.registers.get(rt + idx) as u32;
-                            self.registers.set(rd + idx, u64::from(a & b));
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::VXOR => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let mut lane = 0usize;
-                        while lane + 4 <= vl {
-                            let mut a = [0u32; 4];
-                            let mut b = [0u32; 4];
-                            for offset in 0..4 {
-                                let idx = lane + offset;
-                                if self.zk_mode {
-                                    let taga = self.registers.tag(rs + idx);
-                                    let tagb = self.registers.tag(rt + idx);
-                                    if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + idx, taga);
-                                }
-                                a[offset] = self.registers.get(rs + idx) as u32;
-                                b[offset] = self.registers.get(rt + idx) as u32;
-                            }
-                            let out = vector::vxor(a, b);
-                            for (offset, value) in out.iter().enumerate() {
-                                let idx = lane + offset;
-                                self.registers.set(rd + idx, u64::from(*value));
-                            }
-                            lane += 4;
-                        }
-                        for idx in lane..vl {
-                            if self.zk_mode {
-                                let taga = self.registers.tag(rs + idx);
-                                let tagb = self.registers.tag(rt + idx);
-                                if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                self.registers.set_tag(rd + idx, taga);
-                            }
-                            let a = self.registers.get(rs + idx) as u32;
-                            let b = self.registers.get(rt + idx) as u32;
-                            self.registers.set(rd + idx, u64::from(a ^ b));
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::VOR => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let mut lane = 0usize;
-                        while lane + 4 <= vl {
-                            let mut a = [0u32; 4];
-                            let mut b = [0u32; 4];
-                            for offset in 0..4 {
-                                let idx = lane + offset;
-                                if self.zk_mode {
-                                    let taga = self.registers.tag(rs + idx);
-                                    let tagb = self.registers.tag(rt + idx);
-                                    if taga != tagb {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + idx, taga);
-                                }
-                                a[offset] = self.registers.get(rs + idx) as u32;
-                                b[offset] = self.registers.get(rt + idx) as u32;
-                            }
-                            let out = vector::vor(a, b);
-                            for (offset, value) in out.iter().enumerate() {
-                                let idx = lane + offset;
-                                self.registers.set(rd + idx, u64::from(*value));
-                            }
-                            lane += 4;
-                        }
-                        for idx in lane..vl {
-                            if self.zk_mode {
-                                let taga = self.registers.tag(rs + idx);
-                                let tagb = self.registers.tag(rt + idx);
-                                if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                self.registers.set_tag(rd + idx, taga);
-                            }
-                            let a = self.registers.get(rs + idx) as u32;
-                            let b = self.registers.get(rt + idx) as u32;
-                            self.registers.set(rd + idx, u64::from(a | b));
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::VROT32 => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                        if rd + vl > 256 || rs + vl > 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let shift = (instruction::wide::imm8(instr) as u8 & 0x1F) as u32;
-                        let mut lane = 0usize;
-                        while lane + 4 <= vl {
-                            let mut a = [0u32; 4];
-                            for (offset, value) in a.iter_mut().enumerate() {
-                                let idx = lane + offset;
-                                if self.zk_mode {
-                                    let src_tag = self.registers.tag(rs + idx);
-                                    self.registers.set_tag(rd + idx, src_tag);
-                                }
-                                *value = self.registers.get(rs + idx) as u32;
-                            }
-                            let rotated = vector::vrot32(a, shift);
-                            for (offset, value) in rotated.iter().enumerate() {
-                                let idx = lane + offset;
-                                self.registers.set(rd + idx, u64::from(*value));
-                            }
-                            lane += 4;
-                        }
-                        for idx in lane..vl {
-                            if self.zk_mode {
-                                let src_tag = self.registers.tag(rs + idx);
-                                self.registers.set_tag(rd + idx, src_tag);
-                            }
-                            let value = self.registers.get(rs + idx) as u32;
-                            let rotated = value.rotate_left(shift) as u64;
-                            self.registers.set(rd + idx, rotated);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::SHA256BLOCK => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let vl = self.vector_length.max(1);
-                        let stride = vl;
-                        let rd = instruction::wide::rd(instr);
-                        let ptr_reg = instruction::wide::rs1(instr);
-                        if self.zk_mode && self.registers.tag(ptr_reg) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let base = Self::VECTOR_BASE + rd * stride;
-                        let second = base + stride;
-                        if second + stride > 256 || ptr_reg >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let state_lanes = stride.min(4);
-                        if self.zk_mode
-                            && (0..state_lanes).any(|lane| {
-                                self.registers.tag(base + lane) || self.registers.tag(second + lane)
-                            })
-                        {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let addr = self.registers.get(ptr_reg);
-                        self.ensure_public_memory(addr, 64)?;
-                        let mut block = [0u8; 64];
-                        self.memory.load_bytes(addr, &mut block)?;
-                        if self.zk_trace_collection_enabled() {
-                            for (i, b) in block.iter().enumerate() {
-                                let (root, path) =
-                                    self.memory.merkle_root_and_path(addr + i as u64)?;
-                                self.mem_log.record(MemEvent::Load {
-                                    addr: addr + i as u64,
-                                    value: *b as u128,
-                                    size: 1,
-                                    path,
-                                    root,
-                                });
-                            }
-                        }
-                        let mut state = [0u32; 8];
-                        let first_lanes = state_lanes;
-                        for (lane, slot) in state.iter_mut().take(first_lanes).enumerate() {
-                            *slot = self.registers.get(base + lane) as u32;
-                        }
-                        let second_lanes = state_lanes;
-                        for (lane, slot) in state.iter_mut().skip(4).take(second_lanes).enumerate()
-                        {
-                            *slot = self.registers.get(second + lane) as u32;
-                        }
-                        vector::sha256_compress(&mut state, &block);
-                        for (lane, value) in state.iter().take(first_lanes).enumerate() {
-                            self.registers.set(base + lane, u64::from(*value));
-                        }
-                        for (lane, value) in state.iter().skip(4).take(second_lanes).enumerate() {
-                            self.registers.set(second + lane, u64::from(*value));
-                        }
-                        if self.zk_mode {
-                            for lane in 0..state_lanes {
-                                self.registers.set_tag(base + lane, false);
-                                self.registers.set_tag(second + lane, false);
-                            }
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::SHA3BLOCK => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs_state = instruction::wide::rs1(instr);
-                        let rs_block = instruction::wide::rs2(instr);
-                        if self.zk_mode
-                            && (self.registers.tag(rd)
-                                || self.registers.tag(rs_state)
-                                || self.registers.tag(rs_block))
-                        {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if rd >= 256 || rs_state >= 256 || rs_block >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let state_ptr = self.registers.get(rs_state);
-                        let block_ptr = self.registers.get(rs_block);
-                        let out_ptr = self.registers.get(rd);
-                        self.ensure_public_memory(state_ptr, (25 * 8) as u64)?;
-                        self.ensure_public_memory(block_ptr, 136)?;
-                        let mut state = [0u64; 25];
-                        let mut state_bytes = [0u8; 25 * 8];
-                        self.memory.load_bytes(state_ptr, &mut state_bytes)?;
-                        for i in 0..25 {
-                            let mut lane = [0u8; 8];
-                            lane.copy_from_slice(&state_bytes[i * 8..(i + 1) * 8]);
-                            state[i] = u64::from_le_bytes(lane);
-                        }
-                        let mut block = [0u8; 136];
-                        self.memory.load_bytes(block_ptr, &mut block)?;
-                        crate::sha3::sha3_absorb_block(&mut state, &block);
-                        let mut out_bytes = [0u8; 25 * 8];
-                        for i in 0..25 {
-                            out_bytes[i * 8..(i + 1) * 8].copy_from_slice(&state[i].to_le_bytes());
-                        }
-                        self.preflight_memory_store_privacy(
-                            out_ptr,
-                            out_bytes.len() as u64,
-                            false,
-                        )?;
-                        self.memory.store_bytes(out_ptr, &out_bytes)?;
-                        self.record_memory_store_privacy(out_ptr, out_bytes.len() as u64, false);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::AESENC => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs_state = instruction::wide::rs1(instr);
-                        let rs_key = instruction::wide::rs2(instr);
-                        if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        if self.zk_mode {
-                            let state_tag_lo = self.registers.tag(rs_state);
-                            let state_tag_hi = self.registers.tag(rs_state + 1);
-                            let key_tag_lo = self.registers.tag(rs_key);
-                            let key_tag_hi = self.registers.tag(rs_key + 1);
-                            if state_tag_lo != state_tag_hi
-                                || key_tag_lo != key_tag_hi
-                                || state_tag_lo != key_tag_lo
-                            {
-                                return Err(VMError::PrivacyViolation);
-                            }
-                            self.registers.set_tag(rd, state_tag_lo);
-                            self.registers.set_tag(rd + 1, state_tag_lo);
-                        }
-                        let mut state = [0u8; 16];
-                        let s_lo = self.registers.get(rs_state).to_le_bytes();
-                        let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
-                        state[..8].copy_from_slice(&s_lo);
-                        state[8..].copy_from_slice(&s_hi);
-                        let mut rk = [0u8; 16];
-                        let k_lo = self.registers.get(rs_key).to_le_bytes();
-                        let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
-                        rk[..8].copy_from_slice(&k_lo);
-                        rk[8..].copy_from_slice(&k_hi);
-                        let out = crate::aes::aesenc(state, rk);
-                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                        let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
-                        self.registers.set(rd, lo);
-                        self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::AESDEC => {
-                        if unlikely(!self.vector_enabled) {
-                            return Err(VMError::VectorExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs_state = instruction::wide::rs1(instr);
-                        let rs_key = instruction::wide::rs2(instr);
-                        if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        if self.zk_mode {
-                            let state_tag_lo = self.registers.tag(rs_state);
-                            let state_tag_hi = self.registers.tag(rs_state + 1);
-                            let key_tag_lo = self.registers.tag(rs_key);
-                            let key_tag_hi = self.registers.tag(rs_key + 1);
-                            if state_tag_lo != state_tag_hi
-                                || key_tag_lo != key_tag_hi
-                                || state_tag_lo != key_tag_lo
-                            {
-                                return Err(VMError::PrivacyViolation);
-                            }
-                            self.registers.set_tag(rd, state_tag_lo);
-                            self.registers.set_tag(rd + 1, state_tag_lo);
-                        }
-                        let mut state = [0u8; 16];
-                        let s_lo = self.registers.get(rs_state).to_le_bytes();
-                        let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
-                        state[..8].copy_from_slice(&s_lo);
-                        state[8..].copy_from_slice(&s_hi);
-                        let mut rk = [0u8; 16];
-                        let k_lo = self.registers.get(rs_key).to_le_bytes();
-                        let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
-                        rk[..8].copy_from_slice(&k_lo);
-                        rk[8..].copy_from_slice(&k_hi);
-                        let out = crate::aes::aesdec(state, rk);
-                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                        let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
-                        self.registers.set(rd, lo);
-                        self.registers.set(rd + 1, hi);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::BLAKE2S => {
-                        use iroha_crypto::blake2::{Blake2s256, Digest as _};
-                        let rd = instruction::wide::rd(instr);
-                        let rs = instruction::wide::rs1(instr);
-                        if self.zk_mode && self.registers.tag(rs) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        if rd + 1 >= 256 || rs >= 256 {
-                            return Err(VMError::RegisterOutOfBounds);
-                        }
-                        let ptr = self.registers.get(rs);
-                        self.ensure_public_memory(ptr, 64)?;
-                        let mut input = [0u8; 64];
-                        self.memory.load_bytes(ptr, &mut input)?;
-                        let mut hasher = Blake2s256::new();
-                        hasher.update(input);
-                        let digest = hasher.finalize();
-                        let mut out = [0u8; 32];
-                        out.copy_from_slice(&digest);
-                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                        let hi = u64::from_le_bytes(out[8..16].try_into().unwrap());
-                        self.registers.set(rd, lo);
-                        self.registers.set(rd + 1, hi);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                            self.registers.set_tag(rd + 1, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::POSEIDON2 => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode && (self.registers.tag(rs1) || self.registers.tag(rs2)) {
-                            // This legacy scalar gadget returns only 64 bits
-                            // and is never a Secret<T> declassification path.
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let a = self.registers.get(rs1);
-                        let b = self.registers.get(rs2);
-                        let res = crate::poseidon::poseidon2(a, b);
-                        self.registers.set(rd, res);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::POSEIDON6 => {
-                        let Some((rd, rs_base)) = crate::encoding::wide::decode_poseidon6(instr)
-                        else {
-                            return Err(VMError::DecodeError);
-                        };
-                        let rd = usize::from(rd);
-                        let rs_base = usize::from(rs_base);
-                        if self.zk_mode {
-                            for index in 0..instruction::wide::crypto::POSEIDON6_INPUTS {
-                                if self.registers.tag(rs_base + index) {
-                                    // This legacy scalar gadget returns only
-                                    // 64 bits and cannot consume Secret<T>.
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                            }
-                        }
-                        let vals = std::array::from_fn(|index| {
-                            debug_assert!(index < instruction::wide::crypto::POSEIDON6_INPUTS);
-                            self.registers.get(rs_base + index)
-                        });
-                        let res = crate::poseidon::poseidon6(vals);
-                        self.registers.set(rd, res);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::ED25519BATCHVERIFY => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode && self.registers.tag(rs1) {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let mut fail_index = 0u64;
-                        let request_ptr = self.registers.get(rs1);
-                        let payload_len = match self.inspect_owned_public_tlv_header(request_ptr) {
-                            Ok((payload_len, _)) => Some(payload_len),
-                            Err(VMError::PrivacyViolation) => {
-                                return Err(VMError::PrivacyViolation);
-                            }
-                            Err(error) if error.execution_deferral().is_some() => {
-                                return Err(error);
-                            }
-                            Err(_) => None,
-                        };
-                        let ok = if let Some(payload_len) = payload_len {
-                            if payload_len
-                                > u64::try_from(crate::gas::ED25519_BATCH_MAX_PAYLOAD_BYTES)
-                                    .expect("batch payload limit always fits u64")
-                            {
-                                false
-                            } else {
-                                self.debit_gas(crate::gas::ed25519_batch_extra_gas(
-                                    payload_len,
-                                    0,
-                                ))?;
-                                let request = self
-                                    .validate_public_crypto_tlv(request_ptr)?
-                                    .and_then(|tlv_req| {
-                                        (tlv_req.type_id_raw()
-                                            == crate::pointer_abi::PointerType::NoritoBytes as u16)
-                                            .then(|| {
-                                                norito::decode_from_bytes_with_limits::<
-                                                    crate::signature::Ed25519BatchRequest,
-                                                >(
-                                                    tlv_req.payload,
-                                                    crate::gas::ED25519_BATCH_DECODE_LIMITS,
-                                                )
-                                                .ok()
-                                            })
-                                            .flatten()
-                                    });
-                                if let Some(request) = request {
-                                    if request.entries.is_empty() {
-                                        false
-                                    } else if request.entries.len()
-                                        > crate::gas::ED25519_BATCH_MAX_ENTRIES
-                                    {
-                                        fail_index = u64::try_from(request.entries.len())
-                                            .map_err(|_| VMError::GasCostOverflow)?;
-                                        false
-                                    } else {
-                                        let entry_count = u64::try_from(request.entries.len())
-                                            .map_err(|_| VMError::GasCostOverflow)?;
-                                        self.debit_gas(crate::gas::ed25519_batch_extra_gas(
-                                            0,
-                                            entry_count,
-                                        ))?;
-                                        match crate::signature::verify_ed25519_batch(
-                                            &request,
-                                            crate::gas::ED25519_BATCH_MAX_ENTRIES,
-                                        ) {
-                                            Ok(()) => true,
-                                            Err(err) => {
-                                                fail_index = match err {
-                                                    crate::signature::Ed25519BatchError::Empty => 0,
-                                                    crate::signature::Ed25519BatchError::TooMany {
-                                                        actual,
-                                                        ..
-                                                    } => u64::try_from(actual)
-                                                        .map_err(|_| VMError::GasCostOverflow)?,
-                                                    crate::signature::Ed25519BatchError::InvalidEntry {
-                                                        index,
-                                                    }
-                                                    | crate::signature::Ed25519BatchError::SignatureFailed {
-                                                        index,
-                                                    } => u64::try_from(index)
-                                                        .map_err(|_| VMError::GasCostOverflow)?,
-                                                };
-                                                false
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
-                        } else {
-                            false
-                        };
-                        self.registers.set(rd, if ok { 1 } else { 0 });
-                        self.registers.set(rs2, fail_index);
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                            self.registers.set_tag(rs2, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::ED25519VERIFY => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode
-                            && (self.registers.tag(rd)
-                                || self.registers.tag(rs1)
-                                || self.registers.tag(rs2))
-                        {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let msg_ptr = self.registers.get(rs1);
-                        let sig_ptr = self.registers.get(rs2);
-                        let pk_ptr = self.registers.get(rd);
-                        let operands_ready =
-                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
-                        let ok = if operands_ready
-                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                                self.validate_public_crypto_tlv(msg_ptr)?,
-                                self.validate_public_crypto_tlv(sig_ptr)?,
-                                self.validate_public_crypto_tlv(pk_ptr)?,
-                            ) {
-                            let types_ok = tlv_msg.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_sig.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_pk.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16;
-                            types_ok
-                                && crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Ed25519,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                        } else {
-                            false
-                        };
-                        self.registers.set(rd, if ok { 1 } else { 0 });
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::ECDSAVERIFY => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode
-                            && (self.registers.tag(rd)
-                                || self.registers.tag(rs1)
-                                || self.registers.tag(rs2))
-                        {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let msg_ptr = self.registers.get(rs1);
-                        let sig_ptr = self.registers.get(rs2);
-                        let pk_ptr = self.registers.get(rd);
-                        let operands_ready =
-                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
-                        let ok = if operands_ready
-                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                                self.validate_public_crypto_tlv(msg_ptr)?,
-                                self.validate_public_crypto_tlv(sig_ptr)?,
-                                self.validate_public_crypto_tlv(pk_ptr)?,
-                            ) {
-                            let types_ok = tlv_msg.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_sig.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_pk.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16;
-                            types_ok
-                                && crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::Secp256k1,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                        } else {
-                            false
-                        };
-                        self.registers.set(rd, if ok { 1 } else { 0 });
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::DILITHIUMVERIFY => {
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        if self.zk_mode
-                            && (self.registers.tag(rd)
-                                || self.registers.tag(rs1)
-                                || self.registers.tag(rs2))
-                        {
-                            return Err(VMError::PrivacyViolation);
-                        }
-                        let msg_ptr = self.registers.get(rs1);
-                        let sig_ptr = self.registers.get(rs2);
-                        let pk_ptr = self.registers.get(rd);
-                        let operands_ready =
-                            self.preflight_signature_opcode_payloads([msg_ptr, sig_ptr, pk_ptr])?;
-                        let ok = if operands_ready
-                            && let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
-                                self.validate_public_crypto_tlv(msg_ptr)?,
-                                self.validate_public_crypto_tlv(sig_ptr)?,
-                                self.validate_public_crypto_tlv(pk_ptr)?,
-                            ) {
-                            let types_ok = tlv_msg.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_sig.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16
-                                && tlv_pk.type_id_raw()
-                                    == crate::pointer_abi::PointerType::Blob as u16;
-                            types_ok
-                                && crate::signature::verify_signature(
-                                    crate::signature::SignatureScheme::MlDsa,
-                                    tlv_msg.payload,
-                                    tlv_sig.payload,
-                                    tlv_pk.payload,
-                                )
-                        } else {
-                            false
-                        };
-                        self.registers.set(rd, if ok { 1 } else { 0 });
-                        if self.zk_mode {
-                            self.registers.set_tag(rd, false);
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::ASSERT => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rs = instruction::wide::rs1(instr);
-                        self.zk_require_public_trap_operands(&[rs])?;
-                        if self.zk_trace_collection_enabled() {
-                            self.constraints.record(Constraint::Zero {
-                                reg: rs,
-                                cycle: self.cycles,
-                            });
-                        }
-                        let value = self.registers.get(rs);
-                        if value != 0 {
-                            self.constraint_failed = true;
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::ASSERT_EQ => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
-                        if self.zk_trace_collection_enabled() {
-                            self.constraints.record(Constraint::Eq {
-                                reg1: rs1,
-                                reg2: rs2,
-                                cycle: self.cycles,
-                            });
-                        }
-                        let v1 = self.registers.get(rs1);
-                        let v2 = self.registers.get(rs2);
-                        if v1 != v2 {
-                            self.constraint_failed = true;
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::FADD => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let v1 = self.registers.get(rs1);
-                        let v2 = self.registers.get(rs2);
-                        let res = crate::field::add(v1, v2);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::FSUB => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let v1 = self.registers.get(rs1);
-                        let v2 = self.registers.get(rs2);
-                        let res = crate::field::sub(v1, v2);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::FMUL => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs1 = instruction::wide::rs1(instr);
-                        let rs2 = instruction::wide::rs2(instr);
-                        let tag = self.zk_match_tags(rs1, rs2)?;
-                        let v1 = self.registers.get(rs1);
-                        let v2 = self.registers.get(rs2);
-                        let res = crate::field::mul(v1, v2);
-                        self.registers.set(rd, res);
-                        self.zk_apply_tag(rd, tag);
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::FINV => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rd = instruction::wide::rd(instr);
-                        let rs = instruction::wide::rs1(instr);
-                        self.zk_require_public_trap_operands(&[rs])?;
-                        let tag = self.registers.tag(rs);
-                        let value = self.registers.get(rs);
-                        match crate::field::inv(value) {
-                            Some(inv) => {
-                                self.registers.set(rd, inv);
-                                self.zk_apply_tag(rd, Some(tag));
-                            }
-                            None => {
-                                self.constraint_failed = true;
-                            }
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::zk::ASSERT_RANGE => {
-                        if unlikely(!self.zk_mode) {
-                            return Err(VMError::ZkExtensionDisabled);
-                        }
-                        let rs = instruction::wide::rs1(instr);
-                        let imm = instruction::wide::imm8(instr) as u8;
-                        self.zk_require_public_trap_operands(&[rs])?;
-                        if self.zk_trace_collection_enabled() {
-                            self.constraints.record(Constraint::Range {
-                                reg: rs,
-                                bits: imm,
-                                cycle: self.cycles,
-                            });
-                        }
-                        if imm <= 64 {
-                            let mask = if imm == 64 {
-                                u64::MAX
-                            } else {
-                                (1u64 << imm) - 1
-                            };
-                            let value = self.registers.get(rs);
-                            if value & !mask != 0 {
-                                self.constraint_failed = true;
-                            }
-                        } else {
-                            self.constraint_failed = true;
-                        }
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
-                    instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
-                        // Parallel sections are markers; no state change required.
-                        self.pc = self.pc.wrapping_add(length);
-                        self.cycles += 1;
-                        continue;
-                    }
                     _ => {
                         if crate::dev_env::debug_invalid_enabled() {
                             eprintln!(
-                                "[invalid wide opcode] pc=0x{pc:08x} instr=0x{ins:08x} op_lo=0x{op_lo:02x} op_hi=0x{op_hi:02x}",
+                                "[invalid opcode] pc=0x{pc:08x} instr=0x{ins:08x} opcode=0x{wide_op:02x}",
                                 pc = self.pc,
                                 ins = instr,
-                                op_lo = opcode,
-                                op_hi = wide_op,
                             );
                         }
-                        return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                        return Err(VMError::InvalidOpcode(wide_op));
                     }
                 }
-            }
-            if let Some((before, reservation)) = pending_cycles.take() {
-                reservation.complete(self.cycles.checked_sub(before))?;
             }
             if let Some(step) = pending_step.take() {
                 recorder
@@ -6052,11 +4652,6 @@ impl IVM {
                     self.prepare_trace_padding(&invocation_trace, remaining)?;
                 }
                 let native_before_padding = (self.gas_remaining, self.cycles);
-                if let Some(budget) = &cycle_budget {
-                    // Padding contributes to architectural cycles even when the
-                    // existing following gas check rejects the padded execution.
-                    budget.reserve(remaining)?.complete(Some(remaining))?;
-                }
                 self.cycles = self.max_cycles;
                 // Padding instructions still consume gas like NOPs (cost 1 each)
                 if self.gas_remaining < remaining {
@@ -6093,13 +4688,6 @@ impl IVM {
             }
         };
         self.finish_trace_invocation(invocation_trace);
-        let result = result.and_then(|()| {
-            // A host may swallow a nested error and return from its last syscall.
-            // Never accept such a parent after a shared reservation was refused.
-            cycle_budget
-                .as_ref()
-                .map_or(Ok(()), |budget| budget.ensure_healthy())
-        });
         if let Some(recorder) = recorder {
             if let Some(step) = pending_step.take() {
                 let trap = result
@@ -6582,7 +5170,7 @@ mod tests {
         assert!(!crate::syscalls::is_koto_test_syscall(number));
         assert!(host_syscall_metering_spec(SyscallPolicy::AbiV1, number).is_none());
         let mut code = Vec::new();
-        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_scall(number).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code)
@@ -6607,8 +5195,7 @@ mod tests {
             crate::syscalls::SYSCALL_STATE_COUNT,
         ] {
             let mut program = ProgramMetadata::default().encode();
-            program
-                .extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&crate::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
             let mut vm = IVM::new(u64::MAX);
             assert!(
@@ -6626,14 +5213,14 @@ mod tests {
         ));
         assert!(!crate::syscalls::is_koto_test_syscall(syscall));
         let mut program = ProgramMetadata::default().encode();
-        program.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        program.extend_from_slice(&crate::encoding::wide::encode_scall(syscall).to_le_bytes());
         program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         let mut admitted = IVM::new(u64::MAX);
         assert!(
             matches!(admitted.load_program(&program), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (syscall))
         );
         let mut code = Vec::new();
-        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_scall(syscall).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         let mut raw = IVM::new(u64::MAX);
         raw.load_code(&code).expect("load raw generic program");
@@ -6672,7 +5259,7 @@ mod tests {
             crate::syscalls::SYSCALL_STATE_COUNT,
         ] {
             let mut code = Vec::new();
-            code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            code.extend_from_slice(&crate::encoding::wide::encode_scall(syscall).to_le_bytes());
             code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
             let mut vm = IVM::new(u64::MAX);
             vm.load_code(&code).expect("load raw generic program");
@@ -6721,7 +5308,7 @@ mod tests {
         }
         let number = crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
         let mut code = Vec::new();
-        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_scall(number).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code)
@@ -6915,8 +5502,9 @@ mod tests {
     }
     fn program_with_imm(imm: i16) -> Vec<u8> {
         let mut bytes = ProgramMetadata::default().encode();
-        let imm8 = imm.clamp(-128, 127) as i8;
-        let add = crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, imm8);
+        let imm14 = imm.clamp(instruction::wide::IMM14_MIN, instruction::wide::IMM14_MAX);
+        let add =
+            crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, imm14);
         bytes.extend_from_slice(&add.to_le_bytes());
         bytes.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         bytes
@@ -7419,8 +6007,7 @@ mod tests {
     fn raw_code_resets_the_prior_program_execution_profile() {
         set_banner_enabled(false);
         let metadata = ProgramMetadata {
-            mode: crate::metadata::mode::VECTOR | crate::metadata::mode::ZK,
-            vector_length: 8,
+            mode: crate::metadata::mode::ZK,
             max_cycles: 7,
             ..ProgramMetadata::default()
         };
@@ -7430,7 +6017,6 @@ mod tests {
         reused
             .load_program(&profiled_program)
             .expect("profiled program loads");
-        assert!(reused.vector_enabled);
         assert!(reused.zk_mode_enabled());
         reused.pc_alignment = 3;
         reused.cycles = 9;
@@ -7442,18 +6028,11 @@ mod tests {
             17,
             None,
         );
-        let mut raw = Vec::new();
-        raw.extend_from_slice(
-            &crate::encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, 8)
-                .to_le_bytes(),
-        );
-        raw.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let raw = crate::encoding::wide::encode_halt().to_le_bytes();
         reused.load_code(&raw).expect("raw code loads");
         assert_eq!(reused.metadata.mode, 0);
-        assert!(!reused.vector_enabled);
         assert!(!reused.zk_mode_enabled());
         assert_eq!(reused.max_cycles, 0);
-        assert_eq!(reused.vector_length(), default_vector_length());
         assert_eq!(reused.pc_alignment, 0);
         assert_eq!(reused.cycles, 0);
         assert!(!reused.halted);
@@ -7463,14 +6042,11 @@ mod tests {
         let mut fresh = IVM::new(u64::MAX);
         fresh.load_code(&raw).expect("raw code loads in fresh VM");
         let fresh_result = fresh.run();
-        assert!(matches!(
-            reused_result,
-            Err(VMError::VectorExtensionDisabled)
-        ));
-        assert!(matches!(
-            fresh_result,
-            Err(VMError::VectorExtensionDisabled)
-        ));
+        // The reused runtime behaves exactly like a fresh one.
+        assert!(reused_result.is_ok(), "{reused_result:?}");
+        assert!(fresh_result.is_ok(), "{fresh_result:?}");
+        assert_eq!(reused.get_cycle_count(), fresh.get_cycle_count());
+        assert_eq!(reused.remaining_gas(), fresh.remaining_gas());
     }
     #[test]
     fn deployable_contract_rejects_noncanonical_indirect_control_flow_at_admission() {
@@ -7536,7 +6112,7 @@ mod tests {
         set_banner_enabled(false);
         let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
         let mut code = Vec::new();
-        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_scall(syscall).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code).expect("load raw code");
@@ -7833,12 +6409,11 @@ seiyaku Demo {
                 VMError::UnsupportedProgramAbiVersion { version: 2 },
                 VmTrapKind::UnsupportedProgramAbiVersion,
             ),
+            (VMError::CallDepthExceeded, VmTrapKind::CallDepthExceeded),
+            (VMError::ReentrantCall, VmTrapKind::ReentrantCall),
             (
-                VMError::ProgramVectorLengthTooLarge {
-                    vector_length: u8::MAX,
-                    max_allowed: 64,
-                },
-                VmTrapKind::ProgramVectorLengthTooLarge,
+                VMError::ControlFlowViolation,
+                VmTrapKind::ControlFlowViolation,
             ),
         ];
         for (error, expected) in cases {
@@ -8116,10 +6691,6 @@ seiyaku Demo {
     }
 }
 
-#[cfg(test)]
-#[path = "vm_cycle_budget_tests.rs"]
-mod vm_cycle_budget_tests;
-
 /// Completed contract abort details; local attempt failures can never enter this cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CompletedContractAbort {
@@ -8140,5 +6711,152 @@ impl CompletedContractAbort {
             code: self.code,
             message: self.message,
         }
+    }
+}
+
+#[cfg(test)]
+mod failed_program_install_tests {
+    use super::*;
+    use iroha_allocation::AllocationBudget;
+    use kotodama_lang::compiler::{Compiler, CompilerOptions};
+
+    fn compiled(policy: SyscallPolicy) -> PreparedContract {
+        let bytes = Compiler::new_with_options(CompilerOptions {
+            host_policy: policy,
+            ..CompilerOptions::default()
+        })
+        .compile_source("seiyaku CompleteImage { view fn main() authorize(anyone) { () } }")
+        .unwrap();
+        crate::prepare_contract_for_policy(Arc::<[u8]>::from(bytes), policy).unwrap()
+    }
+
+    fn refuse_loader_memory(vm: &mut IVM) {
+        let budget = AllocationBudget::new(1024 * 1024);
+        let recorder = DiagnosticMemoryAccessRecorder::try_new(0, &budget).unwrap();
+        recorder.begin_run(false).unwrap();
+        vm.memory
+            .install_diagnostic_access_recorder(recorder)
+            .unwrap();
+    }
+
+    #[derive(Default)]
+    struct CountingHost {
+        quotes: std::cell::Cell<usize>,
+        calls: usize,
+    }
+    impl IVMHost for CountingHost {
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            self.quotes.set(self.quotes.get() + 1);
+            Ok(0)
+        }
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            self.calls += 1;
+            Ok(0)
+        }
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn failed_named_install_blocks_execution_reset_snapshot_and_template_until_retry() {
+        let baseline = compiled(SyscallPolicy::AbiV1);
+        let named = compiled(SyscallPolicy::AbiV1RuntimeLifecycle);
+        let mut vm = IVM::new(1_000_000);
+        vm.load_prepared(&baseline).unwrap();
+        let baseline_bytes = vm.memory.read_code_bytes();
+        refuse_loader_memory(&mut vm);
+        assert!(matches!(
+            vm.load_prepared(&named),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::ActiveMemoryCapacity
+            ))
+        ));
+        vm.memory.clear_diagnostic_access_recorder();
+        assert_eq!(vm.memory.read_code_bytes(), baseline_bytes);
+        assert_eq!(vm.syscall_policy(), SyscallPolicy::AbiV1RuntimeLifecycle);
+        let mut host = CountingHost::default();
+        assert!(matches!(vm.run(), Err(VMError::InvalidMetadata)));
+        assert!(matches!(
+            vm.run_with_host(&mut host),
+            Err(VMError::InvalidMetadata)
+        ));
+        assert!(matches!(
+            vm.execute_syscall(&mut host, crate::syscalls::SYSCALL_DEBUG_PRINT),
+            Err(VMError::InvalidMetadata)
+        ));
+        assert_eq!((host.quotes.get(), host.calls), (0, 0));
+        assert!(matches!(
+            vm.try_runtime_template(),
+            Err(VMError::InvalidMetadata)
+        ));
+        let mut snapshot = vm.try_clone_snapshot().unwrap();
+        assert!(matches!(snapshot.run(), Err(VMError::InvalidMetadata)));
+        vm.reset().unwrap();
+        assert!(matches!(vm.run(), Err(VMError::InvalidMetadata)));
+        vm.load_prepared(&named).unwrap();
+        vm.select_entrypoint("main").unwrap();
+        vm.run().unwrap();
+        assert_eq!(vm.syscall_policy(), SyscallPolicy::AbiV1RuntimeLifecycle);
+        assert!(matches!(snapshot.run(), Err(VMError::InvalidMetadata)));
+    }
+
+    #[test]
+    fn failed_raw_install_stays_quarantined_until_successful_raw_reload() {
+        let halt = crate::encoding::wide::encode_halt().to_le_bytes();
+        let mut vm = IVM::new(1_000_000);
+        vm.load_prepared(&compiled(SyscallPolicy::AbiV1RuntimeLifecycle))
+            .unwrap();
+        refuse_loader_memory(&mut vm);
+        assert!(matches!(
+            vm.load_code(&halt),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::ActiveMemoryCapacity
+            ))
+        ));
+        vm.memory.clear_diagnostic_access_recorder();
+        assert_eq!(vm.syscall_policy(), SyscallPolicy::AbiV1);
+        assert!(matches!(vm.run(), Err(VMError::InvalidMetadata)));
+        vm.load_code(&halt).unwrap();
+        vm.run().unwrap();
+        assert_eq!(vm.syscall_policy(), SyscallPolicy::AbiV1);
+    }
+
+    #[test]
+    fn host_catching_failed_reload_cannot_resume_the_guest_loop() {
+        struct ReloadingHost(usize);
+        impl IVMHost for ReloadingHost {
+            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                Ok(0)
+            }
+            fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+                self.0 += 1;
+                refuse_loader_memory(vm);
+                assert!(matches!(
+                    vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes()),
+                    Err(VMError::ExecutionDeferred(
+                        crate::error::ExecutionDeferral::ActiveMemoryCapacity
+                    ))
+                ));
+                vm.memory.clear_diagnostic_access_recorder();
+                Ok(0)
+            }
+            fn as_any(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+        let syscall = crate::encoding::wide::encode_syscallx(crate::syscalls::SYSCALL_DEBUG_PRINT);
+        let code = [syscall, syscall, crate::encoding::wide::encode_halt()]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut vm = IVM::new(1_000_000);
+        vm.load_code(&code).unwrap();
+        let mut host = ReloadingHost(0);
+        assert!(matches!(
+            vm.run_with_host(&mut host),
+            Err(VMError::InvalidMetadata)
+        ));
+        assert_eq!(host.0, 1, "the second guest syscall must never execute");
     }
 }

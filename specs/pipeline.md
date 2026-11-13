@@ -98,7 +98,7 @@ All of the above share the same validation and consensus pipeline once they beco
   standard `Result<ExecutorDataModel, ValidationFail>` installs a data model,
   and `Result<(), ValidationFail>`, the same framing as a validation verdict,
   keeps the current one. Header
-  fields, vector length, bytecode size, and other artifact shape do not select
+  fields, bytecode size, and other artifact shape do not select
   host-side migration or permission behavior. The host applies the declared
   executor data model exactly; it has no legacy permission-name purge or
   pre-release grant migration step. Synthetic executor emulation is

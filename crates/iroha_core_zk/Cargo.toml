@@ -59,6 +59,7 @@ kagemusha-simulator = ["test-utils"]
 zk-tests = ["test-utils"]
 
 [dependencies]
+zk-spartan = { path = "../../experiments/kagemusha-spartan" }
 # Genuine wallet sigma/Q/A/W producers; this crate adds the G1/native custody adapter.
 iroha_kagemusha_proof = { path = "../iroha_kagemusha_proof", default-features = false }
 iroha_plonk_gadgets = { path = "../iroha_plonk_gadgets", default-features = false }

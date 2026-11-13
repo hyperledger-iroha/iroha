@@ -781,11 +781,12 @@ impl Scope<'_> {
                         }
                         let artifact = self.artifacts.get(&target).ok_or_else(|| self.error(
                             "E_CONTRACT_IMPORT_NOT_FOUND", format!("compiled contract `{target}` is absent from this source owner's artifact inventory"), Some(directive.source)))?;
-                        let interface =
-                            if let Some(interface) = self.admitted_artifacts.get(&target) {
-                                interface.clone()
-                            } else {
-                                let admitted = ivm_artifact_admission::verify_contract_artifact(
+                        let interface = if let Some(interface) =
+                            self.admitted_artifacts.get(&target)
+                        {
+                            interface.clone()
+                        } else {
+                            let admitted = ivm_artifact_admission::verify_contract_artifact_with_declared_profile(
                                     &artifact.artifact,
                                 )
                                 .map_err(|error| {
@@ -797,13 +798,13 @@ impl Scope<'_> {
                                         Some(directive.source),
                                     )
                                 })?;
-                                let interface = semantic::ImportedContractInterface {
-                                    code_hash: admitted.code_hash,
-                                    interface: std::sync::Arc::new(admitted.contract_interface),
-                                };
-                                self.admitted_artifacts.insert(target, interface.clone());
-                                interface
+                            let interface = semantic::ImportedContractInterface {
+                                code_hash: admitted.code_hash,
+                                interface: std::sync::Arc::new(admitted.contract_interface),
                             };
+                            self.admitted_artifacts.insert(target, interface.clone());
+                            interface
+                        };
                         unit.contracts.insert(alias.clone(), interface);
                     }
                     SourceDirectiveKind::Import {

@@ -1,0 +1,24 @@
+name: SpartanHardwareProbe
+options:
+  deploymentTarget:
+    iOS: '18.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    DEVELOPMENT_TEAM: YLWWUD25VZ
+    CODE_SIGN_STYLE: Automatic
+    PRODUCT_BUNDLE_IDENTIFIER: jp.co.soramitsu.kagemusha.spartanfixture
+    TARGETED_DEVICE_FAMILY: '1,2'
+targets:
+  SpartanHardwareProbe:
+    type: application
+    platform: iOS
+    sources:
+      - Probe.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Spartan Hardware Fixture

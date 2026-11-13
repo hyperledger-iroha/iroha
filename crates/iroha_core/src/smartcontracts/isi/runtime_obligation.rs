@@ -30,3 +30,17 @@ impl Execute for CompleteRuntimeObligationV1 {
         crate::runtime::obligations::registry::complete(state_transaction, authority, &self)
     }
 }
+
+// Native dispatch has no opaque invocation authority. Only the Executor boundary carrying
+// the original contract frame can enter the independently selected kernel operation.
+impl Execute for iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1 {
+    fn execute(
+        self,
+        _authority: &AccountId,
+        _state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        Err(Error::InvariantViolation(
+            "contract obligation registration requires authenticated invocation context".into(),
+        ))
+    }
+}

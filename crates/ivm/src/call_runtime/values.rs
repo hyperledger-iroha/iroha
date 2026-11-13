@@ -85,7 +85,7 @@ impl IVM {
                             usize::try_from(slot).map_err(|_| VMError::DecodeError)?,
                         )?;
                         if owned != address {
-                            return Err(VMError::AssertionFailed);
+                            return Err(VMError::ControlFlowViolation);
                         }
                         word
                     } else {

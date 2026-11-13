@@ -107,3 +107,59 @@ mod tests {
         );
     }
 }
+
+isi! {
+    /// Register the authenticated executing contract's obligation through its named host profile.
+    ///
+    /// The kernel derives the contract address and subject from the original invocation's
+    /// opaque authorization context. A signed instruction without that context is refused,
+    /// even when its authority names the subject. The frozen account-controller registration
+    /// instruction remains unchanged. Completion effects and expiry obey the same bounded
+    /// registry contract; registering always requires ordinary admission to the canonical root.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1")]
+    pub struct RegisterContractRuntimeObligationV1 {
+        /// What kind of work the contract leaves outstanding.
+        pub kind: ObligationKindV1,
+        /// Exact terminal instructions, each performed at most once by this contract's subject.
+        pub terminal_effects: Vec<InstructionBox>,
+        /// Committed time from which the obligation is no longer live.
+        pub expires_ms: u64,
+    }
+}
+impl crate::seal::Instruction for RegisterContractRuntimeObligationV1 {}
+impl RegisterContractRuntimeObligationV1 {
+    /// Stable wire identity of the independently activated contract kernel call.
+    pub const WIRE_ID: &'static str = "iroha.runtime.obligation.contract.register.v1";
+}
+
+#[cfg(test)]
+mod contract_registration_tests {
+    use super::*;
+    use crate::{
+        Level,
+        isi::{InstructionBox, Log},
+    };
+    #[test]
+    fn contract_registration_roundtrip_preserves_exact_terminal_instruction() {
+        let instruction = RegisterContractRuntimeObligationV1 {
+            kind: ObligationKindV1::Escrow,
+            terminal_effects: vec![Log::new(Level::INFO, "terminal".to_owned()).into()],
+            expires_ms: 42,
+        };
+        let envelope = InstructionBox::from(instruction.clone());
+        let bytes = norito::to_bytes(&envelope).unwrap();
+        let restored: InstructionBox = norito::decode_from_bytes(&bytes).unwrap();
+        assert_eq!(
+            restored
+                .as_any()
+                .downcast_ref::<RegisterContractRuntimeObligationV1>(),
+            Some(&instruction)
+        );
+        assert_eq!(norito::to_bytes(&restored).unwrap(), bytes);
+        let json = norito::json::to_json(&instruction).unwrap();
+        let decoded: RegisterContractRuntimeObligationV1 = norito::json::from_str(&json).unwrap();
+        assert_eq!(decoded, instruction);
+    }
+}

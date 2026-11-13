@@ -72,7 +72,6 @@ pub mod execution_packets;
 /// Local, prepaid interpreter snapshots for diagnostic AIR development only.
 pub mod execution_step_recorder;
 mod execution_summary;
-pub mod field;
 pub mod field_dispatch;
 #[cfg(test)]
 mod frame_identity_tests;
@@ -150,22 +149,25 @@ pub use crate::argument_record::{
     PreparedArgumentRecord, argument_record_decode_count, prepare_argument_record_with_gas_limit,
     reset_argument_record_decode_count, validate_argument_record,
 };
-pub use crate::gas::{cost_of, cost_of_with_vector_len};
+pub use crate::gas::cost_of;
 // Re-export stable mode bits so tests/users can import `ivm::ivm_mode::*`.
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
     ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
-    prepare_contract_with_memory_budget, prepare_koto_test_contract, verify_contract_artifact,
-    verify_contract_artifact_with_memory_budget,
+    prepare_contract_for_policy, prepare_contract_with_memory_budget,
+    prepare_contract_with_memory_budget_for_policy, prepare_koto_test_contract,
+    verify_contract_artifact, verify_contract_artifact_for_policy,
+    verify_contract_artifact_with_declared_profile, verify_contract_artifact_with_memory_budget,
+    verify_contract_artifact_with_memory_budget_for_policy,
 };
 pub use crate::metadata::{
-    CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
-    CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
-    EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-    EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-    EmbeddedStateType, HEADER_SIZE, LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata,
-    VECTOR_LENGTH_MAX, contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
+    CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
+    EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor,
+    EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1,
+    EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor, EmbeddedStateType, HEADER_SIZE,
+    LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata, contract_code_hash,
+    decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items_into};
@@ -196,10 +198,7 @@ pub use crate::{
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
-    ivm::{
-        IVM, RuntimeTemplate, RuntimeTemplateResetError, TraceMode, VmCycleBudget,
-        set_banner_enabled,
-    },
+    ivm::{IVM, RuntimeTemplate, RuntimeTemplateResetError, TraceMode, set_banner_enabled},
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },

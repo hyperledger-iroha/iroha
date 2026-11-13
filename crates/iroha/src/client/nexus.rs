@@ -43,7 +43,10 @@ impl Nexus<'_> {
     ///
     /// # Errors
     /// Returns structured request, transport, deadline, HTTP, response-bound,
-    /// decoding or response-binding errors.
+    /// decoding or response-binding errors. A rejection with Torii's error envelope is
+    /// [`Error::Api`] with its code and message: a plan that committed state refuses is
+    /// HTTP 409 `staking_preparation_refused`, whose message is the reason execution would
+    /// reject with. A response without an envelope stays [`Error::Http`] with its exact body.
     pub async fn prepare_public_lane_plan(
         &self,
         request: &PublicLanePreparationRequestV1,
@@ -107,12 +110,7 @@ fn ensure_deadline(client: &Client) -> Result<()> {
 
 fn decode_response(response: Response<Vec<u8>>) -> Result<PublicLanePreparationV1> {
     if response.status() != StatusCode::OK {
-        return Err(Error::Http {
-            operation: PREPARE,
-            status: response.status().as_u16(),
-            retry_after: crate::error::retry_after(response.headers()),
-            body: response.into_body(),
-        });
+        return Err(crate::error::http_error(PREPARE, response));
     }
     Client::decode_canonical_norito_response(
         &response,
@@ -728,6 +726,64 @@ mod tests {
         let (_, expected) = fixture(super::super::test_network_id());
         assert_eq!(decode_response(response.clone()).unwrap(), expected);
         assert_eq!(response.body(), &original_body);
+    }
+
+    #[tokio::test]
+    async fn staking_preparation_refusal_keeps_its_code_and_reason_without_replay() {
+        const REASON: &str =
+            "Iroha invariant violation: no funded reward entitlement is available to claim";
+        let code = iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE;
+        let envelope = iroha_torii_shared::ErrorEnvelope::new(code, REASON);
+        let bodies = [
+            (
+                APPLICATION_NORITO,
+                norito::encode_canonical(&envelope).unwrap(),
+            ),
+            (
+                "application/json",
+                norito::json::to_json(&envelope).unwrap().into_bytes(),
+            ),
+        ];
+        for (content_type, body) in bodies {
+            let (client, requests, _) = attach(
+                move |_| {
+                    Ok(Response::builder()
+                        .status(409)
+                        .header("Content-Type", content_type)
+                        .header("x-iroha-reject-code", code)
+                        .body(body.clone())
+                        .unwrap())
+                },
+                Duration::ZERO,
+                Duration::ZERO,
+            );
+            let (request, _) = fixture(*client.network_id());
+            let actual_error = client
+                .nexus()
+                .prepare_public_lane_plan(&request)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                actual_error.to_string(),
+                format!("{PREPARE} returned HTTP 409: {code}: {REASON}")
+            );
+            assert_eq!(actual_error.http_status(), Some(409));
+            assert_eq!(actual_error.retry_after(), None);
+            let Error::Api { operation, error } = &actual_error else {
+                panic!("a typed refusal must keep its envelope: {actual_error:?}");
+            };
+            assert_eq!(
+                (
+                    *operation,
+                    error.status(),
+                    error.code(),
+                    error.message(),
+                    error.reject_code(),
+                ),
+                (PREPARE, 409, code, REASON, Some(code))
+            );
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
     }
 
     #[tokio::test]

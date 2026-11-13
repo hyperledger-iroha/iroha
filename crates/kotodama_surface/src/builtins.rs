@@ -411,6 +411,10 @@ pub enum Builtin {
     ExecuteQuery,
     /// Submit the encoded governance ballot instruction.
     ScExecuteSubmitBallot,
+    /// Register this authenticated contract's bounded kernel obligation.
+    RegisterRuntimeObligation,
+    /// End this authenticated contract's own kernel obligation.
+    CompleteRuntimeObligation,
     /// Queue a canonical X509 presentation request against signed attachment custody.
     PresentX509,
     /// Resolve an account alias to its canonical account identity.
@@ -784,16 +788,10 @@ pub enum Builtin {
     Gcd,
     /// Compute the integer mean of two integers.
     Mean,
-    /// Internal Poseidon helper over two scalar register values.
-    Poseidon2,
-    /// Internal Poseidon helper over six scalar register values.
-    Poseidon6,
     /// Internal public-key generation helper over a scalar register value.
     Pubkgen,
     /// Commit secret numeric values in ZK mode.
     Valcom,
-    /// Internal vector-length selection helper.
-    SetVl,
     /// Read an optional integer field from JSON.
     GetInt,
     /// Read an optional decimal field from JSON.
@@ -915,6 +913,8 @@ impl Builtin {
             "query_get_contract_instance" => Self::QueryGetContractInstance,
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
+            "register_runtime_obligation" => Self::RegisterRuntimeObligation,
+            "complete_runtime_obligation" => Self::CompleteRuntimeObligation,
             "present_x509" => Self::PresentX509,
             "resolve_account_alias" => Self::ResolveAccountAlias,
             "subscription_bill" => Self::SubscriptionBill,
@@ -1102,11 +1102,8 @@ impl Builtin {
             "div_ceil" => Self::DivCeil,
             "gcd" => Self::Gcd,
             "mean" => Self::Mean,
-            "poseidon2" => Self::Poseidon2,
-            "poseidon6" => Self::Poseidon6,
             "pubkgen" => Self::Pubkgen,
             "valcom" => Self::Valcom,
-            "setvl" => Self::SetVl,
             "get_int" => Self::GetInt,
             "get_decimal" => Self::GetDecimal,
             "get_quantity" => Self::GetQuantity,
@@ -1174,6 +1171,8 @@ impl Builtin {
             Self::QueryGetContractInstance => "query_get_contract_instance",
             Self::ExecuteQuery => "execute_query",
             Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
+            Self::RegisterRuntimeObligation => "register_runtime_obligation",
+            Self::CompleteRuntimeObligation => "complete_runtime_obligation",
             Self::PresentX509 => "present_x509",
             Self::ResolveAccountAlias => "resolve_account_alias",
             Self::SubscriptionBill => "subscription_bill",
@@ -1361,11 +1360,8 @@ impl Builtin {
             Self::DivCeil => "div_ceil",
             Self::Gcd => "gcd",
             Self::Mean => "mean",
-            Self::Poseidon2 => "poseidon2",
-            Self::Poseidon6 => "poseidon6",
             Self::Pubkgen => "pubkgen",
             Self::Valcom => "valcom",
-            Self::SetVl => "setvl",
             Self::GetInt => "get_int",
             Self::GetDecimal => "get_decimal",
             Self::GetQuantity => "get_quantity",
@@ -1603,6 +1599,8 @@ impl Builtin {
             Self::RegisterSmartContractBytes => "seiyaku::register_bytes",
             Self::ActivateContractInstance => "seiyaku::activate_instance",
             Self::ScExecuteSubmitBallot => "ledger::governance::submit_ballot",
+            Self::RegisterRuntimeObligation => "ledger::runtime::register_obligation",
+            Self::CompleteRuntimeObligation => "ledger::runtime::complete_obligation",
             Self::PresentX509 => "ledger::credentials::present_x509",
             Self::ZkRootsGet => "crypto::zk::roots",
             Self::ZkVoteGetTally => "ledger::governance::tally",
@@ -1665,13 +1663,10 @@ impl Builtin {
             Self::DivCeil => "math::div_ceil",
             Self::Gcd => "math::gcd",
             Self::Mean => "math::mean",
-            Self::Poseidon2 => "crypto::poseidon2",
-            Self::Poseidon6 => "crypto::poseidon6",
             Self::Pubkgen => "crypto::pubkgen",
             Self::Valcom => "crypto::valcom",
             Self::GetPrivateInput => "crypto::private_input",
             Self::CommitOutput => "crypto::commit_output",
-            Self::SetVl => "runtime::set_vector_length",
             Self::NumericSpecUnconstrained => "NumericSpec::unconstrained",
             Self::NumericSpecInteger => "NumericSpec::integer",
             Self::NumericSpecFractional => "NumericSpec::fractional",
@@ -1720,7 +1715,10 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::ScExecuteSubmitBallot | Self::PresentX509 => BuiltinEffects::INSTRUCTION,
+            Self::ScExecuteSubmitBallot
+            | Self::RegisterRuntimeObligation
+            | Self::CompleteRuntimeObligation
+            | Self::PresentX509 => BuiltinEffects::INSTRUCTION,
             Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -1970,8 +1968,6 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect
-            | Self::Poseidon2
-            | Self::Poseidon6
             | Self::Pubkgen
             | Self::SetExecutionDepth
             | Self::DeactivateContractInstance
@@ -1979,7 +1975,6 @@ impl Builtin {
             | Self::RegisterSmartContractCode
             | Self::RegisterSmartContractBytes
             | Self::ActivateContractInstance
-            | Self::SetVl
             | Self::SysvarAuthority
             // Every host binds SYSVAR_BLOCK_TIME_MS to the same logical time as
             // CURRENT_TIME_MS (transaction creation time for transaction calls),
@@ -2041,10 +2036,7 @@ impl Builtin {
             | Self::WrappingSub
             | Self::WrappingMul
             | Self::WrappingNeg
-            | Self::Poseidon2
-            | Self::Poseidon6
             | Self::Pubkgen
-            | Self::SetVl
             | Self::NumericSpecUnconstrained
             | Self::NumericSpecInteger
             | Self::NumericSpecFractional
@@ -2095,9 +2087,10 @@ impl Builtin {
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
-            Self::ScExecuteSubmitBallot | Self::PresentX509 => {
-                &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
-            }
+            Self::ScExecuteSubmitBallot
+            | Self::RegisterRuntimeObligation
+            | Self::CompleteRuntimeObligation
+            | Self::PresentX509 => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
@@ -2435,6 +2428,8 @@ impl Builtin {
             Self::PresentX509 => S::new(&["bytes"], "PendingAction"),
             Self::StateDel
             | Self::ScExecuteSubmitBallot
+            | Self::RegisterRuntimeObligation
+            | Self::CompleteRuntimeObligation
             | Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
             | Self::RegisterSmartContractCode
@@ -2481,8 +2476,7 @@ impl Builtin {
             | Self::TestSetBlockHeight
             | Self::TestAdvanceBlocks
             | Self::TestSetTransactionTimeMs
-            | Self::SetExecutionDepth
-            | Self::SetVl => S::new(&["int"], "()"),
+            | Self::SetExecutionDepth => S::new(&["int"], "()"),
             Self::DebugLog => S::new(&["string"], "()"),
             Self::Assert => S::new(&["bool", "string|int?"], "()"),
             Self::Require => S::new(&["bool", "ErrorEnum::Variant"], "()"),
@@ -2713,8 +2707,7 @@ impl Builtin {
             | Self::WrappingMul
             | Self::DivCeil
             | Self::Gcd
-            | Self::Mean
-            | Self::Poseidon2 => S::new(&["int", "int"], "int"),
+            | Self::Mean => S::new(&["int", "int"], "int"),
             Self::Min | Self::Max => S::new(
                 &["int|decimal|quantity", "int|decimal|quantity"],
                 "int|decimal|quantity",
@@ -2726,7 +2719,6 @@ impl Builtin {
                 ],
                 "int",
             ),
-            Self::Poseidon6 => S::new(&["int", "int", "int", "int", "int", "int"], "int"),
             Self::Authority | Self::SysvarAuthority | Self::ContractSubject => {
                 S::new(&[], "AccountId")
             }
@@ -2943,7 +2935,9 @@ impl Builtin {
             | Self::SoracloudPublishCheckpoint
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope
-            | Self::PresentX509 => signature.with_names(&["request"]),
+            | Self::PresentX509
+            | Self::RegisterRuntimeObligation
+            | Self::CompleteRuntimeObligation => signature.with_names(&["request"]),
             Self::GetPrivateInput => signature.with_names(&["index"]),
             Self::Path => signature.with_names(&["path", "key"]),
             Self::Sm2Verify => {
@@ -2992,7 +2986,6 @@ impl Builtin {
             | Self::Max
             | Self::Gcd
             | Self::Mean
-            | Self::Poseidon2
             | Self::Valcom => signature.with_names(&["left", "right"]),
             Self::JsonSetInt | Self::JsonSetAccountId => {
                 signature.with_names(&["object", "key", "value"])
@@ -3011,7 +3004,6 @@ impl Builtin {
             Self::NumericSpecFractional => signature.with_names(&["scale"]),
             Self::MintableLimited => signature.with_names(&["tokens"]),
             Self::DivCeil => signature.with_names(&["dividend", "divisor"]),
-            Self::Poseidon6 => signature.with_names(&["a", "b", "c", "d", "e", "f"]),
             _ => signature,
         }
     }
@@ -3220,13 +3212,13 @@ mod tests {
     #[test]
     fn builtin_iteration_keeps_payload_placeholder_and_native_iterator_contract() {
         let mut variants = Builtin::iter();
-        assert_eq!(variants.len(), 252);
+        assert_eq!(variants.len(), 251);
         assert_eq!(
             variants.next(),
             Some(Builtin::PointerConstructor(PointerConstructor::default()))
         );
         assert_eq!(variants.next_back(), Some(Builtin::SignatureSchemeMlDsa));
-        assert_eq!(variants.len(), 250);
+        assert_eq!(variants.len(), 249);
         assert_eq!(variants.next(), Some(Builtin::Contains));
         assert_eq!(variants.next(), Some(Builtin::GetOrInsert));
         assert_eq!(variants.clone().count(), variants.len());
@@ -3243,7 +3235,7 @@ mod tests {
             .map(Builtin::PointerConstructor)
             .collect();
         let expanded: Vec<_> = Builtin::all().collect();
-        assert_eq!(expanded.len(), 267);
+        assert_eq!(expanded.len(), 266);
         assert_eq!(&expanded[..pointers.len()], pointers);
         assert_eq!(
             &expanded[pointers.len()..],
@@ -3302,7 +3294,6 @@ mod tests {
             Builtin::SetExecutionDepth.mode(),
             BuiltinMode::CompilerInternal
         );
-        assert_eq!(Builtin::SetVl.mode(), BuiltinMode::CompilerInternal);
         assert_eq!(
             Builtin::NumericAddDirect.mode(),
             BuiltinMode::CompilerInternal
@@ -3349,7 +3340,6 @@ mod tests {
             Builtin::RegisterSmartContractCode,
             Builtin::RegisterSmartContractBytes,
             Builtin::ActivateContractInstance,
-            Builtin::SetVl,
             Builtin::VerifyDsProof,
             Builtin::SoracloudReadCommittedState,
             Builtin::SoracloudEmitStateMutation,
@@ -4070,21 +4060,26 @@ mod tests {
     }
     #[test]
     fn truncated_scalar_crypto_and_removed_nullifier_are_not_source_features() {
-        for (builtin, source_name) in [
-            (Builtin::Poseidon2, "crypto::poseidon2"),
-            (Builtin::Poseidon6, "crypto::poseidon6"),
-            (Builtin::Pubkgen, "crypto::pubkgen"),
+        let builtin = Builtin::Pubkgen;
+        assert_eq!(builtin.source_name(), "crypto::pubkgen");
+        assert_eq!(builtin.mode(), BuiltinMode::CompilerInternal);
+        assert_eq!(builtin.surface(), BuiltinSurface::CompilerInternal);
+        assert_eq!(Builtin::from_source_name("crypto::pubkgen"), None);
+        // Internal lowering identifiers must not accidentally resolve as
+        // source spellings either.
+        assert_eq!(Builtin::from_source_name(builtin.name()), None);
+        for (name, source_name) in [
+            ("poseidon2", "crypto::poseidon2"),
+            ("poseidon6", "crypto::poseidon6"),
+            ("use_nullifier", "crypto::use_nullifier"),
         ] {
-            assert_eq!(builtin.source_name(), source_name);
-            assert_eq!(builtin.mode(), BuiltinMode::CompilerInternal);
-            assert_eq!(builtin.surface(), BuiltinSurface::CompilerInternal);
-            assert_eq!(Builtin::from_source_name(source_name), None);
-            // Internal lowering identifiers must not accidentally resolve as
-            // source spellings either.
-            assert_eq!(Builtin::from_source_name(builtin.name()), None);
+            assert_eq!(Builtin::from_name(name), None, "{name}");
+            assert_eq!(
+                Builtin::from_source_name(source_name),
+                None,
+                "{source_name}"
+            );
         }
-        assert_eq!(Builtin::from_name("use_nullifier"), None);
-        assert_eq!(Builtin::from_source_name("crypto::use_nullifier"), None);
         let commitment = Builtin::Valcom.signature();
         assert_eq!(
             commitment.parameters,
@@ -4561,5 +4556,30 @@ mod tests {
             ivm_abi::SyscallPolicy::AbiV1,
             ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID
         ));
+    }
+}
+
+#[cfg(test)]
+mod runtime_obligation_profile_tests {
+    use super::*;
+    #[test]
+    fn contract_kernel_builtins_are_effectful_exact_tagged_bridges() {
+        for (builtin, name) in [
+            (
+                Builtin::RegisterRuntimeObligation,
+                "ledger::runtime::register_obligation",
+            ),
+            (
+                Builtin::CompleteRuntimeObligation,
+                "ledger::runtime::complete_obligation",
+            ),
+        ] {
+            assert_eq!(builtin.source_name(), name);
+            assert_eq!(builtin.effects(), BuiltinEffects::INSTRUCTION);
+            assert_eq!(
+                builtin.operation_syscalls(),
+                &[ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+            );
+        }
     }
 }

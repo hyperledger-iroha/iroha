@@ -11,24 +11,27 @@ Layout (current)
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
   - 6: `mode: u8` (feature bits; see below)
-  - 7: `vector_length: u8`
+  - 7: `vector_length: u8` (reserved)
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
   - 17..49: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)
 <!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
-- `ZK = 0x01`, `VECTOR = 0x02`.
+- `ZK = 0x01`. It is the only mode bit.
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
 - `abi_hash`: authenticated Iroha Hash v1 commitment (Blake2b-256 with the
   final byte's least-significant bit set to 1) to the exact canonical ABI
-  descriptor selected by `abi_version`; admission validates it before prefix
-  or instruction decoding.
-- `mode`: feature bits for ZK tracing and vector execution.
-- `vector_length`: logical vector length for vector ops (0 selects the runtime default).
-- `max_cycles`: execution padding bound used in ZK mode and admission.
+  host descriptor selected by `abi_version` and the execution root's exact host
+  profile; admission validates it before prefix or instruction decoding.
+- `mode`: feature bits; `ZK` enables privacy tags, private-memory tracking and trace padding.
+- `max_cycles`: the ZK trace bound. A ZK program traps `ExceededMaxCycles` when its executed
+  cycles reach it and pads a successful trace to exactly this length (one gas per padded cycle).
+  It is nonzero exactly when `mode` has the `ZK` bit; a header without `ZK` must carry `0`. Gas is
+  the only execution budget: the caller supplies it, nested invocations draw from the parent's
+  remaining gas, and no header field converts into gas.
 
 Notes
 - Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
@@ -48,13 +51,18 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- The `abi_hash` at bytes 17..49 must equal the canonical 32-byte ABI
-  descriptor hash selected by `abi_version`. The parser validates this field
+- The fixed header `abi_hash` must equal the canonical 32-byte hash of the
+  selected host descriptor. Both the baseline and `iroha.ivm.runtime_lifecycle.v1`
+  use `abi_version = 1` with distinct exact hashes. Ordinary parser entrypoints
+  admit the baseline; explicit policy-aware entrypoints admit the selected named
+  profile. Unknown hashes never select a fallback. The parser validates this field
   before decoding `CNTR`, any other prefix section, or the instruction stream.
 - For deployable artifacts, the required `CNTR` section carries the same ABI
   hash. Admission requires the header's `abi_version`/`abi_hash` and the
   embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both
-  the fixed header and `CNTR` bind the artifact to the ABI.
+  the fixed header and `CNTR` bind the artifact to the ABI. The on-chain manifest
+  must match too. The runtime lifecycle host profile requires deployable `CNTR`
+  metadata and is unavailable to generic programs and local test-harness artifacts.
 - Every first-release execution profile requires `version_major = 1` and
   `version_minor = 1`. Header `1.0` is rejected before section decoding. Generic
   programs and explicit local test harnesses share this header; CNTR presence and
@@ -83,9 +91,11 @@ Validation
   execution. Pointer provenance accepts only exact validated pointer-entry
   starts; scalar values, instruction bytes, headers, and interior addresses are
   never pointer objects.
-- Generic and deployable `mode` parsing permits only `ZK` and `VECTOR`;
-  every other bit is rejected.
-- `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field may be non-zero even if the `VECTOR` bit is not set.
+- Generic and deployable `mode` parsing permits only `ZK`; every other bit is
+  rejected.
+- `max_cycles` must be nonzero exactly when `ZK` is set (`MissingMaxCycles`,
+  `MaxCyclesWithoutZk`); node policy bounds a ZK trace bound by
+  `ivm_max_cycles_upper_bound`.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
 ### Policy (generated)
@@ -96,9 +106,9 @@ The following policy summary is generated from the implementation and should not
 |---|---|
 | version_major | 1 |
 | version_minor | 1 (sole current header for every profile) |
-| mode (known bits) | 0x03 (ZK=0x01, VECTOR=0x02) |
+| mode (known bits) | 0x01 (ZK=0x01) |
 | abi_version | 1 |
-| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
+| vector_length | 0..=64 (reserved; no instruction reads it) |
 <!-- END GENERATED HEADER POLICY -->
 
 ### ABI Hashes (generated)
@@ -123,7 +133,8 @@ closed.
 | ABI v1 | 7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7 |
 <!-- END GENERATED ABI HASHES -->
 
-- ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and
+- ABI V1 is the sole first-release version. Named host profiles preserve its
+  instruction and pointer encodings. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and
   `JALS` extensions are unconditional rather than feature-gated. A future
   post-release encoding break requires an explicit protocol/ABI upgrade; it
   must not silently reinterpret ABI-v1 opcode space.

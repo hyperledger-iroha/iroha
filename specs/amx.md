@@ -403,9 +403,9 @@ alongside `koto check` when publishing UAIDs so the generated R/W summary is
 captured in the validation evidence bundle.
 
 The durable-state control-flow proof is conservative around indirect branches:
-every reachable `JR` or `JALR` makes the exact-access analysis incomplete except
+every reachable `JALR` makes the exact-access analysis incomplete except
 the canonical protected return `JALR x0, x1, 0`. Prepared execution authenticates
-that one terminal edge with strict return-stack integrity. A `JR`, non-zero link
+that one terminal edge with strict return-stack integrity. A non-zero link
 register, different source register, or non-zero immediate remains an
 unauthenticated computed edge and cannot support an exact scheduler access set.
 

@@ -336,7 +336,12 @@ Its raw output is tracked in
 with the versions, host, dates and exact commands, and
 `security_estimate.lattice_estimator` of the summary restates it;
 `make check-fhe-bgv-cost` holds the summary to the record and the record to
-the code of the script. What is estimated:
+the code of the script. Each instance identity binds its modulus family and
+sample count; its exact ciphertext and plaintext moduli, dimension and
+distributions must match the named profile. A `QP:oo` record cannot substitute
+`Q` or a finite sample count. Retries are separate invocations with identical
+instance descriptions; each invocation reports an attack only once. A finished
+cost is a nonnegative finite number or the explicit `oo` marker. What is estimated:
 
 - plain LWE of dimension `n = N` with the exact modulus of the profile, a
   uniform ternary secret and the centered binomial error with `eta = 21`. A

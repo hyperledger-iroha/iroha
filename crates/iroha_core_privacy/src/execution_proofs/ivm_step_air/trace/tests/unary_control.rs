@@ -1,4 +1,4 @@
-//! Unary arithmetic, gas reads and pure direct control interpreter/AIR checks.
+//! Unary arithmetic and pure direct control interpreter/AIR checks.
 
 use super::*;
 
@@ -13,14 +13,14 @@ fn jump(opcode: u8, displacement: i16) -> u32 {
 fn unary_control_mix() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     recorded(
         &[
-            enc::encode_rr(wide::system::GETGAS, 20, 255, 254),
+            enc::encode_rr(wide::arithmetic::NEG, 20, 254, 255),
             enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
             jump(wide::control::JMP, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
             enc::encode_rr(wide::arithmetic::NOT, 7, 6, 255),
             jump(wide::control::JAL, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
-            enc::encode_rr(wide::system::GETGAS, 21, 20, 20),
+            enc::encode_rr(wide::arithmetic::NOT, 21, 20, 20),
             enc::encode_rr(wide::arithmetic::SLT, 22, 6, 7),
             enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 7, -1),
             jump(wide::control::JMP, 1),
@@ -76,44 +76,26 @@ fn unary_ops_match_interpreter_wrapping_extrema_aliases_and_unused_fields() {
 }
 
 #[test]
-fn getgas_matches_interpreter_full_width_zero_cost_and_ignores_both_source_fields() {
-    for gas in [1_000, 1 << 32, u64::MAX] {
-        for (rd, left, right) in [(8, 6, 7), (6, 6, 6), (0, 255, 254), (255, 0, 0)] {
-            let (segment, records) = recorded(
-                &[enc::encode_rr(wide::system::GETGAS, rd, left, right)],
-                1,
-                &[(6, u64::MAX), (7, 17), (254, 9)],
-                gas,
-            );
-            assert_eq!(records[0].opcode_gas, Some(0));
-            assert_eq!(
-                records[0].after.gas_remaining,
-                records[0].before.gas_remaining
-            );
-            assert_eq!(
-                records[0].after.registers[usize::from(rd)],
-                if rd == 0 {
-                    0
-                } else {
-                    records[0].before.gas_remaining
-                }
-            );
-            assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        }
-    }
+fn unary_gas_boundaries_keep_full_width_words_distinct_from_the_field_modulus() {
     // These are explicit later-segment boundaries, not root setup budgets.
-    // Zero and a full Goldilocks modulus remain distinct full-width gas words.
+    // A full Goldilocks modulus and its neighbours remain distinct gas words.
     let (segment, records) = recorded(
-        &[enc::encode_rr(wide::system::GETGAS, 6, 6, 6)],
+        &[enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255)],
         1,
         &[(6, 91)],
         1_000,
     );
-    for gas in [0, 0xffff_ffff_0000_0001, u64::MAX] {
+    assert_eq!(records[0].opcode_gas, Some(1));
+    for gas in [
+        1,
+        1 << 32,
+        0xffff_ffff_0000_0001,
+        0xffff_ffff_0000_0002,
+        u64::MAX,
+    ] {
         let mut records = records.clone();
         records[0].before.gas_remaining = gas;
-        records[0].after.gas_remaining = gas;
-        records[0].after.registers[6] = gas;
+        records[0].after.gas_remaining = gas - 1;
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             1,
@@ -181,8 +163,9 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
     for opcode in [
         wide::control::JALS,
         wide::control::JALR,
-        wide::control::JR,
         wide::control::HALT,
+        // An unassigned opcode byte is no scalar family either.
+        0x8B,
     ] {
         assert!(family(enc::encode_rr(opcode, 0, 0, 0)).is_none());
     }
@@ -198,11 +181,10 @@ fn pure_direct_jumps_match_interpreter_signed_control_without_link_writes() {
 }
 
 #[test]
-fn unary_gas_and_direct_control_coherent_false_boundaries_fail_air() {
+fn unary_and_direct_control_coherent_false_boundaries_fail_air() {
     for word in [
         enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
         enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255),
-        enc::encode_rr(wide::system::GETGAS, 6, 6, 255),
         jump(wide::control::JMP, 2),
         jump(wide::control::JAL, 2),
     ] {
@@ -250,11 +232,10 @@ fn unary_gas_and_direct_control_coherent_false_boundaries_fail_air() {
 }
 
 #[test]
-fn unary_gas_and_direct_control_reject_every_interior_profile_column_mutation() {
+fn unary_and_direct_control_reject_every_interior_profile_column_mutation() {
     for word in [
         enc::encode_rr(wide::arithmetic::NEG, 6, 6, 255),
         enc::encode_rr(wide::arithmetic::NOT, 6, 6, 255),
-        enc::encode_rr(wide::system::GETGAS, 6, 6, 255),
         jump(wide::control::JMP, -1),
         jump(wide::control::JAL, -1),
     ] {
@@ -294,7 +275,8 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
     assert_eq!(segment.after.registers[6], i64::cast_unsigned(i64::MIN));
     assert_eq!(segment.after.registers[7], i64::MAX as u64);
-    assert_eq!(segment.after.registers[20] - segment.after.registers[21], 6);
+    assert_eq!(segment.after.registers[20], 19_u64.wrapping_neg());
+    assert_eq!(segment.after.registers[21], 18);
     assert_eq!(segment.base_width_v1(), 1_356);
     assert_eq!(segment.profile_constraint_count_v1(), 3_369);
     assert_eq!(
@@ -325,7 +307,7 @@ fn unary_direct_mix_keeps_degree_four_and_exact_native_geometry() {
 }
 
 #[test]
-fn native_stark_proves_unary_direct_mix_and_binds_gas_reads_and_jump_artifact() {
+fn native_stark_proves_unary_direct_mix_and_binds_unary_results_and_jump_artifact() {
     let (segment, records) = unary_control_mix();
     let proof =
         prove_proof_managed_note_stark_v1(&segment, &segment.columns(&records).unwrap()).unwrap();
@@ -359,11 +341,7 @@ fn native_stark_proves_unary_direct_mix_and_binds_gas_reads_and_jump_artifact() 
 
 #[test]
 fn coherent_unary_banks_and_result_cannot_replace_the_canonical_source_read() {
-    for opcode in [
-        wide::arithmetic::NEG,
-        wide::arithmetic::NOT,
-        wide::system::GETGAS,
-    ] {
+    for opcode in [wide::arithmetic::NEG, wide::arithmetic::NOT] {
         let word = enc::encode_rr(opcode, 6, 6, 255);
         let (segment, records) = recorded(&[word], 1, &[(6, 11), (255, 37)], 1_000);
         let selected = family(word).unwrap();
@@ -392,7 +370,7 @@ fn coherent_unary_banks_and_result_cannot_replace_the_canonical_source_read() {
         .unwrap();
         let mut rows = changed.witness_rows(&forged).unwrap();
         // Every bank and the public output agree on the false source. Their
-        // internal arithmetic is valid; canonical register/gas read links fail.
+        // internal arithmetic is valid; canonical register read links fail.
         replace_auxiliary_sources(&mut rows[0], word, left, right);
         rows[0][RESULT..RESULT + 2].copy_from_slice(&halves(result));
         assert!(rejects(&changed, &rows));

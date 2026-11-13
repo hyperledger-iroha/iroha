@@ -265,6 +265,11 @@ impl Projection {
                 &row.failure_root,
                 &row.completions,
             ),
+            // A governance block-start row runs no trigger and carries no beacon input.
+            ExecutionOutputV1::GovernanceBlockStart(_) => {
+                self.count("governance_block_start");
+                return Ok(());
+            }
         };
         self.count(source);
         let occurrence = norito::json!({
@@ -1005,7 +1010,8 @@ mod tests {
                         }
                         ExecutionOutputV1::NetworkWithLifecycle(_)
                         | ExecutionOutputV1::PipelineWithLifecycle(_)
-                        | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                        | ExecutionOutputV1::TimeWithLifecycle(_)
+                        | ExecutionOutputV1::GovernanceBlockStart(_) => {
                             panic!("fixture starts with non-lifecycle rows")
                         }
                     }

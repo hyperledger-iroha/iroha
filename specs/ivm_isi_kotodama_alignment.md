@@ -19,7 +19,7 @@ Terminology
 ## Current Mapping (As Implemented)
 
 ### IVM Instructions
-- Arithmetic, memory, control flow, crypto, vector, and ZK helpers are defined in `instruction.rs` and implemented in `ivm.rs`. These are self‑contained and deterministic; acceleration paths (SIMD/Metal/CUDA) have CPU fallbacks.
+- The 59 arithmetic, memory, control-flow, and host-call opcodes are defined in `instruction.rs` and implemented in `ivm.rs`. These are self‑contained and deterministic. Hashing, signature verification, and proof verification are syscalls; host-side acceleration paths (SIMD/Metal/CUDA) have CPU fallbacks.
 - System/host boundary is via `SCALL` (opcode 0x60). Numbers are listed in `syscalls.rs` and include world operations (register/unregister domain/account/asset, mint/burn/transfer, role/permission ops, triggers) plus helpers (`GET_PRIVATE_INPUT`, `COMMIT_OUTPUT`, `GET_MERKLE_PATH`, etc.).
 
 ### Host Layer
@@ -138,10 +138,9 @@ before state changes are committed.
 5. Determinism across acceleration paths
 
 Hardware-assisted paths keep deterministic CPU fallbacks, and blockchain-visible
-results must remain byte-for-byte identical across peers. `SETVL`,
-`PARBEGIN`, and `PAREND` are public deterministic hints/no-op markers in the
-current VM behavior; acceleration work must preserve the same observable trace
-semantics.
+results must remain byte-for-byte identical across peers. The instruction set
+has no vector or parallel-marker opcodes: acceleration exists only behind
+host-side helpers and must preserve the same observable trace semantics.
 
 6. Kotodama language surface vs. ledger semantics
 

@@ -1761,6 +1761,26 @@ fn execute_propose(
     authority: &AccountId,
     instruction: &MultisigPropose,
 ) -> Result<(), ValidationFail> {
+    execute_propose_with_consent(state_transaction, authority, instruction, false)
+}
+
+/// The distinct signed opt-in uses the ordinary proposal authority and occurrence checks.
+pub(crate) fn execute_propose_current(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &MultisigPropose,
+) -> Result<(), ValidationFail> {
+    crate::runtime::deferred_consent::require_enabled(state_transaction)
+        .map_err(ValidationFail::InstructionFailed)?;
+    execute_propose_with_consent(state_transaction, authority, instruction, true)
+}
+
+fn execute_propose_with_consent(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &MultisigPropose,
+    current_bindings: bool,
+) -> Result<(), ValidationFail> {
     crate::runtime::ironwood::admission::instructions(
         &instruction.instructions,
         state_transaction.world.runtime_selection.get(),
@@ -1836,7 +1856,24 @@ fn execute_propose(
         expires_at_ms,
         approvals: BTreeSet::from([authority.clone()]),
     };
-    store_multisig_proposal_state(state_transaction, &state)
+    let consent = crate::runtime::deferred_consent::prepare_multisig(
+        state_transaction,
+        &state.multisig_account_id,
+        &state.instructions,
+        current_bindings,
+    )
+    .map_err(ValidationFail::InstructionFailed)?;
+    store_multisig_proposal_state(state_transaction, &state)?;
+    if let Some(consent) = consent {
+        state_transaction.world.runtime_deferred_consents.insert(
+            crate::runtime::deferred_consent::multisig_key(
+                &state.multisig_account_id,
+                state.proposal_id.as_bytes(),
+            ),
+            consent,
+        );
+    }
+    Ok(())
 }
 fn execute_approve(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -1883,6 +1920,13 @@ fn execute_approve(
             MultisigApprovalOutcomeStatusV1::NotExecuted,
         );
     }
+    let expectation = crate::runtime::deferred_consent::check_multisig(
+        state_transaction,
+        &account,
+        proposal.proposal_id.as_bytes(),
+        &proposal.instructions,
+    )
+    .map_err(ValidationFail::InstructionFailed)?;
     upsert_subject_approval(&mut proposal.approvals, authority.clone());
     if approved_weight_by_subject(&spec, &proposal.approvals) < u32::from(spec.quorum.get()) {
         store_multisig_proposal_state(state_transaction, &proposal)?;
@@ -1907,26 +1951,30 @@ fn execute_approve(
         &execution_id,
     )?;
     let executor = state_transaction.world.executor.clone();
-    let result = (|| {
-        maybe_store_terminal_proposal_state(
-            state_transaction,
-            &proposal,
-            MultisigProposalTerminalStatus::Finalized,
-            &instruction.account,
-        )?;
-        prune_down(state_transaction, &account, &instruction.proposal_id);
-        for inner in &proposal.instructions {
-            executor.execute_instruction(state_transaction, &account, inner)?;
-        }
-        store_multisig_approval_outcome(
-            state_transaction,
-            &instruction.account,
-            &account,
-            &instruction.proposal_id,
-            &instruction.instructions_hash,
-            MultisigApprovalOutcomeStatusV1::Executed,
-        )
-    })();
+    let result = crate::runtime::deferred_consent::with_scope(
+        state_transaction,
+        expectation,
+        |state_transaction| {
+            maybe_store_terminal_proposal_state(
+                state_transaction,
+                &proposal,
+                MultisigProposalTerminalStatus::Finalized,
+                &instruction.account,
+            )?;
+            prune_down(state_transaction, &account, &instruction.proposal_id);
+            for inner in &proposal.instructions {
+                executor.execute_instruction(state_transaction, &account, inner)?;
+            }
+            store_multisig_approval_outcome(
+                state_transaction,
+                &instruction.account,
+                &account,
+                &instruction.proposal_id,
+                &instruction.instructions_hash,
+                MultisigApprovalOutcomeStatusV1::Executed,
+            )
+        },
+    );
     finish_multisig_deferred_execution(
         &mut state_transaction.multisig_deferred_execution_stack,
         &execution_id,
@@ -2102,6 +2150,10 @@ fn prune_down(
     account: &AccountId,
     proposal_id: &MultisigProposalId,
 ) {
+    crate::runtime::deferred_consent::remove(
+        state_transaction,
+        crate::runtime::deferred_consent::multisig_key(account, proposal_id.as_bytes()),
+    );
     state_transaction
         .world
         .smart_contract_state
@@ -3171,6 +3223,7 @@ mod tests {
     }
     include!("multisig/core_execution_tests.rs");
     include!("multisig/tests/occurrence.rs");
+    include!("multisig/tests/deferred_consent.rs");
     fn runtime_state(
         world: World,
         chain_id: ChainId,

@@ -6,7 +6,7 @@ use iroha_data_model::{
     Level,
     isi::{InstructionBox, Log},
     privacy::{
-        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{Executable, FeePaymentIntent, TransactionBuilder, signed_attachments::*},
 };
@@ -19,7 +19,8 @@ pub fn request(network: NetworkId, wallet: AccountId) -> SubmitPrivacyZkX509Cert
         .iter()
         .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
-    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(mut statement) =
+    // The exact-12 fixture archives the frozen wire statement schema.
+    let PrivacyStatementV1::IrohaZkX509StarkP256V1(mut statement) =
         norito::decode_canonical(&row.statement_norito).unwrap()
     else {
         panic!("typed X.509 row")

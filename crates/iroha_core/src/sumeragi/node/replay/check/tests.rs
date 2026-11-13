@@ -356,6 +356,63 @@ fn the_upgrade_checkpoint_names_the_block_kura_stores_at_its_height() {
 }
 
 #[test]
+fn copied_store_remembers_its_runtime_floor_without_adoption_configuration() {
+    run(|| {
+        let (chain, seed, _) = fixture();
+        let floor = UpgradeCheckpointV1 {
+            height: 2,
+            block_hash: chain.kura().get_block_hash(index(2)).unwrap(),
+        };
+        chain.kura().record_history_boundary(&floor).unwrap();
+        let copied = copy(&chain, &seed).unwrap();
+        assert_eq!(copied.upgrade_checkpoint(), None);
+        assert_eq!(copied.history_boundary(), Some(floor));
+        let source = inventory(&chain.kura().store_root());
+        let destination = genesis_destination(&chain, &seed);
+        destination.kura().record_history_boundary(&floor).unwrap();
+        let mut replayed = Vec::new();
+        let error = check_replay(inputs(&seed, destination), &mut |height, _| {
+            replayed.push(height);
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ReplayCheckError::BelowCheckpoint {
+                start: 0,
+                checkpoint: 2
+            }
+        ));
+        assert!(replayed.is_empty());
+        assert_eq!(source, inventory(&chain.kura().store_root()));
+    });
+}
+
+#[test]
+fn normal_startup_rejects_empty_state_below_the_store_boundary() {
+    run(|| {
+        let (chain, seed, _) = fixture();
+        let destination = genesis_destination(&chain, &seed);
+        destination
+            .kura()
+            .record_history_boundary(&UpgradeCheckpointV1 {
+                height: 2,
+                block_hash: chain.kura().get_block_hash(index(2)).unwrap(),
+            })
+            .unwrap();
+        let result = crate::sumeragi::node::prepare(PrepareInputs {
+            state: destination,
+            events: tokio::sync::broadcast::channel(1).0,
+            genesis: None,
+            genesis_account: seed.genesis_account.clone(),
+            consensus_mode: seed.consensus_mode,
+        });
+        assert!(
+            matches!(result, Err(NodeError::Input(message)) if message.contains("below runtime history boundary 2"))
+        );
+    });
+}
+
+#[test]
 fn differences_follow_report_order_and_fall_back_to_the_whole_result() {
     run(|| {
         let (chain, _, _) = fixture();

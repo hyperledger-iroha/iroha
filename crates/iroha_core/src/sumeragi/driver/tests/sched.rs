@@ -1084,6 +1084,76 @@ fn cached_result_mismatch_diverges_without_reexecution() {
     assert!(rig.events.iter().any(|event| matches!(event, Event::ApplyDiverged { local_result, .. } if *local_result == result)));
 }
 
+/// Checkpoint IO retries the same certified, already appended result on bounded backoff.
+#[test]
+fn checkpoint_durability_deferral_keeps_original_execution_and_append() {
+    use crate::{snapshot::CheckpointDeferral, sumeragi::driver::traits::PublicationDeferral};
+
+    for reason in [
+        CheckpointDeferral::WorkerStarting { height: 1 },
+        CheckpointDeferral::QueueFull { height: 1 },
+        CheckpointDeferral::WorkerUnavailable { height: 1 },
+        CheckpointDeferral::DurabilityPending { height: 1 },
+        CheckpointDeferral::Persistence {
+            height: 1,
+            kind: std::io::ErrorKind::PermissionDenied,
+        },
+    ] {
+        let mut rig = Rig::new();
+        let (block, block_hash, result) = child(1, (G, RG), 1);
+        rig.sched.execute(1, block_hash, block.clone(), false);
+        rig.drain();
+        assert_eq!(rig.exec.executions(&block_hash), 1);
+        let certificate = commit_qc(&block, result);
+        rig.sched.commit(block.clone(), certificate.clone());
+        loop {
+            let operation = rig.start().expect("original publication");
+            if let ExecOp::Commit(commit) = operation {
+                assert_eq!(commit.block, block);
+                assert_eq!(commit.qc, certificate);
+                rig.sched.done(
+                    rig.now,
+                    ExecDone::Committed(Err(PublicationError::Deferred(
+                        PublicationDeferral::Checkpoint(reason),
+                    ))),
+                );
+                break;
+            }
+            rig.finish(operation);
+        }
+        assert_eq!(rig.blocks.height(), 1, "append is already durable");
+        assert_eq!(rig.sched.applied(), 0);
+        assert!(rig.sched.halted().is_none());
+        assert!(matches!(
+            rig.sched.preparation_refusal(),
+            Some(PublicationDeferral::Checkpoint(actual)) if *actual == reason
+        ));
+        let retry_at = rig.sched.wakeup();
+        assert!(retry_at > rig.now && retry_at < Millis::MAX);
+        assert!(rig.sched.next(retry_at - 1).is_none());
+        assert!(rig.sched.take_events().iter().all(|event| !matches!(
+            event,
+            Event::BlockApplied { .. } | Event::PublicationRecoveryRequired { .. }
+        )));
+
+        rig.now = retry_at;
+        let prepare = rig.start().expect("same owner becomes retryable");
+        let ExecOp::Prepare(ref commit) = prepare else {
+            panic!("retry re-prepares the retained original publication")
+        };
+        assert_eq!(commit.block, block);
+        assert_eq!(commit.qc, certificate);
+        rig.finish(prepare);
+        let commit = rig.start().expect("durable append is retained");
+        assert!(matches!(commit, ExecOp::Commit(_)));
+        assert_eq!(rig.finish(commit), Some(1));
+        assert_eq!(rig.exec.executions(&block_hash), 1, "no re-execution");
+        assert_eq!(rig.blocks.height(), 1);
+        assert_eq!(rig.sched.applied(), 1);
+        assert!(rig.sched.preparation_refusal().is_none());
+    }
+}
+
 /// The driver transports the original typed application result verbatim. Refusal must not
 /// manufacture a successor from the last committee or publish a partial boundary.
 #[test]

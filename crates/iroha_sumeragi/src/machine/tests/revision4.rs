@@ -628,6 +628,58 @@ fn det_r4_request_proposal_conditions() {
     }
 }
 
+/// A signed original-leader manifest recovers a lost proposal before vote escalation.
+/// Foreign, stale and forged metadata cannot authorize even this bounded request.
+#[test]
+fn det_l37_manifest_requests_missing_proposal_without_payload_custody() {
+    let mut h = H::new(4, pick::at(2, 0, 1));
+    h.commit_with(0, b"parent");
+    assert!(!h.core.late_entry);
+    let leader = h.leader(0);
+    let leader_key = h.key_at(leader);
+    let body = h.block(0, b"payload");
+    let original = manifest(&body);
+    let requests = |out: &[Action]| {
+        statuses(out)
+            .into_iter()
+            .filter(|(to, status)| *to == vec![leader_key.clone()] && status.want_proposal)
+            .count()
+    };
+    for field in 0..8 {
+        let mut invalid = original.clone();
+        match field {
+            0 => invalid.header.height += 1,
+            1 => invalid.header.origin_view += 1,
+            2 => invalid.header.parent_hash = Hash32::ZERO,
+            3 => invalid.header.parent_result = Hash32::ZERO,
+            4 => invalid.header.instance = Hash32::ZERO,
+            5 => invalid.header.epoch.context = Hash32::ZERO,
+            6 => invalid.header.proposer = h.my_idx(),
+            _ => invalid.header.payload_hash = Hash32::ZERO,
+        }
+        let out = h.deliver(leader, WireMessage::PayloadManifest(invalid));
+        assert_eq!(requests(&out), 0, "invalid manifest field {field}");
+        assert!(!h.core.manifest_hint && !h.core.asked);
+    }
+    let out = h.deliver(leader, WireMessage::PayloadManifest(original.clone()));
+    assert_eq!(requests(&out), 1);
+    assert!(h.core.manifest_hint && h.core.asked);
+    assert!(h.core.proposal.is_none());
+    assert!(h.core.wants.is_empty());
+    assert!(h.core.exec.is_empty());
+    assert!(out.iter().all(|action| !matches!(
+        action,
+        Action::AcquirePayload { .. } | Action::Execute { .. } | Action::PersistSafety(_)
+    )));
+    let out = h.deliver(leader, WireMessage::PayloadManifest(original.clone()));
+    assert_eq!(requests(&out), 0, "one immediate request per view");
+    h.enter_view(1);
+    assert!(!h.core.manifest_hint);
+    let out = h.deliver(leader, WireMessage::PayloadManifest(original));
+    assert_eq!(requests(&out), 0, "the previous view's metadata is stale");
+    assert!(!h.core.manifest_hint);
+}
+
 /// §6.11 re-push (4.1): the leader re-sends its proposal at once to a recipient asking for it,
 /// once per recipient per view, never to a non-recipient or to one that reports the proposal;
 /// the request is honoured even inside the per-peer rate limit.

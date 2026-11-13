@@ -260,7 +260,9 @@ IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_REQUIRE_NETWORK=1 TEST_NETWORK_BIN_IROHAD="$P
 ```
 
 No staking reward can exist on these fresh networks; both cases assert that the
-node refuses to prepare a reward claim. Positive funded conversion and claims
+node refuses to prepare a reward claim with its typed HTTP 409
+`staking_preparation_refused` and the absent-entitlement reason. Positive funded
+conversion and claims
 need an authentically aged network
 (`specs/staking_validator_completion.md`, "Real-network reward gate").
 

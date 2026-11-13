@@ -39,7 +39,7 @@ fn each_native_settlement_lowers_both_dynamic_revisions_as_checked_u64() {
             .iter()
             .map(|chunk| u32::from_le_bytes(*chunk))
             .filter(|word| instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM)
-            .map(encoding::wide::decode_syscallx)
+            .map(encoding::wide::decode_scall)
             .collect();
         assert_eq!(calls.iter().filter(|number| **number == syscall).count(), 1);
         assert_eq!(

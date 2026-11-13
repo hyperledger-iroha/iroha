@@ -14,10 +14,7 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn decode_program() -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

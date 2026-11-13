@@ -416,6 +416,15 @@ pub fn benchmark() -> Value {
             input[1] = 4;
         }
         let expected = oracle(&input);
+        assert!(
+            input[HEADER..]
+                .chunks_exact(STRIDE)
+                .zip(expected[HEADER..].chunks_exact(STRIDE))
+                .all(|(before, after)| {
+                    (before[XOR], before[OWNER]) == (after[XOR], after[OWNER])
+                }),
+            "hazard damage must leave every XOR and ownership sentinel unchanged"
+        );
         if weakened {
             assert_eq!(expected[6], 32, "four unit deaths per each of eight owners");
             assert_eq!(expected[7], 4, "one building death per each of four owners");

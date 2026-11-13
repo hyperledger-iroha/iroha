@@ -181,7 +181,7 @@ fn completed_erase_public_backing_keeps_original_zero_initialization_contract() 
 #[test]
 #[ignore = "complete 32/128/256 MiB pooled acquire, write, read, erase lifecycle; optimized build"]
 fn completed_erase_complete_lifecycle_cost() {
-    assert!(!cfg!(debug_assertions));
+    require_optimized_build("use an optimized build");
     for threads in [1, 4, 8] {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -276,7 +276,7 @@ fn required_metal_completed_readonly_erase_complete_cost() {
         GoldilocksTransformDirectionV1 as Direction, PreparedGoldilocksColumnsOutcomeV1 as Outcome,
         prepare_goldilocks_prefix_columns_v1, transform_goldilocks_columns_v1,
     };
-    assert!(!cfg!(debug_assertions));
+    require_optimized_build("use an optimized build");
     select_metal_device().expect("actual Metal required");
     const ROWS: usize = 1 << 22;
     const PREFIX: usize = (1 << 19) + 1816;

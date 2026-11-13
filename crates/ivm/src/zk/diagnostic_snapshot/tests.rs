@@ -11,7 +11,6 @@ use std::{
 
 struct Fixture {
     states: Vec<RegisterState>,
-    constraints: Vec<Constraint>,
     memory: Vec<MemEvent>,
     registers: Vec<RegEvent>,
     steps: Vec<StepEntry>,
@@ -22,13 +21,8 @@ impl Fixture {
         Self {
             states: vec![RegisterState {
                 pc: 4,
-                gpr: [0xA5A5; 256],
-                tags: [true; 256],
-            }],
-            constraints: vec![Constraint::Range {
-                reg: 7,
-                bits: 64,
-                cycle: 0,
+                gpr: [0xA5A5; crate::parallel::REGISTER_COUNT],
+                tags: [true; crate::parallel::REGISTER_COUNT],
             }],
             memory: vec![
                 MemEvent::Load {
@@ -72,7 +66,6 @@ impl Fixture {
     fn source(&self) -> DiagnosticTraceSource<'_> {
         DiagnosticTraceSource {
             registers: DiagnosticRegisterSource::States(&self.states),
-            constraints: &self.constraints,
             memory_events: &self.memory,
             register_events: &self.registers,
             steps: &self.steps,
@@ -85,10 +78,9 @@ fn complete_nested_demand_refuses_one_byte_short_before_copy_and_retries_exactly
     let fixture = Fixture::new();
     let source = fixture.source();
     let expected = size_of::<RegisterState>()
-        + size_of::<Constraint>()
         + 2 * size_of::<MemoryRow>()
         + 2 * size_of::<RegisterRow>()
-        + 21 * size_of::<[u8; 32]>()
+        + (5 + 2 * crate::REGISTER_MERKLE_PATH_DEPTH) * size_of::<[u8; 32]>()
         + size_of::<StepEntry>();
     assert_eq!(
         source.allocation_plan().unwrap().requested_bytes(),
@@ -100,7 +92,7 @@ fn complete_nested_demand_refuses_one_byte_short_before_copy_and_retries_exactly
         Err(VMError::AllocationDeferred(_))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
-    assert_eq!(fixture.states[0].gpr, [0xA5A5; 256]);
+    assert_eq!(fixture.states[0].gpr, [0xA5A5; crate::parallel::REGISTER_COUNT]);
     assert_eq!(memory_parts(&fixture.memory[1]).4, &[[4; 32]; 3]);
     budget.set_limit_bytes(expected);
     let snapshot = source.try_snapshot(&budget).unwrap();
@@ -147,10 +139,10 @@ fn delta_capture_expands_without_changing_source() {
     let budget = AllocationBudget::new(64 * 1024);
     let mut rows = super::DeltaTraceLog::new(Some(&budget));
     budget.with_deferred_refund_notifications(|scope| {
-        rows.prepare_batch(2, 256, 1, Some(scope)).unwrap();
+        rows.prepare_batch(2, crate::parallel::REGISTER_COUNT, 1, Some(scope)).unwrap();
     });
-    let mut gpr = [0; 256];
-    let mut tags = [false; 256];
+    let mut gpr = [0; crate::parallel::REGISTER_COUNT];
+    let mut tags = [false; crate::parallel::REGISTER_COUNT];
     gpr[7] = 21;
     tags[7] = true;
     rows.record_reserved(4, gpr, tags);
@@ -159,7 +151,6 @@ fn delta_capture_expands_without_changing_source() {
     let retained = budget.reserved_bytes();
     let snapshot = DiagnosticTraceSource {
         registers: DiagnosticRegisterSource::Deltas(&rows),
-        constraints: &[],
         memory_events: &[],
         register_events: &[],
         steps: &[],
@@ -188,9 +179,9 @@ fn original_state_backing_erases_registers_and_tags_before_credit_refund() {
         snapshot.states.as_slice().as_ptr().cast(),
         Layout::array::<RegisterState>(1).unwrap(),
         offset_of!(RegisterState, gpr),
-        size_of::<[u64; 256]>(),
+        size_of::<[u64; crate::parallel::REGISTER_COUNT]>(),
     );
-    observer::watch_second_span(offset_of!(RegisterState, tags), size_of::<[bool; 256]>());
+    observer::watch_second_span(offset_of!(RegisterState, tags), size_of::<[bool; crate::parallel::REGISTER_COUNT]>());
     drop(snapshot);
     observer::assert_erased_and_freed();
     assert_eq!(observer::original_credit_at_free(), total);
@@ -307,11 +298,14 @@ fn checker_rejects_extra_missing_and_out_of_range_register_paths() {
         .register_events()
         .next()
         .expect("real authenticated register event");
-    assert_eq!(event.path.len(), 8);
+    assert_eq!(event.path.len(), crate::REGISTER_MERKLE_PATH_DEPTH);
     for (index, path) in [
-        (event.index, event.path[..7].to_vec()),
+        (
+            event.index,
+            event.path[..crate::REGISTER_MERKLE_PATH_DEPTH - 1].to_vec(),
+        ),
         (event.index, [event.path, &[[8; 32]]].concat()),
-        (256, event.path.to_vec()),
+        (crate::parallel::REGISTER_COUNT, event.path.to_vec()),
     ] {
         let altered = DiagnosticRegisterEvent {
             index,

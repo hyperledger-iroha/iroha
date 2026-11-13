@@ -1034,9 +1034,19 @@ impl BuildDriver {
         }
         let manifest_text = std::str::from_utf8(&manifest_bytes).ok()?;
         let manifest: ContractManifest = json::from_str(manifest_text).ok()?;
-        if manifest.code_hash.as_ref() != Some(&artifact_hash) {
+        if manifest.code_hash.as_ref() != Some(&artifact_hash)
+            || manifest.abi_hash
+                != Some(Hash::prehashed(crate::syscalls::compute_abi_hash(
+                    self.session.host_policy(),
+                )))
+        {
             return None;
         }
+        crate::metadata::ProgramMetadata::parse_header_for_policy(
+            &artifact,
+            self.session.host_policy(),
+        )
+        .ok()?;
         if !valid_sidecar(&source_map, "source-map", &record.artifact_hash)
             || !valid_sidecar(&budget, "budget", &record.artifact_hash)
             || interface
@@ -1069,6 +1079,18 @@ impl BuildDriver {
         if output.manifest.code_hash.as_ref() != Some(&artifact_hash) {
             return Err(BuildError::Internal(
                 "compiler manifest hash does not match deployable artifact".to_owned(),
+            ));
+        }
+        let policy = self.session.host_policy();
+        crate::metadata::ProgramMetadata::parse_header_for_policy(&output.artifact, policy)
+            .map_err(|error| {
+                BuildError::Internal(format!("compiler artifact profile mismatch: {error}"))
+            })?;
+        if output.manifest.abi_hash
+            != Some(Hash::prehashed(crate::syscalls::compute_abi_hash(policy)))
+        {
+            return Err(BuildError::Internal(
+                "compiler manifest ABI hash differs from its selected host profile".into(),
             ));
         }
         let artifact_hash_text = artifact_hash.to_string();
@@ -2365,6 +2387,65 @@ mod tests {
         assert_eq!(fs::read(&path).expect("read repaired output"), b"repaired");
         fs::remove_dir_all(root).expect("remove bounded cache root");
     }
+    #[test]
+    fn named_host_build_cache_is_separate_and_rejects_an_abi_manifest_substitution() {
+        let root = temp_root("named-host-profile");
+        let source = "seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }";
+        let named = BuildDriver::new(
+            CompilerSession::new(crate::compiler::CompilerOptions {
+                host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+                ..Default::default()
+            }),
+            "profile-toolchain",
+        );
+        let first = named.build_source(request(&root, source)).unwrap();
+        assert_eq!(first.status, BuildStatus::Built);
+        let verified =
+            ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&first.artifact)
+                .unwrap();
+        assert_eq!(
+            verified.syscall_policy,
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        assert_eq!(
+            named.build_source(request(&root, source)).unwrap().status,
+            BuildStatus::Fresh
+        );
+        let baseline = BuildDriver::new(CompilerSession::default(), "profile-toolchain");
+        let replaced = baseline.build_source(request(&root, source)).unwrap();
+        assert_eq!(replaced.status, BuildStatus::Built);
+        assert_ne!(replaced.artifact_hash, first.artifact_hash);
+        assert_eq!(
+            replaced.manifest.abi_hash,
+            Some(Hash::prehashed(crate::syscalls::compute_abi_hash(
+                crate::SyscallPolicy::AbiV1
+            )))
+        );
+        assert_eq!(
+            named.build_source(request(&root, source)).unwrap().status,
+            BuildStatus::Built
+        );
+        let mut bad = named
+            .session
+            .build(CompileRequest {
+                source,
+                source_name: Some("named.ko"),
+            })
+            .unwrap();
+        bad.manifest.abi_hash = replaced.manifest.abi_hash;
+        assert!(
+            named
+                .finish_build(
+                    bad,
+                    &request(&root, source).layout,
+                    "mismatched",
+                    PublishMode::Write
+                )
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn authenticated_noop_build_writes_nothing_and_tampering_rebuilds() {
         let root = temp_root("fresh");

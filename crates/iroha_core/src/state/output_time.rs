@@ -101,6 +101,10 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             self.skip_uninvoked(ExecutionOutputPhase::Time, 1)?;
             return Ok(false);
         };
+        if !crate::runtime::deferred_consent::trigger_ready(&self.state.world, id, height) {
+            self.skip_uninvoked(ExecutionOutputPhase::Time, 1)?;
+            return Ok(false);
+        }
         let source = if self.lifecycle {
             Some(lifecycle::internal_source(
                 self.state,

@@ -23,9 +23,9 @@ fn serial<F: PastaField>(den: &mut [F], prefix: &mut [F]) {
 fn interleaved<F: PastaField>(den: &mut [F], prefix: &mut [F]) {
     let mut acc = [F::ONE; 4];
     for (ds, ps) in den.chunks(4).zip(prefix.chunks_mut(4)) {
-        for j in 0..ds.len() {
-            ps[j] = acc[j];
-            acc[j] *= ds[j];
+        for ((p, a), d) in ps.iter_mut().zip(acc.iter_mut()).zip(ds) {
+            *p = *a;
+            *a *= d;
         }
     }
     let lo = acc[0] * acc[1];

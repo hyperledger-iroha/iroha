@@ -971,6 +971,119 @@ class EstimatorRecordTest(unittest.TestCase):
                 problems = MODEL.estimator_record_problems(root)
             self.assertTrue(any(expected in problem for problem in problems), (expected, problems))
 
+    def test_an_instance_cannot_substitute_its_sample_count_or_modulus(self) -> None:
+        """A record's QP:oo identity binds the complete unlimited-sample instance."""
+        record = self.record()
+        original = next(
+            item for item in record["INSTANCE"]
+            if item["profile"] == AFFINE and item["instance"] == "QP:oo"
+        )
+        p = MODEL.profile(AFFINE, MODEL.CANDIDATES[AFFINE])
+        substitutions = (
+            ({"samples": "n"}, "sample count"),
+            ({"samples": None}, "sample count"),
+            ({"plaintext_modulus": 2}, "plaintext modulus"),
+            ({"plaintext_modulus": None}, "plaintext modulus"),
+            ({"modulus": "Q"}, "modulus kind"),
+            # A self-consistent Q-only payload still cannot stand in for QP.
+            ({"modulus": "Q", "q": str(p.modulus(p.top))}, "the modulus or the dimension"),
+            ({"modulus": None}, "modulus kind"),
+        )
+        for substitution, expected in substitutions:
+            with self.subTest(substitution=substitution), ScratchRoot() as root:
+                path = root / MODEL.ESTIMATOR_OUTPUT
+                lines = path.read_text().splitlines(keepends=True)
+                for index, line in enumerate(lines):
+                    if line.startswith("INSTANCE ") and json.loads(line[len("INSTANCE "):]) == original:
+                        item = dict(original, **substitution)
+                        lines[index] = "INSTANCE " + json.dumps(item, sort_keys=True) + "\n"
+                path.write_text("".join(lines))
+                problems = MODEL.estimator_record_problems(root)
+                self.assertTrue(any(expected in problem for problem in problems), problems)
+
+    def test_finished_costs_must_be_nonnegative_finite_numbers_or_explicit_infinity(self) -> None:
+        """Malformed JSON numeric values cannot turn into a security estimate."""
+        tracked = (ROOT / MODEL.ESTIMATOR_OUTPUT).read_text().splitlines(keepends=True)
+        index = next(index for index, line in enumerate(tracked) if line.startswith("RESULT "))
+        original = json.loads(tracked[index][len("RESULT "):])
+        for cost in (True, False, float("nan"), float("inf"), -float("inf"), -1, None):
+            with self.subTest(cost=cost), ScratchRoot() as root:
+                changed = dict(original, status="ok", log2_rop=cost)
+                lines = list(tracked)
+                lines[index] = "RESULT " + json.dumps(changed, sort_keys=True) + "\n"
+                (root / MODEL.ESTIMATOR_OUTPUT).write_text("".join(lines))
+                problems = MODEL.estimator_record_problems(root)
+                self.assertTrue(any("no valid cost" in problem for problem in problems), problems)
+
+    def test_duplicate_records_cannot_replace_an_invocation_result(self) -> None:
+        """Retries remain separate invocations and bind the same complete instance."""
+        original = self.record()
+        instance = original["INSTANCE"][0]
+        result = original["RESULT"][0]
+        for kind, item in (("INSTANCE", instance), ("RESULT", result)):
+            line = kind + " " + json.dumps(item) + "\n"
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(ValueError, f"duplicate {kind}"):
+                    MODEL.read_estimator_record('RUN {}\n' + line + line + 'END {}\n')
+                retry = MODEL.read_estimator_record(
+                    'RUN {}\n' + line + 'END {}\nRUN {}\n' + line + 'END {}\n'
+                )
+                self.assertEqual(retry[kind], [item, item])
+        first = "INSTANCE " + json.dumps(instance) + "\n"
+        changed = "INSTANCE " + json.dumps(dict(instance, samples="substituted")) + "\n"
+        with self.assertRaisesRegex(ValueError, "conflicting INSTANCE"):
+            MODEL.read_estimator_record('RUN {}\n' + first + 'END {}\nRUN {}\n' + changed + 'END {}\n')
+        for line in ('RESULT []\n', 'RESULT {"profile": []}\n'):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                MODEL.read_estimator_record('RUN {}\n' + line + 'END {}\n')
+
+    def test_estimator_records_must_belong_to_an_open_invocation(self) -> None:
+        """A source-pinned RUN cannot lend provenance to an orphan result."""
+        result = "RESULT " + json.dumps(self.record()["RESULT"][0]) + "\n"
+        for text in (result + 'RUN {}\nEND {}\n', 'RUN {}\nEND {}\n' + result):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "outside an open invocation"):
+                MODEL.read_estimator_record(text)
+        tracked = (ROOT / MODEL.ESTIMATOR_OUTPUT).read_text().splitlines(keepends=True)
+        index = next(index for index, line in enumerate(tracked) if line.startswith("RESULT "))
+        orphan = tracked.pop(index)
+        with ScratchRoot() as root:
+            (root / MODEL.ESTIMATOR_OUTPUT).write_text(orphan + "".join(tracked))
+            problems = MODEL.estimator_record_problems(root)
+            self.assertTrue(any("outside an open invocation" in problem for problem in problems), problems)
+
+    def test_result_projection_fields_are_validated_before_summary_building(self) -> None:
+        """Malformed completed or interrupted results report a defect instead of crashing."""
+        tracked = (ROOT / MODEL.ESTIMATOR_OUTPUT).read_text().splitlines(keepends=True)
+        index = next(index for index, line in enumerate(tracked) if line.startswith("RESULT "))
+        original = json.loads(tracked[index][len("RESULT "):])
+        substitutions = (
+            ({"cost": None}, "no cost dictionary"),
+            ({"cost": []}, "no cost dictionary"),
+            ({"status": None}, "unknown status"),
+            ({"status": "timeout", "message": None}, "no reason"),
+            ({"seconds": None}, "no valid elapsed time"),
+            ({"seconds": True}, "no valid elapsed time"),
+            ({"seconds": float("nan")}, "no valid elapsed time"),
+        )
+        for substitution, expected in substitutions:
+            with self.subTest(substitution=substitution), ScratchRoot() as root:
+                lines = list(tracked)
+                lines[index] = "RESULT " + json.dumps(dict(original, **substitution)) + "\n"
+                (root / MODEL.ESTIMATOR_OUTPUT).write_text("".join(lines))
+                problems = MODEL.estimator_record_problems(root)
+                self.assertTrue(any(expected in problem for problem in problems), problems)
+                with self.assertRaisesRegex(ValueError, expected):
+                    MODEL.estimator_block(root)
+
+    def test_rederive_refuses_bad_evidence_before_writing_outputs(self) -> None:
+        """The CLI reports malformed evidence without replacing its tracked outputs."""
+        with patch.object(MODEL, "rederive", side_effect=ValueError("invalid estimator record")), \
+                patch.object(MODEL, "write_outputs") as write, \
+                redirect_stderr(StringIO()) as errors:
+            self.assertEqual(MODEL.main(["--rederive", "--write"]), 1)
+            self.assertIn("invalid estimator record", errors.getvalue())
+            write.assert_not_called()
+
     def test_every_estimator_number_is_a_result_line_of_the_record(self) -> None:
         estimator = tracked_summary()["security_estimate"]["lattice_estimator"]
         results = MODEL.estimator_results(self.record())

@@ -53,7 +53,6 @@ fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10_000,
         abi_version: 1,
     }
@@ -160,10 +159,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
-            ),
+            encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
         ],
     );
     // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
@@ -302,10 +298,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -313,7 +306,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10_000,
         abi_version: 1,
     };

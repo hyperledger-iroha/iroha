@@ -1,10 +1,10 @@
 //! Executor authorization, execution and custody regression tests.
+#[path = "executor_content_publish_permission_tests.rs"]
+mod content_publish_permission;
 #[path = "executor_custody_tests.rs"]
 mod custody_upgrade;
 #[path = "executor_restricted_dataspace_read_tests.rs"]
 mod restricted_dataspace_read;
-#[path = "executor_content_publish_permission_tests.rs"]
-mod content_publish_permission;
 
 use super::*;
 use crate::{
@@ -13180,7 +13180,6 @@ fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 100_000,
         abi_version: 1,
     };
@@ -13528,7 +13527,6 @@ fn contract_program_with_entrypoint_kind(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1_000_000,
         abi_version: 1,
     };
@@ -13591,17 +13589,13 @@ fn contract_program_with_private_input_entrypoint(
         version_major: 1,
         version_minor: 1,
         mode: ivm::ivm_mode::ZK,
-        vector_length: 0,
         max_cycles: 1_000_000,
         abi_version: 1,
     };
     let mut program = metadata.encode();
     program.extend_from_slice(&interface.encode_section());
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT).expect("fixture value fits u8"),
-        )
+        &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT)
         .to_le_bytes(),
     );
     program.extend_from_slice(&crate::ivm_test_support::unit_return());

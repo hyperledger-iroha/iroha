@@ -19,7 +19,7 @@ use ivm::{
 use std::collections::{BTreeMap, BTreeSet};
 fn program(syscall: u32) -> Vec<u8> {
     let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
-    program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    program.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
 }
@@ -34,7 +34,7 @@ fn zk_vm_for(syscall: u32, gas: u64) -> IVM {
     let mut metadata = ProgramMetadata::default_for(1, 1, 1);
     metadata.mode = ivm_mode::ZK;
     let mut program = metadata.encode();
-    program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    program.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(gas);
     vm.load_program(&program).expect("load ZK numeric program");
@@ -194,7 +194,7 @@ where
         .last_staged_syscall_context()
         .expect("baseline staged context")
         .charged();
-    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+    let instruction = ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALLX gas");
     let maximum_budget = instruction
         .checked_add(staged)
         .expect("bounded staged test budget");
@@ -1424,7 +1424,7 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         32 + u64::try_from(frame_bytes).expect("bounded frame")
     );
     let instruction_gas =
-        ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+        ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALLX gas");
     let phases = [
         SyscallMeteringPhase::Entry,
         SyscallMeteringPhase::PointerHeader,
@@ -1485,7 +1485,7 @@ fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
         context.phase_charge(SyscallMeteringPhase::OutputSerialization),
         4 * output_length_work(&result) + output_bytes + 2 * output_frame
     );
-    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+    let instruction = ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALLX gas");
     let hash_prefix = instruction
         + context.phase_charge(SyscallMeteringPhase::Entry)
         + context.phase_charge(SyscallMeteringPhase::PointerHeader)
@@ -1521,7 +1521,7 @@ fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
 fn entry_oog_precedes_staged_numeric_privacy_validation() {
     let syscall = syscalls::SYSCALL_INT_NEG;
     let instruction_gas =
-        ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+        ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALLX gas");
     let mut vm = zk_vm_for(
         syscall,
         instruction_gas + ivm::numeric_gas::NUMERIC_ENTRY_GAS - 1,
@@ -1779,7 +1779,7 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
         NumericFaultV1::ExactDivisionScaleOverflow.tag(),
     );
     let syscall = syscalls::SYSCALL_DECIMAL_DIV_ROUND;
-    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+    let instruction = ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALLX gas");
     let mut invalid = vm_for(
         syscall,
         instruction + ivm::numeric_gas::NUMERIC_ENTRY_GAS + 6,
@@ -2134,7 +2134,7 @@ fn assert_int_helper_gas_boundaries(
             })
         );
         assert_eq!(
-            ivm::cost_of(encoding::wide::encode_syscallx(syscall)),
+            ivm::cost_of(encoding::wide::encode_scall(syscall)),
             Some(5)
         );
         // One gas unit short of each independently known event must trap before
@@ -2489,7 +2489,7 @@ fn borrowed_numeric_outputs_keep_exact_frames_and_both_output_refusal_boundaries
                 context.phase_charge(SyscallMeteringPhase::OutputSerialization),
                 probe + byte_debit
             );
-            let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).unwrap();
+            let instruction = ivm::cost_of(encoding::wide::encode_scall(syscall)).unwrap();
             let prior_stages = context.charged() - probe - byte_debit;
             for (completed_output, next_debit) in [(0, probe), (probe, byte_debit)] {
                 let gas = instruction + prior_stages + completed_output + next_debit - 1;

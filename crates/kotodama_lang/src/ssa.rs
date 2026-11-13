@@ -2598,15 +2598,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         ResolveAccountAlias { alias, .. } => f(alias),
         Abs { src, .. } => f(src),
         Isqrt { src, .. } => f(src),
-        Poseidon2 { a, b, .. } => {
-            f(a);
-            f(b);
-        }
-        Poseidon6 { args, .. } => {
-            for temp in args {
-                f(temp);
-            }
-        }
         Pubkgen { src, .. } => f(src),
         Valcom { value, blind, .. } => {
             f(value);
@@ -2748,7 +2739,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         TupleGet { tuple, .. } => f(tuple),
         Copy { src, .. } => f(src),
         SetExecutionDepth { value } => f(value),
-        SetVl { value } => f(value),
         Call { args, .. } | CallMulti { args, .. } => {
             for arg in args {
                 f(arg);
@@ -3120,8 +3110,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::Mean { dest, .. }
         | ir::Instr::Isqrt { dest, .. }
         | ir::Instr::LoadVar { dest, .. }
-        | ir::Instr::Poseidon2 { dest, .. }
-        | ir::Instr::Poseidon6 { dest, .. }
         | ir::Instr::Pubkgen { dest, .. }
         | ir::Instr::Valcom { dest, .. }
         | ir::Instr::PrivateNumericValcom { dest, .. }
@@ -3242,7 +3230,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::TransferNft { .. }
         | ir::Instr::CreateNftsForAllUsers
         | ir::Instr::SetExecutionDepth { .. }
-        | ir::Instr::SetVl { .. }
         | ir::Instr::SetAccountDetail { .. }
         | ir::Instr::RegisterDomain { .. }
         | ir::Instr::RegisterAccount { .. }

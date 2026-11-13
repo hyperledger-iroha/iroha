@@ -1022,8 +1022,7 @@ fn lifecycle_v2_rejects_wrong_registration_position_mixed_coverage_and_extra_tou
             lifecycle_trace::check_occurrence(
                 &row,
                 &selected,
-                registered.0,
-                registered.1,
+                registered,
                 None,
                 fired.header().creation_time_ms,
                 "applied",
@@ -1151,8 +1150,7 @@ fn lifecycle_v2_authenticates_native_progress_success_retry_and_exhaustion() {
             lifecycle_trace::check_occurrence(
                 actual,
                 &selected,
-                registered.0,
-                registered.1,
+                registered,
                 None,
                 fired.header().creation_time_ms,
                 disposition,
@@ -1193,8 +1191,7 @@ fn lifecycle_v2_authenticates_native_progress_success_retry_and_exhaustion() {
             lifecycle_trace::check_occurrence(
                 &terminal,
                 &selected,
-                registered.0,
-                registered.1,
+                registered,
                 None,
                 fired.header().creation_time_ms,
                 "output_limit",
@@ -1209,8 +1206,7 @@ fn lifecycle_v2_authenticates_native_progress_success_retry_and_exhaustion() {
                 lifecycle_trace::check_occurrence(
                     &terminal,
                     &selected,
-                    registered.0,
-                    registered.1,
+                    registered,
                     None,
                     fired.header().creation_time_ms,
                     "output_limit",

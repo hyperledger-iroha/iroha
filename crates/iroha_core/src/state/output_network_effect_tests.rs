@@ -228,10 +228,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         wide::encode_literal(opcode::memory::LDLIT, 10, 0),
         wide::encode_literal(opcode::memory::LDLIT, 11, 1),
         wide::encode_literal(opcode::memory::LDLIT, 12, 2),
-        wide::encode_sys(
-            opcode::system::SCALL,
-            u8::try_from(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL).unwrap(),
-        ),
+        wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
         wide::encode_halt(),
     ] {
         program.extend_from_slice(&instruction.to_le_bytes());

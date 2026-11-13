@@ -4,7 +4,7 @@ use super::{ObserveLog, SERIAL, observe_log_requests, stop_log_requests};
 use iroha_allocation::AllocationBudget;
 use ivm::{
     IVM, VMError, VmTrapKind,
-    encoding::wide::{encode_halt, encode_syscallx},
+    encoding::wide::{encode_halt, encode_scall},
     host::IVMHost,
 };
 use std::any::Any;
@@ -37,7 +37,7 @@ fn actual_trap_and_local_refusal_capture_make_no_heap_request_at_exhausted_origi
     for local in [false, true] {
         let original = AllocationBudget::new(128 * 1024 * 1024);
         let mut vm = IVM::try_new_with_memory_budget(100, &original).unwrap();
-        let code: Vec<_> = [encode_syscallx(ivm::syscalls::SYSCALL_ABORT), encode_halt()]
+        let code: Vec<_> = [encode_scall(ivm::syscalls::SYSCALL_ABORT), encode_halt()]
             .into_iter()
             .flat_map(u32::to_le_bytes)
             .collect();

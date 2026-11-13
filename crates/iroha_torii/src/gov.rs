@@ -2076,8 +2076,7 @@ pub async fn handle_gov_propose_deploy(
     }
     let code_hash_bytes = body.code_hash.into_bytes();
     let abi_hash_bytes = body.abi_hash.into_bytes();
-    let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    if abi_hash_bytes != expected_abi_hash {
+    if !iroha_core::smartcontracts::ivm::known_selected_abi(&state.world_view(), &abi_hash_bytes) {
         return Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(

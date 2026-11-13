@@ -66,8 +66,8 @@ fn keepalive_k2_uses_parent_heartbeat_and_degraded_run() {
         "this height's failed finalizer cannot revoke parent heartbeat validity"
     );
     assert_eq!(
-        due_from(&Current(&block), None, 2, deadline),
-        Err(DueWorkUnavailable)
+        due_from(&Current(&block), None, 2, deadline, || Ok(false)),
+        Ok(false)
     );
 }
 
@@ -105,10 +105,7 @@ fn keepalive_progress_keeps_reconciliation_due_after_degraded_heartbeats_stop() 
     assert_eq!(next_heartbeat_at_ms(&block), None);
     assert_eq!(next_progress_at_ms(&block, None, 2), Some(reconciliation));
     assert_eq!(next_reconciliation_at_ms(&block), Some(reconciliation));
-    assert_eq!(
-        due(&block, None, 2, reconciliation - 1),
-        Err(DueWorkUnavailable)
-    );
+    assert_eq!(due(&block, None, 2, reconciliation - 1), Ok(false));
     assert_eq!(due(&block, None, 2, reconciliation), Ok(true));
     assert_eq!(next_progress_at_ms(&World::new().view(), None, 2), None);
 }
@@ -132,23 +129,26 @@ fn keepalive_pause_conclusion_stays_due_through_expiry_and_reads_original_parent
     .unwrap();
     block.sccp_fast_pause_rounds.insert(key, round);
     assert_eq!(
-        due_from(&BlockParent(&block), None, 2, expired),
-        Err(DueWorkUnavailable),
+        due_from(&BlockParent(&block), None, 2, expired, || Ok(false)),
+        Ok(false),
         "new fast-pause work cannot replace the original parent due-work observation"
     );
-    assert_eq!(due_from(&Current(&block), None, 2, expired), Ok(true));
+    assert_eq!(
+        due_from(&Current(&block), None, 2, expired, || Ok(false)),
+        Ok(true)
+    );
     assert_eq!(next_progress_at_ms(&block, None, 2), Some(0));
     block.commit();
     let mut block = world.block();
     block.sccp_fast_pause_rounds.remove(key);
     assert_eq!(
-        due_from(&BlockParent(&block), None, 3, expired),
+        due_from(&BlockParent(&block), None, 3, expired, || Ok(false)),
         Ok(true),
         "an expired original-parent round stays due until its NoResult is processed"
     );
     assert_eq!(
-        due_from(&Current(&block), None, 3, expired),
-        Err(DueWorkUnavailable)
+        due_from(&Current(&block), None, 3, expired, || Ok(false)),
+        Ok(false)
     );
 }
 
@@ -220,7 +220,7 @@ fn keepalive_ct5_stale_due_work_is_a_local_refusal() {
     );
     assert_eq!(
         stale_due_work(&view, None, 2, deadline - 1, deadline + 60_001, false),
-        Err(DueWorkUnavailable)
+        Ok(false)
     );
 }
 
@@ -242,7 +242,7 @@ fn heartbeat_due_rejects_early_progress_and_includes_the_exact_deadline() {
         !heartbeat_due(&Current(&view), deadline - 1),
         "SC7 heartbeat must wait for the original inclusive deadline"
     );
-    assert_eq!(due(&view, None, 2, deadline - 1), Err(DueWorkUnavailable));
+    assert_eq!(due(&view, None, 2, deadline - 1), Ok(false));
     assert!(heartbeat_due(&Current(&view), deadline));
     assert_eq!(due(&view, None, 2, deadline), Ok(true));
     assert!(
@@ -277,13 +277,13 @@ fn governance_due_keeps_the_original_fast_pause_leg_when_heartbeat_is_disabled()
     block.sccp_fast_pause_rounds.remove(key);
     assert!(!heartbeat_due(&BlockParent(&block), expired));
     assert_eq!(
-        due_from(&BlockParent(&block), None, 2, expired),
+        due_from(&BlockParent(&block), None, 2, expired, || Ok(false)),
         Ok(true),
         "SC8 due work must retain the original fast-pause conclusion leg"
     );
     assert_eq!(
-        due_from(&Current(&block), None, 2, expired),
-        Err(DueWorkUnavailable)
+        due_from(&Current(&block), None, 2, expired, || Ok(false)),
+        Ok(false)
     );
 }
 
@@ -294,10 +294,7 @@ fn keepalive_admission_requires_established_due_work_before_assigning_exemption(
     let early = payload(deadline - 2);
     assert!(valid_shape(&early));
     assert!(!heartbeat_due(&Current(&view), early.creation_time_ms + 1));
-    assert_eq!(
-        due(&view, None, 2, early.creation_time_ms + 1),
-        Err(DueWorkUnavailable)
-    );
+    assert_eq!(due(&view, None, 2, early.creation_time_ms + 1), Ok(false));
     assert!(
         admit(&view, &early, None, 2, deadline).is_err(),
         "SC16 Keepalive admission must reject a carrier without established due work"
@@ -351,17 +348,17 @@ fn scheduled_time_carrier_uses_exact_parent_without_sccp_or_client_work() {
     .unwrap();
     tx.apply();
     assert_eq!(
-        due_from(&BlockParent(&block), Some(0), 2, 101),
-        Err(DueWorkUnavailable),
+        due_from(&BlockParent(&block), Some(0), 2, 101, || Ok(false)),
+        Ok(false),
         "a registration in the carrier block cannot manufacture eligibility"
     );
     block.commit();
 
     let view = world.view();
     assert_eq!(next_progress_at_ms(&view, Some(0), 2), Some(101));
-    assert_eq!(due(&view, Some(0), 2, 100), Err(DueWorkUnavailable));
+    assert_eq!(due(&view, Some(0), 2, 100), Ok(false));
     assert_eq!(due(&view, Some(0), 2, 101), Ok(true));
-    assert_eq!(due(&view, None, 2, 101), Err(DueWorkUnavailable));
+    assert_eq!(due(&view, None, 2, 101), Ok(false));
     assert!(
         admit(&view, &payload(100), Some(0), 2, 100)
             .unwrap()
@@ -383,12 +380,34 @@ fn scheduled_time_carrier_uses_exact_parent_without_sccp_or_client_work() {
     assert!(tx.remove(&"scheduled".parse().unwrap()));
     tx.apply();
     assert_eq!(
-        due_from(&BlockParent(&block), Some(0), 2, 101),
+        due_from(&BlockParent(&block), Some(0), 2, 101, || Ok(false)),
         Ok(true),
         "candidate removal cannot revoke the captured carrier admission"
     );
     assert_eq!(
-        due_from(&Current(&block), Some(0), 2, 101),
-        Err(DueWorkUnavailable)
+        due_from(&Current(&block), Some(0), 2, 101, || Ok(false)),
+        Ok(false)
     );
+}
+
+#[test]
+fn parliament_terms_are_asked_only_when_no_sccp_term_holds_and_stay_unavailable() {
+    let (world, deadline) = world(0);
+    let view = world.view();
+    let source = Current(&view);
+    // A due heartbeat needs no Parliament observation.
+    assert_eq!(
+        due_from(&source, None, 2, deadline, || panic!(
+            "a due SCCP term must not ask Parliament"
+        )),
+        Ok(true)
+    );
+    // Before the heartbeat deadline the answer is Parliament's, unavailability included.
+    for governance in [Ok(true), Ok(false), Err(DueWorkUnavailable)] {
+        assert_eq!(
+            due_from(&source, None, 2, deadline - 1, || governance),
+            governance,
+            "Parliament's due terms decide when no SCCP term holds"
+        );
+    }
 }

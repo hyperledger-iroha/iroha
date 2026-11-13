@@ -151,6 +151,10 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
                 continue;
             };
+            if !crate::runtime::deferred_consent::trigger_ready(&self.state.world, &id, height) {
+                self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
+                continue;
+            }
             let source = if self.lifecycle {
                 Some(lifecycle::internal_source(self.state, &id, height,
                     iroha_data_model::block::execution_output::TriggerLifecycleStateKindV1::Pipeline)?)

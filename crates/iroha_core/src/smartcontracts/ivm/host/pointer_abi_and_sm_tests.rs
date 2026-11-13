@@ -180,10 +180,7 @@ fn nft_mint_enqueues_register_and_transfer() {
     let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_NFT_MINT_ASSET).expect("syscall id fits in u8"),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_NFT_MINT_ASSET)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -239,10 +236,7 @@ fn sm3_syscall_records_success_metric() {
         .expect("preload SM3 input TLV");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SM3_HASH).expect("syscall id fits in u8"),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SM3_HASH)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -276,10 +270,7 @@ fn sm3_syscall_failure_records_failure_metric() {
         .expect("preload SM3 input TLV");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SM3_HASH).expect("syscall id fits in u8"),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SM3_HASH)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

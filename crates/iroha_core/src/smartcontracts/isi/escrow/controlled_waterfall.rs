@@ -60,6 +60,7 @@ pub(super) fn transfer(
     terms: &AssetLockWaterfallSettlementV1,
     context: &ContractRuntimeExecutionContext,
 ) -> Result<(), Error> {
+    crate::runtime::native_escrow_capture::guard_existing(tx, &record.id)?;
     ensure_positive(amount)?;
     if amount > &record.remaining_amount || record.status != AssetEscrowStatus::Locked {
         return Err(validation_err(

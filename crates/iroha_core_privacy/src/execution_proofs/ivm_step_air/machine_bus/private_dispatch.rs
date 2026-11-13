@@ -392,10 +392,6 @@ fn append_control_residues<'a>(
     let literal = select(&|_, w| role(w) == Some(Role::Literal));
     let memory = store.add(load);
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
-    // GETGAS is a successful scalar state transition with the native zero
-    // opcode tariff. Its cycle and register effects remain active at zero gas.
-    let scalar_base_gas =
-        select(&|_, w| role(w) == Some(Role::Scalar) && wide::opcode(w) != wide::system::GETGAS);
     let scalar_extra_gas = select(&|_, w| {
         scalar::is_rotate(w)
             || scalar::is_mean(w)
@@ -517,8 +513,8 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: zero for GETGAS, two for CALL/RETURN/direct jumps,
-        // three for LOAD64/STORE64, one for LDI64 and other scalars/branches.
+        // Native base cost: two for CALL/RETURN/direct jumps, three for
+        // LOAD64/STORE64, one for LDI64 and every scalar or branch.
         // Comparisons/rotates/MEAN add one, multiply adds two, bit counts/ISQRT
         // add five, ordinary division adds nine and DIV_CEIL adds eleven.
         // GCD uses twelve gas/cycles, DIV_CEIL twelve cycles, ISQRT six and
@@ -536,7 +532,7 @@ fn append_control_residues<'a>(
                 .mul(F(2))
                 .add(memory.mul(F(3)))
                 .add(literal)
-                .add(scalar_base_gas)
+                .add(scalar)
                 .add(scalar_extra_gas)
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)

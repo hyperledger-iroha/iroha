@@ -18,15 +18,25 @@
 //!   continue or complete a live obligation still run, because work already admitted continues;
 //! - while it is completion-only, the instructions that complete a live obligation still run;
 //! - an instruction that starts new work runs under neither;
-//! - a change set whose successor changes the bindings or declared dependency closure of a live
-//!   obligation's completions, or disables what of them its predecessor executes, lapses at its
-//!   effective height. Until captured completion capabilities support rebinding, retaining an
-//!   active replacement implementation is insufficient: it has not inherited the original
-//!   obligation.
+//! - unselected native escrow, AMX and SoraFS authority records still require their original
+//!   bindings and dependency closure. Rebinding those classes requires draining them first;
+//!   selected native escrow captures and registered obligations execute retained bindings.
+//!
+//! **Content cleanup.** On a root that selected the content-publishing permission, revoking a
+//! direct grant an account holds and retiring a bundle published after genesis complete work
+//! already admitted ([`content_step`]), so they run under closed admission and completion-only.
+//! Grants and bundles are durable State without custody, so they are not live obligations: they
+//! pin no closure and never hold back a rebinding, a kernel or profile change, or an executor
+//! replacement. `content_publish_permission::check_cleanup` only keeps both instructions
+//! executable while such State remains. An unselected root keeps the frozen baseline's rules.
 //!
 //! **Escrow steps.** Accepting an offer continues an escrow and adds the buyer's exposure. Marking
 //! payment sent, releasing, cancelling, opening or resolving a dispute, attesting a condition,
 //! drawing down and expiring complete it. Opening one is new work.
+//! The selected native escrow service ([`super::native_escrow_capture`]) captures canonical
+//! custody semantics before funding and retains them until the authoritative terminal write.
+//! Direct operations run their captured graph with their own step. Batched orderbook custody
+//! continues to pin its predecessor graph, and checks actual scoped execution before movement.
 //!
 //! **AMX steps.**
 //!
@@ -58,14 +68,17 @@
 //! their completion closure from the selection the root executes at that moment. When the owner
 //! issues one of those instructions, it and what it invokes complete the obligation, once. A
 //! registered obligation is live until it expires or has performed every committed instruction,
-//! and while it is live a change set that changes its captured closure lapses, as it does for
-//! the classes above.
+//! and executes in a scoped context using its captured bindings. A change set may rebind those
+//! interfaces while retaining the captured code and storage. Removing required definitions or
+//! replacing its root-wide kernel, commitment or services profile still lapses.
 //!
 //! **Migration cursors.** A migration is the kernel's own obligation ([`super::migration`]): its
 //! record in `world.runtime_migrations` holds the cursor until the cutover.
 //!
-//! TODO(§7.2, §8.2): pending consent (multisig) and scheduled triggers register no obligation
-//! yet; they ship with the deferred-consent addition that rebinds those interfaces.
+//! Pending multisig consent and scheduled triggers follow the selected deferred-consent service
+//! ([`super::deferred_consent`]); they suspend on changed or restricted captures instead of
+//! receiving a settlement capability. Selected native AMX captures retain the original decision,
+//! settlement and shared-tracker closure; automatic expiry belongs to their pinned service.
 
 use std::collections::BTreeSet;
 
@@ -321,6 +334,9 @@ pub fn step(
             .is_some_and(|record| is_live(record.status))
             .then_some(step);
     }
+    if let Some(step) = content_step(instruction, world) {
+        return Some(step);
+    }
     if let Some(step) = authority_step(instruction, world) {
         return Some(step);
     }
@@ -342,6 +358,47 @@ pub fn step(
             world.sumeragi_amx_participant.get().canonical(),
         )
         .then_some(step)
+}
+
+/// Cleanup of governed content State as completion work: retiring an existing bundle published
+/// after genesis, or revoking a direct grant an account holds in exactly that form, on a root
+/// that selected the content-publishing permission. Authority and payload checks still belong to
+/// the executor and the native handlers.
+fn content_step(
+    instruction: &InstructionBox,
+    world: &crate::state::WorldTransaction<'_, '_>,
+) -> Option<Step> {
+    use iroha_data_model::{
+        account::Account,
+        isi::{Revoke, RevokeBox, content::RetireContentBundle},
+        permission::Permission,
+    };
+
+    if !super::content_publish_permission::selected(world.runtime_selection.get()) {
+        return None;
+    }
+    let raw = instruction.as_any();
+    if let Some(retire) = raw.downcast_ref::<RetireContentBundle>() {
+        return world
+            .content_bundles
+            .get(&retire.bundle_id)
+            .is_some_and(|record| {
+                record.created_height > super::content_publish_permission::GENESIS_HEIGHT
+            })
+            .then_some(Step::Complete);
+    }
+    let revoke = raw
+        .downcast_ref::<Revoke<Permission, Account>>()
+        .or_else(|| match raw.downcast_ref::<RevokeBox>() {
+            Some(RevokeBox::Permission(revoke)) => Some(revoke),
+            _ => None,
+        })?;
+    (revoke.object.name() == super::content_publish_permission::NAME
+        && world
+            .account_permissions
+            .get(&revoke.destination)
+            .is_some_and(|permissions| permissions.contains(&revoke.object)))
+    .then_some(Step::Complete)
 }
 
 /// How selected authority work continues or completes, without changing escrow or AMX admission.
@@ -436,7 +493,7 @@ const AMX_SETTLEMENT_COMPLETIONS: [&str; 2] =
 /// Live obligations whose completion needs the same instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Class {
-    /// Asset escrows and locks in custody.
+    /// Native custody that still pins predecessor bindings, including orderbook batches.
     Escrow,
     /// AMX transactions the global chain has not decided.
     AmxDecision,
@@ -478,6 +535,18 @@ impl Class {
 pub struct LiveObligations {
     /// Asset escrows and locks in custody.
     escrows: usize,
+    /// Selected orderbook custody whose native terminal parents require ordinary admission.
+    orderbook_custody: usize,
+    /// Exact original closures of selected native escrow custody.
+    captured_escrows: Vec<(
+        iroha_data_model::runtime::obligation::CompletionCaptureV1,
+        usize,
+    )>,
+    /// Exact original decision and settlement closures of selected native AMX owners.
+    captured_amx: Vec<(
+        iroha_data_model::runtime::obligation::CompletionCaptureV1,
+        usize,
+    )>,
     /// AMX transactions this root coordinates and has not decided.
     amx_decisions: usize,
     /// AMX escrows this root holds as a participant and has not settled.
@@ -533,18 +602,33 @@ impl LiveObligations {
             } else {
                 0
             };
+        let mut amx = Self::amx(
+            world.sumeragi_amx.get(),
+            world.sumeragi_amx_participant.get().canonical(),
+        );
+        // An invalid or incomplete capture set never weakens the old conservative graph pin.
+        if super::native_amx_capture::enabled(world.runtime_selection.canonical()).ok()
+            == Some(true)
+            && super::native_amx_capture::validate_persistence(&*world).is_ok()
+        {
+            amx.amx_decisions = 0;
+            amx.amx_settlements = 0;
+            amx.captured_amx = super::native_amx_capture::live_captures(world);
+        }
         Self {
             sorafs_authorities,
             registered: Vec::new(),
+            captured_escrows: super::native_escrow_capture::live_captures(world),
+            orderbook_custody: super::native_escrow_capture::live_orderbook_count(world),
             escrows: world
                 .asset_escrows
                 .iter()
-                .filter(|(_, record)| is_live(record.status))
+                .filter(|(id, record)| {
+                    is_live(record.status)
+                        && super::native_escrow_capture::pins_predecessor(world, id)
+                })
                 .count(),
-            ..Self::amx(
-                world.sumeragi_amx.get(),
-                world.sumeragi_amx_participant.get().canonical(),
-            )
+            ..amx
         }
     }
 
@@ -556,6 +640,9 @@ impl LiveObligations {
     ) -> Self {
         Self {
             escrows: 0,
+            orderbook_custody: 0,
+            captured_escrows: Vec::new(),
+            captured_amx: Vec::new(),
             amx_decisions: coordinator
                 .transactions
                 .iter()
@@ -570,7 +657,10 @@ impl LiveObligations {
     /// Whether no obligation is live.
     pub(crate) fn is_empty(&self) -> bool {
         self.sorafs_authorities == 0
+            && self.orderbook_custody == 0
             && self.registered.is_empty()
+            && self.captured_escrows.is_empty()
+            && self.captured_amx.is_empty()
             && Class::ALL.into_iter().all(|class| self.count(class) == 0)
     }
 
@@ -598,6 +688,9 @@ impl LiveObligations {
     pub(crate) fn with_amx(decisions: usize, settlements: usize) -> Self {
         Self {
             escrows: 0,
+            orderbook_custody: 0,
+            captured_escrows: Vec::new(),
+            captured_amx: Vec::new(),
             amx_decisions: decisions,
             amx_settlements: settlements,
             sorafs_authorities: 0,
@@ -635,6 +728,14 @@ fn binding<'a>(selection: &'a RootSelectionV1, wire_id: &str) -> Option<&'a Bind
         .binary_search_by(|binding| binding.wire_id.as_str().cmp(wire_id))
         .ok()
         .map(|index| &selection.bindings[index])
+}
+
+/// Whether `selection` binds `wire_id` to an interface and an implementation it executes: both
+/// retained and neither disabled. Closed admission and completion-only still execute.
+pub(super) fn executable(selection: &RootSelectionV1, wire_id: &str) -> bool {
+    binding(selection, wire_id).is_some_and(|bound| {
+        executes(selection, bound.interface) && executes(selection, bound.implementation)
+    })
 }
 
 /// Why `successor` changes the predecessor's binding of `wire_id`, the `role` it plays in a live
@@ -736,14 +837,10 @@ fn closure_gap(
 
 /// Why `successor` would strand `live` obligations, if it would (§7.2).
 ///
-/// No live obligation has a completion capability that dispatch can follow after a rebinding:
-/// a release answers a wire ID from the selection it executes. Keep the closure of every live
-/// obligation unchanged through every activation, rather than silently treating a newly bound
-/// implementation as its settlement authority: the predecessor closure of each class of escrows
-/// and AMX participations, and the closure each registered obligation captured
-/// ([`registry::closure_gap`]).
-///
-/// TODO(§7.2, §8.2): pending consent and scheduled triggers do not register as obligations yet.
+/// Unselected native escrows, orderbook batches, AMX and SoraFS authorities retain their
+/// predecessor bindings. Selected native escrow captures and registered obligations may execute
+/// retained code beside a replacement, but cannot lose required definitions, storage or root-wide
+/// profiles ([`registry::closure_gap`]). Deferred consent has its separate selected transition gate.
 pub fn stranded(
     predecessor: &RootSelectionV1,
     successor: &RootSelectionV1,
@@ -753,8 +850,32 @@ pub fn stranded(
     if live.is_empty() {
         return None;
     }
+    if live.orderbook_custody != 0
+        && let Some(reason) = super::native_escrow_capture::orderbook_admission_gap(successor)
+    {
+        return Some(format!(
+            "{} live orderbook custody obligations: {reason}",
+            live.orderbook_custody
+        ));
+    }
     if let Some(reason) = registry::closure_gap(predecessor, successor, published, &live.registered)
     {
+        return Some(reason);
+    }
+    if let Some(reason) = super::native_escrow_capture::closure_gap(
+        predecessor,
+        successor,
+        published,
+        &live.captured_escrows,
+    ) {
+        return Some(reason);
+    }
+    if let Some(reason) = super::native_amx_capture::closure_gap(
+        predecessor,
+        successor,
+        published,
+        &live.captured_amx,
+    ) {
         return Some(reason);
     }
     if live.sorafs_authorities != 0 {
@@ -794,3 +915,6 @@ pub fn stranded(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod content_tests;

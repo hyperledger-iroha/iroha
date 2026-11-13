@@ -2482,6 +2482,11 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
             actual: network_count,
         });
     }
+    // Nothing precedes genesis: no block-start pass ran, so it holds no governance
+    // block-start row.
+    if iroha_data_model::block::execution_output::governance_start_row_count_v1(outputs) != 0 {
+        return Err(InvalidGenesisError::OutputStructureMismatch);
+    }
     // Internal invocations have their own output positions. The complete shape
     // validator checks each Network.input_index, phase and invocation owner.
     block
@@ -5912,6 +5917,8 @@ pub(crate) mod valid {
             if keepalives != 0 {
                 let time_ms = u64::try_from(block.header().creation_time().as_millis())
                     .map_err(|_| Self::execution_context_error("Keepalive block time overflow"))?;
+                // K2: SCCP's terms on the original parent, or the block's own pass applied
+                // governance work (`governance_due_applied`, `specs/sccp.md` §4.7.4).
                 match keepalive::due_from(
                     &parent,
                     state_block
@@ -5919,6 +5926,7 @@ pub(crate) mod valid {
                         .map(|tip| tip.creation_time_ms()),
                     block.header().height().get(),
                     time_ms,
+                    || Ok(state_block.governance_due_applied()),
                 ) {
                     Ok(true) => {}
                     Ok(false) => {

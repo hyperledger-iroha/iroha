@@ -868,21 +868,8 @@ impl crate::state::State {
 }
 
 impl crate::state::World {
-    /// Check the stored World state accumulator against a cold capture of this complete World,
-    /// in `O(N)`; a restored World is checked before any State is built on it. Returns the
+    /// Check `stored` against a cold capture of this complete World, in `O(N)`. Returns the
     /// verified World state root.
-    ///
-    /// # Errors
-    /// The stored accumulator differs from the World it claims to commit, the World cannot be
-    /// acquired or a value cannot be encoded.
-    pub(crate) fn verify_state_accumulator(
-        &self,
-        execution_budget: &iroha_allocation::AllocationBudget,
-    ) -> Result<Hash, WorldStateVerificationError> {
-        let stored = self.state_accumulator.view().get().clone();
-        self.verify_captured_accumulator(&stored, execution_budget)
-    }
-
     fn verify_captured_accumulator(
         &self,
         stored: &WorldStateAccumulator,

@@ -60,12 +60,13 @@ fn explicit_fixture_clock_preserves_parent_due_work_refusal_and_original_retry()
         .begin_available_proposal(available.clone())
         .err()
         .expect("an explicit stale clock must keep the original due-work refusal");
-    // The shared parent clock is checked before executing Begin. Its Parliament
-    // observation is unavailable, so preserve that exact dependency refusal rather
-    // than pretending the AMX post-execution freshness guard ran.
+    // The original parent has no due work: this root installs no Parliament family and no
+    // SCCP term holds, so the shared parent clock does not refuse. The stale Begin is
+    // refused by the AMX freshness guard of its own execution.
+    assert!(refusal.contains("StaleDueWork"), "{refusal}");
     assert!(
-        refusal.contains("Retryable(\"Parliament G1–G3 due-work observation is unavailable\")"),
-        "{refusal}"
+        !refusal.contains("due-work observation is unavailable"),
+        "an absent Parliament family is an empty due set, never an unavailable one: {refusal}"
     );
     assert_eq!(
         source.now(),

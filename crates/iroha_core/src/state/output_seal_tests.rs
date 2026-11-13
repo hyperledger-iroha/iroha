@@ -602,3 +602,89 @@ fn sealed_original_output_refuses_direct_mutation_before_and_after_witness_captu
         ));
     }
 }
+
+#[test]
+fn the_seal_commits_governance_start_rows_ahead_of_every_execution_row() {
+    use iroha_data_model::{
+        block::output_budget::{GovernanceStartItemCeilingV1, GovernanceStartOutputBudgetV1},
+        governance::{
+            GovernanceAnchorV1,
+            anonymous_ballot::{
+                BallotScopeV1, CastingClockEstablishedV1, GovernanceBlockStartEventV1,
+                GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1, NativeSlotAdvancedV1,
+            },
+        },
+    };
+
+    let (state, mut source) = seal_fixture();
+    let (mut block, _recording) = recorded_network_block(&state, &source);
+    let (height, timestamp_ms) = (
+        source.header().height().get(),
+        source.header().creation_time_ms,
+    );
+    // The block-start pass of a root that installs the anonymous family left a casting
+    // clock and one positioned receipt.
+    let mut partition = GovernanceStartOutputBudgetV1::new();
+    partition
+        .admit_prelude(GovernanceBlockStartOutputV1 {
+            anchor: GovernanceOutputAnchorV1::CastingClockPrelude {
+                height,
+                timestamp_ms,
+            },
+            event: GovernanceBlockStartEventV1::CastingClockEstablished(
+                CastingClockEstablishedV1 {
+                    scope: BallotScopeV1::new([0x07; 64]),
+                    casting_window_ms: 1_000,
+                    closing_ms: timestamp_ms + 1_000,
+                },
+            ),
+        })
+        .unwrap();
+    partition.close_prelude();
+    partition
+        .admit_item(
+            GovernanceStartItemCeilingV1::Receipt,
+            vec![GovernanceBlockStartOutputV1 {
+                anchor: GovernanceOutputAnchorV1::Pass(GovernanceAnchorV1 {
+                    height,
+                    position: 0,
+                    timestamp_ms,
+                }),
+                event: GovernanceBlockStartEventV1::NativeSlotAdvanced(NativeSlotAdvancedV1 {
+                    target_height: height + 3,
+                    cursor_height: height - 1,
+                    ticket_height: height,
+                }),
+            }],
+        )
+        .unwrap();
+    block.governance_start_outputs = Some(partition);
+    let leading = block.governance_start_rows().unwrap().to_vec();
+    assert_eq!(leading.len(), 2);
+
+    run(&mut block, &source);
+    let rows = retained(&block).rows.clone();
+    assert_eq!(rows.len(), 3);
+    block.seal_execution_outputs(&mut source, metadata).unwrap();
+
+    let committed = source.execution_outputs();
+    assert_eq!(
+        committed.len(),
+        leading.len() + rows.len(),
+        "the executed block commits its governance block-start rows"
+    );
+    assert_eq!(committed[..leading.len()], leading);
+    assert_eq!(committed[leading.len()..], rows);
+    // The Network join follows the leading rows, and every row has its inclusion proof.
+    assert_eq!(
+        source.network_output_at(0).map(|(index, _)| index),
+        Some(2),
+        "a Network output is located after the governance block-start rows"
+    );
+    for index in 0..u32::try_from(committed.len()).unwrap() {
+        assert!(source.output_proof(index).is_some());
+    }
+    // The seal consumed the partition, and the sealed wire holds under the carrier limits.
+    assert!(block.governance_start_rows().is_none());
+    block.verify_execution_output_seal(&source).unwrap();
+}

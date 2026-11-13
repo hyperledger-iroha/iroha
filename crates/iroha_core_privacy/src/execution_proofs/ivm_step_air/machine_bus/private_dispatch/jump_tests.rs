@@ -327,7 +327,6 @@ fn direct_jump_encoding_scope_and_prepared_target_ownership_remain_exact() {
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
-        enc::encode_rr(wide::control::JR, 0, 2, 0),
     ] {
         assert!(role(instruction).is_none());
         let admitted = contract(&[jump(wide::control::JAL, 1)], 1_000, ivm::ivm_mode::ZK);

@@ -28,8 +28,8 @@ pub(super) fn root(arguments: RootArguments, native: bool) -> usize {
 }
 
 /// Whole reserved/staged syscall subtree, including net host writes on failure.
-/// Metadata/quote/body callbacks are masked; resumed VM net changes own <=255
-/// rows. Ordinary privacy entry, sanitization, restoration and final tags log.
+/// Metadata/quote/body callbacks are masked; resumed VM net changes own at most
+/// one row per writable register (31). Ordinary privacy entry, sanitization, restoration and final tags log.
 pub(super) fn syscall(number: u32) -> usize {
     let inputs = crate::ivm::syscall_public_input_registers(number);
     let outputs = crate::ivm::syscall_public_output_registers(number);
@@ -49,7 +49,9 @@ pub(super) fn syscall(number: u32) -> usize {
     ));
     // Reserved prepare/OOG restores two writes per saved output; a host return
     // instead publishes its net changes and possibly one explicit final tag.
-    read_inputs + 3 * output_only + (2 * output_only).max(255 + final_tag)
+    read_inputs
+        + 3 * output_only
+        + (2 * output_only).max(crate::parallel::REGISTER_COUNT - 1 + final_tag)
 }
 
 fn writes(register: usize) -> usize {
@@ -64,16 +66,10 @@ fn overflow() -> VMError {
 /// The caller reserves after ordinary opcode/base-gas validation but before gas
 /// debit, native preflight, or guest effects. Keep this batch live through the
 /// next loop head's `native_finish_step`; padding and root snapshots read no GPRs.
-pub(super) fn instruction(
-    word: u32,
-    vector_length: usize,
-    strict_return: bool,
-    native: bool,
-) -> Result<usize, VMError> {
-    use wide::{arithmetic as a, control as c, crypto as v, memory as m, system as s, zk as z};
+pub(super) fn instruction(word: u32, strict_return: bool, native: bool) -> Result<usize, VMError> {
+    use wide::{arithmetic as a, control as c, memory as m, system as s};
     let destination = writes(wide::rd(word));
     let opcode = wide::opcode(word);
-    let lanes = vector_length.max(1);
     let ordinary = match opcode {
         a::ADD
         | a::SUB
@@ -102,10 +98,7 @@ pub(super) fn instruction(
         | a::MAX
         | a::DIV_CEIL
         | a::GCD
-        | a::MEAN
-        | z::FADD
-        | z::FSUB
-        | z::FMUL => 2 + destination,
+        | a::MEAN => 2 + destination,
         a::ADDI
         | a::ANDI
         | a::ORI
@@ -120,14 +113,10 @@ pub(super) fn instruction(
         | a::ISQRT
         | a::ABS
         | a::CMOVI
-        | z::FINV
         | m::LOAD64 => 1 + destination,
-        s::GETGAS | m::LDLIT | m::LDI64 => destination,
-        m::LOAD128 => 1 + destination + writes(wide::rs2(word)),
+        m::LDLIT | m::LDI64 => destination,
         m::STORE64 => 2,
-        m::STORE128 => 3,
         c::BEQ | c::BNE | c::BLT | c::BGE | c::BLTU | c::BGEU => 2,
-        c::JR => 1,
         c::JALR => {
             if strict_return {
                 6
@@ -144,25 +133,9 @@ pub(super) fn instruction(
                 }
         }
         c::JALS => 2 + if strict_return { 9 } else { 0 },
-        c::HALT | c::JMP | v::SETVL | v::PARBEGIN | v::PAREND => 0,
-        v::VADD32 | v::VADD64 | v::VAND | v::VXOR | v::VOR => {
-            lanes.checked_mul(4).ok_or_else(overflow)?
-        }
-        v::VROT32 => lanes.checked_mul(3).ok_or_else(overflow)?,
-        v::SHA256BLOCK => 1 + 6 * lanes.min(4),
-        v::SHA3BLOCK => 3,
-        v::AESENC | v::AESDEC => 4 + destination + writes(wide::rd(word) + 1),
-        v::BLAKE2S => 1 + destination + writes(wide::rd(word) + 1),
-        v::POSEIDON2 => 2 + destination,
-        v::POSEIDON6 => wide::crypto::POSEIDON6_INPUTS + destination,
-        v::ED25519BATCHVERIFY => 1 + destination + writes(wide::rs2(word)),
-        v::ED25519VERIFY | v::ECDSAVERIFY | v::DILITHIUMVERIFY => 3 + destination,
-        z::ASSERT => 1,
-        z::ASSERT_EQ => 2,
-        z::ASSERT_RANGE => usize::from(wide::imm8(word) as u8 <= 64),
-        s::SCALL => syscall(wide::imm8(word) as u8 as u32),
-        s::SYSTEM => syscall(crate::encoding::wide::decode_syscallx(word)),
-        _ => return Err(VMError::InvalidOpcode((word & 0xffff) as u16)),
+        c::HALT | c::JMP => 0,
+        s::SCALL => syscall(wide::syscall_number(word)),
+        _ => return Err(VMError::InvalidOpcode(opcode)),
     };
     ordinary
         .checked_add(if native { native_observations(word) } else { 0 })

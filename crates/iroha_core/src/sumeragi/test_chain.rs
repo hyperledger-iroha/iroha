@@ -829,6 +829,49 @@ impl CertifiedTestChain {
         self.replay_through(source, source.height())
     }
 
+    /// Recover this fixture's certified durable suffix after dropping unpublished execution.
+    ///
+    /// Unlike copying another applied chain, this restart control allows Kura to be ahead
+    /// of the observed State. Each original body and QC passes the production block-store
+    /// admission and startup executor replay; the new tip is taken only from the resulting
+    /// authenticated native State. It creates no certificate or replacement result.
+    ///
+    /// # Errors
+    /// A missing or invalid durable body/certificate, local resource refusal, or replay
+    /// disagreement leaves the first unfinished height unapplied.
+    #[cfg(test)]
+    pub(crate) fn replay_durable_unobserved_suffix(&mut self) -> Result<(), String> {
+        let durable = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| error.to_string())?;
+        let through = u64::try_from(durable).map_err(|error| error.to_string())?;
+        if through < self.height() {
+            return Err("durable original history is behind the observed fixture State".into());
+        }
+        for height in self.height() + 1..=through {
+            let (body, qc) = self
+                .committed_body(height)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("durable original frame missing at {height}"))?;
+            self.executor
+                .replay(&body, &qc)
+                .map_err(|error| error.to_string())?;
+            let view = self.state.view();
+            let certified = super::certified_chain::CertifiedChain::new(&view)
+                .map_err(|error| error.to_string())?;
+            let committed = certified
+                .certified(height)
+                .map_err(|error| error.to_string())?;
+            self.tip = (
+                height,
+                committed.committed().core_hash(),
+                committed.committed().result(),
+            );
+        }
+        Ok(())
+    }
+
     fn replay_through(&mut self, source: &Self, through: u64) -> Result<(), String> {
         if through < self.height() || through > source.height() {
             return Err("native replay height is outside the original certified suffix".into());

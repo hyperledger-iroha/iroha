@@ -2,7 +2,11 @@ import { sha256 } from "@noble/hashes/sha2.js";
 
 import { blake2b256 } from "./blake2b.js";
 
-export const IVM_PROGRAM_HEADER_LENGTH = 49;
+/**
+ * Fixed IVM V1 program header: magic, version, mode, the little-endian `u64`
+ * budget, the ABI version and the 32-byte authenticated ABI descriptor hash.
+ */
+export const IVM_PROGRAM_HEADER_LENGTH = 48;
 /** Default ledger limit for one complete deployed IVM artifact. */
 export const IVM_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024;
 const CONTRACT_CODE_HASH_DOMAIN = new TextEncoder().encode(

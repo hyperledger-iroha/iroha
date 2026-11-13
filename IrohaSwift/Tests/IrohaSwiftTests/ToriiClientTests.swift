@@ -15205,6 +15205,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         let invalid = [
             #"{"unknown":true}"#,
             #"{"events":[],"enum_types":[],"permissions":[],"features_bitmap":4}"#,
+            #"{"events":[],"enum_types":[],"permissions":[],"features_bitmap":2}"#,
             #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"Option"}"#,
             #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"__kotodama_link_private"}"#,
             #"{"events":[],"enum_types":[],"permissions":[],"seiyaku_name":"state_map_get"}"#,

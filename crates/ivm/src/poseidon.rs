@@ -1,11 +1,11 @@
-//! Lightweight Poseidon hash adapters used by VM opcodes.
+//! Lightweight host-side Poseidon hash adapters. No opcode reaches them.
 //!
 //! The permutations operate on BN254 field elements via
 //! [`bn254_vec`] which dispatches to SIMD backends when available.
 //! The H.2 fixed-arity mode matches the canonical native owner. Tests exercise
 //! the complete state on scalar, SSE2, AVX2, AVX-512 and NEON implementations.
-//! A native bridge is not a constrained Halo2 proof. Opcode outputs are truncated
-//! to 64 bits and must not be used as commitments.
+//! A native bridge is not a constrained Halo2 proof. The 64-bit helper outputs are
+//! truncated and must not be used as commitments.
 use crate::bn254_vec::{self as field_vec, FieldElem};
 use ff::PrimeField;
 use halo2curves::bn256::Fr;

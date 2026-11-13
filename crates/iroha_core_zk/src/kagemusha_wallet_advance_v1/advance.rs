@@ -208,6 +208,15 @@ impl KagemushaWalletAdvanceCapsuleV1 for KagemushaWalletRecoveryCapsuleV1 {
 // Package. Its Coordinator authenticates source maps and re-derives the frozen successor
 // before calling Advance; this provider interface owns the durable signing boundary.
 pub trait KagemushaWalletTransitionOwnerV1<C, R> {
+    /// Recheck live controls after capacity reservation and before any durable
+    /// successor selection. Recovery never repeats this pre-selection gate.
+    /// Existing owners perform their fresh checks in their coordinator.
+    ///
+    /// # Errors
+    /// Rejects an operation whose live controls no longer permit selection.
+    fn before_selection(&self, _capsule: &C) -> Result<(), KagemushaWalletProviderErrorV1> {
+        Ok(())
+    }
     /// Exact `receipt-body` transcript for `capsule` whose frame digest is `capsule_digest`.
     ///
     /// # Errors
@@ -494,6 +503,7 @@ where
                 KagemushaWalletNotPerformedV1::CapacityWait,
             ));
         }
+        owner.before_selection(&request.capsule)?;
         // A4-A12: the slot is unverified until a release re-caches it.
         self.poison(slot);
         self.commit(

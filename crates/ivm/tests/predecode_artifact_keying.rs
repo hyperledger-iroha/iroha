@@ -8,7 +8,6 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     }
@@ -17,8 +16,7 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
     let mut a_mode = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
-        mode: ivm::ivm_mode::VECTOR,
-        vector_length: 8,
+        mode: ivm::ivm_mode::ZK,
         max_cycles: 0,
         abi_version: 1,
     }

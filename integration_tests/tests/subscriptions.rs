@@ -50,7 +50,7 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall should fit in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(instruction::wide::system::SCALL, opcode).to_le_bytes(),
+        &encoding::wide::encode_scall(u32::from(opcode)).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut blob = ProgramMetadata {

@@ -434,3 +434,75 @@ fn sccp_ct5_prepare_signing_resamples_original_after_valid_and_binds_every_coord
         },
     );
 }
+
+/// A proposal below its immutable parent/input floor is invalid even when CT1 would defer it.
+#[test]
+fn deterministic_time_floor_rejects_before_local_clock_refusal() {
+    let (_clock, source) = TimeSource::new_mock(Duration::ZERO);
+    publication_tests::with_worker_from_clock(
+        || {
+            CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000_000))
+                .unwrap()
+        },
+        ConsensusMode::Permissioned,
+        source,
+        move |chain, worker, _blocks, events| {
+            let original = publication_tests::proposal(chain, worker);
+            let proposal = payload::decode(original.payload().as_slice()).unwrap();
+            let parent_time = worker
+                .state
+                .view()
+                .latest_block()
+                .unwrap()
+                .unwrap()
+                .header()
+                .creation_time();
+            let mut header = proposal.header();
+            header.creation_time_ms = u64::try_from(parent_time.as_millis()).unwrap();
+            assert!(
+                parent_time
+                    > worker
+                        .state
+                        .view()
+                        .world()
+                        .parameters()
+                        .sumeragi()
+                        .max_clock_drift()
+            );
+            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+            for transaction in proposal.external_transactions() {
+                builder.push_transaction(transaction.clone());
+            }
+            builder.set_da_commitments(proposal.da_commitments().cloned());
+            builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
+            builder.set_da_pin_intents(proposal.da_pin_intents().cloned());
+            builder.set_npos_consensus_effects(proposal.npos_consensus_effects().cloned());
+            builder.set_global_beacon_pulse(proposal.global_beacon_pulse().copied());
+            builder.set_execution_context(proposal.execution_context().cloned());
+            let invalid = builder.build(iroha_data_model::block::BlockSignatures::default());
+            let bytes = payload::encode(&invalid).unwrap();
+            let mut native_header = original.header().clone();
+            native_header.payload_hash = iroha_sumeragi::preimage::payload_hash(
+                &**worker.context.crypto.as_ref().unwrap(),
+                &bytes,
+            );
+            native_header.payload_len = u32::try_from(bytes.len()).unwrap();
+            let body = chain.author_payload(native_header, bytes);
+            let hash = body.hash(&**worker.context.crypto.as_ref().unwrap());
+            let height = worker.state.view().height();
+            for certified in [false, true] {
+                assert!(
+                    matches!(
+                        worker.execute(&body, hash, certified),
+                        Ok(Some(ExecOutcome::Invalid))
+                    ),
+                    "deterministic time-floor rejection must precede local clock refusal"
+                );
+                assert!(worker.live.is_none());
+                assert!(worker.finishing.is_none());
+                assert_eq!(worker.state.view().height(), height);
+                assert!(events.try_recv().is_err());
+            }
+        },
+    );
+}

@@ -42,7 +42,6 @@ fn first_jump(wide_offset: bool, offset: i32, gas: u64) -> (Program, ScalarFixtu
     assert_eq!(record.after.registers[0], 0);
     assert!(!record.after.tags[0]);
     assert!(!record.after.halted);
-    assert_eq!(record.before.vector_length, record.after.vector_length);
     assert_eq!(
         record.before.constraint_failed,
         record.after.constraint_failed

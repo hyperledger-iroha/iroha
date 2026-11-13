@@ -24,9 +24,9 @@ What this tool does:
   - the tracked Lattice Estimator record
     (specs/fhe_bgv_lattice_estimator_output.txt) was printed by the code
     scripts/fhe_bgv_lattice_estimator.sage now holds, at the commit it pins,
-    for exactly the moduli, dimensions and distributions of this model, with
-    a passing self-check; and `security_estimate` of the summary is the
-    restatement of that record;
+    for exactly the moduli, dimensions, sample counts and distributions of
+    this model, with a passing self-check; and `security_estimate` of the
+    summary is the restatement of that record;
   - the tables the specifications embed and the view that a Rust test reads
     (crates/iroha_fhe/tests/vectors/bgv_cost_model_v1.txt) are the renderings
     of the summary.
@@ -1256,14 +1256,42 @@ def read_estimator_record(text: str) -> dict:
     """The JSON lines of an estimator output record, by kind, in file order.
 
     `invocations` pairs each RUN line with the END line that follows it, or
-    with None when the invocation was cut off before it printed one.
+    with None when the invocation was cut off before it printed one. Repeated
+    identities across invocations are retries; a single invocation cannot
+    redefine an instance or report the same attack twice.
     """
     record: dict = {"RUN": [], "INSTANCE": [], "RESULT": [], "SELFCHECK": [], "END": [], "invocations": []}
+    invocation_identities = set()
+    instances: dict = {}
+    invocation_open = False
     for line in text.splitlines():
         kind, _, body = line.partition(" ")
         if kind not in ("RUN", "INSTANCE", "RESULT", "SELFCHECK", "END"):
             continue
         item = json.loads(body)
+        if not isinstance(item, dict):
+            raise ValueError(f"{kind} is not an object")
+        if kind == "RUN":
+            invocation_identities.clear()
+            invocation_open = True
+        else:
+            if not invocation_open:
+                raise ValueError(f"{kind} is outside an open invocation")
+            if kind == "END":
+                invocation_open = False
+        if kind in ("INSTANCE", "RESULT"):
+            fields = ("profile", "instance") if kind == "INSTANCE" else ("profile", "instance", "model", "attack")
+            identity = tuple(item.get(field) for field in fields)
+            if not all(isinstance(value, str) for value in identity):
+                raise ValueError(f"{kind} has a malformed identity")
+            key = (kind, identity)
+            if key in invocation_identities:
+                raise ValueError(f"duplicate {kind} in one invocation: {'/'.join(identity)}")
+            invocation_identities.add(key)
+            if kind == "INSTANCE":
+                previous = instances.setdefault(identity, item)
+                if previous != item:
+                    raise ValueError(f"conflicting INSTANCE across invocations: {'/'.join(identity)}")
         record[kind].append(item)
         if kind == "RUN":
             record["invocations"].append([item, None])
@@ -1282,15 +1310,16 @@ def estimator_results(record: dict) -> dict:
     return chosen
 
 
-def estimator_record_problems(root: Path) -> list:
-    """Defects of the tracked estimator record against the script that produced it and against this model."""
-    path = root / ESTIMATOR_OUTPUT
-    if not path.is_file():
-        return [f"{ESTIMATOR_OUTPUT} is missing"]
-    try:
-        record = read_estimator_record(path.read_text())
-    except ValueError as error:
-        return [f"{ESTIMATOR_OUTPUT}: {error}"]
+def estimator_record_problems(root: Path, record: Optional[dict] = None) -> list:
+    """Defects of the tracked record or an already-read snapshot against the script and model."""
+    if record is None:
+        path = root / ESTIMATOR_OUTPUT
+        if not path.is_file():
+            return [f"{ESTIMATOR_OUTPUT} is missing"]
+        try:
+            record = read_estimator_record(path.read_text())
+        except ValueError as error:
+            return [f"{ESTIMATOR_OUTPUT}: {error}"]
     problems = []
     facts = estimator_script_facts(root)
     if not record["RUN"]:
@@ -1317,7 +1346,15 @@ def estimator_record_problems(root: Path) -> list:
             problems.append(f"{ESTIMATOR_OUTPUT}: instance {label} is not one this model knows")
             continue
         p = profile(str(name), shape)
-        modulus = p.modulus(p.top) * (p.special_product if instance["modulus"] == "QP" else 1)
+        # The instance identity determines the threat being estimated. Do not let
+        # the record replace unlimited switching-key samples with one key, or
+        # replace QP by Q while keeping the stronger instance's name.
+        modulus_kind, samples = instance["instance"].split(":")
+        if instance.get("modulus") != modulus_kind or instance.get("samples") != samples:
+            problems.append(f"{ESTIMATOR_OUTPUT}: the modulus kind or sample count of {label} differs from its identity")
+        if instance.get("plaintext_modulus") != p.t:
+            problems.append(f"{ESTIMATOR_OUTPUT}: the plaintext modulus of {label} differs from this model")
+        modulus = p.modulus(p.top) * (p.special_product if modulus_kind == "QP" else 1)
         if instance.get("q") != str(modulus) or instance.get("n") != p.degree:
             problems.append(f"{ESTIMATOR_OUTPUT}: the modulus or the dimension of {label} differs from this model")
         if instance.get("error") != f"centered binomial, eta = {ERROR_ETA}":
@@ -1335,10 +1372,25 @@ def estimator_record_problems(root: Path) -> list:
         key = (result.get("profile"), result.get("instance"))
         if key not in seen or result.get("model") not in models or result.get("attack") not in attacks:
             problems.append(f"{ESTIMATOR_OUTPUT}: a RESULT names an unknown instance, cost model or attack")
-        elif result.get("status") == "ok" and not (
-            result.get("log2_rop") == "oo" or isinstance(result.get("log2_rop"), (int, float))
+        elif result.get("status") not in ("ok", "timeout", "memory_limit", "error", "stopped", "not_started"):
+            problems.append(f"{ESTIMATOR_OUTPUT}: a RESULT has an unknown status")
+        elif result["status"] == "ok":
+            cost = result.get("log2_rop")
+            if cost != "oo" and not (
+                (type(cost) is int or (type(cost) is float and math.isfinite(cost)))
+                and cost >= 0
+            ):
+                problems.append(f"{ESTIMATOR_OUTPUT}: a finished RESULT has no valid cost")
+            if not isinstance(result.get("cost"), dict):
+                problems.append(f"{ESTIMATOR_OUTPUT}: a finished RESULT has no cost dictionary")
+        elif not isinstance(result.get("message"), str) or not result["message"]:
+            problems.append(f"{ESTIMATOR_OUTPUT}: an unfinished RESULT has no reason")
+        seconds = result.get("seconds")
+        if not (
+            (type(seconds) is int or (type(seconds) is float and math.isfinite(seconds)))
+            and seconds >= 0
         ):
-            problems.append(f"{ESTIMATOR_OUTPUT}: a finished RESULT has no cost")
+            problems.append(f"{ESTIMATOR_OUTPUT}: a RESULT has no valid elapsed time")
     return problems
 
 
@@ -1573,12 +1625,15 @@ def _proposals_block(results: dict, profiles: dict) -> dict:
 
 
 def estimator_block(root: Path) -> dict:
-    """`security_estimate.lattice_estimator`: the tracked output record of the estimator script, restated."""
+    """Restate one validated snapshot of the estimator record; malformed evidence raises ValueError."""
     path = root / ESTIMATOR_OUTPUT
     if not path.is_file():
         return {"status": "not_run", "reason": f"{ESTIMATOR_OUTPUT} is missing", "script": ESTIMATOR_SCRIPT}
     raw = path.read_bytes()
     record = read_estimator_record(raw.decode("utf-8"))
+    problems = estimator_record_problems(root, record)
+    if problems:
+        raise ValueError("; ".join(problems))
     results = estimator_results(record)
     profiles = {
         name: dict(_estimated_profile_block(results, name, shape), role=role)
@@ -3653,7 +3708,11 @@ def main(argv: list) -> int:
                 print(str(error), file=sys.stderr)
                 return 1
         else:
-            summary = rederive(json.loads(Path(arguments.summary).read_text()))
+            try:
+                summary = rederive(json.loads(Path(arguments.summary).read_text()))
+            except ValueError as error:
+                print(str(error), file=sys.stderr)
+                return 1
         if arguments.write:
             write_outputs(summary)
         else:

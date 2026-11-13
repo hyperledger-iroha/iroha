@@ -109,7 +109,6 @@ pub fn minimal_contract_artifact_with_identity(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 1_000,
         abi_version: 1,
     };

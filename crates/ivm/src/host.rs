@@ -4714,10 +4714,7 @@ mod tests {
     fn run_vm_dispatched_vrf_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let scall = crate::encoding::wide::encode_sys(
-            crate::instruction::wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_VRF_VERIFY_BATCH).expect("syscall fits"),
-        );
+        let scall = crate::encoding::wide::encode_scall(syscalls::SYSCALL_VRF_VERIFY_BATCH);
         let mut code = Vec::new();
         code.extend_from_slice(&scall.to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -4741,10 +4738,7 @@ mod tests {
     fn run_vm_dispatched_zk_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let scall = crate::encoding::wide::encode_sys(
-            crate::instruction::wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
-        );
+        let scall = crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH);
         let mut code = Vec::new();
         code.extend_from_slice(&scall.to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -4805,10 +4799,7 @@ mod tests {
         let mut host = DefaultHost::new().with_public_inputs(inputs);
         let mut vm = IVM::new(1_000_000);
         let code = [
-            crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("syscall fits"),
-            )
+            crate::encoding::wide::encode_scall(syscalls::SYSCALL_GET_PUBLIC_INPUT)
             .to_le_bytes(),
             crate::encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -5724,10 +5715,7 @@ mod tests {
         })
         .expect("encode VRF batch");
         let mut vm = IVM::new(u64::MAX);
-        let scall = crate::encoding::wide::encode_sys(
-            crate::instruction::wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_VRF_VERIFY_BATCH).expect("syscall fits"),
-        );
+        let scall = crate::encoding::wide::encode_scall(syscalls::SYSCALL_VRF_VERIFY_BATCH);
         let mut code = Vec::new();
         code.extend_from_slice(&scall.to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -6062,10 +6050,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
-            )
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH)
             .to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -6109,10 +6094,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
-            )
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_ZK_VERIFY_BATCH)
             .to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -6676,10 +6658,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_VERIFY_SIGNATURE).expect("syscall fits"),
-            )
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_VERIFY_SIGNATURE)
             .to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());

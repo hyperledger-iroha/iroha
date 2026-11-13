@@ -216,6 +216,9 @@ impl Roots {
             }
             .unwrap()
         };
+        Self::new_with_start(start)
+    }
+    fn new_with_start(mut start: impl FnMut(TestChainConfig) -> CertifiedTestChain) -> Self {
         let mut global = start(global_config());
         let first = global.sign(
             &global_config().genesis_key,
@@ -1947,3 +1950,5 @@ pub(super) fn with_paid_global_begin_fixture(
 ) {
     paid_borrowed_custody::with_paid_global_begin_fixture(test);
 }
+
+mod captured;

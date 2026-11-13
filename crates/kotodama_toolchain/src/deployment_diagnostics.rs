@@ -12,7 +12,7 @@ use kotodama_lang::diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase};
 pub fn artifact_deployment_warnings(
     artifact: &[u8],
 ) -> Result<DiagnosticBundle, ivm::ContractArtifactError> {
-    let verified = ivm::verify_contract_artifact(artifact)?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)?;
     let entrypoints = verified.private_input_entrypoints();
     Ok(DiagnosticBundle::new(if entrypoints.is_empty() {
         Vec::new()
@@ -62,5 +62,29 @@ mod tests {
                 .contains("W_PROVER_PRIVATE_INPUT")
         );
         assert!(artifact_deployment_warnings(b"invalid artifact").is_err());
+    }
+}
+
+#[cfg(test)]
+mod named_profile_tests {
+    use super::*;
+    #[test]
+    fn deployment_diagnostics_accept_the_named_profile_but_refuse_an_unknown_hash() {
+        let mut artifact = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+                ..Default::default()
+            },
+        )
+        .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")
+        .unwrap();
+        assert!(
+            artifact_deployment_warnings(&artifact)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
+        artifact[ivm::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+        assert!(artifact_deployment_warnings(&artifact).is_err());
     }
 }

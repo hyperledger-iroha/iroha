@@ -76,7 +76,6 @@ fn every_control_opcode_preserves_successor_order_and_indirect_flags() {
             false,
         ),
         (enc::encode_rr(wide::control::JALR, 0, 1, 0), vec![], true),
-        (enc::encode_rr(wide::control::JR, 0, 1, 0), vec![], true),
         (
             enc::encode_rr(wide::arithmetic::ADD, 1, 2, 3),
             vec![4],

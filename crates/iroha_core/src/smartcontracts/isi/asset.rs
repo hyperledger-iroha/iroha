@@ -6032,6 +6032,16 @@ pub mod isi {
                 )
             }
         };
+        let participant_dataspace = participant.participant.dataspace;
+        if outcome.is_some() {
+            crate::runtime::native_amx_capture::guard(
+                state_transaction,
+                iroha_data_model::runtime::native_amx::NativeAmxKindV1::ParticipantSettlement(
+                    participant_dataspace,
+                ),
+                tx,
+            )?;
+        }
         PreparedNumericAssetMovement::prepare_with_scope(
             state_transaction,
             source_id,
@@ -6049,6 +6059,16 @@ pub mod isi {
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::escrow::VerifiedNativeEscrowPurpose;
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
+        match &purpose {
+            VerifiedNativeEscrowPurpose::Retained { escrow_id }
+            | VerifiedNativeEscrowPurpose::CustodyPartition {
+                parent_id: escrow_id,
+                ..
+            } => {
+                crate::runtime::native_escrow_capture::guard_existing(state_transaction, escrow_id)?
+            }
+            VerifiedNativeEscrowPurpose::Funding { .. } => {}
+        }
         let movement_authorization = match purpose {
             VerifiedNativeEscrowPurpose::Funding {
                 escrow_id,
@@ -6199,6 +6219,7 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::escrow::VerifiedNativeEscrowBatch,
     ) -> Result<(), Error> {
         let (escrow_id, authority, legs) = authorization.into_parts();
+        crate::runtime::native_escrow_capture::guard_existing(state_transaction, &escrow_id)?;
         let record = state_transaction
             .world
             .asset_escrows

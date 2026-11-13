@@ -1112,10 +1112,7 @@ fn deferred_far_jump_uses_sparse_direct_trampoline_chain() {
         instruction::wide::control::HALT
     );
     assert!(relaxed.as_chunks::<4>().0.iter().all(|word| {
-        !matches!(
-            instruction::wide::opcode(u32::from_le_bytes(*word)),
-            instruction::wide::control::JR | instruction::wide::control::JALR
-        )
+        instruction::wide::opcode(u32::from_le_bytes(*word)) != instruction::wide::control::JALR
     }));
 }
 #[test]
@@ -1218,8 +1215,7 @@ fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
         .iter()
         .filter(|word| {
             instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
-                && encoding::wide::decode_syscallx(**word)
-                    == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
+                && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
         })
         .count();
     assert_eq!(
@@ -1239,7 +1235,7 @@ fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
     ];
     assert!(words.iter().all(|word| {
         instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
-            || !typed_getters.contains(&encoding::wide::decode_syscallx(*word))
+            || !typed_getters.contains(&encoding::wide::decode_scall(*word))
     }));
 }
 #[test]
@@ -1256,7 +1252,7 @@ fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
         .map(|chunk| u32::from_le_bytes(*chunk))
         .filter(|word| {
             instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
-                && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_ADD
+                && encoding::wide::decode_scall(*word) == syscalls::SYSCALL_INT_ADD
         })
         .count();
     assert_eq!(
@@ -1356,8 +1352,7 @@ fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         .iter()
         .filter(|word| {
             instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
-                && encoding::wide::decode_syscallx(**word)
-                    == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
+                && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
         })
         .count();
     assert_eq!(
@@ -1366,7 +1361,7 @@ fn mint_trigger_takes_amount_from_one_typed_argument_record() {
     );
     assert!(words.iter().all(|word| {
         instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
-            || encoding::wide::decode_syscallx(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
+            || encoding::wide::decode_scall(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
     }));
 }
 fn call_graph_function(name: &str, instructions: Vec<ir::Instr>) -> ir::Function {
@@ -1404,8 +1399,8 @@ fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
         .expect("compile Bool-key StateMap fixture");
     let metadata = ProgramMetadata::parse(&artifact).expect("V1 metadata");
     let retired_bool_codec_words = [
-        encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x53_u8),
-        encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x55_u8),
+        encoding::wide::encode_scall(0x53_),
+        encoding::wide::encode_scall(0x55_),
     ];
     let executable = &artifact[metadata.code_offset..];
     assert!(executable.as_chunks::<4>().0.iter().all(|chunk| {
@@ -1780,7 +1775,7 @@ fn unary_neg_emits_exact_int_syscall() {
     for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*chunk);
         if instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
-            && encoding::wide::decode_syscallx(word) == syscalls::SYSCALL_INT_NEG
+            && encoding::wide::decode_scall(word) == syscalls::SYSCALL_INT_NEG
         {
             found = true;
             break;
@@ -1851,7 +1846,7 @@ fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
         assert!(
             words.iter().any(|word| {
                 instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
-                    && encoding::wide::decode_syscallx(*word) == syscall
+                    && encoding::wide::decode_scall(*word) == syscall
             }),
             "missing exact adaptive-int comparison syscall {}",
             syscalls::syscall_name(syscall).unwrap_or("UNKNOWN")
@@ -1904,7 +1899,7 @@ fn get_quantity_emits_typed_option_quantity_syscall() {
     let bytes = compiler.compile_source(src).expect("compile get_quantity");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let needle =
-        encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_JSON_GET_QUANTITY).to_le_bytes();
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_JSON_GET_QUANTITY).to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -1920,11 +1915,9 @@ fn get_asset_definition_id_emits_asset_definition_syscall() {
         .compile_source(src)
         .expect("compile get_asset_definition_id");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8,
-    )
-    .to_le_bytes();
+    let needle =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID)
+            .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -1973,11 +1966,7 @@ fn native_escrow_builtins_emit_escrow_syscalls() {
             "ESCROW_RESOLVE_DISPUTE",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("escrow syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2135,11 +2124,7 @@ kotoage fn main() authorize(FixtureAccess) {{
             "SET_ACCOUNT_QUORUM",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("account admin syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2164,19 +2149,15 @@ fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
         .expect("compile dynamic account quorum builtin");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let set_quorum = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM)
-            .expect("account quorum syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let set_quorum =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM).to_le_bytes();
     assert!(
         code.windows(set_quorum.len())
             .any(|window| window == set_quorum),
         "expected SET_ACCOUNT_QUORUM syscall in compiled code"
     );
     let int_to_u64 =
-        encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TO_U64).to_le_bytes();
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_INT_TO_U64).to_le_bytes();
     assert!(
         code.windows(int_to_u64.len())
             .any(|window| window == int_to_u64),
@@ -2250,12 +2231,8 @@ view fn read() authorize(anyone) -> quantity {{
         .expect("compile account balance query builtin");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_GET_ACCOUNT_BALANCE)
-            .expect("account balance syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let needle =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_GET_ACCOUNT_BALANCE).to_le_bytes();
     assert!(
         code.windows(needle.len()).any(|window| window == needle),
         "expected GET_ACCOUNT_BALANCE syscall in compiled code"
@@ -2328,11 +2305,7 @@ kotoage fn main() authorize(FixtureAccess) {{
             "SET_ACCOUNT_DETAIL",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("account-detail syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2422,11 +2395,7 @@ kotoage fn main() authorize(FixtureAccess) {{
         (ivm_abi::syscalls::SYSCALL_MINT_ASSET, "MINT_ASSET"),
         (ivm_abi::syscalls::SYSCALL_BURN_ASSET, "BURN_ASSET"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("asset operation syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2559,11 +2528,7 @@ kotoage fn main() authorize(FixtureAccess) {{
         ),
         (ivm_abi::syscalls::SYSCALL_NFT_BURN_ASSET, "NFT_BURN_ASSET"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("NFT operation syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2707,11 +2672,7 @@ kotoage fn main() authorize(FixtureAccess) {{
         ),
         (ivm_abi::syscalls::SYSCALL_MINT_ASSET, "MINT_ASSET"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("lifecycle syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2801,11 +2762,7 @@ fn peer_trigger_management_builtins_emit_syscalls() {
             "SET_TRIGGER_ENABLED",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("peer/trigger syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2877,11 +2834,7 @@ kotoage fn main() authorize(FixtureAccess) {{
             "REVOKE_PERMISSION",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("role/permission syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -2969,11 +2922,7 @@ fn public_input_builtin_emits_public_input_syscall_and_complete_access() {
             "GET_PUBLIC_INPUT",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("public-input syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3008,36 +2957,23 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
         .expect("compile debug builtins");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_DEBUG_LOG).expect("debug syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_DEBUG_LOG).to_le_bytes();
     assert!(
         code.windows(needle.len()).any(|window| window == needle),
         "expected DEBUG_LOG syscall in compiled code"
     );
-    let retired_print = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_DEBUG_PRINT).expect("debug syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let retired_print =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes();
     assert!(
         !code
             .windows(retired_print.len())
             .any(|window| window == retired_print),
         "V1 source must not expose the raw integer debug syscall"
     );
-    let publish_needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-    )
-    .to_le_bytes();
-    let pointer_codec = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO as u8,
-    )
-    .to_le_bytes();
+    let publish_needle =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes();
+    let pointer_codec =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO).to_le_bytes();
     let logging_codec_calls: Vec<_> = code
         .as_chunks::<4>()
         .0
@@ -3087,16 +3023,14 @@ seiyaku WideInfo { permission FixtureAccess;
         syscalls::SYSCALL_POINTER_TO_NORITO,
         syscalls::SYSCALL_DEBUG_LOG,
     ] {
-        let encoded = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall as u8)
-            .to_le_bytes();
+        let encoded = encoding::wide::encode_scall(syscall as u32).to_le_bytes();
         assert!(
             code.windows(encoded.len()).any(|window| window == encoded),
             "expected V1 pointer/log syscall {syscall:#x}"
         );
     }
     for retired in [0x53_u8, 0x55_u8] {
-        let encoded =
-            encoding::wide::encode_sys(instruction::wide::system::SCALL, retired).to_le_bytes();
+        let encoded = encoding::wide::encode_scall(u32::from(retired)).to_le_bytes();
         assert!(
             !code.windows(encoded.len()).any(|window| window == encoded),
             "retired i64 codec syscall {retired:#x} must not be emitted"
@@ -3138,11 +3072,7 @@ fn assertion_logging_builtins_emit_abort_and_log_syscalls() {
         (ivm_abi::syscalls::SYSCALL_DEBUG_LOG, "DEBUG_LOG"),
         (ivm_abi::syscalls::SYSCALL_ABORT, "ABORT"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("assertion/logging syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3213,11 +3143,7 @@ fn privacy_output_builtins_emit_runtime_syscalls() {
         ),
         (ivm_abi::syscalls::SYSCALL_COMMIT_OUTPUT, "COMMIT_OUTPUT"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("privacy/output syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3412,12 +3338,8 @@ fn signed_axt_spend_source_emits_the_typed_v1_staging_syscall() {
         .expect("typed signed-spend source compiles");
     let metadata = ProgramMetadata::parse(&artifact).expect("parse program metadata");
     let code = &artifact[metadata.code_offset..];
-    let encoded = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND)
-            .expect("B5 fits the V1 immediate"),
-    )
-    .to_le_bytes();
+    let encoded = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND)
+        .to_le_bytes();
     assert!(
         code.windows(encoded.len()).any(|window| window == encoded),
         "source producer must emit the final typed B5 syscall"
@@ -3464,11 +3386,7 @@ fn verify_proof_builtin_emits_verify_proof_syscall_and_complete_access() {
         ),
         (ivm_abi::syscalls::SYSCALL_VERIFY_PROOF, "VERIFY_PROOF"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("verify_proof syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3505,12 +3423,8 @@ fn execution_summary_builtin_emits_execution_summary_syscall_and_complete_access
         .expect("compile execution_summary builtin");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_EXECUTION_SUMMARY)
-            .expect("execution_summary syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let needle =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_EXECUTION_SUMMARY).to_le_bytes();
     assert!(
         code.windows(needle.len()).any(|window| window == needle),
         "expected EXECUTION_SUMMARY syscall in compiled code"
@@ -3624,9 +3538,9 @@ fn vrf_builtins_emit_vrf_syscalls() {
         ),
     ] {
         let needle = if let Ok(imm8) = u8::try_from(syscall) {
-            encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+            encoding::wide::encode_scall(u32::from(imm8))
         } else {
-            encoding::wide::encode_syscallx(syscall)
+            encoding::wide::encode_scall(syscall)
         }
         .to_le_bytes();
         assert!(
@@ -3634,12 +3548,8 @@ fn vrf_builtins_emit_vrf_syscalls() {
             "expected {label} syscall in compiled code"
         );
     }
-    let publish = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .expect("INPUT_PUBLISH_TLV syscall id fits in u8"),
-    )
-    .to_le_bytes();
+    let publish =
+        encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes();
     assert_eq!(
         code.windows(publish.len())
             .filter(|window| *window == publish)
@@ -3657,7 +3567,7 @@ fn vrf_builtins_emit_vrf_syscalls() {
                 instruction::wide::system::SCALL => {
                     Some(u32::from(encoding::wide::decode_sys(word).1))
                 }
-                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_syscallx(word)),
+                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_scall(word)),
                 _ => None,
             }
         })
@@ -3732,11 +3642,7 @@ fn zk_verify_builtins_emit_verify_syscalls() {
             "ZK_VOTE_VERIFY_TALLY",
         ),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("ZK syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -3981,13 +3887,7 @@ fn vendor_bridge_and_subscription_builtins_emit_syscalls() {
         .expect("compile vendor bridge and subscription helpers");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let syscall_needle = |syscall: u32| {
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("test syscall id fits in u8"),
-        )
-        .to_le_bytes()
-    };
+    let syscall_needle = |syscall: u32| encoding::wide::encode_scall(syscall).to_le_bytes();
     let execute_instruction =
         syscall_needle(ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION);
     let execute_instruction_count = code
@@ -4099,11 +3999,7 @@ fn hash_builtins_emit_hash_syscalls_and_complete_access() {
         (ivm_abi::syscalls::SYSCALL_KECCAK256_HASH, "KECCAK256_HASH"),
         (ivm_abi::syscalls::SYSCALL_IROHA_HASH, "IROHA_HASH"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("hash syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -4164,11 +4060,7 @@ fn crypto_builtins_emit_signature_and_sm4_syscalls_and_complete_access() {
         (ivm_abi::syscalls::SYSCALL_SM4_CCM_SEAL, "SM4_CCM_SEAL"),
         (ivm_abi::syscalls::SYSCALL_SM4_CCM_OPEN, "SM4_CCM_OPEN"),
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("crypto syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall in compiled code"
@@ -4296,7 +4188,7 @@ fn numeric_operators_emit_the_nominal_v1_syscall_families() {
         ivm_abi::syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
         ivm_abi::syscalls::SYSCALL_QUANTITY_GE,
     ] {
-        let encoded = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        let encoded = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(encoded.len()).any(|window| window == encoded),
             "missing V1 numeric syscall {syscall:#x}"
@@ -4353,11 +4245,7 @@ fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
         ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
         ivm_abi::syscalls::SYSCALL_TLV_LEN,
     ] {
-        let needle = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("bytes length syscall id fits in u8"),
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "missing bytes length syscall {syscall:#x}"
@@ -4419,11 +4307,8 @@ fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
         .compile_source(include_str!("fixtures/v1/c101.ko"))
         .expect("compile alias shorthand");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4438,11 +4323,8 @@ fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall
         .compile_source(include_str!("fixtures/v1/c102.ko"))
         .expect("compile domain-qualified alias shorthand");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4457,11 +4339,8 @@ fn resolve_account_alias_builtin_emits_syscall() {
         .compile_source(include_str!("fixtures/v1/c103.ko"))
         .expect("compile builtin alias resolution");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4517,9 +4396,9 @@ fn public_context_builtins_emit_syscalls() {
         ),
     ] {
         let word = if let Ok(imm8) = u8::try_from(syscall) {
-            encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+            encoding::wide::encode_scall(u32::from(imm8))
         } else {
-            encoding::wide::encode_syscallx(syscall)
+            encoding::wide::encode_scall(syscall)
         };
         let needle = word.to_le_bytes();
         assert!(
@@ -4596,7 +4475,7 @@ fn native_control_and_recovery_builtins_emit_typed_syscalls() {
             "ACCOUNT_RECOVERY_FINALIZE",
         ),
     ] {
-        let needle = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected {label} syscall"
@@ -4685,12 +4564,8 @@ fn create_nfts_for_all_users_builtin_emits_syscall() {
         .expect("compile create-for-all-users operation");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let code = &bytes[parsed.code_offset..];
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        u8::try_from(ivm_abi::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS)
-            .expect("create-for-all-users syscall fits imm8"),
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS)
+        .to_le_bytes();
     assert!(
         code.windows(needle.len()).any(|window| window == needle),
         "expected CREATE_NFTS_FOR_ALL_USERS syscall"
@@ -4722,11 +4597,8 @@ fn resolve_account_alias_invalid_literal_emits_syscall() {
         .compile_source(include_str!("fixtures/v1/c120.ko"))
         .expect("compile malformed builtin alias resolution");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4741,11 +4613,8 @@ fn resolve_account_alias_domain_qualified_builtin_emits_syscall() {
         .compile_source(include_str!("fixtures/v1/c121.ko"))
         .expect("compile domain-qualified builtin alias resolution");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4760,11 +4629,8 @@ fn resolve_account_alias_invalid_domain_qualified_literal_emits_syscall() {
         .compile_source(include_str!("fixtures/v1/c122.ko"))
         .expect("compile malformed domain-qualified builtin alias resolution");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let needle = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let needle = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(needle.len())
@@ -4791,11 +4657,8 @@ view fn account() authorize(anyone) -> AccountId {{ return AccountId::parse("{ca
         ))
         .expect("compile canonical account literal");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let resolve = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let resolve = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         !bytes[parsed.code_offset..]
             .windows(resolve.len())
@@ -4819,11 +4682,8 @@ fn account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution() {
         .compile_source(include_str!("fixtures/v1/c123.ko"))
         .expect("compile invalid alias-shaped literal");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let resolve = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let resolve = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(resolve.len())
@@ -4838,11 +4698,8 @@ fn account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime
         .compile_source(include_str!("fixtures/v1/c124.ko"))
         .expect("compile invalid domain-qualified alias-shaped literal");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-    let resolve = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-    )
-    .to_le_bytes();
+    let resolve = encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS)
+        .to_le_bytes();
     assert!(
         bytes[parsed.code_offset..]
             .windows(resolve.len())
@@ -4864,38 +4721,6 @@ fn account_id_invalid_non_alias_literal_fails_compile_time_encoding() {
         err.contains("merchant"),
         "expected failing literal in error, got: {err}"
     );
-}
-#[test]
-fn detect_vector_usage_includes_vector_gated_crypto_ops() {
-    let ops = [
-        instruction::wide::crypto::SHA256BLOCK,
-        instruction::wide::crypto::AESENC,
-        instruction::wide::crypto::AESDEC,
-    ];
-    for op in ops {
-        let word = encoding::wide::encode_rr(op, 0, 0, 0);
-        let code = word.to_le_bytes();
-        assert!(
-            super::detect_vector_usage(&code),
-            "expected vector usage for opcode {op:#04x}"
-        );
-    }
-}
-#[test]
-fn detect_zk_usage_includes_zk_ops() {
-    let ops = [
-        instruction::wide::zk::ASSERT,
-        instruction::wide::zk::ASSERT_EQ,
-        instruction::wide::zk::FADD,
-    ];
-    for op in ops {
-        let word = encoding::wide::encode_rr(op, 0, 0, 0);
-        let code = word.to_le_bytes();
-        assert!(
-            super::detect_zk_usage(&code),
-            "expected zk usage for opcode {op:#04x}"
-        );
-    }
 }
 #[test]
 fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
@@ -4930,7 +4755,6 @@ fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
     assert_eq!(payment_error.variants[0].name, "Unauthorized");
     assert_eq!(payment_error.variants[0].code, 1001);
     let mut found_abort = false;
-    let mut found_zk_assert = false;
     for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
@@ -4940,17 +4764,10 @@ fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
                 found_abort = true;
             }
         }
-        if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
-            found_zk_assert = true;
-        }
     }
     assert!(
         found_abort,
         "expected CONTRACT_ABORT syscall in compiled require"
-    );
-    assert!(
-        !found_zk_assert,
-        "require should not emit ZK ASSERT/ASSERT_EQ opcodes"
     );
 }
 #[test]
@@ -4965,7 +4782,6 @@ fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
         "assert should not enable ZK mode"
     );
     let mut found_abort = false;
-    let mut found_zk_assert = false;
     for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
@@ -4975,15 +4791,8 @@ fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
                 found_abort = true;
             }
         }
-        if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
-            found_zk_assert = true;
-        }
     }
     assert!(found_abort, "expected ABORT syscall in compiled assert");
-    assert!(
-        !found_zk_assert,
-        "assert should not emit ZK ASSERT/ASSERT_EQ opcodes"
-    );
 }
 #[test]
 fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
@@ -4997,7 +4806,6 @@ fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
         "assert_eq should not enable ZK mode"
     );
     let mut found_abort = false;
-    let mut found_zk_assert = false;
     for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
         let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
@@ -5007,15 +4815,8 @@ fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
                 found_abort = true;
             }
         }
-        if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
-            found_zk_assert = true;
-        }
     }
     assert!(found_abort, "expected ABORT syscall in compiled assert_eq");
-    assert!(
-        !found_zk_assert,
-        "assert_eq should not emit ZK ASSERT/ASSERT_EQ opcodes"
-    );
 }
 #[test]
 fn source_meta_cannot_override_build_configuration() {
@@ -5046,23 +4847,6 @@ fn production_rejects_test_only_assertions() {
         test_mode_compiler()
             .compile_source(&source)
             .expect("test mode should enable assertion builtins");
-    }
-}
-#[test]
-fn vector_length_is_compiler_owned() {
-    for expression in ["runtime::set_vector_length(8)", "setvl(8)"] {
-        let src = format!(
-            r#"seiyaku Test {{ permission Entry;
-  kotoage fn main() authorize(Entry) {{ {expression}; }}
-}}"#
-        );
-        let error = Compiler::new()
-            .compile_source(&src)
-            .expect_err("source must not select vector metadata");
-        assert!(
-            error.contains("unknown function or builtin") || error.contains("compiler-internal"),
-            "unexpected vector-control error: {error}"
-        );
     }
 }
 #[test]
@@ -5507,7 +5291,7 @@ fn native_json_construction_emits_one_extended_build_syscall() {
             .iter()
             .filter(|word| {
                 instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
-                    && encoding::wide::decode_syscallx(**word) == syscalls::SYSCALL_JSON_BUILD
+                    && encoding::wide::decode_scall(**word) == syscalls::SYSCALL_JSON_BUILD
             })
             .count(),
         1,
@@ -6893,10 +6677,7 @@ fn production_contract_import_emits_typed_a9_and_exact_access_kind() {
                 .iter()
                 .any(|chunk| {
                     let word = u32::from_le_bytes(*chunk);
-                    word == encoding::wide::encode_sys(
-                        instruction::wide::system::SCALL,
-                        ivm_abi::syscalls::SYSCALL_CALL_CONTRACT as u8,
-                    )
+                    word == encoding::wide::encode_scall(ivm_abi::syscalls::SYSCALL_CALL_CONTRACT)
                 })
         );
         let entry = output
@@ -7407,7 +7188,7 @@ fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
                 instruction::wide::system::SCALL => {
                     Some(u32::from(encoding::wide::decode_sys(word).1))
                 }
-                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_syscallx(word)),
+                instruction::wide::system::SYSTEM => Some(encoding::wide::decode_scall(word)),
                 _ => None,
             }
         })
@@ -8435,3 +8216,48 @@ fn literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints() {
 
 #[path = "tests/fi_waterfall.rs"]
 mod fi_waterfall;
+
+#[test]
+fn runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_manifest() {
+    let source = "seiyaku RuntimeObligations { kotoage fn enter(bytes request) authorize(anyone) { ledger::runtime::register_obligation(request); ledger::runtime::complete_obligation(request); } }";
+    let baseline = Compiler::new();
+    assert!(
+        baseline
+            .compile_source(source)
+            .unwrap_err()
+            .contains("iroha.ivm.runtime_lifecycle.v1")
+    );
+    let compiler = Compiler::new_with_options(CompilerOptions {
+        host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ..CompilerOptions::default()
+    });
+    let (artifact, manifest) = compiler.compile_source_with_manifest(source).unwrap();
+    assert!(crate::metadata::ProgramMetadata::parse(&artifact).is_err());
+    let parsed = crate::metadata::ProgramMetadata::parse_for_policy(
+        &artifact,
+        crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+    )
+    .unwrap();
+    assert_eq!(parsed.metadata.abi_version, 1);
+    let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1RuntimeLifecycle);
+    assert_eq!(parsed.contract_interface.unwrap().abi_hash, expected);
+    assert_eq!(
+        manifest.abi_hash,
+        Some(iroha_crypto::Hash::prehashed(expected))
+    );
+    let test_compiler = Compiler::new_with_options(CompilerOptions {
+        host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+        mode: CompilerMode::Test,
+        ..CompilerOptions::default()
+    });
+    assert!(test_compiler.compile_source(source).is_err());
+    let baseline_session = crate::session::CompilerSession::new(CompilerOptions::default());
+    let named_session = crate::session::CompilerSession::new(CompilerOptions {
+        host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ..CompilerOptions::default()
+    });
+    assert_ne!(
+        baseline_session.policy_fingerprint(),
+        named_session.policy_fingerprint()
+    );
+}

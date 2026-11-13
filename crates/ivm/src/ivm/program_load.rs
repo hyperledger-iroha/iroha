@@ -5,12 +5,21 @@ use super::*;
 /// Prepare the canonical image, installing it only when a VM was supplied.
 /// Validation-only callers retire the same admitted image without mutable VM storage.
 pub(super) fn prepare(program: &[u8], destination: Option<&mut IVM>) -> Result<(), VMError> {
+    prepare_for_policy(program, destination, SyscallPolicy::AbiV1)
+}
+
+/// Named-profile admission selected by the caller, retained through installation.
+pub(super) fn prepare_for_policy(
+    program: &[u8],
+    destination: Option<&mut IVM>,
+    policy: SyscallPolicy,
+) -> Result<(), VMError> {
     let budget = destination
         .as_deref()
         .and_then(|vm| vm.memory.allocation_budget());
-    let header = ProgramMetadata::parse_header(program)?;
+    let header = ProgramMetadata::parse_header_for_policy(program, policy)?;
     if header.declares_contract_interface() {
-        let contract = prepare_contract_image(program, budget)?;
+        let contract = prepare_contract_image(program, budget, policy)?;
         return destination.map_or(Ok(()), |vm| vm.load_prepared(&contract));
     }
     let image = prepare_generic_image(program, header, budget)?;
@@ -23,10 +32,16 @@ pub(super) fn prepare(program: &[u8], destination: Option<&mut IVM>) -> Result<(
 fn prepare_contract_image(
     program: &[u8],
     budget: Option<&AllocationBudget>,
+    policy: SyscallPolicy,
 ) -> Result<crate::PreparedContract, VMError> {
     match budget {
-        Some(budget) => crate::prepare_contract_with_memory_budget(program, budget),
-        None => crate::prepare_contract(Arc::<[u8]>::from(program)),
+        Some(budget) => crate::contract_artifact::prepare_contract_with_memory_budget_for_policy(
+            program, budget, policy,
+        ),
+        None => crate::contract_artifact::prepare_contract_for_policy(
+            Arc::<[u8]>::from(program),
+            policy,
+        ),
     }
     .map_err(crate::ContractArtifactError::into_vm_error)
 }
@@ -48,7 +63,7 @@ fn prepare_generic_image<'a>(
         program,
         header_len,
         parsed.literal_section,
-        SyscallPolicy::AbiV1,
+        parsed.syscall_policy,
         budget,
     )?;
     let code_region = &program[header_len..];
@@ -85,6 +100,7 @@ fn prepare_generic_image<'a>(
     let image = ProgramLoadImage {
         code_region,
         metadata: meta,
+        syscall_policy: parsed.syscall_policy,
         contract_interface: parsed.contract_interface.map(|interface| {
             let exclusively_owned = interface
                 .entrypoints
@@ -178,7 +194,7 @@ mod tests {
             })
             .expect("contract-only syscall exists");
         same_static_verdict(
-            &generic(&crate::encoding::wide::encode_syscallx(number).to_le_bytes()),
+            &generic(&crate::encoding::wide::encode_scall(number).to_le_bytes()),
             false,
         );
     }

@@ -56,6 +56,41 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Record,
+        reason: "Selected native AMX service semantics and exact original decision/settlement identities, not a State root",
+        literals: &[
+            r"iroha.runtime.native_amx_capture.v1",
+            r"iroha:runtime:native-amx-capture:v1:original-decision-settlement-and-deadline-cohorts",
+            r"iroha:runtime:native-amx-capture-id:v1\0",
+            r"iroha:runtime:native-amx-opening:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Selected native escrow service semantics and immutable original custody identity, not a State root",
+        literals: &[
+            r"iroha.runtime.native_escrow_capture.v1",
+            r"iroha:runtime:native-escrow-capture:v1:original-custody-kind-and-completion-closure",
+            r"iroha:runtime:native-escrow-opening:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Wire identities of explicit current-binding deferred consent; they identify instructions and hash no State content",
+        literals: &[
+            r"iroha.runtime.consent.multisig.current.v1",
+            r"iroha.runtime.consent.trigger.current.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Immutable identity of one deferred executable and the selected consent-service semantics, not a State root",
+        literals: &[
+            r"iroha:runtime:deferred-consent:v1:exact-occurrence-capture-or-explicit-current-bindings",
+            r"iroha:runtime:deferred-executable:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
         reason: "Immutable identity and closure of the selected commitment profile and its adoption kernel",
         literals: &[
             r"iroha keyed State adoption kernel v1",
@@ -91,8 +126,12 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Exact wire identity of the anonymous Parliament credential registration, including its built-in dispatch entry. It selects the instruction layout; neither the identifier nor its registration computes a digest or grants the instruction authority",
-        literals: &[r"iroha.governance.parliament.credential.register.v1"],
+        reason: "Exact wire identities of the anonymous Parliament family's three interfaces (attempt creation, transition submission and credential registration), including their built-in dispatch entries and the addition that claims them. Each selects an instruction layout; neither an identifier nor its registration computes a digest or grants the instruction authority",
+        literals: &[
+            r"iroha.governance.parliament.anonymous.attempt.create.v1",
+            r"iroha.governance.parliament.anonymous.transition.submit.v1",
+            r"iroha.governance.parliament.credential.register.v1",
+        ],
     },
     OtherDomains {
         usage: Use::Name,
@@ -298,6 +337,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Record,
         reason: "Digest and detached-signature preimage of one ballot qualification record containing its profile, schema, implementation/evidence manifests, security contract and parameter/service bounds. The current release gate remains unqualified; hashing the record grants no production or State authority",
         literals: &[r"PARL/QUALIFICATION/v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Anonymous Parliament lifecycle receipt digests bind the one attempt State or ballot board record that a positioned block-start item left, as its committed governance block-start output names it. A reader recomputes each from that record; the anonymous tables themselves are committed by the World root. They are record identities in a block output, not a State root, accumulator or State-read authority",
+        literals: &[r"PARL/ATTEMPT-STATE/v1", r"PARL/BOARD-RECORD/v1"],
     },
     OtherDomains {
         usage: Use::Test,
@@ -1136,13 +1180,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.governance.attempt.id.v1",
             r"iroha.governance.certificate.id.v1",
             r"iroha.governance.effect_preimage.v1",
-            r"iroha.governance.parliament.anonymous.attempt.create.v1",
             r"iroha.governance.parliament.anonymous.attempt.id.v1",
             r"iroha.governance.parliament.anonymous.body_instance.id.v1",
             r"iroha.governance.parliament.anonymous.certificate.id.v1",
             r"iroha.governance.parliament.anonymous.execution_failure.root.v1",
             r"iroha.governance.parliament.anonymous.transition.digest.v1",
-            r"iroha.governance.parliament.anonymous.transition.submit.v1",
             r"iroha.governance.parliament.assignment.id.v1",
             r"iroha.governance.parliament.assignment_plan.root.v1",
             r"iroha.governance.parliament.attempt.create.v1",
@@ -1567,6 +1609,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.parameter.content_and_router_policy.v1",
             r"iroha.parameters.v1",
             r"iroha.permission.content_publish.v1",
+            r"iroha.runtime.deferred_consent.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.runtime.lifecycle.v1",
             r"iroha.sorafs.authority_governance.v1",

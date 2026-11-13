@@ -352,8 +352,6 @@ internal static class ToriiContractMetadataJson
         {
             Load64 = ReadRequiredUInt64(payload, "load64", $"{context}.load64"),
             Store64 = ReadRequiredUInt64(payload, "store64", $"{context}.store64"),
-            Load128 = ReadRequiredUInt64(payload, "load128", $"{context}.load128"),
-            Store128 = ReadRequiredUInt64(payload, "store128", $"{context}.store128"),
         };
         ValidateContractViewMemory(response, context);
         return response;
@@ -590,8 +588,6 @@ internal static class ToriiContractMetadataJson
         writer.WriteStartObject();
         writer.WriteNumber("load64", value.Load64);
         writer.WriteNumber("store64", value.Store64);
-        writer.WriteNumber("load128", value.Load128);
-        writer.WriteNumber("store128", value.Store128);
         writer.WriteEndObject();
     }
 

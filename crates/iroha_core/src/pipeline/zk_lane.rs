@@ -1,8 +1,8 @@
 //! ZK lane: capture IVM diagnostic traces, check them in the background, and report.
 //!
 //! This module provides a lightweight, non-forking background worker that can receive formal
-//! execution traces from IVM runs, check recorded constraints and authenticated
-//! register-log entries, and report outcomes. It does not verify VM transition
+//! execution traces from IVM runs, check authenticated register-log entries, and
+//! report outcomes. It does not verify VM transition
 //! semantics or memory-event membership, does not mutate WSV, and is intended
 //! purely for diagnostics/telemetry.
 //!
@@ -14,7 +14,7 @@
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-use ivm::zk::{Constraint, DiagnosticTraceSnapshot};
+use ivm::zk::DiagnosticTraceSnapshot;
 #[cfg(test)]
 use ivm::zk::{MemEvent, RegEvent, RegisterState, StepEntry};
 use norito::streaming::CapabilityFlags;
@@ -104,7 +104,6 @@ impl ZkTask {
         }
 
         self.hash_trace(&mut h);
-        self.hash_constraints(&mut h);
         self.hash_memory_log(&mut h);
         self.hash_register_log(&mut h);
         self.hash_step_log(&mut h);
@@ -120,30 +119,6 @@ impl ZkTask {
             }
             for tag in &state.tags {
                 h.update([u8::from(*tag)]);
-            }
-        }
-    }
-    fn hash_constraints(&self, h: &mut Sha256) {
-        h.update((self.snapshot.constraints().len() as u64).to_le_bytes());
-        for constraint in self.snapshot.constraints() {
-            match constraint {
-                Constraint::Zero { reg, cycle } => {
-                    h.update([0]);
-                    h.update((*reg as u64).to_le_bytes());
-                    h.update(cycle.to_le_bytes());
-                }
-                Constraint::Eq { reg1, reg2, cycle } => {
-                    h.update([1]);
-                    h.update((*reg1 as u64).to_le_bytes());
-                    h.update((*reg2 as u64).to_le_bytes());
-                    h.update(cycle.to_le_bytes());
-                }
-                Constraint::Range { reg, bits, cycle } => {
-                    h.update([2]);
-                    h.update((*reg as u64).to_le_bytes());
-                    h.update([*bits]);
-                    h.update(cycle.to_le_bytes());
-                }
             }
         }
     }
@@ -209,7 +184,7 @@ impl ZkTask {
 pub enum TraceCheckOutcome {
     /// All supported diagnostic checks passed.
     Checked,
-    /// A constraint or authenticated register path failed its diagnostic check.
+    /// An authenticated register path failed its diagnostic check.
     Rejected,
 }
 /// Handle for submitting ZK tasks to the background worker.
@@ -745,7 +720,6 @@ fn emit_outcome(job: &ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
         digest = %hex::encode(dig),
         outcome = ?outcome,
         cycles = job.snapshot.states().len(),
-        constraints = job.snapshot.constraints().len(),
         mem_events = job.snapshot.memory_event_count(),
         reg_events = job.snapshot.register_event_count(),
         "zk_lane: checked diagnostic trace"
@@ -1003,24 +977,18 @@ mod tests {
     }
     struct TraceFixture {
         trace: Vec<RegisterState>,
-        constraints: Vec<Constraint>,
         mem_log: Vec<MemEvent>,
         reg_log: Vec<RegEvent>,
         step_log: Vec<StepEntry>,
     }
     impl TraceFixture {
         fn new() -> Self {
-            let mut gpr = [0; 256];
-            gpr[128] = 7;
-            let mut tags = [false; 256];
-            tags[128] = true;
+            let mut gpr = [0; ivm::parallel::REGISTER_COUNT];
+            gpr[28] = 7;
+            let mut tags = [false; ivm::parallel::REGISTER_COUNT];
+            tags[28] = true;
             Self {
                 trace: vec![RegisterState { pc: 11, gpr, tags }],
-                constraints: vec![Constraint::Range {
-                    reg: 128,
-                    bits: 8,
-                    cycle: 0,
-                }],
                 mem_log: vec![MemEvent::Load {
                     addr: 64,
                     value: 7,
@@ -1029,7 +997,7 @@ mod tests {
                     root: root(0x41),
                 }],
                 reg_log: vec![RegEvent::Read {
-                    index: 128,
+                    index: 28,
                     value: 7,
                     tag: true,
                     path: [[0x51; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
@@ -1047,7 +1015,6 @@ mod tests {
         fn snapshot(&self, budget: &iroha_allocation::AllocationBudget) -> DiagnosticTraceSnapshot {
             ivm::zk::DiagnosticTraceSource {
                 registers: ivm::zk::DiagnosticRegisterSource::States(&self.trace),
-                constraints: &self.constraints,
                 memory_events: &self.mem_log,
                 register_events: &self.reg_log,
                 steps: &self.step_log,
@@ -1073,7 +1040,6 @@ mod tests {
     fn empty_snapshot() -> DiagnosticTraceSnapshot {
         ivm::zk::DiagnosticTraceSource {
             registers: ivm::zk::DiagnosticRegisterSource::States(&[]),
-            constraints: &[],
             memory_events: &[],
             register_events: &[],
             steps: &[],
@@ -1082,7 +1048,7 @@ mod tests {
         .expect("empty capture needs no payload credit")
     }
     #[test]
-    fn digest_binds_program_trace_and_constraints() {
+    fn digest_binds_program_and_trace() {
         let digest = digest_task().digest();
         let mut changed = digest_task();
         let mut program = changed.program.as_ref().to_vec();
@@ -1095,18 +1061,11 @@ mod tests {
         );
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let mut fixture = TraceFixture::new();
-        fixture.trace[0].gpr[128] ^= 1;
+        fixture.trace[0].gpr[28] ^= 1;
         assert_ne!(
             digest,
             fixture.task(&budget).digest(),
             "register values must be bound"
-        );
-        let mut fixture = TraceFixture::new();
-        fixture.constraints[0] = Constraint::Zero { reg: 128, cycle: 0 };
-        assert_ne!(
-            digest,
-            fixture.task(&budget).digest(),
-            "constraints must be bound"
         );
     }
     #[test]

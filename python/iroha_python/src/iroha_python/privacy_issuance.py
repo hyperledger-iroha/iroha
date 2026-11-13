@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import hmac
-import json
 import re
-import struct
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
-from norito.crc64 import crc64 as _crc64_v1
 from requests.adapters import HTTPAdapter
+
+from ._torii_error_envelope import (
+    decode_json_error_envelope_v1,
+    decode_norito_error_envelope_v1,
+)
 
 BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1 = "/v1/privacy/bootle-lantern/issuance/authorize"
 BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1 = "/v1/privacy/bootle-lantern/issuance/issue"
@@ -34,7 +35,6 @@ _AUTHORIZATION_MAGIC_V1 = b"ILA1"
 _BLIND_REQUEST_MAGIC_V1 = b"ILQ1"
 _RESPONSE_MAGIC_V1 = b"ILR1"
 _WWW_AUTHENTICATE_VALUE_V1 = 'Bearer realm="iroha-bootle-lantern-issuance"'
-_ERROR_ENVELOPE_TYPE_NAME_V1 = "iroha_torii_shared::ErrorEnvelope"
 _ERROR_CONTRACT_V1: dict[int, tuple[str, str, int | None]] = {
     400: ("privacy_issuance_invalid_request", BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, None),
     401: ("privacy_issuance_unauthorized", BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, None),
@@ -343,73 +343,6 @@ def _read_bounded_response_body(response: Any, operation: str, maximum_bytes: in
     return copied
 
 
-def _read_compact_length_v1(payload: bytes, offset: int) -> tuple[int, int]:
-    value = 0
-    shift = 0
-    count = 0
-    while offset < len(payload) and count < 10:
-        byte = payload[offset]
-        offset += 1
-        count += 1
-        value |= (byte & 0x7F) << shift
-        if byte & 0x80 == 0:
-            if (count > 1 and byte == 0) or value > 0xFFFF_FFFF_FFFF_FFFF:
-                raise ValueError("non-canonical compact length")
-            return value, offset
-        shift += 7
-    raise ValueError("invalid compact length")
-
-
-def _read_norito_string_v1(payload: bytes, offset: int) -> tuple[str, int]:
-    length, offset = _read_compact_length_v1(payload, offset)
-    end = offset + length
-    if end > len(payload):
-        raise ValueError("truncated Norito string")
-    return payload[offset:end].decode("utf-8", errors="strict"), end
-
-
-def _read_norito_field_v1(payload: bytes, offset: int) -> tuple[bytes, int]:
-    length, offset = _read_compact_length_v1(payload, offset)
-    end = offset + length
-    if end > len(payload):
-        raise ValueError("truncated error-envelope field")
-    return payload[offset:end], end
-
-
-def _read_norito_string_field_v1(payload: bytes, offset: int) -> tuple[str, int]:
-    field, offset = _read_norito_field_v1(payload, offset)
-    value, field_offset = _read_norito_string_v1(field, 0)
-    if field_offset != len(field):
-        raise ValueError("trailing bytes in error-envelope string field")
-    return value, offset
-
-
-def _decode_norito_error_envelope_v1(body: bytes) -> tuple[str, str]:
-    if len(body) < 40 or body[:6] != b"NRT0\x00\x00":
-        raise ValueError("invalid Norito header")
-    schema_hash = hashlib.sha256(
-        b"norito:v1:type-name\x00" + _ERROR_ENVELOPE_TYPE_NAME_V1.encode("utf-8")
-    ).digest()[:16]
-    if not hmac.compare_digest(body[6:22], schema_hash):
-        raise ValueError("wrong error-envelope schema")
-    if body[22] != 0 or body[39] != 0x02:
-        raise ValueError("non-canonical error-envelope framing")
-    payload_length = struct.unpack_from("<Q", body, 23)[0]
-    if payload_length == 0 or len(body) != 40 + payload_length:
-        raise ValueError("invalid error-envelope payload length")
-    payload = body[40:]
-    if struct.unpack_from("<Q", body, 31)[0] != _crc64_v1(payload):
-        raise ValueError("error-envelope CRC mismatch")
-    code, offset = _read_norito_string_field_v1(payload, 0)
-    message, offset = _read_norito_string_field_v1(payload, offset)
-    details, offset = _read_norito_field_v1(payload, offset)
-    if details != b"\x00":
-        raise ValueError("error details must be absent")
-    if offset != len(payload):
-        raise ValueError("trailing error-envelope payload")
-    return code, message
-
-
 def _decode_error_response_v1(
     response: Any, operation: str, status: int
 ) -> BootleLanternIssuanceClientErrorV1:
@@ -431,17 +364,12 @@ def _decode_error_response_v1(
             actual_bytes=len(body),
             retry_after_seconds=retry_after_seconds,
         )
+        # A canonical envelope must still name exactly this status's code as both
+        # its code and message; any other envelope is an invalid response.
         if status == 406:
-            expected_body = f'{{"code":"{expected_code}","message":"{expected_code}"}}'.encode()
-            if not hmac.compare_digest(body, expected_body):
-                raise ValueError("non-canonical JSON error envelope")
-            envelope = json.loads(body.decode("utf-8", errors="strict"))
-            code = envelope.get("code")
-            message = envelope.get("message")
-            if set(envelope) != {"code", "message"}:
-                raise ValueError("unexpected JSON error fields")
+            code, message = decode_json_error_envelope_v1(body)
         else:
-            code, message = _decode_norito_error_envelope_v1(body)
+            code, message = decode_norito_error_envelope_v1(body)
         if code != expected_code or message != expected_code:
             raise ValueError("error envelope does not match its HTTP status")
     except BootleLanternIssuanceClientErrorV1:

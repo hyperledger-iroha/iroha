@@ -368,7 +368,7 @@ impl IVM {
             || (opcode == wide::control::JALR
                 && (wide::rd(instruction) != 0
                     || wide::rs1(instruction) != 1
-                    || wide::imm8(instruction) != 0))
+                    || wide::imm14(instruction) != 0))
         {
             return Err(recorder.refusal(CaptureError::Unsupported));
         }
@@ -386,15 +386,12 @@ impl IVM {
             return Err(recorder.refusal(CaptureError::Unsupported));
         }
         if matches!(opcode, wide::memory::LOAD64 | wide::memory::STORE64) {
-            let register = if opcode == wide::memory::STORE64 {
-                wide::rd(instruction)
-            } else {
-                wide::rs1(instruction)
-            };
+            // LOAD64 and STORE64 both keep their base register in bits 18..14.
+            let register = wide::rs1(instruction);
             let address = self
                 .registers
                 .get(register)
-                .wrapping_add_signed(i64::from(wide::imm8(instruction)));
+                .wrapping_add_signed(i64::from(wide::imm14(instruction)));
             let end = address.checked_add(8);
             let stack = address >= recorder.descriptor[0]
                 && end.is_some_and(|end| end <= recorder.descriptor[1]);
@@ -464,8 +461,8 @@ impl IVM {
         match opcode {
             wide::memory::LOAD64 => read(recorder, clocks[4], wide::rs1(instruction)),
             wide::memory::STORE64 => {
-                read(recorder, clocks[4], wide::rd(instruction));
-                read(recorder, clocks[5], wide::rs1(instruction));
+                read(recorder, clocks[4], wide::store_base(instruction));
+                read(recorder, clocks[5], wide::store_value(instruction));
             }
             wide::control::JALR => {
                 read(recorder, clocks[2], 1);
@@ -482,15 +479,12 @@ impl IVM {
             _ => {}
         }
         let memory = if matches!(opcode, wide::memory::LOAD64 | wide::memory::STORE64) {
-            let register = if opcode == wide::memory::STORE64 {
-                wide::rd(instruction)
-            } else {
-                wide::rs1(instruction)
-            };
+            // LOAD64 and STORE64 both keep their base register in bits 18..14.
+            let register = wide::rs1(instruction);
             let address = self
                 .registers
                 .get(register)
-                .wrapping_add_signed(i64::from(wide::imm8(instruction)));
+                .wrapping_add_signed(i64::from(wide::imm14(instruction)));
             // Only successful aligned memory instructions are publishable. A
             // malformed address remains the ordinary interpreter's own fault.
             self.memory.native_packet_cell(address & !15).map(|bytes| {

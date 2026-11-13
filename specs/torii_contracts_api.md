@@ -102,7 +102,7 @@ remain required keys with explicit nulls. Missing or unknown keys are invalid.
 - `AccountId` strings use canonical I105 literals (domainless encoded literal).
   Strict parser paths accept only canonical I105 literals (no `@<domain>` suffix).
 - `features_bitmap` is compiler-derived, hash-covered execution metadata. V1
-  mirrors the artifact header's ZK and deterministic VECTOR capability bits;
+  mirrors the artifact header's ZK capability bit, the only V1 capability;
   it is not source-selectable and never reports host SIMD, Metal, or CUDA
   availability.
 

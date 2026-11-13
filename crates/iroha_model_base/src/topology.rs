@@ -292,6 +292,12 @@ impl JsonKeyCodec for DataSpaceId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&self.as_u64(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        <u64 as JsonKeyCodec>::encode_json_key_to(&self.as_u64(), out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self::from)
     }
@@ -300,6 +306,12 @@ impl JsonKeyCodec for DataSpaceId {
 impl JsonKeyCodec for LaneId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&u64::from(self.as_u32()), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        <u64 as JsonKeyCodec>::encode_json_key_to(&u64::from(self.as_u32()), out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).and_then(|value| {

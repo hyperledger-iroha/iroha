@@ -1,7 +1,9 @@
 # IVM hardware acceleration
 
 IVM computes the same public result, gas, errors, state effects, event order,
-and verification decision on every hardware class. SIMD is compiled into all
+and verification decision on every hardware class. The instruction set has no
+vector or cryptographic opcodes: acceleration exists only behind host-side
+helpers (Merkle hashing, syscall primitives, proof tooling). SIMD is compiled into all
 builds and selected by CPU capability. Ordinary macOS builds now compile the
 Metal backend by default; the Metal feature has target-scoped dependencies and
 is inert on other operating systems. The node's file-loaded `[accel]` policy
@@ -202,7 +204,7 @@ uses the slowest GPU trial against the fastest CPU trial with a 10% margin.
 A different geometry has a 30-second retry cooldown, an eight-second shared
 sampling budget, and no extrapolation. The compiled dalek/SHA-512 baseline is
 process-lived; it is independent of the IVM vector forced-scalar override.
-TODO: integrate the separate ordered `verify_ed25519_batch` opcode request path;
+TODO: integrate the separate ordered `verify_ed25519_batch` request helper;
 this Items helper correction does not accelerate that sequential CPU entrypoint.
 
 Synthetic Ed25519 and AES dispatches execute the same physical-owner lookup and
@@ -318,7 +320,7 @@ and 6/5, x^5, 8 full rounds with 57/60 partial rounds, and the exact complete
 circomlibjs v0.1.7 constants/MDS. The Iroha H.2 fixed-arity mode puts
 `arity * 2^64` in capacity coordinate zero, adds inputs into rate coordinates,
 and returns coordinate one. Six inputs require two additive rate-five blocks.
-The 64-bit opcode outputs are not commitments. The separate FASTPQ variable
+The 64-bit helper outputs are not commitments. The separate FASTPQ variable
 word sponge retains its padding and coordinate convention using the new table.
 
 Strict canonical initialization, explicit width/round-count exports, IVM
@@ -328,7 +330,7 @@ mode behavior; they do not establish a constrained BN254 Halo2 relation. CUDA
 uses the same fixed mode in one authenticated invocation and publishes only
 after validating the complete output state. GPU request buffers, cancellation,
 signed artifacts and physical qualification remain separate requirements.
-The previous tables and untagged modes are removed; ABI V1 opcode outputs and
+The previous tables and untagged modes are removed; helper outputs and
 shared fixture hashes change together without a compatibility path.
 
 Ordinary BN254 addition, subtraction and multiplication, and Poseidon2/6 batches,

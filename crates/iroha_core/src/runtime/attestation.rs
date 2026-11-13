@@ -83,6 +83,14 @@ pub enum NodeAttestationError {
         /// The first definition the selection relies on that this release lacks.
         definition: DefinitionId,
     },
+    /// The code is present for retained history but this release cannot qualify its activation.
+    #[error("definition {definition} is not qualified for activation: {reason}")]
+    Unqualified {
+        /// The newly selected definition whose lifecycle has not been qualified.
+        definition: DefinitionId,
+        /// The missing release prerequisite.
+        reason: &'static str,
+    },
     /// The release catalog cannot be built (a build defect).
     #[error(transparent)]
     Catalog(#[from] CatalogError),
@@ -180,6 +188,16 @@ pub fn successor_selection(
         &PublishedDefinitions(world.runtime_definitions()),
     )
     .map_err(|error| NodeAttestationError::NoLongerApplies(error.to_string()))?;
+    if let Some(definition) = super::catalog::unqualified_native_activation(
+        world.runtime_selection(),
+        &selection,
+        &release_catalog()?.definitions,
+    ) {
+        return Err(NodeAttestationError::Unqualified {
+            definition,
+            reason: super::catalog::UNQUALIFIED_NATIVE_REASON,
+        });
+    }
     Ok((record, selection))
 }
 

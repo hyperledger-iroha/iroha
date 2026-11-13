@@ -8,7 +8,7 @@ use std::{
     path::{Component, Path},
     sync::{Mutex, OnceLock},
 };
-const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_1_mode03_vlen8_cycles1000_abi1";
+const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_1_mode01_vlen8_cycles1000_abi1";
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
 /// Results are cached in-memory so repeated calls do not recompile.

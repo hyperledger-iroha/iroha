@@ -146,11 +146,12 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
     with pytest.raises(goldens.GoldenError, match="forbidden debug metadata"):
         goldens.validate_artifact(path, "standard", ABI_HASH)
 
-    mutated = bytearray(artifact())
-    mutated[6] = 0x80
-    path.write_bytes(mutated)
-    with pytest.raises(goldens.GoldenError, match="unknown execution-mode bits"):
-        goldens.validate_artifact(path, "standard", ABI_HASH)
+    for retired_or_unknown in (0x02, 0x80):
+        mutated = bytearray(artifact())
+        mutated[6] = retired_or_unknown
+        path.write_bytes(mutated)
+        with pytest.raises(goldens.GoldenError, match="unknown execution-mode bits"):
+            goldens.validate_artifact(path, "standard", ABI_HASH)
 
     mutated = bytearray(artifact())
     mutated[7] = 8

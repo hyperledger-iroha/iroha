@@ -139,7 +139,6 @@ mod tests {
             wide::arithmetic::DIV,
             wide::arithmetic::REM,
             wide::arithmetic::CMOV,
-            wide::system::GETGAS,
             wide::control::BEQ,
             wide::control::JAL,
             wide::memory::LOAD64,

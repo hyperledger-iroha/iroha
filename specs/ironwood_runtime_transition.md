@@ -104,13 +104,13 @@ Read-only preflight: export the operator-selected network's `/v1/runtime/upgrade
 response to a local file, then run (from this clone, with its selected toolchain):
 
 ```sh
-CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node \
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node,dev-tools \
   --bin ironwood_activation_preflight -- runtime-upgrades.json H
 ```
 
 The command validates `selection_id_hex` against the complete selection and compares
 it with the current-selection Ironwood constructor. The baseline identity remains
-`56c2328657d63a48e18c7d1bac5ae8f2406e6e71249a630ece7b504d0f9cd491`;
+`11bc31dcbf492f25ce99e3f96ebdd4bd5f2d7afab68d123b147cf87e62a396d9`;
 the compiled Time predecessor is also accepted by this merged release.
 It validates the exported scheduled-record identities, projects every scheduled
 change set due before the supplied activation height H, checks the projected

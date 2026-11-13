@@ -444,6 +444,12 @@ impl norito::json::JsonKeyCodec for RwaId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_display_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         encoded
             .parse::<Self>()

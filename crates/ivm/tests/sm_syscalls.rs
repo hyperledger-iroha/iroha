@@ -43,10 +43,7 @@ fn syscall_sm3_hash_returns_digest_blob() {
         .expect("preload input blob");
     let ptr_input = Memory::INPUT_START;
     vm.set_register(10, ptr_input);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM3_HASH as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM3_HASH);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -76,10 +73,7 @@ where
         .preload_input(0, &tlv)
         .expect("preload input blob");
     vm.set_register(10, Memory::INPUT_START);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM3_HASH as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM3_HASH);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -133,10 +127,7 @@ fn wsv_host_sm2_verify_succeeds_by_default() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -161,10 +152,7 @@ fn default_host_sm3_hash_available_by_default() {
         .preload_input(0, &tlv)
         .expect("preload input blob");
     vm.set_register(10, Memory::INPUT_START);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM3_HASH as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM3_HASH);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -187,10 +175,7 @@ fn core_host_sm3_hash_available_by_default() {
         .preload_input(0, &tlv)
         .expect("preload input blob");
     vm.set_register(10, Memory::INPUT_START);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM3_HASH as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM3_HASH);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -215,10 +200,7 @@ fn wsv_host_sm3_hash_available_by_default() {
         .preload_input(0, &tlv)
         .expect("preload input blob");
     vm.set_register(10, Memory::INPUT_START);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM3_HASH as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM3_HASH);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -262,10 +244,7 @@ fn syscall_sm2_verify_success() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0); // default distid
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -346,10 +325,7 @@ fn syscall_sm2_verify_accepts_custom_distid() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, p_distid);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -383,10 +359,7 @@ fn syscall_sm2_verify_fails_for_bad_signature() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -415,10 +388,7 @@ fn syscall_sm2_verify_returns_zero_for_truncated_signature() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -450,10 +420,7 @@ fn syscall_sm2_verify_returns_zero_for_all_zero_signature() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -487,10 +454,7 @@ fn syscall_sm2_verify_returns_zero_for_invalid_public_key() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -527,10 +491,7 @@ fn syscall_sm2_verify_rejects_mismatched_distid() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, p_other_distid);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -566,10 +527,7 @@ fn syscall_sm2_verify_supports_empty_distid_blob() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, p_distid);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -602,10 +560,7 @@ fn syscall_sm2_verify_available_by_default() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -640,10 +595,7 @@ fn syscall_sm2_verify_errors_on_non_blob_inputs() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -678,10 +630,7 @@ fn syscall_sm2_verify_errors_on_non_utf8_distid() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, p_distid);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -716,10 +665,7 @@ fn syscall_sm4_gcm_seal_matches_vector() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, p_aad);
     vm.set_register(13, p_pt);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -764,10 +710,7 @@ fn syscall_sm4_gcm_open_returns_plaintext() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, p_aad);
     vm.set_register(13, p_ct);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_OPEN as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_OPEN);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -806,10 +749,7 @@ fn syscall_sm4_gcm_open_rejects_bad_tag() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, p_aad);
     vm.set_register(13, p_ct);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_OPEN as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_OPEN);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -840,10 +780,7 @@ fn syscall_sm4_ccm_seal_matches_vector() {
     vm.set_register(12, p_aad);
     vm.set_register(13, p_pt);
     vm.set_register(14, expected_tag.len() as u64);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -889,10 +826,7 @@ fn syscall_sm4_ccm_open_returns_plaintext() {
     vm.set_register(12, p_aad);
     vm.set_register(13, p_ct);
     vm.set_register(14, tag.len() as u64);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_OPEN as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_OPEN);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -932,10 +866,7 @@ fn syscall_sm4_ccm_open_rejects_bad_tag() {
     vm.set_register(12, p_aad);
     vm.set_register(13, p_ct);
     vm.set_register(14, tag.len() as u64);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_OPEN as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_OPEN);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -964,10 +895,7 @@ fn syscall_sm4_ccm_seal_rejects_wide_tag_length_without_truncation() {
     // This aliases tag length 4 if a 64-bit protocol register is narrowed to
     // a 32-bit usize with `as`.
     vm.set_register(14, u64::from(u32::MAX) + 5);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -998,10 +926,7 @@ fn syscall_sm4_ccm_open_rejects_wide_tag_length_without_truncation() {
     vm.set_register(12, p_aad);
     vm.set_register(13, p_ct);
     vm.set_register(14, u64::from(u32::MAX) + 5);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_OPEN as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_OPEN);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -1026,10 +951,7 @@ fn syscall_sm4_gcm_seal_available_by_default() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, 0); // no AAD
     vm.set_register(13, p_pt);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -1066,10 +988,7 @@ fn wsv_host_sm2_verify_available_by_default() {
     vm.set_register(11, p_sig);
     vm.set_register(12, p_pk);
     vm.set_register(13, 0);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM2_VERIFY);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -1101,10 +1020,7 @@ fn wsv_host_sm4_gcm_seal_matches_vector_by_default() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, p_aad);
     vm.set_register(13, p_pt);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -1176,10 +1092,7 @@ fn wsv_host_sm4_gcm_seal_available_by_default() {
     vm.set_register(11, p_nonce);
     vm.set_register(12, 0);
     vm.set_register(13, p_pt);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_GCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_GCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());
@@ -1212,10 +1125,7 @@ fn default_host_sm4_ccm_seal_available_by_default() {
     vm.set_register(12, 0);
     vm.set_register(13, p_pt);
     vm.set_register(14, 16);
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_SM4_CCM_SEAL as u8,
-    );
+    let syscall = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SM4_CCM_SEAL);
     let halt = encoding::wide::encode_halt();
     let mut program = Vec::new();
     program.extend_from_slice(&syscall.to_le_bytes());

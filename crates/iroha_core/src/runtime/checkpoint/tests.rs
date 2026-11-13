@@ -318,6 +318,54 @@ fn the_policy_is_read_and_admitted_only_with_the_lifecycle_state() {
     assert_eq!(admit_parameter(&stx, &unrelated), Ok(()));
 }
 
+#[test]
+fn boundary_readers_require_selected_lifecycle_storage_even_when_rows_exist() {
+    let (record, _, anchor_boundary) = adoption(&keys());
+    let anchor = RuntimeAdoptionAnchorV1 {
+        record,
+        attestations: Vec::new(),
+    };
+    let floor = RuntimeStartupFloorV1 {
+        floor: StartupFloorV1 {
+            network: network(),
+            height: 60,
+            block_hash: [8; 32],
+            committed_ms: 240_000,
+        },
+        effective_ms: DAY_MS,
+        attestations: Vec::new(),
+    };
+    for selected in [false, true] {
+        let state = blank_state();
+        if selected {
+            crate::runtime::activate_additions_for_testing(&state.world, RUNTIME_LIFECYCLE.module)
+                .unwrap();
+        }
+        let mut world = state.world.block();
+        world.runtime_boundaries.insert(
+            anchor.record.height,
+            RuntimeBoundaryV1::AdoptionAnchor(anchor.clone()),
+        );
+        world.runtime_boundaries.insert(
+            floor.floor.height,
+            RuntimeBoundaryV1::StartupFloor(floor.clone()),
+        );
+        assert_eq!(committed_anchor(&world), selected.then(|| anchor.clone()));
+        assert_eq!(latest_floor(&world), selected.then(|| floor.clone()));
+        assert_eq!(
+            history_boundary(&world, DAY_MS - 1),
+            selected.then_some(anchor_boundary)
+        );
+        assert_eq!(
+            history_boundary(&world, DAY_MS),
+            selected.then_some(UpgradeCheckpointV1 {
+                height: floor.floor.height,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(floor.floor.block_hash)),
+            })
+        );
+    }
+}
+
 /// A State that has committed nine blocks, each four seconds after the last, whose root has
 /// activated the lifecycle State and whose committee holds `keys`; with the hash of each block
 /// by height.

@@ -1077,10 +1077,7 @@ the original zero-prefix equations over canonical source bits with native
 six-gas, one-cycle behavior. CMOV/CMOVI now bind the full public condition and
 only the native conditionally read source and written destination. DIV/DIVU/REM/REMU
 reuse the original arithmetic bank and preserve public trap-sensitive operands,
-native gas and the original 21 packet ports. GETGAS binds the destination directly
-to the original gas port, preserves its native zero-gas tariff and one-cycle
-transition, clears the destination's private tag, and ignores both encoded source
-bytes. Register zero remains unwritable, including at zero remaining opcode gas.
+native gas and the original 21 packet ports.
 ABS constrains the public operand and rejects signed overflow. MEAN owns exact
 65-bit signed addition and truncation toward zero, 44 shared result cells and
 native two-gas/three-cycle behavior. ISQRT constrains the 32-bit floor root and
@@ -1209,7 +1206,7 @@ other admitted scalars one; all advance one cycle and four code bytes. The canon
 descriptor supplies witness debit arithmetic; equations bind the actual original
 debit. Native packet geometry remains fixed. The shared instruction workspace has
 1,512 fields per row, including disabled arithmetic banks; all 65 rows reserve
-786,240 bytes before private construction. The composed maximum degree remains four. Conditional moves, GETGAS, division, branching and
+786,240 bytes before private construction. The composed maximum degree remains four. Conditional moves, division, branching and
 fault outcomes remain outside this native source's coverage.
 
 Public-root LOAD64/STORE64 consume the original compact memory and initialization

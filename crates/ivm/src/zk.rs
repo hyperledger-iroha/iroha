@@ -1,13 +1,13 @@
-//! Zero-knowledge execution helpers: tracking ASSERT operations and padding to fixed cycles.
+//! Zero-knowledge execution helpers: diagnostic trace logs and padding to fixed cycles.
 //!
-//! This module provides a minimal constraint logger used by the VM when zero-knowledge padding is
-//! enabled. `ASSERT` instructions register constraints which can be inspected by a prover. The VM
-//! also pads execution to a fixed cycle length as required by the specification.
+//! The VM pads ZK-mode execution to a fixed cycle length and can record register, memory and
+//! step diagnostics for local checking.
 //!
 //! Register authentication paths and memory diagnostic root snapshots are
 //! captured incrementally so that state hashes do not need to be recomputed
 //! after every operation. Memory events do not carry complete leaves or an
 //! authenticated tree size and are not independently verifiable proofs.
+
 /// Default maximum trace length used for padding.
 ///
 /// The original implementation limited zero-knowledge execution to 2^16
@@ -92,19 +92,6 @@ mod tests {
         let root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![[7; 32]])
             .root()
             .expect("one-leaf test tree has a root");
-        let mut constraints = ConstraintLog::default();
-        constraints.record(Constraint::Zero { reg: 7, cycle: 1 });
-        let copied_constraints = constraints
-            .try_clone_allocation()
-            .expect("bounded constraints");
-        assert_eq!(copied_constraints.list, constraints.list);
-        assert!(
-            copied_constraints
-                .allocated_bytes()
-                .expect("checked capacity")
-                > 0
-        );
-
         let mut memory = MemLog::default();
         memory.record(MemEvent::Load {
             addr: 8,
@@ -149,13 +136,15 @@ mod tests {
         assert_ne!(copied_registers.as_slice(), registers.as_slice());
 
         let mut trace = DeltaTraceLog::new(None);
-        let mut gpr = [0; 256];
+        let mut gpr = [0; crate::parallel::REGISTER_COUNT];
         gpr[7] = 21;
-        trace.prepare_batch(1, 256, 0, None).unwrap();
-        trace.record_reserved(4, gpr, [false; 256]);
+        trace
+            .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None)
+            .unwrap();
+        trace.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
         gpr[7] = 22;
         trace.prepare_batch(1, 1, 0, None).unwrap();
-        trace.record_reserved(8, gpr, [false; 256]);
+        trace.record_reserved(8, gpr, [false; crate::parallel::REGISTER_COUNT]);
         let copied_trace = trace
             .try_clone_allocation(None)
             .expect("bounded delta trace");
@@ -164,7 +153,6 @@ mod tests {
         let capture = |rows| {
             DiagnosticTraceSource {
                 registers: DiagnosticRegisterSource::Deltas(rows),
-                constraints: &[],
                 memory_events: &[],
                 register_events: &[],
                 steps: &[],
@@ -319,13 +307,9 @@ mod tests {
         assert!(auto >= 1);
         super::set_prover_threads(baseline);
     }
-    fn snapshot_fixture(
-        states: &[RegisterState],
-        constraints: &[Constraint],
-    ) -> DiagnosticTraceSnapshot {
+    fn snapshot_fixture(states: &[RegisterState]) -> DiagnosticTraceSnapshot {
         DiagnosticTraceSource {
             registers: DiagnosticRegisterSource::States(states),
-            constraints,
             memory_events: &[],
             register_events: &[],
             steps: &[],
@@ -339,71 +323,21 @@ mod tests {
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build_global();
-        let result = check_diagnostic_trace(&snapshot_fixture(&[], &[]));
+        let result = check_diagnostic_trace(&snapshot_fixture(&[]));
         assert!(result.is_ok());
     }
     #[test]
     fn diagnostic_trace_check_accepts_arbitrary_register_data() {
-        let mut gpr = [0u64; 256];
+        let mut gpr = [0u64; crate::parallel::REGISTER_COUNT];
         gpr[0] = 0xDEAD_BEEF_DEAD_BEEF;
         let trace = [RegisterState {
             pc: 0,
             gpr,
-            tags: [false; 256],
+            tags: [false; crate::parallel::REGISTER_COUNT],
         }];
 
-        assert!(check_diagnostic_trace(&snapshot_fixture(&trace, &[])).is_ok());
+        assert!(check_diagnostic_trace(&snapshot_fixture(&trace)).is_ok());
     }
-    #[test]
-    fn diagnostic_trace_check_rejects_out_of_range_constraints_without_panicking() {
-        let trace = vec![RegisterState {
-            pc: 0,
-            gpr: [0; 256],
-            tags: [false; 256],
-        }];
-        for constraint in [
-            Constraint::Zero { reg: 256, cycle: 0 },
-            Constraint::Eq {
-                reg1: 0,
-                reg2: 256,
-                cycle: 0,
-            },
-            Constraint::Range {
-                reg: 256,
-                bits: 64,
-                cycle: 0,
-            },
-            Constraint::Zero {
-                reg: 0,
-                cycle: u64::MAX,
-            },
-        ] {
-            let result = std::panic::catch_unwind(|| {
-                check_diagnostic_trace(&snapshot_fixture(&trace, &[constraint]))
-            });
-            assert!(
-                matches!(
-                    result.expect("malformed diagnostic check must not panic"),
-                    Err(crate::error::VMError::AssertionFailed)
-                ),
-                "malformed constraint must fail closed: {constraint:?}"
-            );
-        }
-    }
-}
-/// A constraint generated by an ASSERT-like instruction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Constraint {
-    /// Register at `reg` must be zero at cycle `cycle`.
-    Zero { reg: usize, cycle: u64 },
-    /// Registers must be equal at cycle `cycle`.
-    Eq {
-        reg1: usize,
-        reg2: usize,
-        cycle: u64,
-    },
-    /// Register value must fit in `bits` bits at cycle `cycle`.
-    Range { reg: usize, bits: u8, cycle: u64 },
 }
 fn trace_allocation_error() -> crate::error::VMError {
     crate::error::VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
@@ -428,25 +362,6 @@ fn try_copy_trace_slice<T: Clone>(source: &[T]) -> Result<Vec<T>, crate::error::
         .map_err(|_| trace_allocation_error())?;
     copied.extend_from_slice(source);
     Ok(copied)
-}
-/// Collector for constraints encountered during execution.
-#[derive(Default, Clone)]
-pub struct ConstraintLog {
-    pub list: Vec<Constraint>,
-}
-impl ConstraintLog {
-    pub fn record(&mut self, c: Constraint) {
-        self.list.push(c);
-    }
-    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
-        trace_vector_bytes::<Constraint>(self.list.capacity())
-    }
-    #[cfg(test)]
-    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
-        Ok(Self {
-            list: try_copy_trace_slice(&self.list)?,
-        })
-    }
 }
 /// A memory access recorded during diagnostic trace collection.
 ///
@@ -561,8 +476,8 @@ pub enum RegEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisterState {
     pub pc: u64,
-    pub gpr: [u64; 256],
-    pub tags: [bool; 256],
+    pub gpr: [u64; crate::parallel::REGISTER_COUNT],
+    pub tags: [bool; crate::parallel::REGISTER_COUNT],
 }
 /// Merkle roots of registers and memory for a single cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -573,43 +488,14 @@ pub struct StepEntry {
 }
 /// Check locally recorded trace diagnostics.
 ///
-/// This checks each recorded [`Constraint`] against the corresponding register
-/// snapshot and authenticates register-log entries against their supplied
-/// fixed-size register-tree commitments. It does not verify VM transition
+/// This authenticates register-log entries against their supplied fixed-size
+/// register-tree commitments. It does not verify VM transition
 /// semantics, trace completeness, or memory-event membership and must not be
 /// used as a proof verifier or admission decision.
 pub fn check_diagnostic_trace(
     snapshot: &DiagnosticTraceSnapshot,
 ) -> Result<(), crate::error::VMError> {
-    let trace = snapshot.states();
-    let constraints = snapshot.constraints();
     prover_pool().install(|| {
-        constraints.par_iter().try_for_each(|c| {
-            match *c {
-                Constraint::Zero { reg, cycle } => {
-                    if trace_register(trace, cycle, reg)? != 0 {
-                        return Err(crate::error::VMError::AssertionFailed);
-                    }
-                }
-                Constraint::Eq { reg1, reg2, cycle } => {
-                    if trace_register(trace, cycle, reg1)? != trace_register(trace, cycle, reg2)? {
-                        return Err(crate::error::VMError::AssertionFailed);
-                    }
-                }
-                Constraint::Range { reg, bits, cycle } => {
-                    if bits < 64 {
-                        let mask = (1u64 << bits) - 1;
-                        if trace_register(trace, cycle, reg)? & !mask != 0 {
-                            return Err(crate::error::VMError::AssertionFailed);
-                        }
-                    } else {
-                        // Even an unconstrained 64-bit range must reference a real trace cell.
-                        let _ = trace_register(trace, cycle, reg)?;
-                    }
-                }
-            }
-            Ok::<(), crate::error::VMError>(())
-        })?;
         // Verify register Merkle proofs
         (0..snapshot.register_event_count())
             .into_par_iter()
@@ -623,15 +509,3 @@ pub fn check_diagnostic_trace(
     })
 }
 
-fn trace_register(
-    trace: &[RegisterState],
-    cycle: u64,
-    register: usize,
-) -> Result<u64, crate::error::VMError> {
-    let cycle = usize::try_from(cycle).map_err(|_| crate::error::VMError::AssertionFailed)?;
-    trace
-        .get(cycle)
-        .and_then(|state| state.gpr.get(register))
-        .copied()
-        .ok_or(crate::error::VMError::AssertionFailed)
-}

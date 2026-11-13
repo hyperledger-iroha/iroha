@@ -556,10 +556,22 @@ const ROOTS: &[Root] = &[
             r"iroha:state-keyed-commitment:schema:v1\0",
         ],
         evidence: &[
-            ("crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs", "pub struct KeyedStateTreeV1 {"),
-            ("crates/iroha_core/src/state/keyed_state.rs", "world_state_root: self.tree.root().into(),"),
-            ("crates/iroha_core/src/state/publication.rs", ".install(keyed_cut.take())"),
-            ("crates/iroha_core/src/state/keyed_state/recovery.rs", "fn verify_replayed_state_commitment("),
+            (
+                "crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs",
+                "pub struct KeyedStateTreeV1 {",
+            ),
+            (
+                "crates/iroha_core/src/state/keyed_state.rs",
+                "world_state_root: self.tree.root().into(),",
+            ),
+            (
+                "crates/iroha_core/src/state/publication.rs",
+                ".install(keyed_cut.take())",
+            ),
+            (
+                "crates/iroha_core/src/state/keyed_state/recovery.rs",
+                "fn verify_replayed_state_commitment(",
+            ),
         ],
     },
     Root {
@@ -4869,7 +4881,7 @@ const CARRIERS: &[Carrier] = &[
             ),
             (
                 "BlockResult.outputs",
-                "one typed output per executed input or internal invocation: execution results, whose hashes are the leaves of output_merkle",
+                "one typed output per governance block-start item, executed input or internal invocation: block-start records and execution results, whose hashes are the leaves of output_merkle",
             ),
             (
                 "BlockResult.lifecycle_custody",
@@ -4983,6 +4995,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "TransactionResult",
                 "result of one executed input or invocation: its data trigger sequence or its rejection reason",
+            ),
+            (
+                "GovernanceBlockStartOutputV1",
+                "one committed output of the governance block-start pass: where the casting-clock prelude or a positioned item happened and what it did. Its digests identify the attempt State, ballot board, sealed list, roster or closure record that the item left or published (record domains PARL/ATTEMPT-STATE/v1, PARL/BOARD-RECORD/v1, PARL/REGMAP/v1, PARL/ROSTER/v1 and PARL/RESULT/v1), each recomputable from that record; none is a State root or State-read authority",
             ),
             (
                 "TriggerId",
@@ -6961,7 +6977,10 @@ fn field_line(
         Role::Local(_) => "local",
     };
     write!(line, ",\"role\":\"{role}\"").expect("write to a String");
-    if matches!(row.field.role, Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))) {
+    if matches!(
+        row.field.role,
+        Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
+    ) {
         write!(line, ",\"keyed_profile_if_installed\":true").expect("write to a String");
     }
     if !matches!(row.commitment, Commitment::Owner) {
@@ -9635,9 +9654,11 @@ fn ivm_zk_roots_inventory_tracks_current_owner_and_refuses_extra_constructions()
     }
 }
 
-/// Restored World verification serves the same root as the State startup verifier.
+/// The State startup verifier and its cold-capture comparison serve the World state root. A
+/// World-only snapshot is refused before State construction, so no restored-World verifier
+/// exists.
 #[test]
-fn restored_world_accumulator_inventory_tracks_current_verifiers() {
+fn world_accumulator_inventory_tracks_current_verifiers() {
     let path = "crates/iroha_core/src/state/world_state_accumulator.rs";
     let text = source(path);
     let scan = scan_sources([(path, text.as_str())]);
@@ -9646,9 +9667,14 @@ fn restored_world_accumulator_inventory_tracks_current_verifiers() {
         "{:?}",
         scan.unlisted_functions
     );
+    assert!(
+        !scan
+            .state_hash_functions
+            .contains_key(&(path.to_owned(), "verify_state_accumulator".to_owned())),
+        "the restored-World verifier was deleted with World-only restore"
+    );
     for name in [
         "verify_captured_accumulator",
-        "verify_state_accumulator",
         "verify_world_state_accumulator",
     ] {
         assert_eq!(
@@ -9660,7 +9686,7 @@ fn restored_world_accumulator_inventory_tracks_current_verifiers() {
         let listed = STATE_HASH_FUNCTIONS
             .iter()
             .find(|listed| listed.path == path && listed.name == name)
-            .expect("every restored and startup verifier is listed");
+            .expect("every startup verifier is listed");
         assert!(matches!(
             listed.owner,
             UseOwner::Roots(["world_state_root"])
@@ -9815,12 +9841,15 @@ fn anonymous_ballot_domains_keep_record_roles_and_exact_source_occurrences() {
     let digests = "crates/iroha_data_model/src/governance/anonymous_ballot/digests.rs";
     let ballot = "crates/iroha_data_model/src/governance/anonymous_ballot/ballot.rs";
     let qualification = "crates/iroha_data_model/src/governance/anonymous_ballot/qualification.rs";
-    let texts = [digests, ballot, qualification].map(|path| (path, source(path)));
+    let board = "crates/iroha_data_model/src/governance/anonymous_ballot/board_record.rs";
+    let texts = [digests, ballot, qualification, board].map(|path| (path, source(path)));
     let scan = scan_sources(texts.iter().map(|(path, text)| (*path, text.as_str())));
     assert!(scan.unlisted_domains.is_empty());
     let owners = domain_owners();
     for literal in [
+        "PARL/ATTEMPT-STATE/v1",
         "PARL/AUTHORITY/v1",
+        "PARL/BOARD-RECORD/v1",
         "PARL/CORPUS-APPEND/v1",
         "PARL/CORPUS-EMPTY/v1",
         "PARL/CORPUS-ENTRY/v1",
@@ -9837,7 +9866,7 @@ fn anonymous_ballot_domains_keep_record_roles_and_exact_source_occurrences() {
         // Production tags and independent inline formula controls are both scanned.
         let mut expected = BTreeMap::from([(
             digests.to_owned(),
-            if literal == "PARL/QUALIFICATION/v1" {
+            if matches!(literal, "PARL/QUALIFICATION/v1" | "PARL/BOARD-RECORD/v1") {
                 1
             } else {
                 2
@@ -9849,6 +9878,10 @@ fn anonymous_ballot_domains_keep_record_roles_and_exact_source_occurrences() {
             }
             "PARL/QUALIFICATION/v1" => {
                 expected.insert(qualification.to_owned(), 1);
+            }
+            // The board digest's formula control sits beside the record's own fixture.
+            "PARL/BOARD-RECORD/v1" => {
+                expected.insert(board.to_owned(), 1);
             }
             _ => {}
         }
@@ -9978,10 +10011,12 @@ fn enrollment_expiry_domains_bind_records_without_state_authority() {
 /// table or cell requires review of its corpus, roster and result commitments.
 ///
 /// The node links `iroha_parliament_ballot` for the anonymous family alone (design §12.3,
-/// slice 2): its reducer drives the board's registration ledger and seal, and the
-/// `iroha.governance.parliament.anonymous.v1` addition keeps its attempts, credentials and
-/// boards in exactly three tables. Every tag above hashes one record or message those tables
-/// keep as content (a roster, a registration mapping, a corpus entry, a closure); none
+/// slices 2 and 3): its reducer drives the board's registration ledger and seal, its
+/// lifecycle adapters and its positioned pass drive the board's schedule, opening, casting
+/// clock and closure, and the `iroha.governance.parliament.anonymous.v1` addition keeps its
+/// attempts, credentials and boards in exactly three tables. Every tag above hashes one
+/// record or message those tables keep as content (a roster, a registration mapping, a corpus
+/// entry, a closure, and in a lifecycle receipt an attempt State or a board record); none
 /// computes a State commitment, which remains the World root, so every tag keeps its record
 /// role. The registration custody in `parliament_registration.rs` writes no State and has one
 /// consumer, the credential handler. Ballot State outside those three tables, another node
@@ -10007,7 +10042,9 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     assert_eq!(
         tags,
         [
+            ("PARL/ATTEMPT-STATE/v1", record),
             ("PARL/AUTHORITY/v1", record),
+            ("PARL/BOARD-RECORD/v1", record),
             ("PARL/CORPUS-APPEND/v1", record),
             ("PARL/CORPUS-EMPTY/v1", record),
             ("PARL/CORPUS-ENTRY/v1", record),
@@ -10118,7 +10155,9 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
         })
         .collect();
     // The anonymous family's reducer drives the board's registration ledger and seal
-    // (design §12.3, slice 2); the node verifies registrations only through it.
+    // (design §12.3, slice 2); the node verifies registrations only through it. Its
+    // lifecycle adapters and its World pass (slice 3) advance a stored board with the
+    // attempt that owns it, and write it back to the boards table alone.
     assert_eq!(
         node_uses,
         [
@@ -10127,8 +10166,16 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
                 "use iroha_parliament_ballot::board::{BoardErrorV1, RegistrationLedgerErrorV1, SealErrorV1};"
             ),
             (
+                "crates/iroha_core/src/governance/parliament_anonymous/ballot_lifecycle.rs",
+                "use iroha_parliament_ballot::board::BallotBoardV1;"
+            ),
+            (
                 "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs",
                 "use iroha_parliament_ballot::board::{"
+            ),
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous/world_pass.rs",
+                "use iroha_parliament_ballot::board::BallotBoardV1;"
             ),
         ],
         "the node uses a ballot crate differently: {REVIEW}"
@@ -10765,7 +10812,8 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
         // Superseded State roots track cutover defects. The selected profile
         // remains the root over all installed State entries.
         let retained_state_root = root.class == RootClass::CertifiedStateRoot
-            && root.id == "keyed_state_root" && root.keyed;
+            && root.id == "keyed_state_root"
+            && root.keyed;
         if root.class.kept() || retained_state_root {
             assert_eq!(root.defect, None, "{}", root.id);
             assert!(
@@ -12579,7 +12627,9 @@ fn contract_section_states_every_publication_and_binding_rule_once() {
         .split_once("\n## Appendix E. As-built reconciliation\n")
         .expect("section 16 precedes Appendix E");
     assert!(
-        section.contains("The governed profile `iroha.keyed-state.radix-blake3.v1` selects a path-compressed"),
+        section.contains(
+            "The governed profile `iroha.keyed-state.radix-blake3.v1` selects a path-compressed"
+        ),
         "the section identifies the governed profile and construction"
     );
     for number in 1..=8 {

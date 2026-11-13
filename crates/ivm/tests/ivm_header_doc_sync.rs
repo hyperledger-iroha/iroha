@@ -3,20 +3,16 @@ const BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const END: &str = "<!-- END GENERATED HEADER POLICY -->";
 fn expected_header_policy() -> String {
     let zk = ivm::ivm_mode::ZK;
-    let vec = ivm::ivm_mode::VECTOR;
-    let known_bits = zk | vec;
     let mut table = String::new();
     table.push_str("| Field | Policy |\n");
     table.push_str("|---|---|\n");
     table.push_str("| version_major | 1 |\n");
     table.push_str("| version_minor | 1 (sole current header for every profile) |\n");
     table.push_str(&format!(
-        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}) |\n"
+        "| mode (known bits) | 0x{zk:02x} (ZK=0x{zk:02x}) |\n"
     ));
     table.push_str("| abi_version | 1 |\n");
-    table.push_str(
-        "| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |\n",
-    );
+    table.push_str("| vector_length | 0..=64 (reserved; no instruction reads it) |\n");
     format!("{BEGIN}\n{table}{END}")
 }
 fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {

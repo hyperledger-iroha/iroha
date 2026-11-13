@@ -10180,6 +10180,12 @@ macro_rules! impl_validated_json_key {
             fn encode_json_key(&self, out: &mut String) {
                 encode_storage_key(self, out);
             }
+            fn encode_json_key_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                json::write_frame_json_hex_to(self, out)
+            }
             fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                 let key: Self = decode_storage_key(encoded)?;
                 key.validate().map_err(|message| {
@@ -14390,12 +14396,45 @@ mod tests {
     }
     #[test]
     fn storage_key_json_roundtrip_and_malformed_inputs_reject() {
+        struct KeyJson<'a, T>(&'a T);
+        impl<T: JsonKeyCodec> json::JsonSerialize for KeyJson<'_, T> {
+            fn json_serialize(&self, out: &mut String) {
+                self.0.encode_json_key(out);
+            }
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                self.0.encode_json_key_to(out)
+            }
+        }
+        fn checked_parity<T: JsonKeyCodec>(key: &T) {
+            let value = KeyJson(key);
+            let expected = json::to_json(&value).unwrap();
+            assert_eq!(
+                json::to_json_bounded(&value, expected.len()),
+                Ok(expected.clone())
+            );
+            for cap in [0, 1, expected.len() / 2, expected.len() - 1] {
+                assert_eq!(
+                    json::to_json_bounded(&value, cap),
+                    Err(json::BoundedJsonError::BodyTooLarge)
+                );
+            }
+        }
         let namespace = zk_ams_namespace(20);
         let key = PrivacyNullifierKeyV1::zk_ams_key_image(
             namespace,
             PrivacyZkAmsKeyImageV1::new(nonzero(0xAB)),
         )
         .expect("valid key");
+        checked_parity(&key);
+        let pgc = pgc_persisted_fixture();
+        checked_parity(&pgc.account_keys[0]);
+        checked_parity(&pgc.invariant_key);
+        checked_parity(&pgc.root_key);
+        checked_parity(&pgc.head_key);
+        checked_parity(&orchard_persisted_fixture().state_key);
         let mut json_string = String::new();
         key.encode_json_key(&mut json_string);
         let encoded = norito::json::from_json::<String>(&json_string).expect("JSON string");

@@ -281,7 +281,7 @@ fn empty_product_requires_initialized_zero_word_and_node_work_is_prepaid() {
         name: "Fixture::Empty".into(),
         fields: vec![],
     }]);
-    assert!(matches!(vm.finish_call(), Err(VMError::AssertionFailed)));
+    assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
     vm.store_u64(table, 1).unwrap();
     assert!(matches!(vm.finish_call(), Err(VMError::DecodeError)));
     vm.store_u64(table, 0).unwrap();

@@ -273,7 +273,7 @@ fn verified_call_artifact(
         ));
     }
     admit_arguments(payload)?;
-    Ok(ivm_artifact_admission::verify_contract_artifact(artifact)?)
+    Ok(ivm_artifact_admission::verify_contract_artifact_with_declared_profile(artifact)?)
 }
 
 /// Encode named arguments for one entrypoint of verified code.
@@ -636,7 +636,8 @@ impl ContractCallService {
         if let Some(payload) = payload {
             admit_arguments(payload)?;
         }
-        let verified = ivm_artifact_admission::verify_contract_artifact(artifact)?;
+        let verified =
+            ivm_artifact_admission::verify_contract_artifact_with_declared_profile(artifact)?;
         if let Some(permission) = required_permission(&verified, intent)?
             && !authorization::read_effective_permissions(&self.client, &self.config.account)?
                 .contains(&permission)
@@ -675,7 +676,9 @@ impl ContractCallService {
             request.payload.as_ref(),
             false,
         )?;
-        let verified = ivm_artifact_admission::verify_contract_artifact(&request.artifact)?;
+        let verified = ivm_artifact_admission::verify_contract_artifact_with_declared_profile(
+            &request.artifact,
+        )?;
         let permission = required_permission(&verified, &request.intent)?;
         request.fee_payment.validate()?;
         if request.fee_payment.gas_limit().is_none() {
@@ -1124,7 +1127,8 @@ fn validate_plan(prepared: &PreparedContractCall, config: &Config) -> Result<()>
     if hex::encode(&artifact) != plan.artifact_hex {
         return Err(eyre!("call artifact is not canonical hex"));
     }
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
     validate_trusted_intent(&artifact, &plan.intent, plan.payload.as_ref(), true)?;
     let permission = required_permission(&verified, &plan.intent)?;
     operation_metadata(plan)?;

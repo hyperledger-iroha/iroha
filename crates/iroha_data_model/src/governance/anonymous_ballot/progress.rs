@@ -20,10 +20,12 @@
 //! whose target is immutable; a successor ticket may choose a newly nearer request. No
 //! request's frozen slot changes.
 //!
-//! TODO: the Core integration derives the ticket in the unified due-item iterator (G1,
-//! `governance_due`, the keeper's `next_governance_progress_at_ms` and the read-only
-//! `/schedule` projection) and records its consumption in the `NativeSlotAdvanced` receipt,
-//! whose committed form is defined with that receipt.
+//! Core derives the ticket in G1 of the positioned pass and in `governance_due`, and records
+//! its consumption in the committed `NativeSlotAdvanced` receipt
+//! ([`super::NativeSlotAdvancedV1`]).
+//!
+//! TODO(design §12.3, slice 3): the keeper's next-governance-progress time and the read-only
+//! `/schedule` projection do not derive the ticket yet.
 
 /// Why a height-progress ticket is not well formed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

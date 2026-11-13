@@ -154,6 +154,17 @@ impl Cells {
     /// Bytewise addition X + D = bound, with constrained carries and final
     /// carry zero. Invalid X still gets a witness, which fails the final row.
     pub(crate) fn at_most(&mut self, indices_le: &[usize], value: &BigUint, bound: &BigUint) {
+        let valid = self.at_most_bit(indices_le, value, bound);
+        self.eq(own(valid, 1), constant(vec![Fp::ONE]));
+    }
+    /// Total canonical-integer comparison. All byte/carry relations remain hard;
+    /// the result is one exactly when X <= bound, including malformed inputs.
+    pub(crate) fn at_most_bit(
+        &mut self,
+        indices_le: &[usize],
+        value: &BigUint,
+        bound: &BigUint,
+    ) -> usize {
         assert_eq!(indices_le.len(), 32);
         let d = (bound + pow2(256) - value) % pow2(256);
         let mut db = d.to_bytes_le();
@@ -178,7 +189,15 @@ impl Cells {
             previous = Some(ck);
             carry = next;
         }
-        self.zero(own(previous.unwrap(), 1));
+        let valid = self.bit(!carry);
+        self.eq(
+            own(valid, 1),
+            plus(
+                &constant(vec![Fp::ONE]),
+                &scaled(&own(previous.unwrap(), 1), -Fp::ONE),
+            ),
+        );
+        valid
     }
 }
 

@@ -334,6 +334,13 @@ fn a_board_records_its_purpose_and_refuses_an_unqualified_one() {
     let seal = ledger().seal(&seated()).expect("seal the seated roster");
     let board = board();
     assert_eq!(board.purpose(), &candidate());
+    assert_eq!(board.proposal_content_id(), proposal_content_id());
+    assert_eq!(
+        BallotBoardV1::restore(board.record())
+            .expect("the original board restores")
+            .proposal_content_id(),
+        proposal_content_id()
+    );
     assert!(!board.purpose().is_production());
     assert_eq!(board.sealed_timestamp_ms(), SEALED_MS);
     assert_eq!(board.roster_root(), &seal_facts(&seal).roster_root);

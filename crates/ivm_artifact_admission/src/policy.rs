@@ -4,9 +4,9 @@ use iroha_data_model::smart_contract::manifest::{
     validate_contract_permission_table,
 };
 use ivm_abi::metadata::{
-    CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, ProgramMetadata, mode,
+    CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractInterfaceV1,
+    EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor, EmbeddedStateType, ProgramMetadata,
+    mode,
 };
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES,
@@ -49,17 +49,10 @@ pub fn validate_contract_interface(
         )));
     }
     let zk_declared = features_bitmap & CONTRACT_FEATURE_BIT_ZK != 0;
-    let vector_declared = features_bitmap & CONTRACT_FEATURE_BIT_VECTOR != 0;
     let zk_enabled = metadata.mode & mode::ZK != 0;
-    let vector_enabled = metadata.mode & mode::VECTOR != 0;
     if zk_declared != zk_enabled {
         return Err(ContractArtifactError::invalid(
             "CNTR features_bitmap does not match metadata ZK mode",
-        ));
-    }
-    if vector_declared != vector_enabled {
-        return Err(ContractArtifactError::invalid(
-            "CNTR features_bitmap does not match metadata VECTOR mode",
         ));
     }
     if !validate_contract_permission_table(&contract_interface.permissions)
@@ -389,28 +382,23 @@ fn validate_bytecode_security(
     let instruction_boundaries = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     for op in decoded {
         let opcode = wide::opcode(op.inst);
-        if !wide::is_valid_opcode(opcode) {
-            return Err(ContractArtifactError::invalid(format!(
-                "invalid opcode 0x{opcode:02x} at pc {}",
-                op.pc
-            )));
-        }
-        if opcode == wide::crypto::POSEIDON6
-            && ivm_abi::encoding::wide::decode_poseidon6(op.inst).is_none()
-        {
-            return Err(ContractArtifactError::invalid(format!(
-                "noncanonical POSEIDON6 encoding at pc {}",
-                op.pc
-            )));
-        }
-        if opcode == wide::control::JR {
-            return Err(ContractArtifactError::invalid(format!(
-                "unverifiable indirect control flow at pc {}",
-                op.pc
-            )));
+        match wide::validate_word(op.inst) {
+            Ok(_) => {}
+            Err(wide::WordError::InvalidOpcode(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "invalid opcode 0x{opcode:02x} at pc {}",
+                    op.pc
+                )));
+            }
+            Err(wide::WordError::ReservedBits) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "instruction 0x{:08x} at pc {} sets reserved operand bits",
+                    op.inst, op.pc
+                )));
+            }
         }
         if opcode == wide::control::JALR {
-            let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_rr(op.inst);
+            let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_ri(op.inst);
             if !(rd == 0 && base == 1 && immediate == 0) {
                 return Err(ContractArtifactError::invalid(format!(
                     "unverifiable indirect control flow at pc {}",
@@ -453,8 +441,8 @@ fn validate_bytecode_security(
             | wide::control::BLT
             | wide::control::BGE
             | wide::control::BLTU
-            | wide::control::BGEU => i64::from(wide::imm8(op.inst)),
-            wide::control::JAL => i64::from(wide::imm16(op.inst)),
+            | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
+            wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
             wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
             _ => continue,
         };
@@ -574,11 +562,7 @@ fn validate_callable_tables(
 }
 fn decoded_syscall_number(instruction: u32) -> Option<u32> {
     use ivm_abi::instruction::wide;
-    match wide::opcode(instruction) {
-        wide::system::SCALL => Some(u32::from(wide::imm8(instruction).cast_unsigned())),
-        wide::system::SYSTEM => Some(ivm_abi::encoding::wide::decode_syscallx(instruction)),
-        _ => None,
-    }
+    (wide::opcode(instruction) == wide::system::SCALL).then(|| wide::syscall_number(instruction))
 }
 fn is_direct_call(op: &DecodedOp) -> bool {
     use ivm_abi::instruction::wide;
@@ -617,20 +601,13 @@ fn shared_nominal_abort_tail_pcs(
                 .or_insert_with(|| ordinary_jump(op));
         }
     }
-    let (Ok(publish), Ok(abort)) = (
-        u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV),
-        u8::try_from(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT),
-    ) else {
-        // This exact suffix requires the short SCALL encoding.
-        return BTreeSet::new();
-    };
     let expected = [
-        encoding::encode_sys(wide::system::SCALL, publish),
-        encoding::encode_rr(wide::arithmetic::ADDI, 12, 0, 0),
-        encoding::encode_rr(wide::arithmetic::ADDI, 13, 0, 0),
-        encoding::encode_rr(wide::arithmetic::ADDI, 14, 0, 0),
-        encoding::encode_rr(wide::arithmetic::ADDI, 15, 0, 0),
-        encoding::encode_sys(wide::system::SCALL, abort),
+        encoding::encode_scall(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV),
+        encoding::encode_ri(wide::arithmetic::ADDI, 12, 0, 0),
+        encoding::encode_ri(wide::arithmetic::ADDI, 13, 0, 0),
+        encoding::encode_ri(wide::arithmetic::ADDI, 14, 0, 0),
+        encoding::encode_ri(wide::arithmetic::ADDI, 15, 0, 0),
+        encoding::encode_scall(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT),
     ];
     let mut proven = BTreeSet::new();
     for suffix in decoded.windows(expected.len()) {
@@ -741,12 +718,6 @@ fn validate_nonrecursive_direct_calls(
             wide::control::JAL | wide::control::JALS => {
                 pending.push_back((fallthrough()?, owner));
             }
-            wide::control::JR => {
-                return Err(ContractArtifactError::invalid(format!(
-                    "unverifiable indirect control flow at pc {}",
-                    op.pc
-                )));
-            }
             _ => pending.push_back((fallthrough()?, owner)),
         }
     }
@@ -822,8 +793,8 @@ fn direct_control_flow_target(op: &DecodedOp) -> Option<u64> {
         | wide::control::BLT
         | wide::control::BGE
         | wide::control::BLTU
-        | wide::control::BGEU => i64::from(wide::imm8(op.inst)),
-        wide::control::JAL => i64::from(wide::imm16(op.inst)),
+        | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
+        wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
         wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
         _ => return None,
     };
@@ -926,12 +897,6 @@ fn reachable_syscalls(
                         op.pc
                     )));
                 }
-            }
-            wide::control::JR => {
-                return Err(ContractArtifactError::invalid(format!(
-                    "entrypoint `{entrypoint_name}` reaches unverifiable indirect control flow at pc {}",
-                    op.pc
-                )));
             }
             _ => {
                 pending.push_back(fallthrough.ok_or_else(|| {

@@ -598,7 +598,7 @@ pub mod json {
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
-    pub use key_codec::JsonKeyCodec;
+    pub use key_codec::{JsonKeyCodec, write_json_value_as_string_to};
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
     /// The extra structural level covers a required boundary envelope around a value at the
@@ -948,6 +948,7 @@ pub mod json {
         }
     }
     mod bounded;
+    mod bounded_frame_hex;
     mod canonical;
     mod canonical_base64;
     #[doc(hidden)]
@@ -955,13 +956,15 @@ pub mod json {
     mod validated;
     pub use bounded::{
         BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
-        visit_json_display_text, write_json_display_to, write_json_string_to, write_json_unbounded,
+        visit_json_display_text, write_json_display_to, write_json_object_key_to,
+        write_json_string_content_to, write_json_string_to, write_json_unbounded,
     };
+    pub use bounded_frame_hex::{write_canonical_json_hex_to, write_frame_json_hex_to};
     #[doc(hidden)]
     pub use canonical_base64::{
         write_bare_norito_base64_json, write_bare_norito_base64_json_to, write_base64_json,
         write_base64_json_to, write_canonical_base64_json, write_canonical_base64_json_to,
-        write_with_unbounded_sink,
+        write_frame_base64_json_to, write_with_unbounded_sink,
     };
     #[doc(hidden)]
     pub use validated::write_validated_json_to;

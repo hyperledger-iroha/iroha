@@ -29,11 +29,15 @@ pub mod sum;
 pub mod syscalls;
 pub mod upgrade;
 pub use error::{HostOutputResource, Perm, VMError};
-/// Syscall policy determined by `ProgramMetadata.abi_version`.
+/// Named host policy authenticated by the fixed program header's exact ABI hash.
+/// Both policies use first-release ABI version 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyscallPolicy {
     /// ABI surface for version 1 programs.
     AbiV1,
+    /// ABI V1 with authenticated contract calls to the runtime obligation kernel.
+    /// The baseline profile and its descriptor remain unchanged.
+    AbiV1RuntimeLifecycle,
 }
 
 #[cfg(test)]

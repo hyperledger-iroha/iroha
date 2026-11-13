@@ -330,15 +330,6 @@ pub enum Instr {
         dest: Temp,
         name: String,
     },
-    Poseidon2 {
-        dest: Temp,
-        a: Temp,
-        b: Temp,
-    },
-    Poseidon6 {
-        dest: Temp,
-        args: [Temp; 6],
-    },
     Pubkgen {
         dest: Temp,
         src: Temp,
@@ -611,10 +602,6 @@ pub enum Instr {
     CreateNftsForAllUsers,
     /// Host helper: set SmartContract execution depth parameter.
     SetExecutionDepth {
-        value: Temp,
-    },
-    /// Host helper: set logical vector length (SETVL immediate).
-    SetVl {
         value: Temp,
     },
     /// Call a user-defined function by name with positional arguments.
@@ -1239,6 +1226,10 @@ pub enum Instr {
 pub enum VendorInstructionKind {
     /// Governance `SubmitBallot`.
     SubmitBallot,
+    /// Kernel registration restricted to the named contract lifecycle host profile.
+    RegisterRuntimeObligation,
+    /// Kernel completion restricted to the same authenticated contract subject.
+    CompleteRuntimeObligation,
 }
 /// Kinds of typed data references supported by the pointer-ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -5454,25 +5445,6 @@ fn lower_surface_builtin_call(
         builtin @ (Builtin::Isqrt | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean) => {
             lower_direct_helper_call(ctx, builtin, args, vars)
         }
-        Builtin::Poseidon2 => {
-            let a = lower_expr_as_u64(ctx, &args[0], vars);
-            let b = lower_expr_as_u64(ctx, &args[1], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Poseidon2 { dest: scalar, a, b });
-            emit_int_from_u64(ctx, scalar)
-        }
-        Builtin::Poseidon6 => {
-            let mut lowered_args = [Temp(0); 6];
-            for (index, arg) in args.iter().enumerate() {
-                lowered_args[index] = lower_expr_as_u64(ctx, arg, vars);
-            }
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Poseidon6 {
-                dest: scalar,
-                args: lowered_args,
-            });
-            emit_int_from_u64(ctx, scalar)
-        }
         Builtin::Pubkgen => {
             let src = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
@@ -5499,11 +5471,6 @@ fn lower_surface_builtin_call(
                 blind,
             });
             emit_int_from_u64(ctx, scalar)
-        }
-        Builtin::SetVl => {
-            let value = lower_expr_as_u64(ctx, &args[0], vars);
-            ctx.current_instr(Instr::SetVl { value });
-            emit_i64_const(ctx, 0)
         }
         Builtin::StateGet => {
             let p = lower_expr(ctx, &args[0], vars);
@@ -5639,12 +5606,20 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::PresentX509 { dest, payload });
             dest
         }
-        Builtin::ScExecuteSubmitBallot => {
+        Builtin::ScExecuteSubmitBallot
+        | Builtin::RegisterRuntimeObligation
+        | Builtin::CompleteRuntimeObligation => {
             let payload = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::VendorExecuteInstruction {
-                payload,
-                kind: VendorInstructionKind::SubmitBallot,
-            });
+            let kind = match builtin {
+                Builtin::RegisterRuntimeObligation => {
+                    VendorInstructionKind::RegisterRuntimeObligation
+                }
+                Builtin::CompleteRuntimeObligation => {
+                    VendorInstructionKind::CompleteRuntimeObligation
+                }
+                _ => VendorInstructionKind::SubmitBallot,
+            };
+            ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
             emit_i64_const(ctx, 0)
         }
         Builtin::ExecuteQuery => {
@@ -9997,13 +9972,6 @@ mod tests {
             }
         }
         assert!(saw_blob, "expected blob dataref for bytes literal");
-    }
-    #[test]
-    fn source_cannot_lower_setvl_builtin() {
-        let src = "fn main() { runtime::set_vector_length(8); }";
-        let prog = parse(src).unwrap();
-        let error = analyze(&prog).expect_err("vector length is compiler-owned");
-        assert!(error.message.contains("unknown function or builtin"));
     }
     #[test]
     fn lower_trigger_event_builtin() {

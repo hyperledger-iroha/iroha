@@ -1242,10 +1242,12 @@ def test_torii_test_commands_keep_explicit_integration_fixtures(workspace: bool)
         ("iroha_core", "iroha_torii"), ("build", "test"), workspace=workspace,
     )
     assert "--features" not in build
-    assert test[test.index("--features") + 1] == "iroha_torii/test-fixtures"
+    assert test[test.index("--features") + 1] == "iroha_torii/test-fixtures,iroha_core/dev-tools"
     assert ("--workspace" in test) is workspace
     assert "mutation-testing" not in " ".join(test)
-    other, = rust_ci.commands_for_checks(("iroha_core",), ("test",), workspace=workspace)
+    torii, = rust_ci.commands_for_checks(("iroha_torii",), ("test",), workspace=workspace)
+    assert torii[torii.index("--features") + 1] == "iroha_torii/test-fixtures"
+    other, = rust_ci.commands_for_checks(("iroha_data_model",), ("test",), workspace=workspace)
     assert "--features" not in other
 
 
@@ -1254,13 +1256,13 @@ def test_gated_executable_owners_test_their_dev_tools_targets(workspace: bool) -
     """Test routes compile `dev-tools` executables whose unit tests live in the binary."""
 
     build, test = rust_ci.commands_for_checks(
-        ("iroha_native_source_delivery", "iroha_release_bundle", "iroha_torii"),
+        ("iroha_core", "iroha_native_source_delivery", "iroha_release_bundle", "iroha_torii"),
         ("build", "test"), workspace=workspace,
     )
     assert "--features" not in build
     assert test[test.index("--features") + 1] == (
         "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,"
-        "iroha_native_source_delivery/dev-tools"
+        "iroha_native_source_delivery/dev-tools,iroha_core/dev-tools"
     )
     only, = rust_ci.commands_for_checks(("iroha_release_bundle",), ("test",), workspace=workspace)
     assert only[only.index("--features") + 1] == "iroha_release_bundle/dev-tools"

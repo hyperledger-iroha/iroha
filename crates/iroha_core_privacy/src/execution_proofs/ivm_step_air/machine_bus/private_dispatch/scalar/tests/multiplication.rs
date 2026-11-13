@@ -231,6 +231,8 @@ fn private_multiply_exact_three_gas_and_unavailable_extended_arithmetic_are_boun
         3
     )));
     assert!(is_supported(enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3)));
-    // Vector arithmetic still needs its original vector-state relation.
-    assert!(!is_supported(enc::encode_rr(wide::crypto::VADD64, 4, 2, 3)));
+    // Host calls need their own syscall relation, and an unassigned opcode
+    // byte selects no scalar equations at all.
+    assert!(!is_supported(enc::encode_rr(wide::system::SCALL, 4, 2, 3)));
+    assert!(!is_supported(enc::encode_rr(0x8B, 4, 2, 3)));
 }

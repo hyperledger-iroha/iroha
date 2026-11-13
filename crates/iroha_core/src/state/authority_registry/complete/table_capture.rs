@@ -266,6 +266,26 @@ capture_world_table_once!(
     "world.runtime_obligations"
 );
 capture_world_table_once!(
+    capture_runtime_deferred_consents_once,
+    runtime_deferred_consents,
+    "world.runtime_deferred_consents"
+);
+capture_world_table_once!(
+    capture_runtime_amx_captures_once,
+    runtime_amx_captures,
+    "world.runtime_amx_captures"
+);
+capture_world_table_once!(
+    capture_runtime_game_transfers_once,
+    runtime_game_transfers,
+    "world.runtime_game_transfers"
+);
+capture_world_table_once!(
+    capture_runtime_escrow_captures_once,
+    runtime_escrow_captures,
+    "world.runtime_escrow_captures"
+);
+capture_world_table_once!(
     capture_runtime_migrations_once,
     runtime_migrations,
     "world.runtime_migrations"
@@ -921,6 +941,10 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_account_signing_keys_once::MATERIALIZER,
     capture_account_signing_key_reservations_once::MATERIALIZER,
     capture_runtime_obligations_once::MATERIALIZER,
+    capture_runtime_deferred_consents_once::MATERIALIZER,
+    capture_runtime_amx_captures_once::MATERIALIZER,
+    capture_runtime_game_transfers_once::MATERIALIZER,
+    capture_runtime_escrow_captures_once::MATERIALIZER,
     capture_runtime_migrations_once::MATERIALIZER,
     capture_runtime_boundaries_once::MATERIALIZER,
     capture_sorafs_authority_proposals_once::MATERIALIZER,
@@ -1386,6 +1410,10 @@ mod tests {
             "world.account_signing_keys",
             "world.account_signing_key_reservations",
             "world.runtime_obligations",
+            "world.runtime_deferred_consents",
+            "world.runtime_amx_captures",
+            "world.runtime_game_transfers",
+            "world.runtime_escrow_captures",
             "world.runtime_migrations",
             "world.runtime_boundaries",
             "world.sorafs_authority_proposals",

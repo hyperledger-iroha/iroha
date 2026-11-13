@@ -19,7 +19,7 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 ## Development workflow
 - Keep changes deterministic across hardware. Every SIMD/Metal/CUDA path must have a byte-for-byte equivalent scalar fallback.
 - Features to know:
-  - `metal` enables Apple Metal acceleration for SHA256BLOCK and vector helpers.
+  - `metal` enables Apple Metal acceleration for the host-side SHA-256/Merkle, Keccak, AES, Ed25519 batch and vector helpers. No opcode reaches them.
   - `cuda` uses the one optional source-approved authenticated bundle and loads the driver at runtime only after bundle admission. Linux/Windows daemon dependencies select this feature automatically. Current `REVIEWED_CUDA_BUNDLE_PINS = None` with no bundle preserves CPU-capable ordinary builds in every profile; supplied unreviewed or malformed material is an integrity error. Shipping qualification requires genuine approval and the complete signed bundle. The sole explicit offline producer uses pinned tools; Cargo and startup never invoke `nvcc`. Kernel execution failures retain the original quarantine and CPU fallback.
   - ML-DSA verification is unconditional; `ivm_vrf_tests` and `ivm_zk_tests` gate heavy test suites.
 - Run `cargo test -p ivm` for the default set, plus targeted commands when relevant:
@@ -29,7 +29,7 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
   - `cargo bench -p ivm benches::bench_vm`
   - `cargo fuzz run decode_header` (from `crates/ivm/fuzz`)
 - When adding opcodes/syscalls/pointer types:
-  - Update the opcode tables in `docs/opcodes.md` and the helpers in `src/instruction/wide.rs` / `src/encoding`.
+  - Update the opcode tables in `docs/opcodes.md`, the constants and `is_valid_opcode` in `crates/ivm_abi/src/instruction.rs`, the encoders in `crates/ivm_abi/src/encoding.rs`, and the fixed price in `src/gas.rs` (`SCHEDULE_OPCODES`, `cost_of`).
   - Refresh syscall/pointer goldens in `tests/abi_syscall_list_golden.rs`, `tests/abi_hash_versions.rs`, and `tests/pointer_type_ids_golden.rs`.
   - Thread new syscalls through the host trait and ensure unknown numbers still yield `VMError::UnknownSyscall`.
   - Map every new opcode, syscall, `VMError`/`VmTrapKind` variant and numeric or pointer fault in `src/proof_coverage/`, record every file that newly constructs a `VMError` variant in `VM_ERROR_PRODUCERS` with its reviewed origin, then regenerate `docs/proof_coverage_inventory.json` with `cargo run --locked -p ivm --features dev-tools --bin gen_proof_coverage_inventory -- --write` and run `cargo test -p ivm --lib proof_coverage`. Never add a syscall exclusion or mark an entry covered without a relation exercised by a test.

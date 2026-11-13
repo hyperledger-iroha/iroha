@@ -4,8 +4,7 @@ use super::{
     AccountId, AssetDefinitionId, AssetId, AxtAnchoredSpendV1, AxtDescriptor,
     ContractArtifactError, DataSpaceId, DecimalValueV1, DecodedOp, DomainId, IntValueV1, Json,
     Name, NftId, ParsedProgramMetadata, ProofBlob, QuantityValueV1, SoracloudHostRequestEnvelopeV1,
-    SoracloudHostResponseEnvelopeV1, SyscallPolicy, VMError, validate_descriptor,
-    validate_proof_blob,
+    SoracloudHostResponseEnvelopeV1, VMError, validate_descriptor, validate_proof_blob,
 };
 use ivm_abi::metadata::{LiteralDirectory, ValidatedLiteral};
 
@@ -19,7 +18,7 @@ pub fn validate_literal_table(
             artifact,
             parsed.header_len,
             parsed.literal_section,
-            SyscallPolicy::AbiV1,
+            parsed.syscall_policy,
         )
         .map_err(|error| {
             ivm_abi::error::preserve_execution_deferral(error, VMError::InvalidMetadata)

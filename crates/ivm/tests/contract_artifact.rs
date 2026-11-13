@@ -180,7 +180,6 @@ fn contract_artifact_with_mode_and_code(
         version_major: 1,
         version_minor: 1,
         mode,
-        vector_length: 0,
         max_cycles: 0,
         abi_version,
     };
@@ -218,7 +217,6 @@ fn contract_artifact_with_error_messages(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -256,7 +254,6 @@ fn contract_artifact_with_access_hints_and_states(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -288,7 +285,6 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -320,7 +316,6 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         version_major: 1,
         version_minor: 1,
         mode,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -390,7 +385,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
         }],
     });
     let argument_code = [
-        ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD),
+        ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD),
         ivm::encoding::wide::encode_halt(),
     ];
     let artifact = contract_artifact_with_code(1, vec![argument_mismatch], None, &argument_code);
@@ -649,33 +644,25 @@ fn compiler_emits_self_describing_contract_artifact() {
 }
 #[test]
 fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
-    for (mode, feature, label) in [
-        (ivm::ivm_mode::ZK, ivm::CONTRACT_FEATURE_BIT_ZK, "ZK"),
-        (
-            ivm::ivm_mode::VECTOR,
-            ivm::CONTRACT_FEATURE_BIT_VECTOR,
-            "VECTOR",
-        ),
-    ] {
-        let artifact = contract_artifact_with_execution_features(mode, feature);
-        let verified = ivm::verify_contract_artifact(&artifact)
-            .unwrap_or_else(|error| panic!("matching {label} capability must verify: {error}"));
-        assert_eq!(verified.manifest.features_bitmap, Some(feature));
-        let missing = contract_artifact_with_execution_features(mode, 0);
-        let error = ivm::verify_contract_artifact(&missing)
-            .expect_err("execution-header capability must be mirrored in CNTR");
-        assert!(
-            error.to_string().contains(label),
-            "unexpected missing-{label} error: {error}"
-        );
-        let forged = contract_artifact_with_execution_features(0, feature);
-        let error = ivm::verify_contract_artifact(&forged)
-            .expect_err("CNTR cannot invent an execution capability");
-        assert!(
-            error.to_string().contains(label),
-            "unexpected forged-{label} error: {error}"
-        );
-    }
+    let (mode, feature, label) = (ivm::ivm_mode::ZK, ivm::CONTRACT_FEATURE_BIT_ZK, "ZK");
+    let artifact = contract_artifact_with_execution_features(mode, feature);
+    let verified = ivm::verify_contract_artifact(&artifact)
+        .unwrap_or_else(|error| panic!("matching {label} capability must verify: {error}"));
+    assert_eq!(verified.manifest.features_bitmap, Some(feature));
+    let missing = contract_artifact_with_execution_features(mode, 0);
+    let error = ivm::verify_contract_artifact(&missing)
+        .expect_err("execution-header capability must be mirrored in CNTR");
+    assert!(
+        error.to_string().contains(label),
+        "unexpected missing-{label} error: {error}"
+    );
+    let forged = contract_artifact_with_execution_features(0, feature);
+    let error = ivm::verify_contract_artifact(&forged)
+        .expect_err("CNTR cannot invent an execution capability");
+    assert!(
+        error.to_string().contains(label),
+        "unexpected forged-{label} error: {error}"
+    );
     let hardware_like_bit = 1_u64 << 63;
     let error = ivm::verify_contract_artifact(&contract_artifact_with_execution_features(
         0,
@@ -988,7 +975,6 @@ fn verify_rejects_missing_cntr() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     }
@@ -1003,7 +989,6 @@ fn verify_rejects_malformed_cntr() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     }
@@ -1034,38 +1019,19 @@ fn verify_rejects_embedded_debug_metadata() {
 }
 #[test]
 fn verify_rejects_undefined_opcodes_before_execution() {
-    let bytes = contract_artifact_with_code(
-        1,
-        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
-        None,
-        &[0xff00_0000, ivm::encoding::wide::encode_halt()],
-    );
-    let error = ivm::verify_contract_artifact(&bytes)
-        .expect_err("undefined opcode must fail shared artifact admission");
-    assert_eq!(
-        error.to_string(),
-        "invalid contract artifact: invalid opcode 0xff at pc 0"
-    );
-}
-#[test]
-fn verify_rejects_noncanonical_poseidon6_encodings_before_execution() {
-    use ivm::instruction::wide;
-
-    for malformed in [
-        ivm::encoding::wide::encode_rr(wide::crypto::POSEIDON6, 9, 10, 1),
-        ivm::encoding::wide::encode_rr(wide::crypto::POSEIDON6, 9, 251, 0),
-    ] {
+    // 0xff was never assigned; 0x47 (JR) and 0x83 (POSEIDON6) left the instruction set.
+    for opcode in [0xff_u8, 0x47, 0x83] {
         let bytes = contract_artifact_with_code(
             1,
             vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
             None,
-            &[malformed, ivm::encoding::wide::encode_halt()],
+            &[u32::from(opcode) << 24, ivm::encoding::wide::encode_halt()],
         );
         let error = ivm::verify_contract_artifact(&bytes)
-            .expect_err("noncanonical POSEIDON6 encoding must fail shared artifact admission");
+            .expect_err("undefined opcode must fail shared artifact admission");
         assert_eq!(
             error.to_string(),
-            "invalid contract artifact: noncanonical POSEIDON6 encoding at pc 0"
+            format!("invalid contract artifact: invalid opcode 0x{opcode:02x} at pc 0")
         );
     }
 }
@@ -1130,11 +1096,6 @@ fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
     use ivm::instruction::wide;
     let invalid_control_flow = [
         (
-            "indirect jump",
-            ivm::encoding::wide::encode_rr(wide::control::JR, 2, 0, 0),
-            "unverifiable indirect control flow",
-        ),
-        (
             "indirect call",
             ivm::encoding::wide::encode_rr(wide::control::JALR, 1, 2, 0),
             "unverifiable indirect control flow",
@@ -1163,10 +1124,7 @@ fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
 #[test]
 fn verify_rejects_disallowed_syscalls_before_execution() {
     let disallowed_number = 0x54;
-    let disallowed = ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        u8::try_from(disallowed_number).expect("unassigned syscall fits SCALL immediate"),
-    );
+    let disallowed = ivm::encoding::wide::encode_scall(disallowed_number);
     assert!(!ivm::syscalls::is_syscall_allowed(
         ivm::SyscallPolicy::AbiV1,
         disallowed_number
@@ -1183,10 +1141,7 @@ fn verify_rejects_disallowed_syscalls_before_execution() {
 }
 #[test]
 fn verify_rejects_private_input_syscall_without_zk_mode() {
-    let private_input = ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
-    );
+    let private_input = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT);
     let bytes = contract_artifact_with_code(
         1,
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
@@ -1203,10 +1158,7 @@ fn verify_rejects_private_input_syscall_without_zk_mode() {
 #[test]
 fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode() {
     use ivm::instruction::wide;
-    let private_input = ivm::encoding::wide::encode_sys(
-        wide::system::SCALL,
-        ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
-    );
+    let private_input = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT);
     let mut code = unit_caller_with_helper(true, &[private_input]);
     let plain_pc = (code.len() * 4) as u64;
     code.extend_from_slice(&common::unit_return_words());
@@ -1237,10 +1189,7 @@ fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode(
 #[test]
 fn verify_derives_transitive_view_effects_from_bytecode() {
     use ivm::instruction::wide;
-    let state_write = ivm::encoding::wide::encode_sys(
-        wide::system::SCALL,
-        ivm::syscalls::SYSCALL_STATE_SET as u8,
-    );
+    let state_write = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET);
     for (encoding, long_call) in [("JAL", false), ("JALS", true)] {
         let code = unit_caller_with_helper(long_call, &[state_write]);
         let malicious_view = contract_artifact_with_code(
@@ -1272,10 +1221,7 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
         // canonical return form to try to enter the hidden state-write block.
         ivm::encoding::wide::encode_ri(wide::arithmetic::ADDI, 1, 2, 0),
         ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-        ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm::syscalls::SYSCALL_STATE_SET as u8,
-        ),
+        ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET),
         ivm::encoding::wide::encode_halt(),
     ];
     let malicious_view = contract_artifact_with_code(
@@ -1341,18 +1287,12 @@ fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
     use ivm::instruction::wide;
     let mut code = unit_caller_with_helper(
         true,
-        &[ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm::syscalls::SYSCALL_STATE_GET as u8,
-        )],
+        &[ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET)],
     );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
     let mutate_pc = (code.len() * 4) as u64;
-    code.push(ivm::encoding::wide::encode_sys(
-        wide::system::SCALL,
-        ivm::syscalls::SYSCALL_STATE_SET as u8,
-    ));
+    code.push(ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET));
     code.extend_from_slice(&common::unit_return_words());
     let mut mutate = entrypoint("mutate", EntryPointKind::Kotoage, mutate_pc);
     mutate.write_keys = vec!["state:*".to_owned()];
@@ -1461,10 +1401,7 @@ fn verify_view_can_call_a_read_only_helper_when_the_artifact_has_no_writes() {
     use ivm::instruction::wide;
     let code = unit_caller_with_helper(
         true,
-        &[ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm::syscalls::SYSCALL_STATE_GET as u8,
-        )],
+        &[ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET)],
     );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
@@ -1478,10 +1415,7 @@ fn verify_view_effect_analysis_follows_both_branch_arms() {
     let code = [
         ivm::encoding::wide::encode_branch(wide::control::BEQ, 0, 0, 2),
         ivm::encoding::wide::encode_halt(),
-        ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm::syscalls::SYSCALL_STATE_SET as u8,
-        ),
+        ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET),
         ivm::encoding::wide::encode_halt(),
     ];
     let bytes = contract_artifact_with_code(
@@ -1504,14 +1438,11 @@ fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
     let encodings = [
         (
             "high-bit SCALL",
-            ivm::encoding::wide::encode_sys(
-                wide::system::SCALL,
-                ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION as u8,
-            ),
+            ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION),
         ),
         (
             "extended SYSTEM",
-            ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+            ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET),
         ),
     ];
     for (encoding, write) in encodings {
@@ -1534,10 +1465,7 @@ fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
 #[test]
 fn verify_view_effect_analysis_ignores_unreachable_write_code() {
     use ivm::instruction::wide;
-    let state_write = ivm::encoding::wide::encode_sys(
-        wide::system::SCALL,
-        ivm::syscalls::SYSCALL_STATE_SET as u8,
-    );
+    let state_write = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_SET);
     let bytes = contract_artifact_with_code(
         1,
         vec![entrypoint("inspect", EntryPointKind::View, 0)],
@@ -1555,25 +1483,20 @@ fn verify_view_effect_analysis_ignores_unreachable_write_code() {
 #[test]
 fn verify_rejects_unverifiable_indirect_entrypoint_control_flow() {
     use ivm::instruction::wide;
-    let indirect_jumps = [
-        ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 2, 0),
-        ivm::encoding::wide::encode_rr(wide::control::JR, 2, 0, 0),
-    ];
-    for indirect in indirect_jumps {
-        let bytes = contract_artifact_with_code(
-            1,
-            vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
-            None,
-            &[indirect],
-        );
-        let error = ivm::verify_contract_artifact(&bytes)
-            .expect_err("indirect entrypoint control flow cannot be admitted from CNTR claims");
-        assert!(
-            error
-                .to_string()
-                .contains("unverifiable indirect control flow")
-        );
-    }
+    let indirect = ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 2, 0);
+    let bytes = contract_artifact_with_code(
+        1,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[indirect],
+    );
+    let error = ivm::verify_contract_artifact(&bytes)
+        .expect_err("indirect entrypoint control flow cannot be admitted from CNTR claims");
+    assert!(
+        error
+            .to_string()
+            .contains("unverifiable indirect control flow")
+    );
 }
 #[test]
 fn verify_rejects_helper_hidden_access_classes_under_reported_by_cntr() {
@@ -1593,7 +1516,7 @@ fn verify_rejects_helper_hidden_access_classes_under_reported_by_cntr() {
         let code = [
             ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
             ivm::encoding::wide::encode_halt(),
-            ivm::encoding::wide::encode_syscallx(syscall),
+            ivm::encoding::wide::encode_scall(syscall),
             ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
         ];
         let mut forged = entrypoint("mutate", EntryPointKind::Kotoage, 0);

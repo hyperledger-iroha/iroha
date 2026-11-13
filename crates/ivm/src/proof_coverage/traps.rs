@@ -495,10 +495,9 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             AbiTypeNotAllowed, DecodeError, ExceededMaxCycles, NoritoInvalid, OutOfGas, OutOfMemory,
         ],
         InterpreterTrap: [
-            AbiTypeNotAllowed, AssertionFailed, DecodeError, ExceededMaxCycles, GasCostOverflow,
-            InvalidMetadata, InvalidOpcode, InvalidVectorLength, MemoryAccessViolation,
-            MisalignedAccess, MissingHalt, NoritoInvalid, OutOfGas, PrivacyViolation,
-            RegisterOutOfBounds, VectorExtensionDisabled, ZkExtensionDisabled,
+            AbiTypeNotAllowed, AssertionFailed, DecodeError, ExceededMaxCycles, InvalidMetadata,
+            InvalidOpcode, MemoryAccessViolation, MissingHalt, NoritoInvalid, OutOfGas,
+            PrivacyViolation, RegisterOutOfBounds,
         ],
         SyscallTrap: [
             AbiTypeNotAllowed, ContractAbort, DecodeError, GenericSyscallNotAllowed,
@@ -891,7 +890,7 @@ const fn error(variant: &'static str, trap_kind: Option<VmTrapKind>) -> VmErrorE
 }
 
 /// Number of [`VMError`] variants.
-pub const VM_ERROR_COUNT: usize = 46;
+pub const VM_ERROR_COUNT: usize = 43;
 
 /// Every [`VMError`] variant in declaration order.
 pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
@@ -952,13 +951,7 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
         "GenericSyscallNotAllowed",
         Some(VmTrapKind::GenericSyscallNotAllowed),
     ),
-    error("InvalidVectorLength", Some(VmTrapKind::InvalidVectorLength)),
     error("MissingHalt", Some(VmTrapKind::MissingHalt)),
-    error(
-        "VectorExtensionDisabled",
-        Some(VmTrapKind::PermissionDenied),
-    ),
-    error("ZkExtensionDisabled", Some(VmTrapKind::PermissionDenied)),
     // No file in the producer scope constructs this variant; the
     // `vm_error_without_producer` open semantic tracks it.
     error("NullifierAlreadyUsed", Some(VmTrapKind::PermissionDenied)),
@@ -1015,10 +1008,7 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::ProgramVectorLengthTooLarge { .. } => "ProgramVectorLengthTooLarge",
         VMError::ArtifactAbiHashMismatch { .. } => "ArtifactAbiHashMismatch",
         VMError::GenericSyscallNotAllowed { .. } => "GenericSyscallNotAllowed",
-        VMError::InvalidVectorLength { .. } => "InvalidVectorLength",
         VMError::MissingHalt => "MissingHalt",
-        VMError::VectorExtensionDisabled => "VectorExtensionDisabled",
-        VMError::ZkExtensionDisabled => "ZkExtensionDisabled",
         VMError::NullifierAlreadyUsed => "NullifierAlreadyUsed",
         VMError::PermissionDenied => "PermissionDenied",
         VMError::ReentrantCall => "ReentrantCall",
@@ -1061,7 +1051,6 @@ pub const fn trap_kind_name(kind: VmTrapKind) -> &'static str {
         VmTrapKind::ProgramVectorLengthTooLarge => "ProgramVectorLengthTooLarge",
         VmTrapKind::ArtifactAbiHashMismatch => "ArtifactAbiHashMismatch",
         VmTrapKind::GenericSyscallNotAllowed => "GenericSyscallNotAllowed",
-        VmTrapKind::InvalidVectorLength => "InvalidVectorLength",
         VmTrapKind::MissingHalt => "MissingHalt",
         VmTrapKind::PermissionDenied => "PermissionDenied",
         VmTrapKind::PrivacyViolation => "PrivacyViolation",
@@ -1126,7 +1115,7 @@ const fn kind(kind: VmTrapKind) -> TrapKindEntry {
 }
 
 /// Number of [`VmTrapKind`] variants.
-pub const TRAP_KIND_COUNT: usize = 32;
+pub const TRAP_KIND_COUNT: usize = 31;
 
 /// Every [`VmTrapKind`] in declaration order.
 pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
@@ -1152,7 +1141,6 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
     kind(VmTrapKind::ProgramVectorLengthTooLarge),
     kind(VmTrapKind::ArtifactAbiHashMismatch),
     kind(VmTrapKind::GenericSyscallNotAllowed),
-    kind(VmTrapKind::InvalidVectorLength),
     kind(VmTrapKind::MissingHalt),
     kind(VmTrapKind::PermissionDenied),
     kind(VmTrapKind::PrivacyViolation),

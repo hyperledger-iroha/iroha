@@ -234,11 +234,6 @@ path = "benches/bench_bn254_cuda.rs"
 harness = false
 required-features = ["bench"]
 
-[[bench]]
-name = "bench_vm_aes"
-path = "benches/bench_vm_aes.rs"
-harness = false
-
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

@@ -29,24 +29,24 @@ import {
 
 const ARTIFACT = Uint8Array.from([
   0x49, 0x56, 0x4d, 0x00,
-  0x01, 0x01, 0x01, 0x00,
+  0x01, 0x01, 0x01,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x01,
   ...Array(32).fill(0),
 ]);
 
 test("packed entrypoints expose identical browser-safe IVM artifact identities", () => {
-  assert.equal(mainHeaderLength, 49);
-  assert.equal(browserHeaderLength, 49);
-  assert.equal(subpathHeaderLength, 49);
+  assert.equal(mainHeaderLength, 48);
+  assert.equal(browserHeaderLength, 48);
+  assert.equal(subpathHeaderLength, 48);
   assert.equal(mainMaxBytes, 4 * 1024 * 1024);
   assert.equal(browserMaxBytes, mainMaxBytes);
   assert.equal(subpathMaxBytes, mainMaxBytes);
   const expected = {
     codeHashHex:
-      "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
+      "83000f5bff780fe02a9ad2c2e3b1b77d3afdabbbe483bfd2bda19fce28df7c37",
     artifactSha256Hex:
-      "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
+      "24f1d8c07c034f0a3bbeafbd901f938550b21863d8489ad3201dca64482d7b29",
   };
   assert.deepEqual(computeFromMain(ARTIFACT), expected);
   assert.deepEqual(computeFromBrowser(ARTIFACT), expected);
@@ -100,8 +100,8 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
           /^export const IVM_PROGRAM_HEADER_LENGTH:\s*(\d+);$/gmu,
         ),
       ].map((match) => match[1]),
-      ["49"],
-      "standalone declarations must expose the exact 49-byte IVM V1 program header",
+      ["48"],
+      "standalone declarations must expose the exact 48-byte IVM V1 program header",
     );
     const mainDeclarations = fs.readFileSync(
       path.join(packagePath, "index.d.ts"),
@@ -113,8 +113,8 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
           /^export const IVM_PROGRAM_HEADER_LENGTH:\s*(\d+);$/gmu,
         ),
       ].map((match) => match[1]),
-      ["49"],
-      "main declarations must expose the exact 49-byte IVM V1 program header",
+      ["48"],
+      "main declarations must expose the exact 48-byte IVM V1 program header",
     );
     assert.doesNotMatch(
       declarations,
@@ -165,9 +165,9 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     assert.equal(packedModule.IVM_ARTIFACT_MAX_BYTES, mainMaxBytes);
     assert.deepEqual(packedModule.computeIvmArtifactHashes(ARTIFACT), {
       codeHashHex:
-        "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
+        "83000f5bff780fe02a9ad2c2e3b1b77d3afdabbbe483bfd2bda19fce28df7c37",
       artifactSha256Hex:
-        "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
+        "24f1d8c07c034f0a3bbeafbd901f938550b21863d8489ad3201dca64482d7b29",
     });
     const offsetBytes = new Uint8Array(ARTIFACT.byteLength + 9);
     offsetBytes.set(ARTIFACT, 5);
@@ -179,7 +179,7 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     );
     const original = packedModule.computeIvmArtifactHashes(ARTIFACT);
     const changedHeader = ARTIFACT.slice();
-    changedHeader[16] ^= 0x80;
+    changedHeader[15] ^= 0x80;
     const headerHashes = packedModule.computeIvmArtifactHashes(changedHeader);
     assert.notEqual(headerHashes.codeHashHex, original.codeHashHex);
     assert.notEqual(
@@ -217,7 +217,7 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
         '  type IvmArtifactHashes,',
         '} from "@iroha/iroha-js/ivm-artifact";',
         "const artifact = new Uint8Array(IVM_PROGRAM_HEADER_LENGTH);",
-        "const headerBytes: 49 = IVM_PROGRAM_HEADER_LENGTH;",
+        "const headerBytes: 48 = IVM_PROGRAM_HEADER_LENGTH;",
         "const maxBytes: 4194304 = IVM_ARTIFACT_MAX_BYTES;",
         "const hashes: IvmArtifactHashes = computeIvmArtifactHashes(artifact);",
         "const fromBuffer: IvmArtifactHashes = computeIvmArtifactHashes(artifact.buffer);",

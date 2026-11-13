@@ -31,6 +31,9 @@ use crate::nonnative::{
 };
 use crate::p256;
 use crate::sha::{self, Sha};
+#[cfg(test)]
+#[path = "backend_chain_tests.rs"]
+mod backend_chain_tests;
 use crate::uniform::{
     self, Array, ChallengeRows, Copies, Export, Import, Lin, RP_FULL, RP_INPUT, constant, link,
     own, plus, scaled,
@@ -43,6 +46,8 @@ pub type Fq = crate::verifier::Fq;
 
 /// A circuit under construction.
 pub struct Wiring<F> {
+    /// Explicit independently randomizable product gates for ZK evaluations.
+    pub product_masks: Vec<(usize, [usize; 3])>,
     pub arrays: Vec<Array<F>>,
     pub pi: Vec<usize>,
     pub counts: Vec<usize>,
@@ -63,6 +68,7 @@ pub struct Wiring<F> {
 impl<F: Scalar> Default for Wiring<F> {
     fn default() -> Self {
         Wiring {
+            product_masks: Vec::new(),
             arrays: Vec::new(),
             pi: Vec::new(),
             counts: Vec::new(),
@@ -136,6 +142,7 @@ impl<F: Scalar> Wiring<F> {
             self.tables,
             Copies {
                 exports,
+                product_masks: self.product_masks,
                 imports: self.imports,
                 challenge: self.challenge,
                 io_arrays: self.io_arrays,
@@ -310,6 +317,7 @@ impl<F: Scalar + PoseidonField> Pool<F> {
         assert!(outs == self.outputs, "pool outputs");
         let (at, fam) = (w.arrays.len(), w.pi.len());
         uniform::relocate(&mut arrays, at, fam);
+        w.product_masks.push((at + uniform::RP_MASK, [0, 1, 2]));
         w.pi.extend([pis[0], pis[1]]);
         w.counts.extend([n, 2]);
         let slots = 1usize << log;
@@ -445,6 +453,200 @@ pub const TABLE_IO: usize = 56;
 /// statement-sponge digest. TODO: replace the synthetic statement with the
 /// canonical monetary state encoding before production integration.
 pub const HEAD_IO: usize = 4;
+/// Exact statement digest exposed by every completed monetary operation.
+pub const STATEMENT_IO: usize = 5;
+/// Exact signed receipt object digest exposed by every completed operation.
+pub const RECEIPT_IO: usize = 6;
+
+/// Authenticated leaves opened by the recursive verifier for wallet slot zero.
+/// Only this module may construct the production value, after assembling the
+/// scalar/point verifiers, their cross-field binding and deferred claim owner.
+/// A caller cannot turn an arbitrary witness array into predecessor authority.
+#[derive(Clone)]
+pub struct VerifiedPredecessor {
+    io: usize,
+    leaves: usize,
+}
+
+impl VerifiedPredecessor {
+    fn from_verified_slot(w: &Wiring<Fp>, io: usize) -> Self {
+        let a = &w.arrays[io];
+        assert_eq!(a.cells(), 1, "one verified IO-fold cell");
+        assert!(a.rho >= 7, "complete monetary public profile");
+        let leaves = (1usize << a.rho) / 2;
+        assert!(
+            leaves + KIND_IO + 2 <= a.r_count,
+            "all profile leaves present"
+        );
+        Self { io, leaves }
+    }
+
+    fn at(&self, index: usize) -> crate::send_arithmetic::Source {
+        crate::send_arithmetic::Source {
+            array: self.io,
+            cell: 0,
+            instance: self.leaves + index,
+        }
+    }
+
+    pub fn head(&self) -> crate::send_arithmetic::Source {
+        self.at(HEAD_IO)
+    }
+    pub fn statement_digest(&self) -> crate::send_arithmetic::Source {
+        self.at(STATEMENT_IO)
+    }
+    pub fn receipt_digest(&self) -> crate::send_arithmetic::Source {
+        self.at(RECEIPT_IO)
+    }
+    pub fn context(&self) -> [crate::send_arithmetic::Source; crate::bootstrap_context::FIELDS] {
+        std::array::from_fn(|i| self.at(crate::bootstrap_context::CONTEXT_IO + i))
+    }
+    pub fn lineage(
+        &self,
+    ) -> [crate::send_arithmetic::Source; crate::bootstrap_context::LINEAGE_FIELDS] {
+        std::array::from_fn(|i| self.at(crate::bootstrap_context::LINEAGE_IO + i))
+    }
+    pub fn table(&self) -> [crate::send_arithmetic::Source; 4] {
+        std::array::from_fn(|i| self.at(TABLE_IO + i))
+    }
+
+    /// Synthetic verifier leaves for component tests only. Tests must bind
+    /// these leaves to their public context when testing authority changes.
+    /// Production builds have no constructor outside this verifier module.
+    #[cfg(test)]
+    pub(crate) fn fixture(w: &mut Wiring<Fp>, family: usize, values: [Fp; 64]) -> Self {
+        let mut leaves = vec![Fp::ZERO; 128];
+        leaves[64..].copy_from_slice(&values);
+        let io = w.push(Array {
+            name: "test verified predecessor leaves",
+            family,
+            rho: 7,
+            r_count: 128,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![],
+            values: vec![leaves],
+        });
+        Self::from_verified_slot(w, io)
+    }
+}
+
+/// Candidate incoming Send fields and the total verifier's derived verdict.
+/// Candidate fields do not confer predecessor authority when the verdict is
+/// false. Production construction belongs exclusively to this verifier owner.
+pub struct IncomingProofFacts {
+    io: usize,
+    leaves: usize,
+    validity: crate::send_arithmetic::Source,
+    proof_digest: crate::send_arithmetic::Source,
+}
+
+pub(crate) fn native_predecessor(
+    w: &mut Wiring<Fp>, family: usize, head: &crate::native::VerifiedWalletHead,
+) -> VerifiedPredecessor {
+    let io = native_profile(w, family, head.profile());
+    VerifiedPredecessor::from_verified_slot(w,io)
+}
+
+fn native_profile(w:&mut Wiring<Fp>,family:usize,profile:&[Fp;64])->usize {
+    let mut values=vec![Fp::ZERO;128];values[64..].copy_from_slice(profile);
+    w.push(Array{name:"sealed native verified profile",family,rho:7,r_count:128,
+        fixed:false,lookups:Vec::new(),widths:vec![255],
+        rows:vec![[plus(&own(0,128),&constant(values.iter().map(|v|-*v).collect())),constant(vec![Fp::ONE;128]),Vec::new()]],
+        values:vec![values]})
+}
+
+pub(crate) fn native_incoming(
+    w:&mut Wiring<Fp>,family:usize,payment:&crate::native::VerifiedIncomingPayment,
+) -> IncomingProofFacts {
+    let io=native_profile(w,family,payment.profile());
+    let digest=crate::payment::proof_digest(payment.exact_pair()).expect("verified bounded pair");
+    let array=w.push(Array{name:"sealed native verified proof facts",family,rho:0,r_count:1,
+        fixed:false,lookups:Vec::new(),widths:vec![1,255],
+        rows:vec![[plus(&own(0,1),&constant(vec![-Fp::ONE])),constant(vec![Fp::ONE]),Vec::new()],
+        [plus(&own(1,1),&constant(vec![-digest])),constant(vec![Fp::ONE]),Vec::new()]],
+        values:vec![vec![Fp::ONE],vec![digest]]});
+    IncomingProofFacts{io,leaves:64,
+        validity:crate::send_arithmetic::Source{array,cell:0,instance:0},
+        proof_digest:crate::send_arithmetic::Source{array,cell:1,instance:0}}
+}
+
+impl IncomingProofFacts {
+    fn at(&self, index: usize) -> crate::send_arithmetic::Source {
+        crate::send_arithmetic::Source {
+            array: self.io,
+            cell: 0,
+            instance: self.leaves + index,
+        }
+    }
+    pub fn head(&self) -> crate::send_arithmetic::Source {
+        self.at(HEAD_IO)
+    }
+    pub fn statement_digest(&self) -> crate::send_arithmetic::Source {
+        self.at(STATEMENT_IO)
+    }
+    pub fn receipt_digest(&self) -> crate::send_arithmetic::Source {
+        self.at(RECEIPT_IO)
+    }
+    pub fn context(&self) -> [crate::send_arithmetic::Source; crate::bootstrap_context::FIELDS] {
+        std::array::from_fn(|i| self.at(crate::bootstrap_context::CONTEXT_IO + i))
+    }
+    pub fn lineage(
+        &self,
+    ) -> [crate::send_arithmetic::Source; crate::bootstrap_context::LINEAGE_FIELDS] {
+        std::array::from_fn(|i| self.at(crate::bootstrap_context::LINEAGE_IO + i))
+    }
+    pub fn table(&self) -> [crate::send_arithmetic::Source; 4] {
+        std::array::from_fn(|i| self.at(TABLE_IO + i))
+    }
+    pub fn kind(&self) -> [crate::send_arithmetic::Source; 2] {
+        std::array::from_fn(|i| self.at(KIND_IO + i))
+    }
+    pub fn validity(&self) -> crate::send_arithmetic::Source {
+        self.validity
+    }
+    pub fn proof_digest(&self) -> crate::send_arithmetic::Source {
+        self.proof_digest
+    }
+
+    /// Isolated test ports, requiring explicit public joins in each harness.
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        w: &mut Wiring<Fp>,
+        family: usize,
+        values: [Fp; 64],
+        validity: Fp,
+        proof_digest: Fp,
+    ) -> Self {
+        let p = VerifiedPredecessor::fixture(w, family, values);
+        let facts = w.push(Array {
+            name: "test incoming proof verdict and digest",
+            family,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![1, 255],
+            rows: vec![],
+            values: vec![vec![validity], vec![proof_digest]],
+        });
+        Self {
+            io: p.io,
+            leaves: p.leaves,
+            validity: crate::send_arithmetic::Source {
+                array: facts,
+                cell: 0,
+                instance: 0,
+            },
+            proof_digest: crate::send_arithmetic::Source {
+                array: facts,
+                cell: 1,
+                instance: 0,
+            },
+        }
+    }
+}
 
 /// The own relation's predecessor and exposed successor head.
 pub struct HeadIdx {
@@ -2228,6 +2430,8 @@ mod tests {
 /// (absolute array indices).
 pub struct ScalarIdx<S> {
     pub side: usize,
+    /// Opening stride in the scalar verifier's column-bit array.
+    pub q_pad: usize,
     /// Slot instances of the slot data array (the slots are the last ones).
     pub slot_instances: usize,
     pub endo: usize,
@@ -2627,6 +2831,7 @@ where
     }
     ScalarIdx {
         side: first,
+        q_pad,
         slot_instances: n_s,
         endo: endo_a,
         limbs: limbs_a,
@@ -2643,6 +2848,9 @@ where
 
 /// One incoming pair, proved with its pairing link and traced.
 pub struct TracedPair {
+    /// Exact candidate bytes for total Receive parsing. When absent, the
+    /// canonical typed proof encoding is the original.
+    pub incoming_original: Option<Vec<u8>>,
     pub shape_p: crate::r1cs::Shape,
     pub inst_p: crate::r1cs::Instance<Fp>,
     pub claims_p: Vec<crate::ipa::Claim<iroha_pasta::Eq>>,
@@ -2660,6 +2868,12 @@ pub struct TracedPair {
     pub kind: usize,
 }
 
+#[path = "generator_integration.rs"]
+mod generator_integration;
+pub use generator_integration::{GeneratorFolds, inherited_generator_claim};
+#[path = "incoming_codec.rs"]
+mod incoming_codec;
+
 /// The public io indices of a circuit's kind bits (`deferral::kind_bits`):
 /// c0 at `KIND_IO` (1 for Send) and c1 at `KIND_IO + 1` (1 for Bootstrap);
 /// Receive is (0, 0).
@@ -2669,6 +2883,8 @@ pub const SEND: usize = 1;
 /// The chain's first link: no predecessor slot, the empty claim as its
 /// accumulator (`p_boot`, `s_boot`).
 pub const BOOTSTRAP: usize = 2;
+/// An ordinary, finalized online-to-offline Load into the existing wallet.
+pub const LOAD: usize = 3;
 
 /// Generators of the two proof shapes (P: Vesta 2^14, S: Pallas 2^13).
 pub struct PairGens {
@@ -2683,8 +2899,8 @@ pub struct PairGens {
     /// Send, Bootstrap), per side, when all three are uniform circuits of one
     /// layout: then the predecessor slot takes a proof of any kind, its kind
     /// bits read from the proof's io (`KIND_IO`).
-    pub keys_p: Option<[Vec<crate::ipa::Aff<iroha_pasta::Eq>>; 3]>,
-    pub keys_s: Option<[Vec<crate::ipa::Aff<iroha_pasta::Ep>>; 3]>,
+    pub keys_p: Option<Vec<Vec<crate::ipa::Aff<iroha_pasta::Eq>>>>,
+    pub keys_s: Option<Vec<Vec<crate::ipa::Aff<iroha_pasta::Ep>>>>,
 }
 
 /// How a verifier slot takes its proof's kind: (the proof's kind, whether
@@ -2941,6 +3157,7 @@ fn toy_pair(gens: &PairGens, i: usize) -> TracedPair {
     );
     assert!(tr_p.accepts && tr_s.accepts, "the pair verifies natively");
     TracedPair {
+        incoming_original: None,
         shape_p: sp,
         inst_p: spec.inst_p,
         claims_p: spec.claims_p,
@@ -3005,10 +3222,34 @@ pub fn next_gens(
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
 ) -> PairGens {
+    next_gens_with_load(recv, send, boot, None)
+}
+
+/// Include the actual Load relation in the fixed recursive program. A Load
+/// predecessor is selected by the fourth two-bit corner, never represented by
+/// a fabricated funded Bootstrap.
+pub fn next_gens_with_load(
+    recv: &UniformPair,
+    send: Option<&UniformPair>,
+    boot: Option<&UniformPair>,
+    load: Option<&UniformPair>,
+) -> PairGens {
+    next_gens_with_load_at(recv, send, boot, load, FP_DIMS)
+}
+
+/// A full backend fixes its accumulator dimensions independently of temporary
+/// seed circuits. Every subsequent operation must fit this selected program.
+pub fn next_gens_with_load_at(
+    recv: &UniformPair,
+    send: Option<&UniformPair>,
+    boot: Option<&UniformPair>,
+    load: Option<&UniformPair>,
+    dimensions: ((usize, usize), (usize, usize)),
+) -> PairGens {
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
     assert_eq!(recv.kind, RECEIVE, "the first pair is a Receive");
     let specs = toy_specs();
-    let (dp, ds) = FP_DIMS;
+    let (dp, ds) = dimensions;
     let kinds_of = |u: Option<&UniformPair>, kind: usize, toy: usize| match u {
         Some(u) => {
             assert_eq!(u.kind, kind, "pair of kind {kind}");
@@ -3023,16 +3264,15 @@ pub fn next_gens(
     };
     let (send_p, send_s) = kinds_of(send, SEND, 1);
     let (boot_p, boot_s) = kinds_of(boot, BOOTSTRAP, 0);
-    let defer_p = crate::deferral::MatPoly::with_min(
-        [uniform_kind(recv.cp.clone()), send_p, boot_p],
-        dp.0,
-        dp.1,
-    );
-    let defer_s = crate::deferral::MatPoly::with_min(
-        [uniform_kind(recv.cs.clone()), send_s, boot_s],
-        ds.0,
-        ds.1,
-    );
+    let mut p_kinds = vec![uniform_kind(recv.cp.clone()), send_p, boot_p];
+    let mut s_kinds = vec![uniform_kind(recv.cs.clone()), send_s, boot_s];
+    if let Some(load) = load {
+        let (lp, ls) = kinds_of(Some(load), LOAD, 0);
+        p_kinds.push(lp);
+        s_kinds.push(ls);
+    }
+    let defer_p = crate::deferral::MatPoly::with_min_vec(p_kinds, dp.0, dp.1);
+    let defer_s = crate::deferral::MatPoly::with_min_vec(s_kinds, ds.0, ds.1);
     assert_eq!(
         (defer_p.x, defer_p.y, defer_s.x, defer_s.y),
         (dp.0, dp.1, ds.0, ds.1),
@@ -3050,17 +3290,20 @@ pub fn next_gens(
             && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len)
     };
     let (keys_p, keys_s) = match (send, boot) {
-        (Some(t), Some(b)) if same(t) && same(b) => {
+        (Some(t), Some(b)) if same(t) && same(b) && load.is_none_or(same) => {
             let key = |c: &crate::uniform::UniformCircuit<Fp>| {
                 crate::spartan::fixed_commitments(&c.shape, &p, c)
             };
             let key_s = |c: &crate::uniform::UniformCircuit<crate::verifier::Fq>| {
                 crate::spartan::fixed_commitments(&c.shape, &s, c)
             };
-            (
-                Some([key(&recv.cp), key(&t.cp), key(&b.cp)]),
-                Some([key_s(&recv.cs), key_s(&t.cs), key_s(&b.cs)]),
-            )
+            let mut kp = vec![key(&recv.cp), key(&t.cp), key(&b.cp)];
+            let mut ks = vec![key_s(&recv.cs), key_s(&t.cs), key_s(&b.cs)];
+            if let Some(load) = load {
+                kp.push(key(&load.cp));
+                ks.push(key_s(&load.cs));
+            }
+            (Some(kp), Some(ks))
         }
         _ => (None, None),
     };
@@ -3077,6 +3320,17 @@ pub fn next_gens(
 /// A proved uniform pair traced as circuit proofs on `gens`' generators (its
 /// accumulators are its late io).
 pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
+    trace_uniform_mode(u, gens, None, true)
+}
+
+/// Witness construction for the total Receive relation. The candidate has
+/// already passed bounded framing; canonical decoding can select the unique
+/// dummy proof. The circuit derives and authenticates that selection itself.
+pub fn trace_incoming_candidate(u: UniformPair, gens: &PairGens, original: Vec<u8>) -> TracedPair {
+    trace_uniform_mode(u, gens, Some(original), false)
+}
+
+fn trace_uniform_mode(u: UniformPair, gens: &PairGens, incoming_original: Option<Vec<u8>>, require_acceptance: bool) -> TracedPair {
     use crate::spartan::Link;
     use crate::verifier::trace_circuit;
     let fixed_p = crate::spartan::fixed_for(&u.cp.shape, &gens.p, u.cp.as_ref(), &u.ip.io);
@@ -3104,18 +3358,19 @@ pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
         &fixed_s,
     );
     assert!(
-        tr_p.accepts && tr_s.accepts,
+        !require_acceptance || (tr_p.accepts && tr_s.accepts),
         "the uniform pair's traces accept"
     );
     TracedPair {
+        incoming_original,
         shape_p: u.cp.shape,
-        acc_p: crate::deferral::claim_of(&u.pp.late),
+        acc_p: crate::deferral::claim_of(&u.pp.late[..gens.defer_p.n() + 1]),
         inst_p: u.ip,
         claims_p: Vec::new(),
         proof_p: u.pp,
         tr_p,
         shape_s: u.cs.shape,
-        acc_s: crate::deferral::claim_of(&u.ps.late),
+        acc_s: crate::deferral::claim_of(&u.ps.late[..gens.defer_s.n() + 1]),
         inst_s: u.is,
         claims_s: Vec::new(),
         proof_s: u.ps,
@@ -3126,7 +3381,9 @@ pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
 
 /// Where P-recv's parts sit.
 pub struct PRecvIdx {
-    pub own: OwnIdx,
+    /// Census-only benchmark relation. Monetary entry points never populate it.
+    pub own: Option<OwnIdx>,
+    pub monetary: Option<CompleteOperation>,
     pub points: crate::points::PointsIdx,
     pub scalars: Vec<ScalarIdx<Fp>>,
     pub shared: usize,
@@ -3139,6 +3396,77 @@ pub struct PRecvIdx {
     pub tables: Vec<Option<usize>>,
     pub io_digest: usize,
     pub defer: DeferIdx<Fp>,
+}
+
+/// Exact monetary witnesses; this selection is part of the circuit program.
+pub enum OperationWitness<'a> {
+    Send(&'a crate::send::Witness),
+    Load(&'a crate::load::Witness),
+    Receive(&'a crate::receive::Witness),
+}
+
+pub enum CompleteOperation {
+    Send(crate::send::CompleteSend),
+    Load(crate::load::CompleteLoad),
+    Receive(crate::receive::CompleteReceive),
+}
+
+impl OperationWitness<'_> {
+    pub fn kind(&self) -> usize {
+        match self { Self::Send(_) => SEND, Self::Load(_) => LOAD, Self::Receive(_) => RECEIVE }
+    }
+}
+
+impl CompleteOperation {
+    fn public_sources(&self) -> (
+        [crate::send_arithmetic::Source; 3],
+        [crate::send_arithmetic::Source; crate::bootstrap_context::FIELDS],
+        [crate::send_arithmetic::Source; crate::bootstrap_context::LINEAGE_FIELDS],
+    ) {
+        use crate::send_arithmetic::Source;
+        let statement = |s: &crate::statement::StatementCells| Source { array: s.local, cell: s.digest, instance: 0 };
+        match self {
+            Self::Send(op) => ([op.head(), statement(op.statement()), op.receipt().digest()], op.context(), op.lineage()),
+            Self::Load(op) => ([op.head(), statement(op.statement()), op.receipt().digest()], op.context(), op.lineage()),
+            Self::Receive(op) => ([op.head(), statement(op.statement()), op.receipt().digest()], op.context(), op.lineage()),
+        }
+    }
+}
+
+fn expose_operation(w: &mut Wiring<Fp>, family: usize, operation: &CompleteOperation) {
+    let (head, context, lineage) = operation.public_sources();
+    for (offset, sources) in [
+        (HEAD_IO, head.as_slice()),
+        (crate::bootstrap_context::CONTEXT_IO, context.as_slice()),
+        (crate::bootstrap_context::LINEAGE_IO, lineage.as_slice()),
+    ] {
+        let n = sources.len().next_power_of_two();
+        let mut values = vec![Fp::ZERO; n];
+        for (i, source) in sources.iter().enumerate() { values[i] = source.value(w); }
+        let io = w.push(Array {
+            name: "complete monetary public outputs", family,
+            rho: n.trailing_zeros() as usize, r_count: sources.len(), fixed: false,
+            lookups: Vec::new(), widths: vec![255], rows: Vec::new(), values: vec![values],
+        });
+        w.io_arrays.push((io, offset));
+        let mut host = crate::certificate::Cells::new(family);
+        host.a.name = "complete monetary public output bindings";
+        for (i, source) in sources.iter().enumerate() {
+            host.eq(source.linear(), link(io, 0, vec![Some(i)], Fp::ONE));
+        }
+        w.push(host.a);
+    }
+}
+
+/// Compose real monetary semantics with the hard recursive wallet predecessor.
+/// The incoming Receive branch additionally requires the total proof owner.
+pub fn p_operation(
+    witness: OperationWitness<'_>, gens: &PairGens, pairs: &[TracedPair],
+    generators: &GeneratorFolds,
+) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
+    let kind = witness.kind();
+    let op = Op { kind, ..Op::SEND };
+    p_circuit_impl(&op, gens, pairs, None, pairs[0].inst_p.io[HEAD_IO], Some(witness), Some(generators))
 }
 
 /// P-recv in the uniform layout: the own relation; for each incoming pair the
@@ -3242,8 +3570,18 @@ fn p_circuit_with_predecessor(
     key: &WalletKey,
     predecessor: Fp,
 ) -> (Wiring<Fp>, PRecvIdx) {
+    p_circuit_impl(op, gens, pairs, Some(key), predecessor, None, None).expect("benchmark relation")
+}
+
+fn p_circuit_impl(
+    op: &Op, gens: &PairGens, pairs: &[TracedPair], key: Option<&WalletKey>,
+    predecessor: Fp, operation: Option<OperationWitness<'_>>,
+    generators: Option<&GeneratorFolds>,
+) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
+    let total_incoming = matches!(&operation, Some(OperationWitness::Receive(_)));
+    if total_incoming && pairs.len() != 2 { return Err("Receive needs predecessor and incoming Send"); }
     let kinds = slot_kinds(gens, pairs);
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
@@ -3252,19 +3590,13 @@ fn p_circuit_with_predecessor(
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
     let _ = kind_pin(&mut w, gfam, op.kind);
-    let own_idx = own_relation_with_head(
-        &mut w,
-        &mut pool,
-        e_out,
-        e_zero,
-        gfam,
-        op,
-        key,
-        None,
-        Some(predecessor),
-    );
-    let (own_table, _) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
-    w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
+    let (own_idx, own_table) = if let Some(key) = key {
+        let own = own_relation_with_head(&mut w, &mut pool, e_out, e_zero, gfam,
+            op, key, None, Some(predecessor));
+        let (table, _) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
+        w.wallet = Some((own.comb + nonnative::A_WTABLE, TABLE_IO));
+        (Some(own), Some(table))
+    } else { (None, None) };
     // Shared values: per pair, the P proof's then the S proof's; then each
     // pair's two kind bits (here the P proof's io bits, in S the S proof's:
     // the binding makes them one); then the P proofs' table commitments.
@@ -3272,9 +3604,16 @@ fn p_circuit_with_predecessor(
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
     let table_offs = table_values(pairs, &mut values);
+    let generator_offsets = generators.map(|g| g.append_shared(&mut values));
+    let incoming_wire = total_incoming.then(|| incoming_encoding(&pairs[1]));
+    let wire_at = values.len();
+    if let Some(wire) = &incoming_wire { values.extend(crate::proof_bytes::shared_words(&wire.bytes)); }
+    let verdict_at = values.len();
+    if total_incoming { values.extend(incoming_verdict_values(gens, &pairs[1])); }
     // The S proofs' points sides; a slot taking any kind pins the S proof's
     // fixed rows to the key its kind bits select.
     let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
+    let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_p + link_word_at(&pr.tr_p);
         let sm = SharedMap {
@@ -3284,12 +3623,17 @@ fn p_circuit_with_predecessor(
         };
         let keys = match (&gens.keys_s, kinds[i].1) {
             (Some(k), true) => Some(KeySelect {
-                fixed: [&k[0][..], &k[1][..], &k[2][..]],
+                fixed: k.iter().map(Vec::as_slice).collect(),
                 kind_at: kind_at + 2 * i,
             }),
             _ => None,
         };
-        pb.verify_keyed(
+        if total_incoming && i == 1 {
+            proof_points.push(pb.verify_keyed_total(
+                &mut pool, &pr.shape_s, &gens.s, &pr.proof_s, &pr.claims_s,
+                &pr.tr_s, sm, keys.as_ref(), None,
+            ));
+        } else { proof_points.push(pb.verify_keyed(
             &mut pool,
             &pr.shape_s,
             &gens.s,
@@ -3299,8 +3643,12 @@ fn p_circuit_with_predecessor(
             sm,
             keys.as_ref(),
             None,
-        );
+        )); }
     }
+    let generator_equalities = generators.map(|g| {
+        let token = pb.generator_fold(&mut pool, &gens.s, &g.s, &g.ts, generator_offsets.unwrap().1);
+        (0..2).map(|slot| pb.generator_source_equals_proof(&token, 2*slot, &proof_points[slot % pairs.len()])).collect::<Vec<_>>()
+    });
     // The binding chain: the shared values and mu in the first phase, the
     // chain in the link phase (rho and R are the link's io).
     let shared = p_binding(&mut w, gfam, &binding_mu(&values), &values);
@@ -3339,7 +3687,7 @@ fn p_circuit_with_predecessor(
                 io: &pr.inst_p.io,
                 limb: io_limb(&pr.tr_p, off_p),
                 fold: sc.io,
-                start: 0,
+                slots: (0..pr.inst_p.io.len()).collect(),
             }];
             if pr
                 .tr_p
@@ -3351,7 +3699,7 @@ fn p_circuit_with_predecessor(
                     io: &pr.proof_p.late,
                     limb: late_limb(&pr.tr_p, &pr.claims_p, off_p),
                     fold: sc.io,
-                    start: 64,
+                    slots: pr.tr_p.circuit.as_ref().unwrap().late_slots.clone(),
                 });
             }
             v
@@ -3365,7 +3713,8 @@ fn p_circuit_with_predecessor(
         .zip(&scalars)
         .map(|(pr, sc)| (&pr.shape_p, &pr.inst_p, &pr.tr_p, sc, &pr.acc_p))
         .collect();
-    let defer = defer_into::<iroha_pasta::Eq>(
+    let fold = if total_incoming { defer_into_total::<iroha_pasta::Eq> } else { defer_into::<iroha_pasta::Eq> };
+    let defer = fold(
         &mut w,
         gfam,
         &gens.defer_p,
@@ -3386,9 +3735,10 @@ fn p_circuit_with_predecessor(
         &ios,
         &table_offs,
         shared,
-        Some(own_table),
+        own_table,
     );
-    let context_values: [Fp; crate::bootstrap_context::FIELDS] = pairs[0].inst_p.io
+    if let Some(own_idx) = &own_idx {
+        let context_values: [Fp; crate::bootstrap_context::FIELDS] = pairs[0].inst_p.io
         [crate::bootstrap_context::CONTEXT_IO
             ..crate::bootstrap_context::CONTEXT_IO + crate::bootstrap_context::FIELDS]
         .try_into()
@@ -3400,17 +3750,51 @@ fn p_circuit_with_predecessor(
         own_idx.head.as_ref().expect("a transition head").context,
         scalars[0].io,
     );
+    }
     let mut rng = SpikeRng::new(b"p-recv pool");
     let pidx = pool.build(&mut w, e_out, &mut rng);
     let points = pb.build(&mut w, gfam, shared, false);
+    if let Some(g) = generators {
+        let starts = generator_offsets.unwrap();
+        generator_integration::bind_relation(&mut w,gfam,shared,starts,&scalars[0]);
+        let inherited = generator_integration::scalar_bind(&mut w,gfam,shared,starts.0,&g.p,&g.tp,&scalars,total_incoming);
+        for (slot,equality) in generator_equalities.as_ref().unwrap().iter().enumerate() {
+            let port=equality.validity(&points);
+            if total_incoming && slot==1 { bind_verdict(&mut w,gfam,VerifierCell{array:port.0,cell:port.1,instance:port.2},shared,verdict_at+6); }
+            else {generator_integration::require_true(&mut w,gfam,port);}
+        }
+        if let Some(bit)=inherited{bind_verdict(&mut w,gfam,bit,shared,verdict_at+5);}
+    }
+    let incoming = if let Some(wire) = &incoming_wire {
+        let token = &proof_points[1];
+        let (array,cell,instance) = token.validity(&points);
+        bind_verdict(&mut w,gfam,VerifierCell{array,cell,instance},shared,verdict_at+1);
+        bind_verdict(&mut w,gfam,defer.incoming_validity.expect("corrected P claim"),shared,verdict_at+2);
+        let bytes=crate::proof_bytes::append_shared(&mut w,gfam,&wire.bytes,shared,wire_at);
+        let selected=incoming_codec::select(&mut w,gfam,&bytes,wire,&pairs[1],shared,verdict_at,true);
+        bind_proof_points(&mut w,gfam,&selected,wire.secondary,&pairs[1].proof_s,token,&points);
+        bind_proof_scalars::<iroha_pasta::Eq>(&mut w,gfam,&selected,wire.primary,&pairs[1].proof_p,&pairs[1].tr_p,&scalars[1],shared,offsets[1].0);
+        Some(incoming_facts(&mut w,gfam,scalars[1].io,&bytes,&selected,&wire.bytes,shared,verdict_at,offsets[1].0+offsets[1].2-2))
+    } else { None };
+    let monetary = if let Some(operation) = operation {
+        let predecessor = VerifiedPredecessor::from_verified_slot(&w, scalars[0].io);
+        let complete = match operation {
+            OperationWitness::Send(witness) => CompleteOperation::Send(crate::send::append(&mut w, gfam, witness, &predecessor)?),
+            OperationWitness::Load(witness) => CompleteOperation::Load(crate::load::append(&mut w, gfam, witness, &predecessor)?),
+            OperationWitness::Receive(witness) => CompleteOperation::Receive(crate::receive::append(&mut w,gfam,witness,&predecessor,incoming.as_ref().expect("total incoming owner"))?),
+        };
+        expose_operation(&mut w, gfam, &complete);
+        Some(complete)
+    } else { None };
     let mut seen = std::collections::HashSet::new();
     w.tables.retain(|(_, t)| seen.insert(*t));
     let mut own_idx = own_idx;
-    own_idx.pool = pidx;
-    (
+    if let Some(own) = &mut own_idx { own.pool = pidx; }
+    Ok((
         w,
         PRecvIdx {
             own: own_idx,
+            monetary,
             points,
             scalars,
             shared,
@@ -3420,7 +3804,7 @@ fn p_circuit_with_predecessor(
             io_digest,
             defer,
         },
-    )
+    ))
 }
 
 /// Whether a verified proof's circuit reads the link's io.
@@ -3488,6 +3872,136 @@ pub struct DeferIdx<S> {
     pub q: Vec<S>,
     /// Seconds to compute q natively (deg q + 1 evaluations of P).
     pub q_secs: f64,
+    /// For total incoming verification, an iff comparison between the payer's
+    /// original accumulator value and the corrected value folded below. The
+    /// corrected value is authenticated by the resulting accumulator's native
+    /// matrix check, not by the witness generator.
+    pub incoming_validity: Option<VerifierCell>,
+}
+
+/// A verifier-owned scalar cell. Creation is restricted to verifier modules;
+/// downstream monetary relations consume its location, never a host boolean.
+#[derive(Clone, Copy, Debug)]
+pub struct VerifierCell {
+    pub array: usize,
+    pub cell: usize,
+    pub instance: usize,
+}
+
+impl VerifierCell {
+    fn linear<S: Scalar>(self) -> Lin<S> {
+        link(self.array, self.cell, vec![Some(self.instance)], S::ONE)
+    }
+}
+
+struct IncomingEncoding {
+    bytes: Vec<u8>,
+    primary: usize,
+    secondary: usize,
+}
+
+fn incoming_encoding(pair: &TracedPair) -> IncomingEncoding {
+    use crate::bootstrap_context::{CONTEXT_IO, RELATION};
+    let mut bytes = b"KGSPPR1\0".to_vec();
+    bytes.extend_from_slice(&[1, 0]);
+    for i in 0..2 {
+        let value = pair.inst_p.io[CONTEXT_IO + RELATION + i].to_repr();
+        assert!(value[16..].iter().all(|b| *b == 0), "relation identifier limb");
+        bytes.extend_from_slice(&value[..16]);
+    }
+    bytes.extend_from_slice(&pair.tr_p.link.expect("incoming linked P proof").3);
+    let primary = bytes.len();
+    bytes.extend_from_slice(&pair.proof_p.to_bytes());
+    let secondary = bytes.len();
+    bytes.extend_from_slice(&pair.proof_s.to_bytes());
+    if let Some(original)=&pair.incoming_original {
+        assert_eq!(original.len(),bytes.len(),"fixed profile candidate proof length");
+        bytes.clone_from(original);
+    }
+    IncomingEncoding { bytes, primary, secondary }
+}
+
+fn incoming_verdict_values(gens: &PairGens, pair: &TracedPair) -> [u128; incoming_codec::VERDICT_BITS] {
+    let parse=incoming_codec::native_bits(pair,&incoming_encoding(pair));
+    [u128::from(pair.tr_p.accepts), u128::from(pair.tr_s.accepts),
+        u128::from(gens.defer_p.eval(&pair.acc_p.point) == pair.acc_p.value),
+        u128::from(gens.defer_s.eval(&pair.acc_s.point) == pair.acc_s.value),
+        u128::from(crate::generator_claim::decide(&gens.p,&crate::ipa::Claim{g:pair.proof_p.ipa.g_final,us:pair.tr_p.us.clone()})),
+        u128::from(inherited_generator_claim(&pair.tr_p,&gens.p).is_ok_and(|c|crate::generator_claim::decide(&gens.p,&c))),
+        u128::from(crate::generator_claim::decide(&gens.s,&crate::ipa::Claim{g:pair.proof_s.ipa.g_final,us:pair.tr_s.us.clone()})),
+        u128::from(inherited_generator_claim(&pair.tr_s,&gens.s).is_ok_and(|c|crate::generator_claim::decide(&gens.s,&c))),parse[0],parse[1]]
+}
+
+fn bind_verdict<S:Scalar>(w:&mut Wiring<S>, family:usize, actual:VerifierCell, shared:usize, index:usize) {
+    w.push(Array { name:"cross-pair total verifier verdict", family, rho:0, r_count:1,
+        fixed:false,lookups:Vec::new(),widths:vec![1], values:vec![vec![S::ZERO]],
+        rows:vec![[plus(&actual.linear(),&link(shared,0,vec![Some(index)],-S::ONE)),constant(vec![S::ONE]),Vec::new()]] });
+}
+
+fn word_offsets<C:iroha_pasta::PastaCurve>(proof:&crate::spartan::Proof<C>, start:usize)->(Vec<usize>,Vec<usize>){
+    let mut at=start; let mut points=Vec::new();let mut scalars=Vec::new();
+    for _ in &proof.rows {points.push(at);at+=32;}
+    for _ in &proof.late {scalars.push(at);at+=32;}
+    for _ in &proof.outer {points.push(at);at+=32;}
+    for _ in &proof.v {scalars.push(at);at+=32;}
+    for _ in &proof.inner {points.push(at);at+=32;}
+    for _ in &proof.ipa.lr {points.extend([at,at+32]);at+=64;}
+    points.extend([at,at+32]);at+=64;
+    scalars.extend([at,at+32]);
+    (points,scalars)
+}
+
+fn bind_proof_scalars<C:iroha_pasta::PastaCurve>(
+    w:&mut Wiring<crate::ipa::F<C>>,family:usize,bytes:&crate::proof_bytes::SharedBytes,
+    start:usize,proof:&crate::spartan::Proof<C>,tr:&crate::verifier::Trace<C>,
+    sc:&ScalarIdx<crate::ipa::F<C>>, shared:usize,base:usize,
+) where crate::ipa::F<C>:Scalar {
+    use crate::scalar;
+    type S<C> = crate::ipa::F<C>;
+    let (_, offsets)=word_offsets(proof,start);
+    let leaves=(1usize<<w.arrays[sc.io].rho)/2;
+    let slots = &tr.circuit.as_ref().expect("projected circuit proof").late_slots;
+    assert_eq!(slots.len(), proof.late.len(), "exact late IO projection");
+    let mut sources:Vec<_>=slots.iter().map(|slot|VerifierCell{array:sc.io,cell:0,instance:leaves+slot}).collect();
+    sources.extend((0..3).map(|i|VerifierCell{array:sc.side+scalar::S_GLUE,cell:scalar::V0+i,instance:0}));
+    sources.push(VerifierCell{array:sc.side+scalar::S_GLUE,cell:scalar::Z1,instance:0});
+    let full_at=base+tr.challenges.iter().map(|(_,k,_)|if *k==crate::verifier::Kind::Full{2}else{1}).sum::<usize>();
+    let z2=w.push(Array{name:"final Schnorr z2 exact scalar",family,rho:0,r_count:1,fixed:false,lookups:Vec::new(),widths:vec![255],
+        rows:vec![[plus(&own(0,1),&plus(&link(shared,0,vec![Some(full_at+16)],-S::<C>::ONE),&link(shared,0,vec![Some(full_at+17)],-S::<C>::from(2).pow_vartime([128])))),constant(vec![S::<C>::ONE]),Vec::new()]], values:vec![vec![proof.ipa.z2]]});
+    sources.push(VerifierCell{array:z2,cell:0,instance:0});
+    assert_eq!(offsets.len(),sources.len());
+    for (offset,source) in offsets.into_iter().zip(sources){crate::proof_bytes::bind_scalar(w,family,bytes,offset,source);}
+}
+
+fn bind_proof_points<S:Scalar,C:iroha_pasta::PastaCurve>(
+    w:&mut Wiring<S>,family:usize,bytes:&crate::proof_bytes::SharedBytes,start:usize,
+    proof:&crate::spartan::Proof<C>, points:&crate::points::TotalPoints, built:&crate::points::PointsIdx,
+){
+    let (offsets,_)=word_offsets(proof,start);
+    let sources=points.wire_points(built);
+    assert_eq!(sources.len(),offsets.len(),"exact proof point stream");
+    for(offset,xy)in offsets.into_iter().zip(sources){crate::proof_bytes::bind_point(w,family,bytes,offset,xy.map(|(array,cell,instance)|VerifierCell{array,cell,instance}));}
+}
+
+fn incoming_facts(
+    w:&mut Wiring<Fp>,family:usize,io:usize,bytes:&crate::proof_bytes::SharedBytes,
+    selected:&crate::proof_bytes::SharedBytes,
+    raw:&[u8],shared:usize,verdict_at:usize,r_at:usize,
+) -> IncomingProofFacts {
+    use crate::{certificate::Cells, bootstrap_context::{CONTEXT_IO,RELATION}};
+    crate::operation_auth::ensure_range(w,family);
+    let leaves=(1usize<<w.arrays[io].rho)/2;
+    let mut c=Cells::new(family);
+    c.a.name="exact incoming pair header and derived verifier conjunction";
+    for (i,b) in b"KGSPPR1\0\x01\x00".iter().enumerate(){c.eq(bytes.byte(i).linear(),constant(vec![Fp::from(*b as u64)]));}
+    for i in 0..2 {c.eq(bytes.packed(10+16*i,16),link(io,0,vec![Some(leaves+CONTEXT_IO+RELATION+i)],Fp::ONE));
+        c.eq(selected.packed(42+16*i,16),link(shared,0,vec![Some(r_at+i)],Fp::ONE));}
+    let mut product=None;let mut v=Fp::ONE;
+    for i in 0..incoming_codec::VERDICT_BITS {let bit=c.cell(w.arrays[shared].values[0][verdict_at+i],1);c.eq(own(bit,1),link(shared,0,vec![Some(verdict_at+i)],Fp::ONE));c.a.rows.push([own(bit,1),own(bit,1),own(bit,1)]);
+        v*=c.a.values[bit][0];let next=c.cell(v,1);c.a.rows.push([product.map(|k|own(k,1)).unwrap_or_else(||constant(vec![Fp::ONE])),own(bit,1),own(next,1)]);product=Some(next);}
+    let array=w.push(c.a);
+    let proof_digest=crate::proof_bytes::append_digest(w,family,bytes,raw);
+    IncomingProofFacts {io,leaves,validity:crate::send_arithmetic::Source{array,cell:product.unwrap(),instance:0},proof_digest}
 }
 
 /// Per verified proof (proof `i` of kind `kinds[i]`): the incoming
@@ -3530,6 +4044,58 @@ pub fn defer_into<C: iroha_pasta::PastaCurve>(
     )],
     kinds: &[SlotKind],
     kind_shared: (usize, usize),
+) -> DeferIdx<crate::ipa::F<C>>
+where
+    crate::ipa::F<C>: Scalar,
+{
+    defer_into_mode(w, gfam, poly, proofs, kinds, kind_shared, false)
+}
+
+/// Fold a hard wallet predecessor and a total incoming Send. Only the payer's
+/// inherited claim is corrected. Its exact original point is retained, and
+/// equality of the original/corrected values determines the derived verdict.
+///
+/// Soundness uses the same committed-curve argument as every deferred claim:
+/// a dishonest corrected value makes the final accumulator false except with
+/// the folding error probability. The caller must verify both final native
+/// accumulators and join both sides' verdicts into the Receive verdict.
+#[allow(clippy::type_complexity)]
+pub fn defer_into_total<C: iroha_pasta::PastaCurve>(
+    w: &mut Wiring<crate::ipa::F<C>>,
+    gfam: usize,
+    poly: &crate::deferral::MatPoly<crate::ipa::F<C>>,
+    proofs: &[(
+        &crate::r1cs::Shape,
+        &crate::r1cs::Instance<crate::ipa::F<C>>,
+        &crate::verifier::Trace<C>,
+        &ScalarIdx<crate::ipa::F<C>>,
+        &crate::deferral::Claim<crate::ipa::F<C>>,
+    )],
+    kinds: &[SlotKind],
+    kind_shared: (usize, usize),
+) -> DeferIdx<crate::ipa::F<C>>
+where
+    crate::ipa::F<C>: Scalar,
+{
+    assert_eq!(proofs.len(), 2, "wallet predecessor and incoming Send");
+    defer_into_mode(w, gfam, poly, proofs, kinds, kind_shared, true)
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn defer_into_mode<C: iroha_pasta::PastaCurve>(
+    w: &mut Wiring<crate::ipa::F<C>>,
+    gfam: usize,
+    poly: &crate::deferral::MatPoly<crate::ipa::F<C>>,
+    proofs: &[(
+        &crate::r1cs::Shape,
+        &crate::r1cs::Instance<crate::ipa::F<C>>,
+        &crate::verifier::Trace<C>,
+        &ScalarIdx<crate::ipa::F<C>>,
+        &crate::deferral::Claim<crate::ipa::F<C>>,
+    )],
+    kinds: &[SlotKind],
+    kind_shared: (usize, usize),
+    total_incoming: bool,
 ) -> DeferIdx<crate::ipa::F<C>>
 where
     crate::ipa::F<C>: Scalar,
@@ -3582,7 +4148,11 @@ where
         let value = r * ma + r.square() * mb + r.square() * r * mc;
         let point = poly.fresh_point(kind, r, &ch2, &rx, &ry);
         assert!(poly.eval(&point) == value, "fresh claim of proof {i} holds");
-        claims.push(acc.clone());
+        let mut inherited = acc.clone();
+        if total_incoming && i == 1 {
+            inherited.value = poly.eval(&inherited.point);
+        }
+        claims.push(inherited);
         claims.push(Claim { point, value });
     }
     let claims: [Claim<S<C>>; 4] = claims.try_into().map_err(|_| ()).unwrap();
@@ -3611,6 +4181,7 @@ where
         .map(|j| if j < n { one } else { S::<C>::ZERO })
         .collect();
     let mut vrows: Vec<[Lin<S<C>>; 3]> = Vec::new();
+    let mut incoming_validity = None;
     for s in 0..2 {
         let i = slot_proof(s);
         let (kind, from_io) = kinds[i];
@@ -3652,7 +4223,7 @@ where
                     ]);
                 }
             }
-            if from_io {
+            if from_io && poly.kinds.len() < 4 {
                 // c0 c1 = 0: the corner (1, 1) is the empty claim's, no
                 // kind's.
                 vrows.push([bit_io(0), bit_io(1), Vec::new()]);
@@ -3669,7 +4240,15 @@ where
         w.arrays[fold.coords]
             .rows
             .push([acc_row, constant(vec![one; nc]), Vec::new()]);
-        vrows.push([val_row, constant(vec![one]), Vec::new()]);
+        if total_incoming && i == 1 {
+            incoming_validity = Some(corrected_claim_validity(
+                w, gfam,
+                VerifierCell { array: fold.values, cell: V_V[2 * s], instance: 0 },
+                VerifierCell { array: sc.io, cell: 0, instance: leaves + base + n },
+            ));
+        } else {
+            vrows.push([val_row, constant(vec![one]), Vec::new()]);
+        }
         // The fresh claim: constants (kind, padding), r, and the challenge
         // digits r_x, r_y.
         let (slot_a, glue) = (sc.side + scalar::S_SLOT, sc.side + scalar::S_GLUE);
@@ -3787,7 +4366,32 @@ where
         claims,
         q,
         q_secs,
+        incoming_validity,
     }
+}
+
+/// Biconditional equality, with a uniquely selected zero inverse. All
+/// arithmetic remains hard even when the incoming accumulator is false.
+fn corrected_claim_validity<S: Scalar>(
+    w: &mut Wiring<S>, family: usize, corrected: VerifierCell, original: VerifierCell,
+) -> VerifierCell {
+    let delta = w.arrays[corrected.array].values[corrected.cell][corrected.instance]
+        - w.arrays[original.array].values[original.cell][original.instance];
+    let valid = if delta == S::ZERO { S::ONE } else { S::ZERO };
+    let inverse = Option::<S>::from(delta.invert()).unwrap_or(S::ZERO);
+    let difference = plus(&corrected.linear(), &scaled(&original.linear(), -S::ONE));
+    let array = w.push(Array {
+        name: "incoming corrected accumulator iff validity", family, rho: 0,
+        r_count: 1, fixed: false, lookups: Vec::new(), widths: vec![1, 255],
+        rows: vec![
+            [own(0, 1), plus(&constant(vec![S::ONE]), &scaled(&own(0, 1), -S::ONE)), Vec::new()],
+            [difference.clone(), own(0, 1), Vec::new()],
+            [difference, own(1, 1), plus(&constant(vec![S::ONE]), &scaled(&own(0, 1), -S::ONE))],
+            [own(0, 1), own(1, 1), Vec::new()],
+        ],
+        values: vec![vec![valid], vec![inverse]],
+    });
+    VerifierCell { array, cell: 0, instance: 0 }
 }
 
 /// One proof whose io digest the circuit computes: its io values, the
@@ -3796,9 +4400,9 @@ pub struct IoDigest<'a, S> {
     pub io: &'a [S],
     pub limb: usize,
     pub fold: usize,
-    /// The io index of `io[0]` (0 for the early io; a circuit proof's late io
-    /// sits further on).
-    pub start: usize,
+    /// The authenticated circuit's IO slot of each digest word. Late claims
+    /// need not occupy consecutive slots (the pairing link reserves its own).
+    pub slots: Vec<usize>,
 }
 
 /// The io digests (rate-2 sponge from (0, 0, len) over the io values, as
@@ -3821,6 +4425,7 @@ pub fn io_digests<S: Scalar + PoseidonField>(
         .collect();
     let e_start = constant_entries(w, gfam, "io digest starts", &starts);
     for (k, it) in items.iter().enumerate() {
+        assert_eq!(it.io.len(), it.slots.len(), "digest projection length");
         let n_io = 1usize << w.arrays[it.fold].rho;
         let leaves = n_io / 2;
         let e_io = w.export(it.fold, vec![own(0, n_io)]);
@@ -3830,12 +4435,12 @@ pub fn io_digests<S: Scalar + PoseidonField>(
         );
         let mut last = 0;
         for (j, pair) in it.io.chunks(2).enumerate() {
-            let i0 = leaves + it.start + 2 * j;
+            let i0 = leaves + it.slots[2 * j];
             let b = pair.get(1).copied().unwrap_or(S::ZERO);
             let lanes = [
                 Some((e_io, i0)),
                 if pair.len() > 1 {
-                    Some((e_io, i0 + 1))
+                    Some((e_io, leaves + it.slots[2 * j + 1]))
                 } else {
                     Some((e_zero, 0))
                 },
@@ -4177,6 +4782,22 @@ pub fn s_circuit(
     gens: &PairGens,
     pairs: &[TracedPair],
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    s_circuit_impl(own_kind, gens, pairs, false, None)
+}
+
+/// Secondary half of the complete monetary backend. Receive's incoming slot
+/// produces a total verdict and folds corrected matrix claims on this side.
+pub fn s_operation(
+    own_kind: usize, gens: &PairGens, pairs: &[TracedPair],
+    generators: &GeneratorFolds,
+) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    s_circuit_impl(own_kind, gens, pairs, own_kind == RECEIVE, Some(generators))
+}
+
+fn s_circuit_impl(
+    own_kind: usize, gens: &PairGens, pairs: &[TracedPair], total_incoming: bool,
+    generators: Option<&GeneratorFolds>,
+) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use crate::verifier::Fq;
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
@@ -4194,7 +4815,14 @@ pub fn s_circuit(
     // The P proofs' table commitments (as in the P circuit): each P proof's
     // wallet row is pinned to its own.
     let table_offs = table_values(pairs, &mut values);
+    let generator_offsets = generators.map(|g| g.append_shared(&mut values));
+    let incoming_wire = total_incoming.then(|| incoming_encoding(&pairs[1]));
+    let wire_at = values.len();
+    if let Some(wire) = &incoming_wire { values.extend(crate::proof_bytes::shared_words(&wire.bytes)); }
+    let verdict_at = values.len();
+    if total_incoming { values.extend(incoming_verdict_values(gens, &pairs[1])); }
     let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
+    let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_s + link_word_at(&pr.tr_s);
         let sm = SharedMap {
@@ -4204,12 +4832,17 @@ pub fn s_circuit(
         };
         let keys = match (&gens.keys_p, kinds[i].1) {
             (Some(k), true) => Some(KeySelect {
-                fixed: [&k[0][..], &k[1][..], &k[2][..]],
+                fixed: k.iter().map(Vec::as_slice).collect(),
                 kind_at: kind_at + 2 * i,
             }),
             _ => None,
         };
-        pb.verify_keyed(
+        if total_incoming && i == 1 {
+            proof_points.push(pb.verify_keyed_total(
+                &mut pool, &pr.shape_p, &gens.p, &pr.proof_p, &pr.claims_p,
+                &pr.tr_p, sm, keys.as_ref(), table_offs[i],
+            ));
+        } else { proof_points.push(pb.verify_keyed(
             &mut pool,
             &pr.shape_p,
             &gens.p,
@@ -4219,8 +4852,12 @@ pub fn s_circuit(
             sm,
             keys.as_ref(),
             table_offs[i],
-        );
+        )); }
     }
+    let generator_equalities = generators.map(|g| {
+        let token = pb.generator_fold(&mut pool, &gens.p, &g.p, &g.tp, generator_offsets.unwrap().0);
+        (0..2).map(|slot| pb.generator_source_equals_proof(&token, 2*slot, &proof_points[slot % pairs.len()])).collect::<Vec<_>>()
+    });
     let mu = Option::<crate::verifier::Fq>::from(crate::verifier::Fq::from_repr(
         nonnative::fq_bytes(&binding_mu(&values)),
     ))
@@ -4260,7 +4897,7 @@ pub fn s_circuit(
                 io: &pr.inst_s.io,
                 limb: io_limb(&pr.tr_s, off_s),
                 fold: sc.io,
-                start: 0,
+                slots: (0..pr.inst_s.io.len()).collect(),
             }];
             if pr
                 .tr_s
@@ -4272,7 +4909,7 @@ pub fn s_circuit(
                     io: &pr.proof_s.late,
                     limb: late_limb(&pr.tr_s, &pr.claims_s, off_s),
                     fold: sc.io,
-                    start: 64,
+                    slots: pr.tr_s.circuit.as_ref().unwrap().late_slots.clone(),
                 });
             }
             v
@@ -4284,7 +4921,8 @@ pub fn s_circuit(
         .zip(&scalars)
         .map(|(pr, sc)| (&pr.shape_s, &pr.inst_s, &pr.tr_s, sc, &pr.acc_s))
         .collect();
-    let defer = defer_into::<Pallas>(
+    let fold = if total_incoming { defer_into_total::<Pallas> } else { defer_into::<Pallas> };
+    let defer = fold(
         &mut w,
         gfam,
         &gens.defer_s,
@@ -4302,6 +4940,25 @@ pub fn s_circuit(
     let mut rng = SpikeRng::new(b"s-recv pool");
     let _pidx = pool.build(&mut w, e_out, &mut rng);
     let points = pb.build(&mut w, gfam, shared, true);
+    if let Some(g) = generators {
+        let inherited = generator_integration::scalar_bind(&mut w,gfam,shared,generator_offsets.unwrap().1,&g.s,&g.ts,&scalars,total_incoming);
+        for (slot,equality) in generator_equalities.as_ref().unwrap().iter().enumerate() {
+            let port=equality.validity(&points);
+            if total_incoming && slot==1 { bind_verdict(&mut w,gfam,VerifierCell{array:port.0,cell:port.1,instance:port.2},shared,verdict_at+4); }
+            else {generator_integration::require_true(&mut w,gfam,port);}
+        }
+        if let Some(bit)=inherited{bind_verdict(&mut w,gfam,bit,shared,verdict_at+7);}
+    }
+    if let Some(wire) = &incoming_wire {
+        let token=&proof_points[1];
+        let (array,cell,instance)=token.validity(&points);
+        bind_verdict(&mut w,gfam,VerifierCell{array,cell,instance},shared,verdict_at);
+        bind_verdict(&mut w,gfam,defer.incoming_validity.expect("corrected S claim"),shared,verdict_at+3);
+        let bytes=crate::proof_bytes::append_shared(&mut w,gfam,&wire.bytes,shared,wire_at);
+        let selected=incoming_codec::select(&mut w,gfam,&bytes,wire,&pairs[1],shared,verdict_at,false);
+        bind_proof_points(&mut w,gfam,&selected,wire.primary,&pairs[1].proof_p,token,&points);
+        bind_proof_scalars::<Pallas>(&mut w,gfam,&selected,wire.secondary,&pairs[1].proof_s,&pairs[1].tr_s,&scalars[1],shared,offsets[1].1);
+    }
     let mut seen = std::collections::HashSet::new();
     w.tables.retain(|(_, t)| seen.insert(*t));
     (
@@ -4343,16 +5000,22 @@ fn boot_values() -> Vec<u128> {
 /// future Core, signed receipt and issuer-certified omitted payment table row.
 pub fn p_boot(gens: &PairGens, key: &WalletKey) -> (Wiring<Fp>, BootIdx) {
     let (context, input) = crate::bootstrap::fixture(key, &gens.p);
-    let prepared = crate::bootstrap::prepare(&context, &input).expect("valid Bootstrap fixture");
+    p_boot_from_inputs(gens, &context, &input).expect("valid Bootstrap fixture")
+}
+
+pub fn p_boot_from_inputs(gens:&PairGens,context:&crate::bootstrap::Context,input:&crate::bootstrap::Inputs)
+    -> Result<(Wiring<Fp>,BootIdx), &'static str> {
+    let prepared = crate::bootstrap::prepare(context, input)?;
     let (mut w, gfam) = (prepared.wiring, prepared.gfam);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
     let values = boot_values();
     let _ = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let (_, empty) =
         crate::deferral::expose_constant(&mut w, gfam, &gens.defer_p.empty_claim(), LATE_IO);
+    generator_integration::expose_empty(&mut w,gfam,&gens.p);
     let mut seen = std::collections::HashSet::new();
     w.tables.retain(|(_, t)| seen.insert(*t));
-    (
+    Ok((
         w,
         BootIdx {
             own: None,
@@ -4360,7 +5023,7 @@ pub fn p_boot(gens: &PairGens, key: &WalletKey) -> (Wiring<Fp>, BootIdx) {
             empty,
             key_tables: None,
         },
-    )
+    ))
 }
 
 /// The bit table {0, 1} (S-boot's one lookup table).
@@ -4396,6 +5059,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     let _ = native_binding(&mut w, gfam, mu, &values);
     let (_, empty) =
         crate::deferral::expose_constant(&mut w, gfam, &gens.defer_s.empty_claim(), LATE_IO);
+    generator_integration::expose_empty(&mut w,gfam,&gens.s);
     (
         w,
         BootIdx {

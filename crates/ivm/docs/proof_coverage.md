@@ -15,8 +15,7 @@ proof: nothing in it constrains a witness or authorizes `IvmProved` admission.
 
 | Section | Entries | Source owner checked by the tests |
 | --- | --- | --- |
-| `opcodes` | 90 admitted opcodes | `wide::is_valid_opcode` (compile time), `ivm_abi/src/instruction.rs`, the interpreter dispatch in `src/ivm.rs` |
-| `reserved_opcodes` | 16 ISO 20022 values | `ivm_abi/src/instruction.rs`; rejected as `InvalidOpcode` |
+| `opcodes` | 59 admitted opcodes | `wide::is_valid_opcode` (compile time), `ivm_abi/src/instruction.rs`, the interpreter dispatch in `src/ivm.rs` |
 | `syscalls` | every `abi_syscall_list()` entry | `abi_syscall_list()`, `syscall_name` (`ABI_V1_SYSCALL_METADATA`), the access and metering registries |
 | `host_private_syscalls` | Kotodama test helpers | `is_koto_test_syscall`; rejected as `UnknownSyscall` by production hosts |
 | `run_phases` | invocation entry, root-call initialization, step preamble and the terminal block | `IVM::run_with_host_ref` in `src/ivm.rs` and `IVM::begin_root_call` in `src/call_runtime.rs` |
@@ -36,13 +35,16 @@ artifact is rendered.
 `private_masking` follows one rule: an opcode carries it exactly when one step
 reads or writes a privacy tag, that is, when its arm calls a tag accessor or a
 privacy helper (`tag_surface`), raises `PrivacyViolation` itself, or dispatches a
-syscall. Only `HALT`, `JMP`, `SETVL`, `PARBEGIN` and `PAREND` are outside it.
+syscall. Only `HALT` and `JMP` are outside it.
+
+Every opcode byte outside the `opcodes` section is unassigned: it has no
+inventory entry and is rejected as `InvalidOpcode` at admission and at runtime.
 
 ## Obligation classes
 
 `fetch`, `typed_values`, `initialization`, `memory_ordering`, `pointers`, `calls`,
-`copyback`, `faults`, `gas`, `padding`, `vector`, `parallel`, `precompile`,
-`continuation`, `proof_composition`, `vm_recursion`, `guest_proof_verification`,
+`copyback`, `faults`, `gas`, `padding`, `precompile`, `continuation`,
+`proof_composition`, `vm_recursion`, `guest_proof_verification`,
 `private_masking`, `host_result`, `state_read`, `state_effect` and
 `statement_binding`.
 
@@ -114,9 +116,8 @@ tests pin its complete call surface.
 - `complete`: the registered whole-invocation relation discharges every obligation.
   No entry is complete while `COMPLETE_RELATION` is `None`.
 
-Today 58 opcodes are `component_only` and 32 are `uncovered` (`LDLIT`, `JR`,
-`HALT`, `SCALL`, `SYSTEM` and every vector, parallel, cryptographic and ZK opcode).
-Every syscall is `uncovered`. Only the `OutOfGas` and `AssertionFailed` outcomes
+Today 55 opcodes are `component_only` and 4 are `uncovered` (`LDLIT`, `HALT`,
+`SCALL` and `SYSTEM`). Every syscall is `uncovered`. Only the `OutOfGas` and `AssertionFailed` outcomes
 have a component relation, for the final attempted step of the public scalar
 segment. `IvmProved` verification rejects unconditionally.
 

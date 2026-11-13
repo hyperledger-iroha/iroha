@@ -80,11 +80,14 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 
+pub mod ballot_lifecycle;
 pub mod credentials;
 pub mod deliberation;
 pub mod election;
+pub(crate) mod pass;
 mod restore;
 pub mod schedule;
+pub(crate) mod world_pass;
 
 pub use self::{
     credentials::{
@@ -1522,6 +1525,8 @@ impl AnonymousParliamentAttemptStateV1 {
 
 #[cfg(test)]
 mod credentials_tests;
+#[cfg(test)]
+mod interface_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]

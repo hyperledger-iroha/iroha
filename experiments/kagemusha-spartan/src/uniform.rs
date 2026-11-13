@@ -108,6 +108,10 @@ pub struct Import<F> {
 /// (a constant column committed in the verification key), so a read names
 /// its entry and the prover never chooses an address.
 pub struct Copies<F> {
+    /// Independent private product gates; each tuple names an array's a,b,c
+    /// cells. The prover refreshes these with its fresh proof entropy.
+    pub product_masks: Vec<(usize, [usize; 3])>,
+
     pub exports: Vec<Export<F>>,
     pub imports: Vec<Import<F>>,
     /// Second-phase rows over the LogUp challenges (the deferred matrix
@@ -134,6 +138,7 @@ pub struct Copies<F> {
 impl<F> Default for Copies<F> {
     fn default() -> Self {
         Copies {
+            product_masks: Vec::new(),
             exports: Vec::new(),
             imports: Vec::new(),
             challenge: ChallengeRows::default(),
@@ -240,8 +245,6 @@ struct Reader {
     row: usize,
     mat: usize,
     term: usize,
-    /// For each `r'` of the read array: the reader's `r` values mapping to it.
-    inverse: Vec<Vec<usize>>,
 }
 
 /// What a verifier of a circuit's proofs depends on besides its key: the
@@ -261,6 +264,9 @@ pub struct Layout {
 }
 
 pub struct UniformCircuit<F> {
+    /// Imported immutable verifier-only programs have no private construction
+    /// arrays. Their authenticated challenge metadata accompanies the tape.
+    verifier_only: Option<(usize, (usize, usize))>,
     pub label: &'static str,
     pub arrays: Vec<Array<F>>,
     /// log2 of each family's `p` range, and its used count (`p < count`).
@@ -269,6 +275,8 @@ pub struct UniformCircuit<F> {
     pub shape: Shape,
     pub io_len: usize,
     pub constraints: usize,
+    /// Logical cells of independent product-mask instances, before placement.
+    product_masks: Vec<(usize, [usize; 3], usize)>,
     row_base: Vec<Vec<usize>>,
     blocks: Vec<Vec<Block>>,
     bounds: Vec<usize>,
@@ -346,6 +354,9 @@ pub struct UniformCircuit<F> {
     plan: OnceLock<Tape<F>>,
 }
 
+#[path = "program_artifact.rs"]
+mod program_artifact;
+
 /// A linear combination's value at slot `i` of array `a`, from the arrays'
 /// values (multiplicities are counted before the layout exists).
 fn eval_lin<F: Field>(arrays: &[Array<F>], pi: &[usize], a: usize, lin: &Lin<F>, i: usize) -> F {
@@ -393,9 +404,6 @@ fn split_families<F: Scalar>(
     copies: &mut Copies<F>,
 ) -> Vec<Option<(usize, usize)>> {
     let mut split_of: Vec<Option<(usize, usize)>> = vec![None; arrays.len()];
-    if std::env::var("ZKS_SPLIT").as_deref() == Ok("off") {
-        return split_of;
-    }
     let mut export_split: HashMap<usize, (usize, usize)> = HashMap::new();
     for f in 0..pi.len() {
         let n = counts[f];
@@ -1016,7 +1024,7 @@ fn copy_layout<F: Scalar>(
 /// Placement key: fewest wasted cells first (`ZKS_PLACE_KEY=waste`) or the
 /// earliest end first (the default).
 fn by_waste() -> bool {
-    std::env::var("ZKS_PLACE_KEY").as_deref() == Ok("waste")
+    false
 }
 
 /// Witness rows being filled: taken stripes per row, each row's class (0
@@ -1184,6 +1192,18 @@ fn place(
 }
 
 impl<F: Scalar> UniformCircuit<F> {
+    /// Erase retained construction values after the last prover use. Public
+    /// program constants remain available for exact program authentication.
+    pub fn zeroize_witness_values(&mut self)
+    where F: zeroize::Zeroize {
+        for array in &mut self.arrays {
+            if !array.fixed {
+                for values in &mut array.values {
+                    zeroize::Zeroize::zeroize(values);
+                }
+            }
+        }
+    }
     fn m(&self, a: usize) -> usize {
         self.pi[self.arrays[a].family] + self.arrays[a].rho
     }
@@ -1230,6 +1250,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// The matrices' degrees in the LogUp challenges: 1 in alpha if any row
     /// carries `alpha - t`, and the highest power of beta.
     pub fn challenge_degrees(&self) -> (usize, usize) {
+        if let Some((_, degrees)) = self.verifier_only { return degrees; }
         let (mut da, mut db) = (0, 0);
         for row in self.symbolic().iter().flatten() {
             for (_, f) in row.iter().flatten() {
@@ -1341,6 +1362,56 @@ impl<F: Scalar> UniformCircuit<F> {
             assert!(cf <= 1 << pf, "family {f}: count fits 2^pi");
         }
         let mut copies = copies;
+        if copies.product_masks.is_empty() {
+            // Every uniform circuit needs private masking even when it has no
+            // transcript pool. These gates are real rows of its relation.
+            let family = pi.len();
+            pi.push(1);
+            counts.push(2);
+            let array = arrays.len();
+            arrays.push(Array {
+                name: "independent opening masks", family, rho: 0, r_count: 1,
+                fixed: false, lookups: vec![], widths: vec![255; 3],
+                rows: vec![[own(0, 1), own(1, 1), own(2, 1)]],
+                values: vec![vec![F::ZERO; 2]; 3],
+            });
+            copies.product_masks.push((array, [0, 1, 2]));
+        }
+        let mut product_masks = Vec::new();
+        for &(a, cells) in &copies.product_masks {
+            let mask = &arrays[a];
+            assert!(!mask.fixed && mask.lookups.is_empty() && mask.cells() == 3,
+                "private masking is an independent three-cell product array");
+            assert_eq!(cells, [0, 1, 2]);
+            assert_eq!(mask.rows.len(), 1);
+            let n = 1usize << mask.rho;
+            for k in 0..3 {
+                assert_eq!(mask.widths[k], 255);
+                let lin = &mask.rows[0][k];
+                assert!(lin.len() == 1 && lin[0].src == Src::Own(k)
+                    && lin[0].coef == vec![F::ONE; n], "exact private product gate");
+            }
+            assert!(!copies.io_arrays.iter().any(|(io, _)| *io == a));
+            assert!(!copies.exports.iter().any(|e| e.array == a));
+            assert!(!copies.imports.iter().any(|e| e.array == a));
+            for (reader, array) in arrays.iter().enumerate() {
+                if reader == a { continue; }
+                for row in &array.rows {
+                    for term in row.iter().flatten() {
+                        assert!(!matches!(term.src, Src::Link { array, .. } | Src::All { array, .. } if array == a),
+                            "a private product mask is not an application input");
+                    }
+                }
+            }
+            for p in 0..counts[mask.family] {
+                for r in 0..mask.r_count {
+                    product_masks.push((a, cells, (p << mask.rho) + r));
+                }
+            }
+        }
+        let unique_masks: HashSet<_> = product_masks.iter().copied().collect();
+        assert_eq!(unique_masks.len(), product_masks.len(), "distinct private product mask cells");
+        assert!(product_masks.len() >= 2, "two independent private product masks");
         let split_of = split_families(&mut arrays, &mut pi, &mut counts, &mut copies);
         let challenge = std::mem::take(&mut copies.challenge);
         let mut io_arrays = std::mem::take(&mut copies.io_arrays);
@@ -1740,14 +1811,7 @@ impl<F: Scalar> UniformCircuit<F> {
         // wider one. Second-phase cells are a class of their own.
         // `ZKS_CLASSES` (comma-separated bit bounds, the last 255) overrides
         // the classes.
-        let classes: Vec<u16> = std::env::var("ZKS_CLASSES")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .map(|x| x.trim().parse().expect("a class bound"))
-                    .collect()
-            })
-            .unwrap_or_else(|| vec![1, 11, 20, 88, 180, 255]);
+        let classes: Vec<u16> = vec![1, 11, 20, 88, 180, 255];
         let classes = classes.as_slice();
         let class_of = |w: u16| {
             classes
@@ -1756,9 +1820,6 @@ impl<F: Scalar> UniformCircuit<F> {
                 .unwrap_or(classes.len() - 1)
         };
         let mut class_map: Vec<usize> = (0..classes.len()).collect();
-        if std::env::var("ZKS_NO_CLASSES").is_ok() {
-            class_map = vec![classes.len() - 1; classes.len()];
-        }
         let row_cells = 1usize << col_bits;
         let mut class_cells = vec![0usize; classes.len()];
         for &(_, _, m, w) in &sizes {
@@ -1801,8 +1862,7 @@ impl<F: Scalar> UniformCircuit<F> {
             .filter(|&&(a, k, _, _)| by_value_of(a, k))
             .map(|&(a, _, _, _)| present_n[a])
             .sum();
-        let split = std::env::var("ZKS_P2_SPLIT").as_deref() != Ok("off")
-            && by_value_cells >= 2usize << col_bits;
+        let split = by_value_cells >= 2usize << col_bits;
         let is_by_value = |a: usize, k: usize| !split || by_value_of(a, k);
         let p2_list: Vec<(usize, usize, usize, u16, u8)> = p2_sizes
             .iter()
@@ -1864,10 +1924,7 @@ impl<F: Scalar> UniformCircuit<F> {
             let active = s.cols() - s.tail_len() - crate::r1cs::MASK_COLS;
             // Stripes of 2^c columns: narrow stripes waste less of a block's
             // last, partly present row (at most 128 stripes).
-            let stripe_bits = std::env::var("ZKS_STRIPE_BITS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10usize);
+            let stripe_bits = 10usize;
             let c = (active.ilog2() as usize)
                 .min(stripe_bits)
                 .max((active >> 7).max(1).next_power_of_two().trailing_zeros() as usize);
@@ -2214,6 +2271,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let fixed_values = w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec();
         let _ = n_user;
         let circuit = UniformCircuit {
+            verifier_only: None,
             label,
             arrays,
             pi,
@@ -2221,6 +2279,7 @@ impl<F: Scalar> UniformCircuit<F> {
             shape,
             io_len,
             constraints,
+            product_masks,
             row_base,
             blocks,
             bounds,
@@ -2283,6 +2342,7 @@ impl<F: Scalar> UniformCircuit<F> {
 
     /// Whether the circuit runs LogUp (lookups or copy-table entries).
     fn logup(&self) -> bool {
+        if let Some((challenges, _)) = self.verifier_only { return challenges != 0; }
         !self.lookup_arrays.is_empty() || !self.exports.is_empty() || !self.ch_rows.is_empty()
     }
 
@@ -2881,24 +2941,41 @@ impl<F: Scalar> UniformCircuit<F> {
             .iter()
             .map(|arr| vec![Vec::new(); arr.cells()])
             .collect();
+        // Store only actual reads, then bucket them into one CSR per target
+        // block. A dense inverse map per reader multiplies a large lookup
+        // helper's extent by the number of scalar readers (hundreds of GB for
+        // the total ECDSA relation), even if every reader maps one instance.
+        let mut edges: Vec<Vec<Vec<(u32, u32, u32)>>> = self
+            .arrays
+            .iter()
+            .map(|arr| vec![Vec::new(); arr.cells()])
+            .collect();
         for (a, arr) in self.arrays.iter().enumerate() {
             for (j, row) in rows[a].iter().enumerate() {
                 for (mat, lin) in row.iter().enumerate() {
                     for (t, term) in lin.iter().enumerate() {
                         match &term.src {
                             Src::One => one_readers.push((a, j, mat, t)),
-                            Src::Own(k) => readers[a][*k].push(Reader {
-                                array: a,
-                                row: j,
-                                mat,
-                                term: t,
-                                inverse: (0..1 << arr.rho).map(|r| vec![r]).collect(),
-                            }),
+                            Src::Own(k) => {
+                                let ri = u32::try_from(readers[a][*k].len()).expect("reader index");
+                                readers[a][*k].push(Reader { array: a, row: j, mat, term: t });
+                                edges[a][*k].extend((0..1usize << arr.rho).map(|r| {
+                                    let r = u32::try_from(r).expect("reader instance");
+                                    (r, ri, r)
+                                }));
+                            }
                             Src::Link { array, cell, map } => {
-                                let mut inverse = vec![Vec::new(); 1 << self.arrays[*array].rho];
+                                let ri = u32::try_from(readers[*array][*cell].len())
+                                    .expect("reader index");
                                 for (r, target) in map.iter().enumerate() {
                                     if let Some(rr) = target {
-                                        inverse[*rr].push(r);
+                                        assert!(*rr < 1usize << self.arrays[*array].rho,
+                                            "target instance in block");
+                                        edges[*array][*cell].push((
+                                            u32::try_from(*rr).expect("target instance"),
+                                            ri,
+                                            u32::try_from(r).expect("reader instance"),
+                                        ));
                                     }
                                 }
                                 let tf = self.arrays[*array].family;
@@ -2911,7 +2988,6 @@ impl<F: Scalar> UniformCircuit<F> {
                                     row: j,
                                     mat,
                                     term: t,
-                                    inverse,
                                 });
                             }
                             Src::All { array, cell } => {
@@ -2922,21 +2998,32 @@ impl<F: Scalar> UniformCircuit<F> {
                 }
             }
         }
-        let at = readers
-            .iter()
+        let at = edges
+            .into_iter()
             .enumerate()
             .map(|(a2, cells)| {
                 cells
-                    .iter()
+                    .into_iter()
                     .map(|list| {
                         let n2 = 1usize << self.arrays[a2].rho;
                         let mut offsets = vec![0u32; n2 + 1];
-                        let mut pairs = Vec::new();
+                        for &(target, _, _) in &list {
+                            offsets[target as usize + 1] = offsets[target as usize + 1]
+                                .checked_add(1).expect("reads per target block");
+                        }
                         for r2 in 0..n2 {
-                            for (ri, rd) in list.iter().enumerate() {
-                                pairs.extend(rd.inverse[r2].iter().map(|r| (ri as u32, *r as u32)));
-                            }
-                            offsets[r2 + 1] = pairs.len() as u32;
+                            offsets[r2 + 1] = offsets[r2 + 1].checked_add(offsets[r2])
+                                .expect("total reads per target block");
+                        }
+                        let mut next = offsets[..n2].to_vec();
+                        let mut pairs = vec![(0u32, 0u32); list.len()];
+                        // Readers and their source instances were visited in
+                        // ascending order. Stable bucketing retains precisely
+                        // that order within each target's CSR segment.
+                        for (target, reader, r) in list {
+                            let at = &mut next[target as usize];
+                            pairs[*at as usize] = (reader, r);
+                            *at += 1;
                         }
                         (offsets, pairs)
                     })
@@ -3037,6 +3124,38 @@ impl<F: Scalar> UniformCircuit<F> {
     /// The compiled matrix evaluation.
     fn plan(&self) -> &Tape<F> {
         self.plan.get_or_init(|| self.compile(None))
+    }
+
+    /// Exact program identity for authenticated parameter distribution. Hashes
+    /// the complete compiled A/B/C evaluation program, fixed (non-wallet) rows,
+    /// phase layout and verifier IO ABI. No witness value or sampled evaluation
+    /// substitutes for a program instruction.
+    pub fn program_digest(&self) -> [u8; 32] {
+        let mut h=blake3::Hasher::new();
+        h.update(b"kagemusha-spartan/program/v1\0");
+        let word=|h:&mut blake3::Hasher,v:usize|{h.update(&(v as u64).to_le_bytes());};
+        word(&mut h,self.shape.label.len());h.update(self.shape.label.as_bytes());
+        for v in [self.shape.sx,self.shape.row_bits,self.shape.col_bits,self.shape.k,self.io_len,
+            self.p1_rows,self.pl_rows,self.p2_rows,self.fixed_rows,self.wallet_rows,
+            self.wallet_io.unwrap_or(usize::MAX)] {word(&mut h,v);}
+        let degree=self.challenge_degrees();
+        for v in [self.phase2_challenges(),degree.0,degree.1] {word(&mut h,v);}
+        let tape=self.plan();word(&mut h,tape.inputs);word(&mut h,tape.ops.len());word(&mut h,tape.pool.len());
+        for value in &tape.pool {h.update(&value.to_repr());}
+        for op in &tape.ops {
+            let(tag,a,b)=match *op {Op::Add(a,b)=>(0,a,b),Op::Sub(a,b)=>(1,a,b),Op::Mul(a,b)=>(2,a,b),Op::Scale(a,b)=>(3,a,b),Op::Const(a)=>(4,a,0)};
+            h.update(&[tag]);h.update(&a.to_le_bytes());h.update(&b.to_le_bytes());
+        }
+        for out in tape.out {h.update(&out.to_le_bytes());}
+        // The wallet's omitted row is instance-owned and issuer-certified.
+        // fixed_values contains only the trusted global tail.
+        word(&mut h,self.fixed_values.len());
+        for value in &self.fixed_values {h.update(&value.to_repr());}
+        word(&mut h,self.late_io.len());
+        for &(io,a,c,i) in &self.late_io {for v in [io,a,c,i]{word(&mut h,v);}}
+        word(&mut h,self.link_io.len());
+        for &(a,io) in &self.link_io {word(&mut h,a);word(&mut h,io);}
+        *h.finalize().as_bytes()
     }
 
     /// The compiled matrix evaluation's products of two slots, products by
@@ -5040,6 +5159,17 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
 }
 
 impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
+    fn randomize_masks(&self, w: &mut [F], rng: &mut SpikeRng) {
+        assert!(self.verifier_only.is_none(), "an imported public program has no prover witness");
+        for &(array, cells, instance) in &self.product_masks {
+            let a = rng.scalar();
+            let b = rng.scalar();
+            for (cell, value) in cells.into_iter().zip([a, b, a * b]) {
+                w[self.cell_index(array, cell, instance)] = value;
+            }
+        }
+    }
+
     fn phase2_challenges(&self) -> usize {
         if self.logup() { 2 } else { 0 }
     }
@@ -5052,6 +5182,7 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         if let Some(w) = w
             && self.logup()
         {
+            assert!(self.verifier_only.is_none(), "an imported public program cannot fill private witnesses");
             self.fill_helpers(ch, w);
             if let Some(fill) = &self.ch_fill {
                 for (a, k, i, v) in fill(ch) {
@@ -5496,6 +5627,75 @@ mod tests {
 
     type Fv = <Vesta as iroha_pasta::PastaCurve>::ScalarExt;
 
+    #[test]
+    fn sparse_reader_csr_preserves_cross_family_and_repeated_maps() {
+        let n = 1usize << 15;
+        let target = Array {
+            name: "large sparse reader target", family: 0, rho: 15,
+            r_count: n, fixed: false, lookups: vec![], widths: vec![255], rows: vec![],
+            values: vec![(0..n).map(|i| Fv::from((i + 1) as u64)).collect()],
+        };
+        let mut readers = Array {
+            name: "many small cross-family readers", family: 1, rho: 2,
+            r_count: 3, fixed: false, lookups: vec![], widths: vec![255],
+            rows: vec![], values: vec![vec![Fv::ONE; 16]],
+        };
+        for i in 0..128 {
+            let repeated = (i * 127) % n;
+            readers.rows.push([
+                link(0, 0, vec![Some(repeated), Some(repeated), None, Some(n - 1)], Fv::from((i + 1) as u64)),
+                own(0, 4),
+                constant(vec![Fv::from(9); 4]),
+            ]);
+        }
+        let (c, _, _) = UniformCircuit::build(
+            "sparse readers", vec![target, readers], vec![0, 2], vec![1, 3],
+            vec![], 12, 4, b"sparse readers",
+        );
+        let rd = c.readers();
+        let symbolic = c.symbolic();
+        for (a, cells) in rd.readers.iter().enumerate() {
+            for (cell, list) in cells.iter().enumerate() {
+                let (offsets, pairs) = &rd.at[a][cell];
+                assert_eq!(offsets.len(), (1usize << c.arrays[a].rho) + 1);
+                let mut expected = std::collections::BTreeMap::<usize, Vec<(u32,u32)>>::new();
+                for (ri, reader) in list.iter().enumerate() {
+                    let term = &symbolic[reader.array][reader.row][reader.mat][reader.term].0;
+                    match &term.src {
+                        Src::Own(_) => for r in 0..1usize << c.arrays[reader.array].rho {
+                            expected.entry(r).or_default().push((ri as u32,r as u32));
+                        },
+                        Src::Link { map, .. } => for (r, target) in map.iter().enumerate() {
+                            if let Some(target) = target {
+                                expected.entry(*target).or_default().push((ri as u32,r as u32));
+                            }
+                        },
+                        _ => unreachable!(),
+                    }
+                }
+                assert_eq!(pairs.len(), expected.values().map(Vec::len).sum::<usize>());
+                for r in 0..offsets.len()-1 {
+                    let actual = &pairs[offsets[r] as usize..offsets[r+1] as usize];
+                    assert_eq!(actual, expected.get(&r).map_or(&[][..], Vec::as_slice), "block {a}:{cell}, target {r}");
+                }
+            }
+        }
+        // Compare the complete gather against direct sparse matrix expansion,
+        // including all source-family repetitions and inactive source slots.
+        let mut rng = SpikeRng::new(b"sparse reader m-table");
+        let rx: Vec<Fv> = (0..c.shape.sx).map(|_| rng.scalar()).collect();
+        let ex = eq_table(&rx);
+        let weights = [rng.scalar(),rng.scalar(),rng.scalar()];
+        let ch = [Fv::from(31), Fv::from(47)];
+        let rel = c.instantiate(&c.shape,&ch,None);
+        let actual = rel.m_table(&c.shape,&ex,weights[0],weights[1],weights[2]);
+        let mut expected = vec![Fv::ZERO;1usize << c.shape.sz()];
+        for (matrix,row,col,value) in c.entries(&ch) {
+            expected[col] += weights[matrix] * ex[row] * value;
+        }
+        assert_eq!(actual,expected);
+    }
+
     fn small() -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>) {
         let (arrays, pi, _) = rp57::<Fv>(2, b"uniform-small");
         let counts = pi.iter().map(|p| 1 << p).collect();
@@ -5509,6 +5709,38 @@ mod tests {
             4,
             b"uniform-small",
         )
+    }
+
+    #[test]
+    fn proof_entropy_refreshes_real_product_masks_and_replays() {
+        let (c, inst, wit) = small();
+        let mut a = wit.w.clone();
+        let mut b = wit.w.clone();
+        c.randomize_masks(&mut a, &mut SpikeRng::new(b"private mask proof A"));
+        c.randomize_masks(&mut b, &mut SpikeRng::new(b"private mask proof B"));
+        assert_ne!(a, b, "fresh entropy changes the actual relation witness");
+        let positions: std::collections::HashSet<_> = c.product_masks.iter()
+            .flat_map(|(array, cells, i)| cells.iter().map(|cell| c.cell_index(*array, *cell, *i)))
+            .collect();
+        for i in 0..a.len() {
+            if !positions.contains(&i) { assert_eq!(a[i], wit.w[i], "application witness preserved"); }
+        }
+        for w in [a, b] {
+            let z = crate::r1cs::z_vector(&c.shape, &inst, &Witness { w });
+            let (aa, bb, cc) = c.instantiate(&c.shape, &[], None).abc(&c.shape, &z);
+            assert!(aa.into_iter().zip(bb).zip(cc).all(|((a,b),c)| a*b==c));
+        }
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let prove = |seed: &[u8]| crate::spartan::prove_circuit(
+            &c.shape, &gens, &inst, &wit, &mut SpikeRng::new(seed), &c).0;
+        let pa = prove(b"private mask proof A");
+        let pb = prove(b"private mask proof B");
+        let replay = prove(b"private mask proof A");
+        assert_ne!(pa.v, pb.v, "fresh masked scalar disclosures");
+        assert_eq!(pa.to_bytes(), replay.to_bytes(), "same-operation preview replay");
+        for proof in [pa, pb] {
+            assert!(crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok());
+        }
     }
 
     /// The structured Az/Bz/Cz, M(r_x, .) and A~, B~, C~ equal the expanded

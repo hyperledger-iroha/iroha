@@ -56,7 +56,7 @@ the debugger first checks its artifact hash.
 - `crates/kotodama_lang/src/samples/native_escrow.ko` wraps ledger-managed
   escrow operations instead of relying on a contract-controlled account.
 
-The source language cannot select ABI/vector metadata, allocate raw host
+The source language cannot select ABI metadata, allocate raw host
 memory, invoke direct syscall variants, or submit opaque instruction bytes. ABI
 v1 is unconditional, and the selected cycle ceiling is embedded in the hashed
 artifact header.

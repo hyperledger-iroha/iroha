@@ -39,6 +39,42 @@ fn failure(reason: impl Into<String>) -> CatalogError {
 }
 
 impl ReleaseCatalog {
+    /// The same lifecycle State can activate after the consent service as before it.
+    pub(super) fn compile_runtime_lifecycle_after_deferred(&mut self) -> Result<(), CatalogError> {
+        if self.deferred_consent_compositions.is_empty() {
+            return Ok(());
+        }
+        let Some(base) = self
+            .additions
+            .iter()
+            .find(|addition| addition.module == RUNTIME_LIFECYCLE.module)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let mut families = vec![self.baseline.clone(), self.lifecycle.clone()];
+        if let Some(ironwood) = &self.ironwood {
+            let family = ironwood.selection.clone();
+            families.push(self.lifecycle_successor(&family)?);
+            families.push(family);
+        }
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0; 32])),
+        );
+        for family in families {
+            let change =
+                self.draft_deferred_consent(&family, &self.definitions, network, 1, [0; 32])?;
+            let successor = change
+                .apply(&family, &self.definitions)
+                .map_err(|error| failure(error.to_string()))?
+                .selection;
+            let composition = self.compose_runtime_lifecycle(&base, &successor)?;
+            self.runtime_lifecycle_compositions
+                .insert(successor.services_profile, composition);
+        }
+        Ok(())
+    }
+
     /// Compile the kernel lifecycle addition over the baseline, Time, Ironwood and Ironwood
     /// with Time families. Publishing a composition activates nothing.
     ///
@@ -75,7 +111,7 @@ impl ReleaseCatalog {
     /// The addition's storage and wire IDs with the services profile of `family`, the events of
     /// its native bundle and that bundle's declared closure, besides the addition's own tables
     /// and interfaces.
-    fn compose_runtime_lifecycle(
+    pub(super) fn compose_runtime_lifecycle(
         &mut self,
         base: &AdditionDefinitions,
         family: &RootSelectionV1,

@@ -1,4 +1,4 @@
-//! Successful aligned STORE effects on frame-generation byte initialization.
+//! Successful aligned STORE64 effects on frame-generation byte initialization.
 //!
 //! The memory packet and byte log are the same tuples consumed by `memory_store`,
 //! not independent success flags. Absolute 16-byte initialization cells normalize
@@ -15,6 +15,8 @@ use super::{F, bit, memory_store, packet};
 /// Prior initialization bits, owned by the same typed state-history packet.
 pub(super) const WIDTH: usize = 16;
 pub(super) const CONSTRAINTS: usize = 131;
+/// Every admitted store initializes one eight-byte half of a sixteen-byte cell.
+const LENGTH: u64 = 8;
 
 /// Fixed component descriptors, not a caller-supplied substitute for frame authority.
 #[derive(Clone, Copy, Debug)]
@@ -31,7 +33,6 @@ pub(super) struct WritePhase {
     vm: u8,
     generation: u16,
     address: u64,
-    length: usize,
     memory_clock: u32,
     initialization_clock: u32,
     tracked: bool,
@@ -44,19 +45,17 @@ impl WritePhase {
         vm: u8,
         generation: u16,
         address: u64,
-        length: usize,
         memory_clock: u32,
         initialization_clock: u32,
         frame: Option<FrameRegions>,
     ) -> Option<Self> {
-        if !matches!(length, 8 | 16)
-            || !address.is_multiple_of(length as u64)
+        if !address.is_multiple_of(LENGTH)
             || address >> 4 > u64::from(u32::MAX)
             || initialization_clock <= memory_clock
         {
             return None;
         }
-        let end = address.checked_add(length as u64)?;
+        let end = address.checked_add(LENGTH)?;
         let mut tracked = false;
         if let Some(frame) = frame {
             for [start, end] in [frame.stack, frame.results] {
@@ -76,6 +75,8 @@ impl WritePhase {
                     tracked = true;
                 } else if address < region[1] && region[0] < end {
                     // No successful native write can cross a frame/table boundary.
+                    // Eight-byte bounds and writes already exclude a straddle;
+                    // this refusal only guards that descriptor invariant.
                     return None;
                 }
             }
@@ -84,7 +85,6 @@ impl WritePhase {
             vm,
             generation,
             address,
-            length,
             memory_clock,
             initialization_clock,
             tracked,
@@ -130,14 +130,15 @@ pub(super) fn append_residues(
     for (actual, expected) in log[..4].iter().zip([
         F(phase.address & 0xffff_ffff),
         F(phase.address >> 32),
-        F(phase.length as u64),
+        F(LENGTH),
         F::ONE,
     ]) {
         out.push(actual.sub(committed.mul(expected)));
     }
-    let offset = (phase.address & 15) as usize / 2;
+    // Four u16 limbs of the written half; the log's remaining limbs are zero.
+    let offset = (phase.address & 8) as usize / 2;
     for limb in 0..8 {
-        let expected = if limb < phase.length / 2 {
+        let expected = if limb < 4 {
             memory[AFTER + offset + limb]
         } else {
             F::ZERO
@@ -160,11 +161,7 @@ pub(super) fn append_residues(
     for value in initialized {
         out.push(F::ONE.sub(enabled).mul(*value));
     }
-    let (before, after) = initialized_masks(
-        row,
-        F(u64::from(phase.address & 8 != 0)),
-        phase.length == 16,
-    );
+    let (before, after) = initialized_masks(row, F(u64::from(phase.address & 8 != 0)));
     out.push(initialized[BEFORE].sub(before));
     out.push(initialized[AFTER].sub(enabled.mul(after)));
     for offset in [BEFORE, AFTER] {
@@ -177,15 +174,13 @@ pub(super) fn append_residues(
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }
 
-/// Exact OR of the selected bytes, shared with native STORE composition.
+/// Exact OR of the addressed half's eight bytes, shared with native STORE composition.
 /// Inputs remain witness fields; owner relations constrain all bits and enable.
-pub(super) fn initialized_masks(row: &[F; WIDTH], high_half: F, wide: bool) -> (F, F) {
+pub(super) fn initialized_masks(row: &[F; WIDTH], high_half: F) -> (F, F) {
     row.iter()
         .enumerate()
         .fold((F::ZERO, F::ZERO), |(before, after), (byte, old)| {
-            let selected = if wide {
-                F::ONE
-            } else if byte < 8 {
+            let selected = if byte < 8 {
                 F::ONE.sub(high_half)
             } else {
                 high_half

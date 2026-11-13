@@ -741,6 +741,11 @@ pub fn network_profile_names() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+/// Stable code of a staking plan preparation that committed state refuses.
+///
+/// The HTTP 409 envelope's message is the deterministic reason the same operation would be
+/// rejected with on execution, for example an absent funded reward entitlement.
+pub const STAKING_PREPARATION_REFUSED_CODE: &str = "staking_preparation_refused";
 /// Stable code for exact scoped pipeline transaction status absence.
 pub const PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE: &str =
     "pipeline_transaction_status_not_found";

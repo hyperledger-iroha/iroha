@@ -10933,7 +10933,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 1,
             abi_version: 1,
         };

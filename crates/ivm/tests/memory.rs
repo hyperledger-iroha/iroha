@@ -303,10 +303,7 @@ fn test_heap_alloc_syscall() {
     let mut prog = Vec::new();
     push_word(
         &mut prog,
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_ALLOC as u8,
-        ),
+        encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC),
     );
     halt(&mut prog);
     let prog = assemble(&prog);

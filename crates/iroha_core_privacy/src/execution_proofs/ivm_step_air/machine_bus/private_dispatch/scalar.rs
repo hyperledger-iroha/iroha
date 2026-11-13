@@ -5,7 +5,6 @@
 //! the original shift workspace; their native trap-sensitive operands are public.
 //! `DIV_CEIL` adds the exact signed same-sign/nonzero correction in the shared
 //! MEAN result workspace, with its own twelve-gas/twelve-cycle original ports.
-//! GETGAS reads the original post-debit control word and always writes a public tag.
 //! Successful ABS reuses the original subtraction and zero-test cells; its
 //! native public-operand and signed-overflow traps remain mandatory.
 //! Total ISQRT reuses the full-width product/remainder bank with an exact
@@ -109,10 +108,6 @@ pub(super) fn is_rotate(instruction: u32) -> bool {
     matches!(shift_kind(instruction), Some(3 | 4))
 }
 
-fn is_getgas(instruction: u32) -> bool {
-    wide::opcode(instruction) == wide::system::GETGAS
-}
-
 pub(super) fn is_square_root(instruction: u32) -> bool {
     wide::opcode(instruction) == wide::arithmetic::ISQRT
 }
@@ -125,18 +120,11 @@ fn is_absolute(instruction: u32) -> bool {
     wide::opcode(instruction) == wide::arithmetic::ABS
 }
 
-fn reads_left(instruction: u32) -> bool {
-    !is_getgas(instruction)
-}
-
 fn right_immediate(instruction: u32) -> Option<u64> {
     match wide::opcode(instruction) {
-        // GETGAS has no register sources. Its result is linked directly to the
-        // original gas-debit port; unused arithmetic workspaces stay canonical.
         // Unary instructions never read the encoded rs2 byte. NEG routes the
         // original rs1 packet into the right arithmetic operand separately.
-        wide::system::GETGAS
-        | wide::arithmetic::NEG
+        wide::arithmetic::NEG
         | wide::arithmetic::ABS
         | wide::arithmetic::POPCNT
         | wide::arithmetic::CLZ
@@ -239,8 +227,7 @@ pub(super) fn is_gcd(instruction: u32) -> bool {
 }
 
 pub(super) fn is_supported(instruction: u32) -> bool {
-    is_getgas(instruction)
-        || is_gcd(instruction)
+    is_gcd(instruction)
         || is_square_root(instruction)
         || is_mean(instruction)
         || is_absolute(instruction)
@@ -301,7 +288,8 @@ pub(super) fn append_residues(
             F::ZERO
         }
     });
-    let register_left = select(&|w| reads_left(w));
+    // Every supported scalar and branch instruction reads its left register.
+    let register_left = select(&|_| true);
     let division_selected = select(&|w| is_division(w));
     let ceiling_selected = select(&|w| is_division_ceiling(w));
     let absolute_selected = select(&|w| is_absolute(w));
@@ -323,13 +311,7 @@ pub(super) fn append_residues(
     for (slot, index, enabled, write) in [
         (
             SCALAR_LEFT,
-            weighted(&|w| {
-                if reads_left(w) {
-                    F(left_register(w) as u64)
-                } else {
-                    F::ZERO
-                }
-            }),
+            weighted(&|w| F(left_register(w) as u64)),
             register_left,
             F::ZERO,
         ),
@@ -648,7 +630,6 @@ pub(super) fn append_residues(
     let ceiling_destination = select(&|w| is_division_ceiling(w) && has_destination(w));
     let shift_destination = select(&|w| shift_kind(w).is_some() && has_destination(w));
     let alu_destination = select(&|w| is_alu(w) && wide::rd(w) != 0);
-    let gas_destination = select(&|w| is_getgas(w) && has_destination(w));
     let absolute_destination = select(&|w| is_absolute(w) && has_destination(w));
     let mean_destination = select(&|w| is_mean(w) && has_destination(w));
     let minimum_destination =
@@ -709,10 +690,6 @@ pub(super) fn append_residues(
                         F::ZERO
                     }
                 }))
-                // The same original port is range-constrained and debited by
-                // the dispatcher, and retained in its mandatory history join.
-                // Do not accept a second supplied gas value or the pre-debit word.
-                .sub(gas_destination.mul(p[GAS_DEBIT][AFTER + limb]))
                 .sub(multiplied)
                 .sub(square_destination.mul(shifts[division::QUOTIENT + limb]))
                 .sub(gcd_destination.mul(gcd::limb(&row[SCALAR..], gcd::RESULT, limb)))
@@ -758,8 +735,8 @@ pub(super) fn append_residues(
     let moved_tag = select(&|w| wide::opcode(w) == wide::arithmetic::CMOV && has_destination(w))
         .mul(move_taken)
         .mul(p[SCALAR_RIGHT][BEFORE_TAG]);
-    // GETGAS has a disabled (zero) left packet, so its output tag is public
-    // regardless of the overwritten register's old tag or unused encoding bytes.
+    // Every ordinary destination inherits the original left read's tag; a
+    // taken CMOV copies its source tag and CMOVI writes a public immediate.
     out.push(
         p[SCALAR_DESTINATION][AFTER_TAG]
             .mul(F::ONE.sub(load))

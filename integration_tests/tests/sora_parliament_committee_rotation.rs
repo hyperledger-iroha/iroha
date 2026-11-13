@@ -757,6 +757,12 @@ async fn four_validator_certified_rotation_moves_mandatory_pulse_to_successor_se
         "activated attempt",
     )?;
     assert_eq!(terminal.outcome, Some(activated));
+    eprintln!(
+        "SORA_PARLIAMENT_LIFECYCLE committee_rotation activated_height={rotated_height} transition_id={} successor_session={} target_roster_hash={}",
+        hex::encode(transition_id),
+        hex::encode(successor_record.session.session_id),
+        hex::encode(successor_record.session.roster_hash),
+    );
 
     // Across the rotation the mandatory pre-boundary pulse finalizes on the successor
     // session under the rotated committee, and it schedules the following epoch.
@@ -795,6 +801,10 @@ async fn four_validator_certified_rotation_moves_mandatory_pulse_to_successor_se
         "successor-session mandatory pre-boundary pulse",
     )
     .await?;
+    eprintln!(
+        "SORA_PARLIAMENT_LIFECYCLE committee_rotation successor_pulse_height={successor_pulse_height} session={}",
+        hex::encode(successor_pulse.session_id),
+    );
 
     let retained_boundary = preparation.last_height;
     let retained_epoch = ROTATION_TARGET_EPOCH + 1;

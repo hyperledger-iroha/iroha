@@ -92,7 +92,7 @@ def test_full_and_segmented_routes_include_explicit_torii_integrations(
     assert "--features" in torii, "complete Torii test routes must select the required integration fixture owner"
     assert torii[torii.index("--features") + 1] == (
         "iroha_torii/test-fixtures" if segmented else
-        "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
+        "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools"
     )
     assert "mutation-testing" not in " ".join(torii)
     assert ("--test-threads=2" in torii) is threads
@@ -116,7 +116,7 @@ def test_default_route_keeps_empty_integration_arguments_on_stock_bash(workflow)
         ["build", "--locked", "--workspace"],
         ["test", "--locked", "--workspace", "--exclude", "integration_tests",
          "--features", "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,"
-         "iroha_native_source_delivery/dev-tools"],
+         "iroha_native_source_delivery/dev-tools,iroha_core/dev-tools"],
         ["test", "--locked", "-p", "integration_tests"],
     ]
 

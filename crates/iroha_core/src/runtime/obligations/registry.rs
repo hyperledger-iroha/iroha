@@ -6,22 +6,17 @@
 //! registered for it. A registration commits to the exact instructions that complete the
 //! obligation and captures their completion closure from the selection the root executes.
 //!
-//! - **Completion.** When the owner issues one of the committed instructions, the kernel marks
-//!   it performed and executes it as a completion of the obligation: admission closure and
+//! - **Completion.** When the owner issues one of the committed instructions, the kernel
+//!   executes it as a completion and marks it performed on success: admission closure and
 //!   completion-only on the definitions behind it, or behind what it invokes, do not stop it
 //!   ([`performing`], [`super::Step`]). Each committed instruction lends that capability once.
 //!   A contract has no kernel call under the first-release ABI, and needs none: the committed
 //!   instructions it queues under its subject account complete the obligation registered for
 //!   it in the same way.
-//! - **Activation.** While an obligation is live, a change set that stops executing a captured
-//!   definition or rebinds an interface its closure reaches lapses ([`closure_gap`]).
-//!
-//! A release answers a wire ID from the selection it executes, so a completion runs the code the
-//! root binds now, and keeping a registered completion as it was means keeping its bindings.
-//! TODO(§7.2): run a captured implementation beside its replacement, so a change set may rebind
-//! what a live obligation reaches. That needs one handler per implementation and wire ID, and an
-//! execution context every selection-dependent switch (services, authorization, storage
-//! contracts) reads instead of the root's current selection.
+//! - **Activation.** A new binding may coexist with a captured implementation. The completion
+//!   runs under its captured context, including authorization and host selection, while normal
+//!   instructions run under the new binding. Removing or disabling a required definition, or
+//!   changing root-wide kernel, commitment or services semantics, still lapses ([`closure_gap`]).
 //!
 //! The registry is storage of the `iroha.runtime.lifecycle.v1` addition. A root that has not
 //! activated it holds no record, so nothing here changes what that root executes.
@@ -50,6 +45,22 @@ use crate::state::StateTransaction;
 
 fn refused(reason: impl core::fmt::Display) -> Error {
     Error::InvariantViolation(format!("runtime obligation: {reason}").into())
+}
+
+/// Release the temporary authority even when an outer execution owner catches an unwind.
+struct CompletionScope<'transaction, 'block, 'world> {
+    transaction: &'transaction mut StateTransaction<'block, 'world>,
+    previous_selection: Option<RootSelectionV1>,
+}
+
+impl Drop for CompletionScope<'_, '_, '_> {
+    fn drop(&mut self) {
+        self.transaction.completing_obligation = None;
+        self.transaction
+            .world
+            .runtime_selection
+            .set_executing(self.previous_selection.take());
+    }
 }
 
 /// The account that controls the lifecycle of `contract` and the contract's subject account.
@@ -127,6 +138,11 @@ pub(crate) fn register(
         height,
     )
     .map_err(refused)?;
+    crate::smartcontracts::ivm::host_profile::ensure_new_capture(
+        state_transaction.world(),
+        &capture,
+        height,
+    )?;
     let (id, _) = held(state_transaction, &owner)?;
     state_transaction.world.runtime_obligations.insert(
         id,
@@ -146,7 +162,8 @@ pub(crate) fn register(
 /// End the obligation an owner holds and release its completion closure (§7.2).
 ///
 /// The owner ends its own obligation. The account that controls the lifecycle of the contract
-/// that owns an obligation ends it, because the contract itself cannot. Anyone ends an
+/// that owns an obligation can also end it. A selected contract kernel call uses the authenticated
+/// contract subject directly. Anyone ends an
 /// obligation that is no longer live, so a record no capability remains behind does not stay
 /// in State.
 ///
@@ -174,10 +191,12 @@ pub(crate) fn complete(
 }
 
 /// Run `execute` for `instruction`, which `authority` issues. If the instruction is a committed
-/// terminal effect of the live obligation `authority` holds and is still to be performed, mark
-/// it performed and execute it as a completion of that obligation (§7.2).
+/// terminal effect of the live obligation `authority` holds and is still to be performed,
+/// execute it as a completion and consume the capability only on success (§7.2).
 ///
-/// A failing instruction fails its transaction, whose rollback restores the effect as pending.
+/// A caught instruction rejection cannot consume the pending effect. The record remains live
+/// during execution, including checks against executor replacement. If the callback explicitly
+/// replaces or ends the registration, completing the old effect never resurrects it.
 /// A root that holds no obligation pays one emptiness check.
 ///
 /// # Errors
@@ -188,24 +207,80 @@ pub(crate) fn performing<T>(
     instruction: &InstructionBox,
     execute: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, ValidationFail>,
 ) -> Result<T, ValidationFail> {
-    if state_transaction.completing_obligation
-        || !perform(state_transaction, authority, instruction)
-    {
+    if state_transaction.completing_obligation.is_some() {
         return execute(state_transaction);
     }
-    state_transaction.completing_obligation = true;
-    let result = execute(state_transaction);
-    state_transaction.completing_obligation = false;
+    let Some((id, mut record, effect)) = pending_effect(state_transaction, authority, instruction)
+    else {
+        return execute(state_transaction);
+    };
+    let selection = record
+        .capture
+        .execution_selection(
+            state_transaction.world.runtime_selection.canonical(),
+            &PublishedDefinitions(&state_transaction.world.runtime_definitions),
+        )
+        .map_err(|error| ValidationFail::InstructionFailed(refused(error)))?;
+    // A user registration cannot replace a native obligation's authoritative custody context.
+    // Matching consent may finish the registered effect, but native progression keeps
+    // its own Step (acceptance never becomes completion through this registration).
+    if state_transaction.native_execution.is_some()
+        && state_transaction.world.runtime_selection.get() != &selection
+    {
+        return Err(ValidationFail::InstructionFailed(refused(
+            "registered terminal context disagrees with native obligation custody",
+        )));
+    }
+    let previous_selection = state_transaction
+        .world
+        .runtime_selection
+        .replace_executing(Some(selection));
+    state_transaction.completing_obligation = Some(record.capture.clone());
+    let result = {
+        let scope = CompletionScope {
+            transaction: state_transaction,
+            previous_selection,
+        };
+        execute(&mut *scope.transaction)
+    };
+    if result.is_ok() && state_transaction.world.runtime_obligations.get(&id) == Some(&record) {
+        record.terminal_effects[effect].performed = true;
+        state_transaction
+            .world
+            .runtime_obligations
+            .insert(id, record);
+    }
     result
 }
 
-/// Mark `instruction` performed if it is a pending terminal effect of the live obligation
-/// `authority` holds.
-fn perform(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
+/// Whether the executing obligation captured the exact binding of `instruction`.
+///
+/// A completion capability covers its captured call graph, not every instruction a callback
+/// might derive. An interface introduced outside that graph follows ordinary admission even
+/// while a committed terminal effect is executing.
+pub(crate) fn captures_executing(
+    state_transaction: &StateTransaction<'_, '_>,
     instruction: &InstructionBox,
 ) -> bool {
+    // Deferred execution follows its own consent and ordinary restrictions. Neither captured
+    // nor current-binding consent borrows an enclosing completion's admission exemption.
+    if !state_transaction.deferred_expectations.is_empty()
+        || state_transaction.native_execution.is_some()
+    {
+        return false;
+    }
+    let Some(capture) = &state_transaction.completing_obligation else {
+        return false;
+    };
+    crate::runtime::execution::capture_contains_binding(state_transaction, capture, instruction)
+}
+
+/// Find the original live registration and pending effect without consuming it before execution.
+fn pending_effect(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> Option<(ObligationId, ObligationRecordV1, usize)> {
     if state_transaction
         .world
         .runtime_obligations
@@ -213,26 +288,21 @@ fn perform(
         .next()
         .is_none()
     {
-        return false;
+        return None;
     }
-    let Ok((id, Some(mut record))) = held(state_transaction, authority) else {
-        return false;
+    let Ok((id, Some(record))) = held(state_transaction, authority) else {
+        return None;
     };
     if record.owner != *authority || !record.is_live(block_ms(state_transaction)) {
-        return false;
+        return None;
     }
     let Some(index) = terminal_effect_id(instruction)
         .ok()
         .and_then(|envelope| record.pending_effect(&envelope))
     else {
-        return false;
+        return None;
     };
-    record.terminal_effects[index].performed = true;
-    state_transaction
-        .world
-        .runtime_obligations
-        .insert(id, record);
-    true
+    Some((id, record, index))
 }
 
 /// The distinct completion closures of the obligations of `world` that are live at committed
@@ -257,9 +327,8 @@ pub(super) fn live_captures(
     captures
 }
 
-/// Why `successor` would strand a live registered obligation, if it would: it stops executing a
-/// captured definition that `predecessor` executes, or rebinds an interface a captured closure
-/// reaches ([`CompletionCaptureV1::broken_by`]).
+/// Why `successor` cannot retain the original execution context of a registered obligation.
+/// Binding replacement is allowed while the root retains the captured definitions and profiles.
 pub(super) fn closure_gap(
     predecessor: &RootSelectionV1,
     successor: &RootSelectionV1,
@@ -267,7 +336,11 @@ pub(super) fn closure_gap(
     captures: &[(CompletionCaptureV1, usize)],
 ) -> Option<String> {
     captures.iter().find_map(|(capture, count)| {
-        let reason = match capture.broken_by(predecessor, successor, published) {
+        let context = match capture.execution_selection(successor, published) {
+            Ok(context) => context,
+            Err(error) => return Some(format!("{count} live registered obligations: {error}")),
+        };
+        let reason = match capture.broken_by(predecessor, &context, published) {
             Ok(reason) => reason,
             Err(error) => Some(error.to_string()),
         }?;
@@ -277,3 +350,125 @@ pub(super) fn closure_gap(
 
 #[cfg(test)]
 mod tests;
+
+/// Register new work owned by the exact active deployed contract of an opaque invocation.
+/// No caller-owned address, controller substitution or transaction-authority fallback is used.
+pub(crate) fn register_contract(
+    tx: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1,
+    context: Option<&crate::executor::ContractRuntimeExecutionContext>,
+) -> Result<(), Error> {
+    use crate::{smartcontracts::code, state::WorldReadOnly as _};
+    use iroha_data_model::smart_contract::ContractArtifactId;
+    let context = context.ok_or_else(|| {
+        refused("contract registration requires authenticated invocation context")
+    })?;
+    let binding = code::fetch_contract_lifecycle_binding(&tx.world, &context.contract_address)
+        .map_err(refused)?
+        .ok_or_else(|| refused("contract has no lifecycle binding"))?;
+    if context.contract_subject != *authority
+        || binding.subject != *authority
+        || context.contract_address.subject_id() != *authority
+        || tx.world.contract_subject_addresses().get(authority) != Some(&context.contract_address)
+    {
+        return Err(refused(
+            "contract invocation subject disagrees with the active binding",
+        ));
+    }
+    let code_hash = binding
+        .lifecycle
+        .active_code_hash
+        .ok_or_else(|| refused("only an active deployed contract registers an obligation"))?;
+    if code::pending_contract_lifecycle(&tx.world, &context.contract_address)
+        .map_err(refused)?
+        .is_some()
+    {
+        return Err(refused(
+            "pending lifecycle hooks cannot register contract obligations",
+        ));
+    }
+    let artifact =
+        ContractArtifactId::for_address(&context.contract_address, code_hash).map_err(refused)?;
+    let expected = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(
+        ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+    ));
+    let manifest = tx
+        .world
+        .contract_manifests()
+        .get(&artifact)
+        .ok_or_else(|| refused("active contract manifest is absent"))?;
+    if manifest.code_hash != Some(code_hash) || manifest.abi_hash != Some(expected) {
+        return Err(refused(
+            "active contract manifest does not name the contract lifecycle host profile",
+        ));
+    }
+    let now_ms = block_ms(tx);
+    let height = tx._curr_block.height().get();
+    let canonical = tx.world.runtime_selection.canonical();
+    if tx.world.runtime_selection.get() != canonical {
+        return Err(refused(
+            "contract registration is new work and cannot borrow a retained execution scope",
+        ));
+    }
+    let wire =
+        iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1::WIRE_ID;
+    let binding = canonical
+        .bindings
+        .iter()
+        .find(|binding| binding.wire_id == wire)
+        .ok_or_else(|| refused("contract registration is not selected"))?;
+    for id in [binding.interface, binding.implementation] {
+        if super::super::blocking_restriction(canonical, &id, height).is_some() {
+            return Err(refused("contract registration requires ordinary admission"));
+        }
+    }
+    check_registration(instruction.kind, instruction.expires_ms, now_ms).map_err(refused)?;
+    let (committed, wire_ids) = terminal_effects(&instruction.terminal_effects).map_err(refused)?;
+    let lookup = PublishedDefinitions(&tx.world.runtime_definitions);
+    let canonical = tx.world.runtime_selection.canonical();
+    let capture =
+        CompletionCaptureV1::capture(canonical, &lookup, &wire_ids, height).map_err(refused)?;
+    crate::smartcontracts::ivm::host_profile::ensure_new_capture(tx.world(), &capture, height)?;
+    let expected_execution = capture
+        .execution_selection(canonical, &lookup)
+        .map_err(refused)?;
+    if (
+        expected_execution.kernel,
+        expected_execution.commitment_profile,
+        expected_execution.services_profile,
+    ) != (
+        tx.world.runtime_selection.get().kernel,
+        tx.world.runtime_selection.get().commitment_profile,
+        tx.world.runtime_selection.get().services_profile,
+    ) || capture
+        .broken_by(
+            &expected_execution,
+            tx.world.runtime_selection.get(),
+            &lookup,
+        )
+        .map_err(refused)?
+        .is_some()
+    {
+        return Err(refused(
+            "new contract work must execute the canonical root's captured bindings",
+        ));
+    }
+    let (id, _) = held(tx, authority)?;
+    tx.world.runtime_obligations.insert(
+        id,
+        ObligationRecordV1 {
+            owner: authority.clone(),
+            contract: Some(context.contract_address.clone()),
+            kind: instruction.kind,
+            created_at: height,
+            expires_ms: instruction.expires_ms,
+            capture,
+            terminal_effects: committed,
+        },
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod contract_tests;

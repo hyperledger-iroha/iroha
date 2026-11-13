@@ -7181,10 +7181,7 @@ mod tests_null_decode {
             .with_public_inputs(BTreeMap::from([(input_name.clone(), input_value)]));
         let mut vm = IVM::new(1_000_000);
         let code = [
-            crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("syscall fits"),
-            )
+            crate::encoding::wide::encode_scall(syscalls::SYSCALL_GET_PUBLIC_INPUT)
             .to_le_bytes(),
             crate::encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -7434,10 +7431,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(1_000_000);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("syscall fits"),
-            )
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_GET_PUBLIC_INPUT)
             .to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -7480,10 +7474,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(1_000_000);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &crate::encoding::wide::encode_sys(
-                crate::instruction::wide::system::SCALL,
-                u8::try_from(syscalls::SYSCALL_JSON_ENCODE).expect("syscall fits"),
-            )
+            &crate::encoding::wide::encode_scall(syscalls::SYSCALL_JSON_ENCODE)
             .to_le_bytes(),
         );
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());

@@ -5351,9 +5351,7 @@ public sealed partial class ToriiClientTests
                     "instruction_count": 42,
                     "memory": {
                       "load64": 1,
-                      "store64": 2,
-                      "load128": 3,
-                      "store128": 4
+                      "store64": 2
                     },
                     "syscalls": [
                       { "number": 7, "name": "emit", "count": 3 }
@@ -15271,7 +15269,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var analysis = new ToriiContractViewAnalysis
         {
             InstructionCount = 42,
-            Memory = new ToriiContractViewMemory { Load64 = 1, Store64 = 2, Load128 = 3, Store128 = 4 },
+            Memory = new ToriiContractViewMemory { Load64 = 1, Store64 = 2 },
             Syscalls = syscalls,
         };
         var permission = ContractPermission("can_execute_contract");
@@ -18379,8 +18377,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Load64 = 1,
             Store64 = 2,
-            Load128 = 3,
-            Store128 = 4,
         };
     }
 
@@ -24992,8 +24988,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 {
                     ["load64"] = 1,
                     ["store64"] = 2,
-                    ["load128"] = 3,
-                    ["store128"] = 4,
                 },
                 ["syscalls"] = new JsonArray(new JsonObject
                 {
@@ -25288,8 +25282,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["load64"] = 1,
             ["store64"] = 2,
-            ["load128"] = 3,
-            ["store128"] = 4,
         };
     }
 

@@ -34,11 +34,17 @@ use iroha_pasta::poseidon::PoseidonField;
 use crate::fs::{Scalar, Transcript, endo_scalar, lean_schedule};
 use crate::full::{Pool, Src3, Wiring};
 use crate::ipa::{Aff, Claim, F, Gens};
-use crate::ladders::{self, coords};
+use crate::ladders;
+#[path = "points_complete.rs"]
+mod complete;
 use crate::r1cs::Shape;
 use crate::spartan::Proof;
 use crate::uniform::{Array, Lin, Src, Term, constant, link, own, plus, scaled};
 use crate::verifier::{Kind, Trace, shared_scalars};
+use complete::coords;
+#[path = "generator_claim_points.rs"]
+mod generator_claim_points;
+pub use generator_claim_points::{GeneratorEquality, GeneratorPoints};
 
 /// A point the DAG produces: an input point, an addition, an endoscaling, a
 /// multiplication.
@@ -105,13 +111,13 @@ struct SqueezeSpec<F> {
 /// c1 next), shared values with c0 c1 = 0. The fixed rows are pinned to
 /// `key0 + c0 (key1 - key0) + c1 (key2 - key0)`, linear in the bits.
 pub struct KeySelect<'a, C: PastaCurve> {
-    pub fixed: [&'a [Aff<C>]; 3],
+    pub fixed: Vec<&'a [Aff<C>]>,
     pub kind_at: usize,
 }
 
 /// A constant input's alternative keys: the three kinds' coordinates and the
 /// kind bits' first binding index.
-type KeyAlt<F> = ([(F, F); 3], usize);
+type KeyAlt<F> = (Vec<(F, F)>, usize);
 
 /// Binding indices for one proof's shared values.
 #[derive(Clone, Copy, Debug)]
@@ -139,6 +145,7 @@ pub struct Exports {
     pub pairs: usize,
     pub embed: usize,
     pub header: usize,
+    pub valid: usize,
 }
 
 pub struct PointsBuilder<C: PastaCurve> {
@@ -153,6 +160,8 @@ pub struct PointsBuilder<C: PastaCurve> {
     mixed: Vec<MixedSpec<C>>,
     squeezes: Vec<SqueezeSpec<C::Base>>,
     equal: Vec<(usize, usize)>,
+    soft_equal: Vec<(usize, usize, Option<usize>)>,
+    total: bool,
     /// (binding index, the challenge it equals).
     v_from: Vec<(usize, ChRef)>,
     /// (input point, binding indices of x lo, x hi, y lo, y hi).
@@ -163,6 +172,7 @@ pub struct PointsBuilder<C: PastaCurve> {
     /// commitments), each with its alternative keys when a kind bit selects
     /// between two circuits' keys.
     consts: Vec<(usize, Option<KeyAlt<C::Base>>)>,
+    finite: Vec<usize>,
     pub perms: usize,
 }
 
@@ -195,6 +205,7 @@ where
             pairs: r(),
             embed: r(),
             header: r(),
+            valid: r(),
         };
         PointsBuilder {
             e,
@@ -207,11 +218,14 @@ where
             mixed: Vec::new(),
             squeezes: Vec::new(),
             equal: Vec::new(),
+            soft_equal: Vec::new(),
+            total: false,
             v_from: Vec::new(),
             claim_limbs: Vec::new(),
             embeds: Vec::new(),
             headers: Vec::new(),
             consts: Vec::new(),
+            finite: Vec::new(),
             perms: 0,
         }
     }
@@ -343,6 +357,71 @@ where
         sm: SharedMap,
         keys: Option<&KeySelect<C>>,
         wallet: Option<usize>,
+    ) -> TotalPoints {
+        let start = self.inputs.len();
+        self.verify_keyed_inner(
+            pool, shape, gens, proof, claims, tr, sm, keys, wallet, false,
+        );
+        self.proof_ports(start, usize::MAX, proof, claims.len(), tr)
+    }
+
+    /// Total verification keeps transcript/group computation hard and returns
+    /// the iff final Schnorr equality, including identity/opposite cases.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_keyed_total(
+        &mut self,
+        pool: &mut Pool<C::Base>,
+        shape: &Shape,
+        gens: &Gens<C>,
+        proof: &Proof<C>,
+        claims: &[Claim<C>],
+        tr: &Trace<C>,
+        sm: SharedMap,
+        keys: Option<&KeySelect<C>>,
+        wallet: Option<usize>,
+    ) -> TotalPoints {
+        self.total = true;
+        let start = self.inputs.len();
+        let verdict = self.soft_equal.len();
+        self.verify_keyed_inner(pool, shape, gens, proof, claims, tr, sm, keys, wallet, true);
+        self.proof_ports(start, verdict, proof, claims.len(), tr)
+    }
+
+    fn proof_ports(
+        &self,
+        start: usize,
+        verdict: usize,
+        proof: &Proof<C>,
+        claims_len: usize,
+        tr: &Trace<C>,
+    ) -> TotalPoints {
+        let fixed = tr.circuit.as_ref().map_or(0, |c| c.fixed.len());
+        let rows = proof.rows.len();
+        let rounds = proof.outer.len() + proof.inner.len();
+        let mut wire_nodes: Vec<_> = (start..start + rows).collect();
+        wire_nodes.extend(start + rows + fixed..start + rows + fixed + rounds);
+        let ipa = start + rows + fixed + rounds + claims_len + 1;
+        wire_nodes.extend(ipa..ipa + 2 * proof.ipa.lr.len() + 2);
+        assert_eq!(wire_nodes.len(), rows + rounds + 2 * proof.ipa.lr.len() + 2);
+        TotalPoints {
+            verdict,
+            wire_nodes,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_keyed_inner(
+        &mut self,
+        pool: &mut Pool<C::Base>,
+        shape: &Shape,
+        gens: &Gens<C>,
+        proof: &Proof<C>,
+        claims: &[Claim<C>],
+        tr: &Trace<C>,
+        sm: SharedMap,
+        keys: Option<&KeySelect<C>>,
+        wallet: Option<usize>,
+        total: bool,
     ) {
         let lean = lean_schedule();
         let embed = Transcript::<C>::scalars_embed();
@@ -504,6 +583,10 @@ where
                 );
                 if let Some(ks) = keys {
                     assert!(
+                        (2..=4).contains(&ks.fixed.len()),
+                        "two to four circuit kinds"
+                    );
+                    assert!(
                         ks.fixed.iter().all(|f| f.len() == ct.fixed.len() - nw),
                         "every kind's key has the proof's key rows"
                     );
@@ -523,7 +606,7 @@ where
                             ((PtRef::Input(i), _), _) => {
                                 let alt = keys.map(|ks| {
                                     let at = |kind: usize| coords(&C::from(ks.fixed[kind][f - nw]));
-                                    ([at(0), at(1), at(2)], ks.kind_at)
+                                    ((0..ks.fixed.len()).map(at).collect(), ks.kind_at)
                                 });
                                 self.consts.push((i, alt));
                             }
@@ -678,14 +761,55 @@ where
         let lhs = self.add(t12, t3, false);
         let cf = self.endoscale(folded, c.0, &c.1);
         let rhs = self.add(a, cf, false);
-        assert_eq!(coords(&lhs.1), coords(&rhs.1), "the final Schnorr check");
+        if !total {
+            assert!(!bool::from(a.1.is_identity()), "Schnorr A must be finite");
+            let PtRef::Input(ai) = a.0 else {
+                unreachable!()
+            };
+            self.finite.push(ai);
+            assert_eq!(coords(&lhs.1), coords(&rhs.1), "the final Schnorr check");
+        }
         if let (PtRef::Add(l), PtRef::Add(r)) = (lhs.0, rhs.0) {
-            self.equal.push((l, r));
+            if total {
+                let PtRef::Input(ai) = a.0 else {
+                    unreachable!()
+                };
+                self.soft_equal.push((l, r, Some(ai)));
+            } else {
+                self.equal.push((l, r));
+            }
         }
     }
 }
 
 // ------------------------------------------------------------------ layout
+
+/// Sealed result of the total verifier. The raw proof point sources exclude
+/// key constants, inherited claims and intermediate transcript commitments.
+pub struct TotalPoints {
+    verdict: usize,
+    wire_nodes: Vec<usize>,
+}
+impl TotalPoints {
+    pub fn validity(&self, built: &PointsIdx) -> (usize, usize, usize) {
+        (
+            built.validity.expect("total verifier verdict array"),
+            0,
+            self.verdict,
+        )
+    }
+    /// The exact raw proof's own folded generator, before any correction.
+    pub fn own_generator(&self, built: &PointsIdx) -> [(usize, usize, usize); 2] {
+        let i = self.wire_nodes[self.wire_nodes.len() - 2];
+        [(built.points, 0, i), (built.points, 1, i)]
+    }
+    pub fn wire_points(&self, built: &PointsIdx) -> Vec<[(usize, usize, usize); 2]> {
+        self.wire_nodes
+            .iter()
+            .map(|i| [(built.points, 0, *i), (built.points, 1, *i)])
+            .collect()
+    }
+}
 
 /// Where the points side's arrays sit.
 #[derive(Clone, Copy, Debug)]
@@ -698,6 +822,7 @@ pub struct PointsIdx {
     pub mixed_end: usize,
     pub squeeze: usize,
     pub squeeze_full: usize,
+    pub validity: Option<usize>,
 }
 
 const CH: usize = crate::nonnative::CHUNK;
@@ -859,7 +984,7 @@ where
         let np = self.inputs.len();
         let rho_p = bits_for(np);
         let n_p = 1usize << rho_p;
-        let mut pv = vec![vec![Fb::<C>::ZERO; n_p]; 4];
+        let mut pv = vec![vec![Fb::<C>::ZERO; n_p]; 5];
         for (i, (x, y, _)) in self.inputs.iter().enumerate() {
             pv[0][i] = *x;
             pv[1][i] = *y;
@@ -872,6 +997,43 @@ where
             [o(2), o(0), o(3)],
             [o(1), o(1), plus(&o(3), &constant(vec![C::b(); n_p]))],
         ];
+        if self.total {
+            pv.extend((0..5).map(|_| vec![Fb::<C>::ZERO; n_p]));
+            for i in 0..n_p {
+                let x = pv[0][i];
+                let y = pv[1][i];
+                pv[5][i] = if x == Fb::<C>::ZERO {
+                    one
+                } else {
+                    Fb::<C>::ZERO
+                };
+                pv[6][i] = Option::<Fb<C>>::from(x.invert()).unwrap_or(Fb::<C>::ZERO);
+                pv[7][i] = if y == Fb::<C>::ZERO {
+                    one
+                } else {
+                    Fb::<C>::ZERO
+                };
+                pv[8][i] = Option::<Fb<C>>::from(y.invert()).unwrap_or(Fb::<C>::ZERO);
+                pv[9][i] = pv[5][i] * pv[7][i];
+            }
+            prow[2][2] = plus(&prow[2][2], &scaled(&o(9), -C::b()));
+            for (v, z, inv) in [(0, 5, 6), (1, 7, 8)] {
+                prow.push([o(v), o(z), vec![]]);
+                prow.push([
+                    o(v),
+                    o(inv),
+                    plus(&constant(vec![one; n_p]), &scaled(&o(z), -one)),
+                ]);
+                prow.push([o(inv), o(z), vec![]]);
+                prow.push([o(z), o(z), o(z)]);
+            }
+            prow.push([o(5), o(7), o(9)]);
+            let mut finite_mask = vec![Fb::<C>::ZERO; n_p];
+            for i in &self.finite {
+                finite_mask[*i] = one;
+            }
+            prow.push([o(9), constant(finite_mask), vec![]]);
+        }
         // Constant inputs (fixed rows' commitments): x and y equal the key's;
         // in a slot that takes any kind, key0 + c0 (key1 - key0) + c1 (key2 -
         // key0) with the slot's kind bits c0, c1 (shared values).
@@ -882,15 +1044,22 @@ where
                 let mut val = vec![Fb::<C>::ZERO; n_p];
                 let mut kind_map = [vec![None; n_p], vec![None; n_p]];
                 let mut kind_coef = [vec![Fb::<C>::ZERO; n_p], vec![Fb::<C>::ZERO; n_p]];
-                for &(i, alt) in &self.consts {
+                let mut product_coef = vec![Fb::<C>::ZERO; n_p];
+                for (i, alt) in &self.consts {
+                    let i = *i;
                     mask[i] = one;
                     match alt {
                         None => val[i] = -pick((self.inputs[i].0, self.inputs[i].1)),
                         Some((keys, at)) => {
                             val[i] = -pick(keys[0]);
                             for b in 0..2 {
-                                kind_map[b][i] = Some(at + b);
-                                kind_coef[b][i] = pick(keys[0]) - pick(keys[b + 1]);
+                                kind_map[b][i] = Some(*at + b);
+                                kind_coef[b][i] =
+                                    pick(keys[0]) - pick(*keys.get(b + 1).unwrap_or(&keys[0]));
+                            }
+                            if keys.len() == 4 {
+                                product_coef[i] = -(pick(keys[3]) - pick(keys[1]) - pick(keys[2])
+                                    + pick(keys[0]));
                             }
                         }
                     }
@@ -901,6 +1070,13 @@ where
                         coef: mask,
                     }],
                     &constant(val),
+                );
+                row = plus(
+                    &row,
+                    &vec![Term {
+                        src: Src::Own(4),
+                        coef: product_coef,
+                    }],
                 );
                 for (map, coef) in kind_map.into_iter().zip(kind_coef) {
                     if map.iter().any(Option::is_some) {
@@ -920,6 +1096,34 @@ where
                 prow.push(lin_row(row, n_p));
             }
         }
+        // The fourth kind uses the bilinear basis c0*c1. Three-kind slots
+        // still reject 11; four-kind slots authenticate the fourth key exactly.
+        let mut kind_maps = [vec![None; n_p], vec![None; n_p]];
+        let mut forbidden = vec![Fb::<C>::ZERO; n_p];
+        let mut two_kind = vec![Fb::<C>::ZERO; n_p];
+        for (i, alt) in &self.consts {
+            if let Some((keys, at)) = alt {
+                kind_maps[0][*i] = Some(*at);
+                kind_maps[1][*i] = Some(*at + 1);
+                pv[4][*i] =
+                    w.arrays[shared_a].values[0][*at] * w.arrays[shared_a].values[0][*at + 1];
+                if keys.len() < 4 {
+                    forbidden[*i] = one;
+                }
+                if keys.len() == 2 {
+                    two_kind[*i] = one;
+                }
+            }
+        }
+        let c0 = shared_link(kind_maps[0].clone(), one);
+        let c1 = shared_link(kind_maps[1].clone(), one);
+        prow.push([c0.clone(), c1.clone(), o(4)]);
+        prow.push([o(4), constant(forbidden), vec![]]);
+        prow.push([c1.clone(), constant(two_kind), vec![]]);
+        // These selectors are authenticated shared values, and are locally
+        // constrained to the same Boolean domain as the scalar-side selector.
+        prow.push([c0.clone(), c0.clone(), c0]);
+        prow.push([c1.clone(), c1.clone(), c1]);
         if !self.claim_limbs.is_empty() {
             for (k, cell) in [(0usize, 0usize), (2, 1)] {
                 let mut mask = vec![Fb::<C>::ZERO; n_p];
@@ -949,7 +1153,7 @@ where
             r_count: np,
             fixed: false,
             lookups: Vec::new(),
-            widths: vec![255; 4],
+            widths: vec![255; pv.len()],
             rows: prow,
             values: pv,
         });
@@ -970,7 +1174,11 @@ where
             .collect();
         for (i, s) in self.adds.iter().enumerate() {
             let qy = if s.neg { -s.qv.1 } else { s.qv.1 };
-            let [l, sq, pq, x3, y3] = ladders::n_add(s.pv, (s.qv.0, qy));
+            let [l, sq, pq, x3, y3] = if self.total {
+                [Fb::<C>::ZERO; 5]
+            } else {
+                ladders::n_add(s.pv, (s.qv.0, qy))
+            };
             for (k, v) in [s.pv.0, s.pv.1, s.qv.0, s.qv.1, qy, l, sq, pq, x3, y3]
                 .into_iter()
                 .enumerate()
@@ -1007,6 +1215,17 @@ where
             [l.clone(), l.clone(), plus(&plus(&x3, &px), &qx)],
             [l.clone(), plus(&px, &neg(&x3)), plus(&y3, &py)],
         ];
+        if self.total {
+            let completed = complete::additions(
+                gfam,
+                rho_a,
+                &self.adds.iter().map(|a| a.pv).collect::<Vec<_>>(),
+                &self.adds.iter().map(|a| a.qv).collect::<Vec<_>>(),
+                &self.adds.iter().map(|a| a.neg).collect::<Vec<_>>(),
+            );
+            av = completed.values;
+            arows = completed.rows;
+        }
         if !self.equal.is_empty() {
             for cell in [8usize, 9] {
                 let mut mask = vec![Fb::<C>::ZERO; n_a];
@@ -1034,7 +1253,7 @@ where
             r_count: na,
             fixed: false,
             lookups: Vec::new(),
-            widths: vec![255; 10],
+            widths: vec![255; av.len()],
             rows: arows,
             values: av,
         });
@@ -1090,7 +1309,11 @@ where
             .iter()
             .map(|e| (e.point, e.bits.clone()))
             .collect();
-        let lad = ladders::endoscale::<C>(first_e, fam_e, pi_e, &inputs);
+        let lad = if self.total {
+            complete::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
+        } else {
+            ladders::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
+        };
         w.arrays.extend(lad.arrays);
         let (eb, es) = (first_e, first_e + 2);
         let last = self.endo[0].bits.len() / 2 - 1;
@@ -1121,7 +1344,11 @@ where
             .iter()
             .map(|m| (m.point, m.bits.clone(), m.fixed))
             .collect();
-        let lad = ladders::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs);
+        let lad = if self.total {
+            complete::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
+        } else {
+            ladders::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
+        };
         let results = lad.results.clone();
         w.arrays.extend(lad.arrays);
         let (mb, mstep, mtail, msel, mend) =
@@ -1133,8 +1360,12 @@ where
                 for (p, r) in results.iter().enumerate() {
                     col[p] = if k == 0 { r.0 } else { r.1 };
                 }
-                end.values.push(col);
-                end.widths.push(255);
+                if self.total {
+                    end.values[5 + k] = col;
+                } else {
+                    end.values.push(col);
+                    end.widths.push(255);
+                }
                 let res = own::<Fb<C>>(5 + k, 1);
                 let tail = at(mtail, cell, 2);
                 end.rows.push([
@@ -1211,6 +1442,70 @@ where
             });
             w.tables.push((t, crate::nonnative::RANGE_TABLE));
         }
+        let validity = if self.soft_equal.is_empty() {
+            None
+        } else {
+            let count = self.soft_equal.len();
+            let rho = bits_for(count);
+            let n = 1usize << rho;
+            let mut values = vec![vec![Fb::<C>::ZERO; n]; 6];
+            let left: Vec<_> = (0..n)
+                .map(|r| self.soft_equal.get(r).map(|(l, _, _)| *l))
+                .collect();
+            let right: Vec<_> = (0..n)
+                .map(|r| self.soft_equal.get(r).map(|(_, r, _)| *r))
+                .collect();
+            for (i, (l, r, ai)) in self.soft_equal.iter().enumerate() {
+                for (cell, z, inv) in [(8, 1, 2), (9, 3, 4)] {
+                    let d = w.arrays[adds].values[cell][*l] - w.arrays[adds].values[cell][*r];
+                    values[z][i] = if d == Fb::<C>::ZERO {
+                        one
+                    } else {
+                        Fb::<C>::ZERO
+                    };
+                    values[inv][i] = Option::<Fb<C>>::from(d.invert()).unwrap_or(Fb::<C>::ZERO);
+                }
+                values[5][i] = values[1][i] * values[3][i];
+                values[0][i] = values[5][i]
+                    * (one - ai.map_or(Fb::<C>::ZERO, |a| w.arrays[points].values[9][a]));
+            }
+            let mut rows = vec![];
+            for (cell, z, inv) in [(8, 1, 2), (9, 3, 4)] {
+                let d = plus(
+                    &link(adds, cell, left.clone(), one),
+                    &link(adds, cell, right.clone(), -one),
+                );
+                rows.push([d.clone(), own(z, n), vec![]]);
+                rows.push([
+                    d,
+                    own(inv, n),
+                    plus(&constant(vec![one; n]), &scaled(&own(z, n), -one)),
+                ]);
+                rows.push([own(z, n), own(inv, n), vec![]]);
+            }
+            rows.push([own(1, n), own(3, n), own(5, n)]);
+            let a_map = (0..n)
+                .map(|i| self.soft_equal.get(i).and_then(|(_, _, a)| *a))
+                .collect();
+            rows.push([
+                own(5, n),
+                plus(&constant(vec![one; n]), &link(points, 9, a_map, -one)),
+                own(0, n),
+            ]);
+            let array = w.push(Array {
+                name: "total verifier Schnorr iff verdicts",
+                family: gfam,
+                rho,
+                r_count: count,
+                fixed: false,
+                lookups: vec![],
+                widths: vec![1, 1, 255, 1, 255, 1],
+                rows,
+                values,
+            });
+            w.set_export(self.e.valid, array, vec![own(0, n)]);
+            Some(array)
+        };
         PointsIdx {
             points,
             adds,
@@ -1220,6 +1515,7 @@ where
             mixed_end: mend,
             squeeze,
             squeeze_full,
+            validity,
         }
     }
 
@@ -1558,3 +1854,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "points_total_tests.rs"]
+mod total_tests;

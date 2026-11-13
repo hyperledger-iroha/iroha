@@ -205,14 +205,12 @@ fn remove(
 pub(super) fn check_occurrence(
     output: &ExecutionOutputV1,
     selected: &Trigger,
-    registered_height: u64,
-    registered_ms: u64,
+    registered: (u64, u64),
     retry: Option<(u32, u64)>,
     time_ms: u64,
     disposition: &str,
     progress: Option<u32>,
 ) -> PyResult<()> {
-    let registered = (registered_height, registered_ms);
     let after_progress = progress.map(|remaining| remaining.saturating_sub(1));
     let mut effects = output
         .require_trigger_lifecycle()

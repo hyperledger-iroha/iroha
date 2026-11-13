@@ -2,38 +2,36 @@ use crate::common;
 use common::{assemble, assemble_zk};
 use ivm::{IVM, VMError, encoding, zk::MAX_CYCLES};
 #[test]
-fn test_zk_mode_padding_and_assert() {
-    // Program that triggers an assertion failure via the ZK ASSERT instruction.
-    let assert_instr = encoding::wide::encode_rr(ivm::instruction::wide::zk::ASSERT, 0, 1, 0);
+fn test_zk_mode_padding_and_abort() {
+    // Program that fails the run through the ABORT syscall.
+    let abort_instr = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_ABORT);
     let halt = encoding::wide::encode_halt().to_le_bytes();
-    let mut assert_prog = Vec::with_capacity(8);
-    assert_prog.extend_from_slice(&assert_instr.to_le_bytes());
-    assert_prog.extend_from_slice(&halt);
-    // Case 1: Normal mode (zk_mode = false) -> ZK op is rejected immediately.
+    let mut abort_prog = Vec::with_capacity(8);
+    abort_prog.extend_from_slice(&abort_instr.to_le_bytes());
+    abort_prog.extend_from_slice(&halt);
+    // Case 1: Normal mode (zk_mode = false) -> the abort stops the run without padding.
     let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 1);
-    let prog = assemble(&assert_prog);
+    let prog = assemble(&abort_prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::ZkExtensionDisabled)),
-        "ZK ASSERT should be gated by header mode bit"
+        matches!(res, Err(VMError::AssertionFailed)),
+        "Abort should fail the run in normal mode"
     );
-    // Execution is rejected before the instruction is applied.
-    assert_eq!(vm.get_cycle_count(), 0);
+    // Only the aborting syscall executed.
+    assert_eq!(vm.get_cycle_count(), 1);
     // Case 2: ZK mode (zk_mode = true) -> should pad to MAX_CYCLES and then error
     let mut vm2 = IVM::new(u64::MAX);
-    vm2.set_register(1, 1);
-    let prog = assemble_zk(&assert_prog, MAX_CYCLES);
+    let prog = assemble_zk(&abort_prog, MAX_CYCLES);
     vm2.load_program(&prog).unwrap();
     let res2 = vm2.run();
     assert!(
         matches!(res2, Err(VMError::AssertionFailed)),
-        "Assert should still produce error in ZK mode"
+        "Abort should still produce error in ZK mode"
     );
     // Execution should be padded to MAX_CYCLES cycles
     assert_eq!(vm2.get_cycle_count(), MAX_CYCLES);
-    // Case 3: ZK mode with no assertion (normal halt) -> should still pad cycles and return Ok
+    // Case 3: ZK mode with no abort (normal halt) -> should still pad cycles and return Ok
     let mut vm3 = IVM::new(u64::MAX);
     let halt_prog: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
     let prog = assemble_zk(&halt_prog, MAX_CYCLES);
@@ -60,40 +58,6 @@ fn test_exceed_max_cycles_error() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::ExceededMaxCycles)));
     assert_eq!(vm.get_cycle_count(), 10);
-}
-#[test]
-fn test_assert_continues_execution_in_zk_mode() {
-    // Program: ASSERT r1; ADDI r2,r2,1; HALT
-    let assert_inst = encoding::wide::encode_rr(ivm::instruction::wide::zk::ASSERT, 0, 1, 0);
-    let addi_inst = encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 2, 2, 1);
-    let halt_inst = encoding::wide::encode_halt();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&assert_inst.to_le_bytes());
-    bytes.extend_from_slice(&addi_inst.to_le_bytes());
-    bytes.extend_from_slice(&halt_inst.to_le_bytes());
-    // Normal mode: ZK ASSERT is rejected, so ADDI does not execute.
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_register(1, 1);
-    vm.set_register(2, 0);
-    let prog = assemble(&bytes);
-    vm.load_program(&prog).unwrap();
-    let res = vm.run();
-    assert!(matches!(res, Err(VMError::ZkExtensionDisabled)));
-    assert_eq!(
-        vm.register(2),
-        0,
-        "addi executed unexpectedly when ZK mode bit is unset"
-    );
-    // ZK mode: execution continues so ADDI runs
-    let mut vm2 = IVM::new(u64::MAX);
-    vm2.set_register(1, 1);
-    vm2.set_register(2, 0);
-    let prog = assemble_zk(&bytes, 10);
-    vm2.load_program(&prog).unwrap();
-    let res2 = vm2.run();
-    assert!(matches!(res2, Err(VMError::AssertionFailed)));
-    assert_eq!(vm2.register(2), 1, "addi should execute in zk mode");
-    assert_eq!(vm2.get_cycle_count(), 10);
 }
 #[test]
 fn test_zero_max_cycles_means_no_padding() {

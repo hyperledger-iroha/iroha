@@ -10,7 +10,9 @@ use crate::{
 };
 pub use ivm_artifact_admission::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+    verify_contract_artifact_for_policy, verify_contract_artifact_with_declared_profile,
     verify_contract_artifact_with_memory_budget,
+    verify_contract_artifact_with_memory_budget_for_policy,
 };
 use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
@@ -19,6 +21,13 @@ use std::sync::Arc;
 /// and execution structures after that shared policy has accepted the immutable artifact bytes.
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
+}
+/// Prepare an immutable contract under one explicitly selected named ABI V1 profile.
+pub fn prepare_contract_for_policy(
+    artifact: Arc<[u8]>,
+    policy: SyscallPolicy,
+) -> Result<PreparedContract, ContractArtifactError> {
+    PreparedContract::prepare_for_policy(artifact, policy)
 }
 /// Prepare immutable instructions, runtime indexes and artifact bytes in the original State pool.
 ///
@@ -33,6 +42,16 @@ pub fn prepare_contract_with_memory_budget(
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<PreparedContract, ContractArtifactError> {
     let verified = verify_contract_artifact_with_memory_budget(artifact, budget)?;
+    PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
+}
+/// Prepare with original State custody and an explicitly selected named host profile.
+pub fn prepare_contract_with_memory_budget_for_policy(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+    policy: SyscallPolicy,
+) -> Result<PreparedContract, ContractArtifactError> {
+    let verified =
+        verify_contract_artifact_with_memory_budget_for_policy(artifact, budget, policy)?;
     PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
 }
 /// A prepared compiler-produced Kotodama test-suite artifact.
@@ -75,6 +94,14 @@ impl PreparedContract {
         let verified = ivm_artifact_admission::verify_contract_artifact(artifact.as_ref())?;
         Self::prepare_shared_verified(artifact.as_ref(), verified, None)
     }
+    /// Admit under an explicit named policy before constructing any native runtime cache.
+    pub fn prepare_for_policy(
+        artifact: Arc<[u8]>,
+        policy: SyscallPolicy,
+    ) -> Result<Self, ContractArtifactError> {
+        let verified = verify_contract_artifact_for_policy(artifact.as_ref(), policy)?;
+        Self::prepare_shared_verified(artifact.as_ref(), verified, None)
+    }
     fn prepare_koto_test_harness(
         artifact: Arc<[u8]>,
         contract_interface: EmbeddedContractInterfaceV1,
@@ -100,7 +127,7 @@ impl PreparedContract {
             artifact,
             verified.header_len,
             verified.literal_section(),
-            SyscallPolicy::AbiV1,
+            verified.syscall_policy,
             budget,
         )
         .map_err(|error| {
@@ -154,6 +181,7 @@ impl PreparedContract {
                 .map_err(|error| ContractArtifactError::preparation("artifact backing", error))?,
             },
             metadata: verified.metadata,
+            syscall_policy: verified.syscall_policy,
             manifest: verified.manifest,
             header_len: verified.header_len,
             code_offset: verified.code_offset,

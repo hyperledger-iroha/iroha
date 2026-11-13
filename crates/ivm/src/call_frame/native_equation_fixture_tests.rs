@@ -138,7 +138,7 @@ fn owner_capture(result_words: usize, shift: u64, root_return: bool) -> Value {
         memory
             .call_frames
             .finish(saved_sp, result, result_words as u64),
-        Err(VMError::AssertionFailed)
+        Err(VMError::ControlFlowViolation)
     ));
     assert_eq!(observe(&memory, result & !15), before_failed);
     memory.store_u8(end - 1, 0).unwrap();

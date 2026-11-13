@@ -4,7 +4,7 @@
 //! not these computations, establish fetch/control and instruction semantics.
 //! The native join admits public arithmetic and bit operations, LDI64, public-root
 //! LOAD64/STORE64 and root JALR.
-//! TODO: join private/wide memory, other instructions and complete native faults
+//! TODO: join private memory, other instructions and complete native faults
 //! before extending this coverage. No second value/tag event is manufactured.
 
 use super::*;

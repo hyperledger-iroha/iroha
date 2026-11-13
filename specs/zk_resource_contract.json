@@ -13032,7 +13032,7 @@
       "group": "proof",
       "status": "not_implemented",
       "what": "The wire, verifier-work and output bounds of the Parliament anonymous ballot on the node path: the envelope (262,144 bytes) and entrypoint wire (263,168 bytes) of one anonymous input; the verifier input of one verification call (425,984 bytes); the committed per-block ballot verification reservations and verifier-input bytes of parliament_ballot_v1 (default 2 and 851,968, at most 8 and 3,407,872); the registration-proof reservations and verifier-input bytes per block (1 and 425,984); and the governance block-start output partition (1 MiB and 256 rows per block, rows of at most 256 KiB, 1 KiB and 16 KiB).",
-      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot and lifecycle policies in the authenticated State adapter or carry governance block-start rows in ExecutionOutputV1. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
+      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot policy in the authenticated State adapter. ExecutionOutputV1 carries governance block-start rows in their own partition (1,048,576 complete row bytes in 256 rows), which Core reserves before the block-start pass mutates and against which every block result is validated; the rows count towards no execution-row limit. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
       "requires": [
         "Each value is a listed bound with the node site where admission, block validation or the governance block-start pass compares it, and a test at the bound and one over.",
         "The committed per-block budgets are validated when genesis or SetParameter installs parliament_ballot_v1 and are related to block.max_transactions and to the block wire and execution-output bounds they reserve from.",
@@ -14769,28 +14769,6 @@
         }
       },
       {
-        "path": "crates/ivm/src/gas.rs",
-        "reason": "Shape bounds of the Ed25519 batch-verification opcode payload, inside the guest memory and gas budgets; M.1 inventories the opcode's semantics.",
-        "symbols": [
-          "ED25519_BATCH_MAX_ENTRIES",
-          "ED25519_BATCH_MAX_PAYLOAD_BYTES",
-          "ED25519_BATCH_MAX_SEQUENCE_ELEMENTS",
-          "ED25519_BATCH_MAX_TOTAL_ELEMENTS",
-          "ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES",
-          "ED25519_BATCH_MAX_DECODE_DEPTH",
-          "ED25519_BATCH_DECODE_LIMITS"
-        ],
-        "exprs": {
-          "ED25519_BATCH_MAX_ENTRIES": "512",
-          "ED25519_BATCH_MAX_PAYLOAD_BYTES": "512 * 1024",
-          "ED25519_BATCH_MAX_SEQUENCE_ELEMENTS": "64 * 1024",
-          "ED25519_BATCH_MAX_TOTAL_ELEMENTS": "ED25519_BATCH_MAX_PAYLOAD_BYTES",
-          "ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES": "2 * ED25519_BATCH_MAX_PAYLOAD_BYTES",
-          "ED25519_BATCH_MAX_DECODE_DEPTH": "8",
-          "ED25519_BATCH_DECODE_LIMITS": "norito::DecodeLimits::new( ED25519_BATCH_MAX_SEQUENCE_ELEMENTS, ED25519_BATCH_MAX_PAYLOAD_BYTES, ED25519_BATCH_MAX_TOTAL_ELEMENTS, ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES, ED25519_BATCH_MAX_DECODE_DEPTH, )"
-        }
-      },
-      {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
         "module": [
           "pub mod network {"
@@ -16218,15 +16196,6 @@
             }
           },
           {
-            "path": "crates/ivm/src/ivm.rs",
-            "symbols": [
-              "LOGICAL_VECTOR_MAX"
-            ],
-            "exprs": {
-              "LOGICAL_VECTOR_MAX": "crate::metadata::VECTOR_LENGTH_MAX as usize"
-            }
-          },
-          {
             "path": "crates/ivm/src/numeric_gas.rs",
             "symbols": [
               "MAX_DECIMAL_SCALE",
@@ -16239,15 +16208,6 @@
               "MAX_PRODUCT_SCALE": "MAX_DECIMAL_SCALE * 2",
               "MAX_VALUE_LIMBS": "(iroha_primitives::numeric::MAX_MANTISSA_BITS / 64) as u64",
               "MAX_PRODUCT_LIMBS": "MAX_VALUE_LIMBS * 2"
-            }
-          },
-          {
-            "path": "crates/ivm/src/proof_coverage/opcodes.rs",
-            "symbols": [
-              "RESERVED_OPCODES"
-            ],
-            "exprs": {
-              "RESERVED_OPCODES": "&[ reserved!(iso20022::MSG_CREATE), reserved!(iso20022::MSG_CLONE), reserved!(iso20022::MSG_SET), reserved!(iso20022::MSG_GET), reserved!(iso20022::MSG_ADD), reserved!(iso20022::MSG_REMOVE), reserved!(iso20022::MSG_CLEAR), reserved!(iso20022::MSG_PARSE), reserved!(iso20022::MSG_SERIALIZE), reserved!(iso20022::MSG_VALIDATE), reserved!(iso20022::MSG_SIGN), reserved!(iso20022::MSG_VERIFY_SIG), reserved!(iso20022::MSG_SEND), reserved!(iso20022::ENCODE_STR), reserved!(iso20022::DECODE_STR), reserved!(iso20022::VALIDATE_FORMAT), ]"
             }
           },
           {
@@ -18915,7 +18875,7 @@
         ]
       },
       {
-        "reason": "Parliament anonymous-ballot wire-schema caps and the still-unavailable node verifier budget: the canonical envelope of one anonymous input (E_max, 262,144 bytes) and its complete entrypoint wire reservation (E_wire, 263,168 bytes), the authenticated ballot context and published sealed list (C_max, 163,840 bytes), the verifier input charged to one verification (E_max + C_max = 425,984 bytes), the structural ceilings of the committed per-block ballot verification budgets (8 reservations, 3,407,872 verifier-input bytes) and governance block-start row caps (256 KiB, 1 KiB and 16 KiB). These are fixed product schema bounds, not local scheduling allowances. TransactionEntrypoint now carries the canonical anonymous input, whose data-model codec enforces its structure and byte cap. Governance block-start row types exist separately but are not yet variants of ExecutionOutputV1. Core and Torii recognize these carriers but defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable; no node depends on the standalone iroha_parliament_ballot crate or executes its verifier budget. The declared item proof.anonymous_ballot_verifier_budget owns full node integration and classification of each verifier and output budget with its enforcement sites and boundary tests.",
+        "reason": "Parliament anonymous-ballot wire-schema caps and the still-unavailable node verifier budget: the canonical envelope of one anonymous input (E_max, 262,144 bytes) and its complete entrypoint wire reservation (E_wire, 263,168 bytes), the authenticated ballot context and published sealed list (C_max, 163,840 bytes), the verifier input charged to one verification (E_max + C_max = 425,984 bytes), the structural ceilings of the committed per-block ballot verification budgets (8 reservations, 3,407,872 verifier-input bytes) the governance block-start row caps (256 KiB, 1 KiB and 16 KiB) and their partition (1,048,576 complete row bytes in 256 rows, at most two rows per positioned item and sixteen prelude rows). These are fixed product schema bounds, not local scheduling allowances. TransactionEntrypoint now carries the canonical anonymous input, whose data-model codec enforces its structure and byte cap. Governance block-start rows are ExecutionOutputV1::GovernanceBlockStart, bounded by their own partition and row caps on the complete row frame. Core and Torii recognize these carriers but defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable; no node depends on the standalone iroha_parliament_ballot crate or executes its verifier budget. The declared item proof.anonymous_ballot_verifier_budget owns full node integration and classification of each verifier and output budget with its enforcement sites and boundary tests.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/governance/anonymous_ballot.rs",
@@ -18957,14 +18917,22 @@
           {
             "path": "crates/iroha_data_model/src/governance/anonymous_ballot/output.rs",
             "symbols": [
+              "GOVERNANCE_START_OUTPUT_BYTES_V1",
+              "GOVERNANCE_START_OUTPUT_ROWS_V1",
               "GOVERNANCE_START_ROW_MAX_BYTES_V1",
               "CASTING_CLOCK_ROW_MAX_BYTES_V1",
-              "LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1"
+              "LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1",
+              "GOVERNANCE_START_ROWS_PER_ITEM_V1",
+              "GOVERNANCE_START_PRELUDE_ROWS_V1"
             ],
             "exprs": {
+              "GOVERNANCE_START_OUTPUT_BYTES_V1": "1_048_576",
+              "GOVERNANCE_START_OUTPUT_ROWS_V1": "256",
               "GOVERNANCE_START_ROW_MAX_BYTES_V1": "262_144",
               "CASTING_CLOCK_ROW_MAX_BYTES_V1": "1_024",
-              "LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1": "16_384"
+              "LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1": "16_384",
+              "GOVERNANCE_START_ROWS_PER_ITEM_V1": "2",
+              "GOVERNANCE_START_PRELUDE_ROWS_V1": "ParliamentBallotParametersV1::MAX_NONTERMINAL_ATTEMPTS as u32"
             }
           }
         ]
@@ -29001,17 +28969,6 @@
                 "degraded_run < 2": 1,
                 "degraded < 2": 1,
                 "wall_ms.saturating_sub(candidate_ms) > maximum_lag_ms / 2": 1
-              }
-            }
-          ]
-        },
-        {
-          "reason": "A Parliament enactment consumes four committed block-start work units. The original positioned pass defers further positions when fewer than four remain; the committed minimum separately prevents starvation.",
-          "files": [
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/sccp/parliament_iface.rs",
-              "sites": {
-                "self.remaining < 4": 1
               }
             }
           ]

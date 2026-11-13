@@ -271,6 +271,12 @@ scenario_test!(f06_vote_withholders, "F6", scenarios::f06);
 scenario_test!(f07_adversarial_tc_composition, "F7", scenarios::f07);
 scenario_test!(f08_split_brain, "F8", scenarios::f08);
 scenario_test!(f09_loss_dup_reorder, "F9", scenarios::f09);
+
+/// Two lost control proposals still recover from their authentic availability manifests.
+#[test]
+fn f09_seed2124_manifest_recovery_preserves_p99_bound() {
+    run(scenarios::f09(2_124)).unwrap_or_else(|report| panic!("{report}"));
+}
 scenario_test!(f10_delay_spikes, "F10", scenarios::f10);
 scenario_test!(f11_partitions, "F11", scenarios::f11);
 scenario_test!(f12_clock_skew_drift, "F12", scenarios::f12);
@@ -419,6 +425,28 @@ scenario_test!(f29_cpu_flood, "F29", scenarios::f29);
 scenario_test!(f32_cluster_restart_lock_or_cqc, "F32", scenarios::f32);
 scenario_test!(f33_hidden_pqc, "F33", scenarios::f33);
 scenario_test!(f34_late_entrants, "F34", scenarios::f34);
+
+/// The retained 10,000-seed failure completes every original height target on time.
+#[test]
+fn f34_seed6117_completes_original_live_obligations() {
+    let mut world = World::new(scenarios::f34(6_117));
+    let minimum = world.duration;
+    world.run_until(minimum);
+    assert!(world.failure.is_none());
+    assert!(world.honest().iter().any(|r| world.committed(*r) < 8));
+    world.run().unwrap_or_else(|report| panic!("{report}"));
+    assert_eq!(
+        world.duration, minimum,
+        "retain the minimum observation window"
+    );
+    assert!(world.now > minimum);
+    for replica in world.honest() {
+        if world.machines[world.replicas[replica].machine].up {
+            assert!(world.committed(replica) >= 8);
+        }
+    }
+}
+
 scenario_test!(f35_local_queue_asymmetry, "F35", scenarios::f35);
 
 /// The original sparse-work failures at n = 22 stay covered even in the default short sweep.
@@ -593,6 +621,45 @@ fn f31_amx_two_phase_commit() {
     });
 }
 
+/// Stalled AMX work may be refused as stale; the original refusal is not an injected fault.
+/// Seed 1475 is the retained 10,000-seed O-FAULT failure. The time-floor and manifest
+/// recovery rules moved its timeline, so seed 1562 pins a run that still reaches an
+/// uncertified CT5 refusal on an honest machine.
+#[test]
+fn f31_stale_due_work_refusal_recovers_and_settles() {
+    for (seed, refuses) in [(1_475, false), (1_562, true)] {
+        let mut world = World::new(scenarios::f31(seed));
+        world.run().unwrap_or_else(|report| panic!("{report}"));
+        let refused = world
+            .clock_guard
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| !event.certified && event.rule == super::world::GuardRule::StaleDueWork);
+        assert!(
+            refused || !refuses,
+            "seed {seed} no longer reaches a CT5 refusal"
+        );
+        let amx = world.amx.as_ref().unwrap();
+        assert!(!amx.seen.settled.is_empty(), "seed {seed}");
+        assert!(
+            amx.seen
+                .decided
+                .values()
+                .any(|(outcome, _, _)| *outcome == super::amx::Outcome::Commit),
+            "seed {seed}"
+        );
+        assert!(
+            amx.seen
+                .decided
+                .values()
+                .any(|(outcome, _, _)| *outcome == super::amx::Outcome::Abort),
+            "seed {seed}"
+        );
+    }
+}
+
 /// F39: O-TIME checks every commit under skewed honest wall clocks (§4.5). Every run must
 /// make five further commits after convergence or healing, and every honest replica must
 /// observe renewed progress before this short run ends.
@@ -621,6 +688,19 @@ fn f39_clock_guard() {
             );
         }
     });
+}
+
+/// Deterministically invalid stale proposals cannot spend the original late-progress window
+/// retrying a wall-clock refusal (the retained 10,000-seed F39 failure).
+#[test]
+fn f39_seed2572_invalid_time_floor_does_not_delay_clock_recovery() {
+    let mut world = World::new(scenarios::f39(2_572));
+    world.run().unwrap_or_else(|report| panic!("{report}"));
+    assert_eq!(world.duration, 60_000);
+    assert_eq!(world.checks.windows, vec![(0, 30_000, 60_000, 5)]);
+    for replica in world.honest() {
+        assert!(world.oracle.reps[replica].last_commit >= 30_000);
+    }
 }
 
 /// F38: a lane instance next to the global one, followed by every machine.

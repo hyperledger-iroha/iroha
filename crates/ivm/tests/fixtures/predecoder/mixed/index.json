@@ -13,12 +13,12 @@
       }
     },
     {
-      "artifact_sha256": "0cad3c9c0b01370a6af22270767fc59ced4691a922322e51bf66bb9236665184",
-      "file": "artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+      "artifact_sha256": "73b7175487a16ef705744dc251285225ea2854fd1eca22333ae1bb782e946f10",
+      "file": "artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
       "meta": {
         "abi_version": 1,
         "max_cycles": 1000,
-        "mode": 3,
+        "mode": 1,
         "vector_length": 8,
         "version_major": 1,
         "version_minor": 1

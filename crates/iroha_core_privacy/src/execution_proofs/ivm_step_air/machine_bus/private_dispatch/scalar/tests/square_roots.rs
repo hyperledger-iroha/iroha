@@ -230,7 +230,7 @@ fn private_isqrt_mixed_original_records_preserve_continuity_and_canonical_paddin
         enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
         enc::encode_rr(wide::arithmetic::ADD, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::ISQRT, 4, 4, 255),
-        enc::encode_rr(wide::system::GETGAS, 5, 0, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 5, 0, 127),
         enc::encode_rr(wide::arithmetic::ISQRT, 5, 5, 255),
     ];
     let (program, recorder, _) = shifts::capture(

@@ -7,11 +7,7 @@ use crate::{ProgramMetadata, VMError, encoding, instruction::wide, ivm_cache::De
 use iroha_allocation::AllocationBudget;
 
 pub(super) fn syscall_number(op: DecodedOp) -> Option<u32> {
-    match wide::opcode(op.inst) {
-        wide::system::SCALL => Some(u32::from(wide::imm8(op.inst) as u8)),
-        wide::system::SYSTEM => Some(crate::encoding::wide::decode_syscallx(op.inst)),
-        _ => None,
-    }
+    (wide::opcode(op.inst) == wide::system::SCALL).then(|| wide::syscall_number(op.inst))
 }
 
 pub(super) fn analyze<I: Iterator<Item = DecodedOp>>(
@@ -113,29 +109,15 @@ impl ProgramAnalysisBuilder {
             // Memory access instructions.
             wide::memory::LOAD64 => {
                 self.memory.load64 += 1;
-                let (_, dest, base, _) = encoding::wide::decode_mem(op.inst);
+                let (_, dest, base, _) = encoding::wide::decode_load(op.inst);
                 self.write(dest);
                 self.read(base);
             }
             wide::memory::STORE64 => {
                 self.memory.store64 += 1;
-                let (_, base, value, _) = encoding::wide::decode_mem(op.inst);
+                let (_, base, value, _) = encoding::wide::decode_store(op.inst);
                 self.read(base);
                 self.read(value);
-            }
-            wide::memory::LOAD128 => {
-                self.memory.load128 += 1;
-                let (_, rd_lo, base, rd_hi) = encoding::wide::decode_load128(op.inst);
-                self.write(rd_lo);
-                self.write(rd_hi);
-                self.read(base);
-            }
-            wide::memory::STORE128 => {
-                self.memory.store128 += 1;
-                let (_, base, rs_lo, rs_hi) = encoding::wide::decode_store128(op.inst);
-                self.read(base);
-                self.read(rs_lo);
-                self.read(rs_hi);
             }
             wide::memory::LDLIT | wide::memory::LDI64 => {
                 let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
@@ -153,10 +135,6 @@ impl ProgramAnalysisBuilder {
                 self.read(rs1);
                 self.read(rs2);
             }
-            wide::control::JR => {
-                let rs = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.read(rs);
-            }
             wide::control::JALR => {
                 let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
                 let rs = u8::try_from(wide::rs1(op.inst)).expect("register index fits in u8");
@@ -170,29 +148,9 @@ impl ProgramAnalysisBuilder {
             wide::control::JALS => self.write(1u8),
             wide::control::JMP | wide::control::HALT => {}
             // System helpers.
-            wide::system::GETGAS => {
-                let rd = u8::try_from(wide::rd(op.inst)).expect("register index fits in u8");
-                self.write(rd);
-            }
-            wide::system::SCALL | wide::system::SYSTEM => {}
-            // Vector configuration.
-            wide::crypto::SETVL => {
-                // SETVL carries its lane count in the rs2/immediate field; it
-                // does not consume a vector or scalar register operand.
-            }
-            wide::crypto::PARBEGIN | wide::crypto::PAREND => {}
-            wide::crypto::POSEIDON2 => self.two_src_one_dst(op.inst),
-            wide::crypto::POSEIDON6 => {
-                let rd = Self::reg(wide::rd(op.inst));
-                self.write(rd);
-                if let Some((_, rs_base)) = crate::encoding::wide::decode_poseidon6(op.inst) {
-                    for offset in 0..wide::crypto::POSEIDON6_INPUTS {
-                        self.read(usize::from(rs_base) + offset);
-                    }
-                }
-            }
-            // All remaining opcodes (crypto, ISO20022, ZK, vector ALU, etc.)
-            // follow the canonical rd/rs1/rs2 layout.
+            wide::system::SCALL => {}
+            // The remaining register-register opcodes follow the canonical
+            // rd/rs1/rs2 layout.
             _ => {
                 self.two_src_one_dst(op.inst);
             }

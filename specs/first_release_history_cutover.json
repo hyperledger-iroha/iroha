@@ -30,6 +30,10 @@
   ],
   "test_only_version_impls": [
     {
+      "type": "Payload",
+      "path": "crates/iroha_version/src/error_tests.rs"
+    },
+    {
       "type": "ExactPayload",
       "path": "crates/iroha_version/src/lib.rs"
     },
@@ -90,6 +94,20 @@
       "package": "iroha_core",
       "target": "lib",
       "covers": "block wire version 1 only; the decoder storage and distribution use refuses other versions, headerless payloads and other Norito header layouts"
+    },
+    {
+      "path": "crates/iroha_core/src/sumeragi/node.rs",
+      "test": "restart_refuses_world_only_snapshot_and_replays_the_certified_history",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "a World-only snapshot cannot authorize State-level fields; four validators reconstruct their certified history before resuming"
+    },
+    {
+      "path": "crates/iroha_core/src/state/keyed_state/recovery.rs",
+      "test": "keyed_snapshot_successor_replay_reproduces_original_publication",
+      "package": "iroha_core",
+      "target": "lib",
+      "covers": "complete-State authentication precedes certified successor replay; final roots, native tip, serialized State and row-proof custody match original execution"
     },
     {
       "path": "crates/iroha_core/src/sumeragi/node.rs",
@@ -835,7 +853,7 @@
       "anchors": [
         {
           "path": "crates/iroha_core/src/sumeragi/node.rs",
-          "contains": "verify_world_state_accumulator"
+          "contains": "verify_replayed_state_commitment"
         }
       ],
       "regenerate": [
@@ -1224,7 +1242,11 @@
       },
       {
         "path": "crates/iroha_core/src/state/deserialize_core.rs",
-        "contains": "authenticate_restored_world(&world, &self.execution_budget, certified)?;"
+        "contains": "(false, Some(_)) => return Err(StateRestoreError::NativeExecutionReplayRequired),"
+      },
+      {
+        "path": "crates/iroha_core/src/state/keyed_state/recovery.rs",
+        "contains": "if captured != claim.certified {"
       },
       {
         "path": "crates/iroha_core/src/state/native_execution_tip.rs",
@@ -1240,7 +1262,7 @@
       }
     ],
     "owner": "outside-zk-plan:consensus",
-    "summary": "Ordinary snapshot resume authenticates the native certified prefix and checks the decoded World against its certified successor parent root before State construction; startup replays the stored suffix. Complete-State checkpoint authority remains open: State-level fields outside World and original native World publication custody are not authenticated or recreated by that World check. The future checkpoint rule still requires an explicit verified suffix and cannot validate discarded history."
+    "summary": "Nonempty World-only snapshots require native certified replay. Keyed snapshot resume authenticates the native prefix and requires a cold capture of the complete selected State to match the certified successor parent root before replaying the suffix. Current-candidate checkpoint and crash/publication qualification remains open. The checkpoint rule still requires an explicit verified suffix and cannot validate discarded history."
   },
   "test_prerequisites": [
     {

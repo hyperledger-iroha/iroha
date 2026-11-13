@@ -15,14 +15,14 @@ decoders, aliases, shims and parallel implementations are prohibited.
 
 | Milestone | Completion gate | Current state |
 | --- | --- | --- |
-| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Earlier focused Core custody, rollback, fee and restoration controls passed; the current shared beacon custody API and typed restoration errors await fresh compilation and runtime checks, followed by unchanged-candidate network qualification |
+| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Focused Core staking custody, rollback, reward, penalty and lane-evidence controls pass on current source; the shared beacon custody API and typed restoration errors still await their own runtime checks, followed by unchanged-candidate network qualification |
 | Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Immutable network XOR pin, global scale-nine genesis/operator validation and early staking/reward custody checks implemented; production implicit minting removed; current-candidate component and integration validation pending |
 | Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Generation/authorization, authenticated native epoch graph and pristine E+2 boundary capture are integrated; current Core, runtime and network qualification remains open |
 | Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Native prepare/activate/retain source capture, BLS-authenticated control, atomic application barrier and current/predecessor restore join are integrated; snapshot chain/network identity is checked before typed restore, but positive-height startup and real restart/transition qualification remain open |
 | Monetary fees | Exact signed effects, bounded claims with retained dust, and principal distinct from assessed fees | Monetary plans and native effect checks are present. Required explicit fee-reward claim bindings and additive shared custody are implemented; canonical reward-currency admission, current-policy integration, multisig/proved execution and paid network coverage remain under validation |
 | Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | Native execution/context retention, deterministic history and Kura's fail-stop gate are integrated. Complete original-pool funding through World/DA/proof graphs, publication, replay and retained-generation reclamation remains open |
 | Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Candidate and credential commands and native evidence readers are present. Same-source native artifacts, regenerated fixtures, complete SDK consumers and operator network qualification remain open |
-| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties and withdrawal; funded rewards on an aged network; maintained formal/DA/workspace/SDK gates | Exits, a real-peer double-sign slash and withdrawal of the slashed remainder are integrated in the real-peer scenarios and await execution on one unchanged candidate. Funded rewards cannot be qualified by a disposable run (reward gate below) |
+| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties and withdrawal; funded rewards on an aged network; maintained formal/DA/workspace/SDK gates | The five-process real-peer double-sign slash passes on one frozen working-tree candidate. The complete paid 4→7→4 scenario with exits, a slash while unbonding and withdrawal of the slashed remainder awaits execution on that candidate. Funded rewards cannot be qualified by a disposable run (reward gate below) |
 
 Rewards automatically accrue from authenticated funded XOR conversion using
 historical validator and nominator exposure. Committee preparation
@@ -333,8 +333,9 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   penalty follows. In the complete rotation the slash must reduce the pending
   unbond in place: the request keeps its identity and liability horizon, the
   node prepares withdrawal of exactly the remainder and refuses it until
-  replacement and expiry. Both cases are source-integrated and await execution
-  on one unchanged candidate; until then this is not a real-peer slashing result.
+  replacement and expiry. The focused case passes on real peers, including the
+  typed refusal of an absent reward entitlement; the complete rotation's slash
+  while unbonding awaits execution on the same candidate.
 - The finality-owned lane penalty component
   `native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission`
   now covers signed full-unbond scheduling, a delayed physical XOR transfer to a
@@ -343,9 +344,9 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   and lane seats retain custody. The connected `lane/tests/replacement.rs` extension
   then certifies a replacement, releases both seat obligations, waits for height
   and time maturity, withdraws the remaining XOR, and checks a freshly signed replay
-  with exact fees, balances and reserves. The extension is implemented but awaits
-  compilation and runtime qualification; it is a deterministic native component,
-  not a real-peer slashing result; the real-peer double-sign above is that gate.
+  with exact fees, balances and reserves. The extension passes; it is a
+  deterministic native component, not a real-peer slashing result; the real-peer
+  double-sign above is that gate.
   Torii exposes evidence reads, not an external evidence-submission endpoint;
   the Initial executor admits manual slashing only in genesis. Keep
   mandatory-slash simulator and component evidence separate from network
@@ -446,8 +447,12 @@ substitute a fabricated chain clock for this gate.
 
 The fresh real-peer scenarios therefore qualify absence: no validation-fee
 registry exists, and after genuine service, a slash and a pending withdrawal the
-node refuses to prepare a reward claim ("no funded reward entitlement"), so
-principal and slashed stake can never be paid out as a reward. Conversion,
+node refuses to prepare a reward claim: `POST /v1/nexus/staking/prepare` answers
+HTTP 409 with the error code `staking_preparation_refused` and the reason "no
+funded reward entitlement is available to claim". Principal and slashed stake
+can therefore never be paid out as a reward. A refused preparation is a typed
+conflict carrying the reason execution would reject with; a server error never
+counts as a refusal. Conversion,
 accrual, claims, replay and recovery are covered by the deterministic Core
 suites (`validation_fee/runtime_rewards_tests.rs`,
 `runtime_reward_history_tests.rs`, `runtime_reward_crash_tests.rs`,

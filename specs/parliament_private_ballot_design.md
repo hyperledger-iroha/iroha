@@ -1551,7 +1551,10 @@ also remain.
 
 **Requirements on the governance clock.** [sccp.md](sccp.md) section 4.7 owns
 the governance clock, the due predicate, the progress invariant and their
-wording. The ballot requires the following of them. None is implemented.
+wording. The ballot requires the following of them. The positioned pass
+(section 12.3, slice 3) implements the progress ticket, the exact-pulse draw,
+late processing and the casting clock. The admission cap waits for the
+attempt-creation interface, and the latency bound for qualification.
 
 - **Bounded progress to the slot.** A governance progress item
   `AdvanceToNativeSlot` exists for the nearest admitted future slot. Its
@@ -2042,6 +2045,187 @@ activatable only after the fourth.
   dependencies are exactly the frozen baseline. The release publishes it, but
   it stays unactivated until the fourth slice, and a root that runs the
   kernel's lifecycle services profile needs a composition for it first.
+
+**Slice 3: the positioned pass.** Implemented and dispatched: the pass runs
+once at the start of every block of the global chain, and Parliament's items
+run on a root whose selection installs the family and on no other. Its outputs
+are committed as the leading rows of the block result. The due index and the
+real-peer test are still open (last bullet).
+
+- **Cursor.** One cursor per block holds the remaining budget and the next
+  position for G1 to G3. It is bound to the block's header and to the World
+  publication it started on, runs the five segments once each in order, and
+  refuses items of another segment, items that are not due and repeated order
+  keys before any of them reaches its owner. An owner's error poisons it: the
+  block is abandoned, items already applied included.
+- **Occurrences.** Each segment's items are listed from the State the earlier
+  segments left and frozen. Immediately before an item is charged, its owner
+  reports it live or lapsed. A lapsed item takes no position and no charge. An
+  opening that finds `K` windows open ends G2c only; exhausting the budget or
+  the output partition ends every later segment and leaves the item due.
+- **Parliament's owner.** Every item is applied in one World transaction over
+  the three tables, so an attempt, its board and their outputs change
+  together and a refused item changes nothing.
+  - The prelude establishes the clock of every board opened in the parent
+    block, in `(governance_attempt_id, body)` order. A board that opened
+    earlier and has no clock is refused: no block skips the prelude.
+  - A draw consumes the supplied pulse of its exact slot for one generation.
+  - A binding jury's `CloseInvitations` stores the sealed board under its own
+    scope and emits the complete canonical list. A scope that already holds a
+    board refuses the item.
+  - The `AdvancePhase` that enters a binding jury's Reflection fixes the
+    board's opening time in the same item, so G2c of that pass lists it.
+  - A closure closes the board and applies its record to the attempt in one
+    step. The Confirmation snapshot, read only for a narrow Policy approval,
+    is every citizen whose bond is at least the attempt's frozen minimum, in
+    account order.
+  - An opening is listed only while its attempt is active at that jury's
+    stage. The board of an attempt that ended before its ballot opened never
+    opens and never counts as open.
+- **`K`.** A window is open from its opening until its closure is processed.
+  The bound is `max_nonterminal_attempts` of the committed
+  `gov.parliament_ballot` parameter, or of its default while none is
+  committed. A committed value that does not decode or is out of range
+  abandons the block.
+- **Refusals.** An item whose attempt ended or whose occurrence passed lapses.
+  Any other refusal of a listed item is an error of the pass. A refusal the
+  node cannot decide (storage admission, its proof profile, a pinned frame or
+  the verifier backend) defers the block and is never a verdict. Tables that
+  disagree with one another are an error and never a lapse.
+- **Due predicate.** Parliament's terms of `governance_due`
+  ([sccp.md](sccp.md) section 4.7.3) are computed from the same listing: a
+  window opened in the parent block awaits its clock, a generation awaits a
+  slot at or below the height whose pulse is available, the height-progress
+  ticket of the height is due, a lifecycle item or a closure is due, or an
+  opening is due while fewer than `K` windows are open. Whenever it holds,
+  that block's pass establishes a clock or processes an item; an opening
+  without a slot makes no block. Admission also counts the candidate height's
+  own slot, whose pulse rule K4 requires in the block.
+- **Restore.** A restored cut holds no realized anchor, pulse, result or
+  corpus entry above its height, every board opened below the cut has its
+  clock, a board's opening time is the one its attempt's Reflection gives,
+  its opening follows that Reflection, and its closure is the one the attempt
+  recorded as a result or a rejection. The tests run every block on a World
+  rebuilt from the rows the previous block left and check those rows as a
+  restored cut.
+- **Dispatch.** The block-start sequence runs the pass once per block, after
+  S0 and the pause-panel draw and before the G4 lapse cleanup, on the global
+  chain's ordinary carrier only (`state/governance_start.rs`). A lane block, an
+  independent root and a probe scope run the baseline enactments alone. The
+  baseline Parliament enactments, which are height-indexed and unpositioned,
+  run between G2c and G3. One cursor holds Parliament's items and SCCP's
+  rank-three and pause-enactment items, so they share its budget and positions;
+  SCCP supplies its items through `sccp::parliament_iface`. A root whose
+  selection does not install the family has no Parliament item, no partition
+  and no Parliament due work.
+- **Committed outputs.** Each output is one `ExecutionOutputV1::GovernanceBlockStart`
+  row. The rows of a block precede its Network, Pipeline and Time rows, in
+  emission order: the prelude's casting clocks, then each positioned item's
+  rows.
+  - **Partition.** A block of a root that installs the family reserves
+    1,048,576 complete row bytes in at most 256 rows before the pass mutates
+    anything. The partition is separate from the execution output policy:
+    governance rows count towards neither its row limit nor its byte limits,
+    so the Network input capacity of a block does not change, and the
+    complete executed wire bounds both. A selection that installs the family
+    is supported only under a policy whose wire ceiling exceeds its
+    execution-row byte total by the partition. The partition keeps sixteen
+    1,024-byte casting-clock rows for the mandatory prelude until the prelude
+    has run. Every limit is measured on the complete row frame.
+  - **Reservation.** Before an item is charged its owner asks whether its
+    rows fit: one receipt of at most 16,384 bytes, and for a binding jury's
+    seal, a closure and an opening one ballot output of at most 262,144 bytes
+    more. An item that does not fit stays due, takes no position or charge,
+    and ends the pass. An item's rows enter the partition before its World
+    transaction is applied, so a refused item leaves neither.
+  - **Receipts.** Every positioned Parliament item emits `LifecycleApplied`
+    first: the item and its occurrence, the attempt's status and stage after
+    it, the digest of the attempt State it left and, when it stored or changed
+    a board, the board's scope and record digest. The height-progress ticket
+    emits `NativeSlotAdvanced`. A receipt never carries a candidate snapshot.
+  - **Validation.** The block result is refused unless its governance rows
+    lead it, name its height and one block time, fit their caps and the
+    partition, list the casting clocks first with one row per scope, and give
+    each position its receipt first and at most one output more. Genesis
+    holds no governance row. A Network output is located after the leading
+    rows (`network_output_at`).
+  - **Commit.** The rows stay with the block overlay that ran the pass. The
+    output seal moves them ahead of the execution rows; dropping the block
+    discards them with its State.
+- **Pulse.** A draw consumes the pulse World keeps for its exact slot: the one
+  the block carries at its own height, which enters World before the pass, or
+  one an earlier block committed. The pulse is verified again against the key
+  session retained for its height. A slot whose pulse is absent or does not
+  verify has none, and its generation keeps waiting.
+- **Height-progress ticket** (section 9). The ticket of a block is derived
+  from its parent and never stored: the step to the nearest slot an active
+  attempt awaits at or above the block's height, due once the parent's time
+  plus the committed block cadence is reached. It is G1's first item, costs
+  one unit and changes no row. The block of the slot consumes the last ticket,
+  so a slot that passed without its pulse leaves none.
+- **K2 and K4.** A keepalive block is valid when an SCCP term holds on its
+  parent or its own pass applied work (`governance_due_applied`). Admission,
+  the proposer and CT5 evaluate Parliament's terms on the committed tip of the
+  global chain; another root has none. There the slot of the candidate height
+  counts only where consensus requires the native pulse at that height, so
+  every valid candidate block carries it; a later block counts a slot once its
+  pulse is committed.
+- **Local refusals.** A refusal the node cannot decide (World storage
+  admission, its proof profile, a pinned frame, the verifier backend or an
+  allocation) defers the block. Any other refusal of a listed item abandons it.
+- **Attempt creation.** `CreateAnonymousParliamentAttemptV1` and
+  `SubmitAnonymousParliamentTransitionV1` are tolerant instructions of the
+  addition, beside the credential registration.
+  - Any signer may create an attempt while fewer than `K` anonymous attempts
+    are nonterminal: the same committed `max_nonterminal_attempts` that bounds
+    open casting windows, so every admitted attempt has its casting position.
+    An attempt beyond the cap is refused before anything is written.
+  - Core selects the purpose: the release's qualification, or the genesis
+    candidate-testing selection, or none, which refuses the creation. The
+    identifier is the family's own derivation. A retry needs its exact
+    predecessor, terminal and not enacted (`Rejected`, `Superseded` or
+    `ExecutionFailed`), and inherits the redraw units it used.
+  - The pipeline is the proposal kind's baseline bodies followed by the
+    conditional Confirmation Jury, with the kind's risk tier. The policy is
+    frozen from the committed `gov.parliament_lifecycle` and
+    `gov.parliament_ballot` values, or their defaults while none is committed,
+    at the committed block cadence and the native pulse cadence; a chain
+    without that cadence creates no attempt. Core derives the proposal digest,
+    the effect hash and the compare-and-set head. `StartQualification` is due
+    at the creating block's time.
+  - Only the proposal's digest is kept. Production enactment (slice 5) needs
+    the proposal itself, so a qualified release must store it with its
+    attempt before it certifies a production attempt.
+- **Transitions.** Each transition passes its static rules first. Risk
+  escalation and the two early-close intents need `CanManageParliament`. The
+  two sortition registrations are permissionless; their snapshot is every
+  citizen whose bond is at least the attempt's frozen minimum, in account
+  order, at the containing height. A response, an absence or an endorsement is
+  the signer's own, and a binding seat is accepted only with its credential.
+  Creation and transitions cost their encoded bytes, as their baseline
+  counterparts do.
+- **Confirmation capacity.** A narrow Policy approval whose Confirmation
+  snapshot leaves fewer than three citizens, exceeds the V1 snapshot bounds or
+  finds the redraw budget spent ends the attempt
+  `ConfirmationJuryCapacityUnavailable`. The registration runs inside a
+  block-start closure, so it is never an error that would abandon every block
+  while the closure stays due.
+- **Open.**
+  - A due index bounded by `K`, rebuilt on restore: listing reads every
+    attempt and board, terminal ones included, and the admission cap counts
+    nonterminal attempts by reading the attempts table.
+  - A real-peer test: no network may activate the family before slice 4, so
+    the interfaces and the pass are tested on World rows only.
+  - Idle-chain progress: fee exemption (K3) of a keepalive justified by
+    Parliament work alone (fee admission refuses it today), the keeper's
+    next-governance-progress time and the read-only schedule projection.
+    Until then a block for Parliament work alone needs an ordinary
+    fee-paying transaction; its pass then applies the due work.
+  - Clients: a committed-transaction proof assumes a Network output's index
+    equals its input's index, which holds only in a block without governance
+    rows (slice 5).
+  - Production enactment in G3 (slice 5). This release certifies no
+    production attempt.
 
 ## 13. Required validation
 

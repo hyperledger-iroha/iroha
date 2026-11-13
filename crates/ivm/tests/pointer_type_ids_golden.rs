@@ -111,3 +111,30 @@ fn unassigned_numeric_pointer_id_is_unknown_and_never_allowed() {
         );
     }
 }
+
+#[test]
+fn named_runtime_lifecycle_profile_preserves_every_pointer_id_and_policy() {
+    use ivm::{PointerType, SyscallPolicy, is_type_allowed_for_policy, pointer_abi};
+    assert_eq!(
+        pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1RuntimeLifecycle),
+        pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1),
+    );
+    for pointer_type in PointerType::all() {
+        assert_eq!(
+            PointerType::from_u16(*pointer_type as u16),
+            Some(*pointer_type)
+        );
+        assert!(is_type_allowed_for_policy(
+            SyscallPolicy::AbiV1RuntimeLifecycle,
+            *pointer_type
+        ));
+    }
+    for unassigned in [0x000C, 0x0014, u16::MAX] {
+        assert_eq!(PointerType::from_u16(unassigned), None);
+        assert!(
+            !pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1RuntimeLifecycle)
+                .iter()
+                .any(|pointer_type| *pointer_type as u16 == unassigned)
+        );
+    }
+}

@@ -287,3 +287,55 @@ mod runtime_configuration_tests {
     use super::*;
     include!("runtime_configuration_tests.rs");
 }
+
+/// Original semantic configuration refusal while authenticating a pending checkpoint.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotReconciliationConfigError {
+    /// The restored checkpoint's committed pipeline policy is invalid.
+    #[error(transparent)]
+    Pipeline(#[from] crate::pipeline_validity_policy::PipelineValidityPolicyError),
+    /// The restored checkpoint's committed ZK policy or transition counts are invalid.
+    #[error(transparent)]
+    Zk(#[from] ZkConfigInstallError),
+    /// The original node governance settings cannot validate the restored frozen contexts.
+    #[error("checkpoint governance configuration: {0}")]
+    Governance(String),
+}
+
+impl State {
+    /// Install the live node's original settings into an isolated checkpoint reconstruction.
+    ///
+    /// Committed policy is always read from this reconstructed World, not from `source`'s
+    /// newer World. Preserve the original execution pool and process-wide caches, prover,
+    /// cryptographic defaults and telemetry. This never installs genesis owner bindings,
+    /// changes Kura geometry, or gives an unauthenticated decoded State publication authority.
+    /// Callers must still authenticate its exact complete State against certified history.
+    ///
+    /// # Errors
+    /// Validate all fallible semantic inputs before replacing any reconstructed settings.
+    pub(crate) fn install_snapshot_reconciliation_configuration(
+        &mut self,
+        source: &State,
+    ) -> Result<(), SnapshotReconciliationConfigError> {
+        self.world.parameters.view().pipeline_policy().validate()?;
+        let effective_zk = {
+            let parameters = self.world.parameters.view();
+            crate::zk_validity_policy::committed(&parameters)
+                .map_err(|_| ZkConfigInstallError::MalformedCommittedPolicy)?;
+            crate::zk_validity_policy::effective_zk(source.zk.clone(), &parameters)
+        };
+        self.validate_zk_install(&effective_zk)?;
+        self.validate_restored_governance(&source.gov)
+            .map_err(SnapshotReconciliationConfigError::Governance)?;
+
+        self.install_pipeline_settings(source.pipeline.clone(), ProcessRuntimeInstallation::Preserve);
+        // Share the original immutable crypto settings without re-installing process defaults.
+        *self.crypto.write() = source.crypto();
+        self.oracle = source.oracle.clone();
+        self.fraud_monitoring = source.fraud_monitoring.clone();
+        self.gov = source.gov.clone();
+        self.content = source.content.clone();
+        self.zk = source.zk.clone();
+        Ok(())
+    }
+}

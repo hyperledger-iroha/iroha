@@ -346,6 +346,39 @@ fn discarded_unprepared_execution_leaves_original_state_unchanged() {
 }
 
 #[test]
+fn dropped_durable_execution_recovers_only_from_original_certified_suffix() {
+    let mut chain = chain();
+    let state = Arc::clone(chain.state());
+    let kura = Arc::clone(chain.kura());
+    let proposal = chain.proposal(Some(2000), Vec::new());
+    let mut pending = chain
+        .begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::default())
+        .unwrap();
+    let expected_result = pending.result();
+    pending.prepare(Signers::Quorum).unwrap();
+    pending.append_prepared().unwrap();
+    assert_eq!(state.view().height(), 1);
+    assert_eq!(kura.blocks_count(), 2);
+    drop(pending);
+    let original_wire = kura
+        .canonical_block_wire_bytes_for_testing(std::num::NonZeroUsize::new(2).unwrap())
+        .unwrap();
+
+    chain.replay_durable_unobserved_suffix().unwrap();
+    assert_eq!(chain.height(), 2);
+    assert_eq!(state.view().height(), 2);
+    assert_eq!(chain.committed(2).result(), expected_result);
+    chain.replay_durable_unobserved_suffix().unwrap();
+    assert_eq!(chain.height(), 2, "an already observed durable suffix is inert");
+    assert_eq!(
+        kura.canonical_block_wire_bytes_for_testing(std::num::NonZeroUsize::new(2).unwrap())
+            .unwrap(),
+        original_wire,
+        "recovery never rewrites the original certified frame",
+    );
+}
+
+#[test]
 fn prepared_genesis_derives_then_enforces_both_signed_native_policies() {
     let prepared = CertifiedTestChain::prepare(TestChainConfig::new(World::new(), 1000)).unwrap();
     let topology = super::super::super::network_topology::Topology::new(

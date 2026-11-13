@@ -572,6 +572,33 @@ impl Core {
         });
     }
     pub(super) fn on_manifest(&mut self, manifest: PayloadManifest) {
+        // The control proposal may be lost while its signed availability metadata
+        // arrives. Recover it before stage-2 voting rather than discarding that
+        // authenticated evidence. At most one successful verification is needed
+        // per view; the ordinary request and recipient rate limits still apply.
+        #[cfg(not(sumeragi_mutation = "ML37"))]
+        if !self.manifest_hint
+            && !self.awaiting
+            && self.halted.is_none()
+            && self.proposal.is_none()
+            && self.my_index() != Some(self.rnd.leader())
+            && manifest.header.height == self.height
+            && manifest.header.origin_view == self.view
+            && manifest.header.proposer == self.rnd.leader()
+            && manifest.header.parent_hash == self.tip.block_hash
+            && manifest.header.parent_result == self.tip.result
+            && crate::availability::verify_manifest(
+                self.instance,
+                &self.cfg,
+                &manifest.header,
+                &manifest.availability,
+                &self.body_budget,
+                &*self.crypto,
+            )
+            .is_ok()
+        {
+            self.manifest_hint = true;
+        }
         let bh = manifest.hash(&*self.crypto);
         let Some(want) = self.wants.get(&bh) else {
             return;

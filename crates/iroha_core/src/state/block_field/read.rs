@@ -221,7 +221,6 @@ where
 
 impl<K: Key, V: Value, M: mv::storage::StorageMode<K, V>> StorageField<'_, K, V, M> {
     /// Borrow original undo rows without acquiring a view or reopening execution.
-    #[cfg(test)]
     pub(crate) fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
         match self.read_phase() {
             ReadPhase::Executing(block) => OriginalReadIter::Executing(block.revert_map().iter()),

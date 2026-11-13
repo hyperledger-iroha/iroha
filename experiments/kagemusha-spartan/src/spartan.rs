@@ -687,21 +687,13 @@ pub static COMMIT_SPLIT: std::sync::Mutex<[f64; 3]> = std::sync::Mutex::new([0.0
 /// Pallas; `ZKS_TABLE_WINDOW_P` / `ZKS_TABLE_WINDOW_S` override them.
 pub fn table_window<C: PastaCurve>() -> usize {
     let p = std::any::type_name::<C>() == std::any::type_name::<iroha_pasta::Eq>();
-    let (var, default) = if p {
-        ("ZKS_TABLE_WINDOW_P", 14)
-    } else {
-        ("ZKS_TABLE_WINDOW_S", 13)
-    };
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    if p { 14 } else { 13 }
 }
 
 /// Whether row commitments use the generators' fixed-base table (the
 /// default) or the variable-base column MSM (`ZKS_COMMIT=variable`).
 pub fn table_commits() -> bool {
-    std::env::var("ZKS_COMMIT").map_or(true, |v| v != "variable")
+    true
 }
 
 /// Table build time spent inside commits (first use per shape), seconds.
@@ -846,23 +838,15 @@ pub(crate) fn commit_rows_lanes<C: PastaCurve>(
     range: std::ops::Range<usize>,
     bounds: &[usize],
     blinds: &[F<C>],
-    helpers: bool,
+    _helpers: bool,
 ) -> Vec<Aff<C>> {
     let (cols, active) = (shape.cols(), shape.active_cols());
     let clock = Instant::now();
     // Second-phase rows (LogUp helpers): a row of few distinct values is
     // summed by value; the other rows go through the lanes as before.
-    let grouped: Vec<Option<C>> =
-        if helpers && !ipa::old_kernels() && std::env::var("ZKS_GROUPED").as_deref() != Ok("off") {
-            range
-                .clone()
-                .into_par_iter()
-                .with_max_len(1)
-                .map(|r| grouped_row_sum(gens, &w[r * cols..r * cols + active]))
-                .collect()
-        } else {
-            range.clone().map(|_| None).collect()
-        };
+    // Secret equality patterns are not an admissible grouping index. Every
+    // native row follows the bounded secret-scalar API, including LogUp rows.
+    let grouped: Vec<Option<C>> = range.clone().map(|_| None).collect();
     crate::prof::add("c.grouped", clock.elapsed().as_secs_f64());
     let lanes: Vec<(usize, &[F<C>])> = range
         .clone()
@@ -1330,6 +1314,7 @@ fn prove_inner<C: PastaCurve>(
     let mut t = Transcript::<C>::new(shape.label.as_bytes());
     header(&mut t, shape, &inst.io);
     let mut w = crate::prof::time("c.wclone", || wit.w.clone());
+    circuit.randomize_masks(&mut w, rng);
 
     // Hyrax rows: phase 1, then (after its challenges) phase 2.
     let clock = Instant::now();
@@ -1450,11 +1435,10 @@ fn prove_inner<C: PastaCurve>(
     let mut outer = Vec::new();
     let mut rx: Vec<Vec<F<C>>> = Vec::new();
     let mut position = 0;
-    let old_kernels = std::env::var("ZKS_KERN").as_deref() == Ok("old");
+    let old_kernels = ipa::old_kernels();
     // An honest prover's first outer round has zero Boolean points (the
     // relation holds on every row); `ZKS_OUTER=exact` computes them anyway.
-    let assume_satisfied =
-        cheat == Cheat::Honest && std::env::var("ZKS_OUTER").as_deref() != Ok("exact");
+    let assume_satisfied = cheat == Cheat::Honest;
     for (i, &k) in shape.outer_blocks().iter().enumerate() {
         let extender = Extender::new(k);
         let basis = crate::kern::Basis::new(k);

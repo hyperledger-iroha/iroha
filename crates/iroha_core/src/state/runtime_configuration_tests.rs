@@ -908,3 +908,85 @@ fn cold_execution_pool_handle_needs_no_cache_lock_or_thread_allocation() {
         });
     });
 }
+
+
+#[test]
+fn checkpoint_reconciliation_preserves_original_pool_and_installs_only_isolated_settings() {
+    run_runtime_configuration_test(|| {
+        let mut source = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        let mut restored = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        source.pipeline.cache_size = 7;
+        source.pipeline.ivm_execution_max_bytes = 1;
+        source.gov.max_conviction += 1;
+        let budget = restored.ivm_execution_budget();
+        let original_limit = budget.limit_bytes();
+        let held = budget.try_reserve_bytes(73).unwrap();
+        let before_reserved = budget.reserved_bytes();
+        let before_selection = restored.world.runtime_selection.view().get().clone();
+        restored.install_snapshot_reconciliation_configuration(&source).unwrap();
+        assert_eq!(restored.installed_pipeline().cache_size, 7);
+        assert_eq!(restored.gov.max_conviction, source.gov.max_conviction);
+        assert!(Arc::ptr_eq(&restored.crypto(), &source.crypto()));
+        assert!(held.belongs_to(&restored.ivm_execution_budget()));
+        assert_eq!(budget.limit_bytes(), original_limit, "source's stale local cap cannot resize the running pool");
+        assert_eq!(budget.reserved_bytes(), before_reserved);
+        let prepared = restored.pipeline_ivm_prepared_cache.read().clone();
+        assert!(held.belongs_to(prepared.execution_budget()));
+        assert_eq!(restored.world.runtime_selection.view().get(), &before_selection);
+        assert!(restored.world.provider_owners.view().iter().next().is_none());
+        assert_eq!(source.pipeline.ivm_execution_max_bytes, 1);
+    });
+}
+
+#[test]
+fn checkpoint_reconciliation_checks_restored_transition_counts_before_configuration_changes() {
+    run_runtime_configuration_test(|| {
+        let source = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        let mut restored = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        let maximum = source.zk_snapshot().policy_transition_max_per_height;
+        restored.world.confidential_policy_transition_counts.insert(41, maximum.get() + 1);
+        let before_crypto = restored.crypto();
+        let before_cache_size = restored.pipeline.cache_size;
+        let before_limit = restored.ivm_execution_budget().limit_bytes();
+        let result = restored.install_snapshot_reconciliation_configuration(&source);
+        assert!(matches!(result, Err(SnapshotReconciliationConfigError::Zk(
+            ZkConfigInstallError::ConfidentialPolicyTransitionLimitExceeded {
+                effective_height: 41, count, maximum: actual,
+            }
+        )) if count == maximum.get() + 1 && actual == maximum));
+        assert!(Arc::ptr_eq(&restored.crypto(), &before_crypto));
+        assert_eq!(restored.pipeline.cache_size, before_cache_size);
+        assert_eq!(restored.ivm_execution_budget().limit_bytes(), before_limit);
+    });
+}
+
+#[test]
+fn checkpoint_reconciliation_returns_governance_refusal_without_bootstrap_or_panic() {
+    run_runtime_configuration_test(|| {
+        let mut source = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        let mut restored = State::new_for_testing(
+            World::new(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+        );
+        source.gov.approval_threshold_q_den = 0;
+        source.pipeline.cache_size = 7;
+        let before_denominator = restored.gov.approval_threshold_q_den;
+        let before_cache_size = restored.pipeline.cache_size;
+        assert!(matches!(
+            restored.install_snapshot_reconciliation_configuration(&source),
+            Err(SnapshotReconciliationConfigError::Governance(_)),
+        ));
+        assert_eq!(restored.gov.approval_threshold_q_den, before_denominator);
+        assert_eq!(restored.pipeline.cache_size, before_cache_size);
+        assert!(restored.world.provider_owners.view().iter().next().is_none());
+    });
+}

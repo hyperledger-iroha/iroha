@@ -374,6 +374,12 @@ impl json::JsonSerialize for TimeTriggerRetryState {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         json::JsonSerialize::json_serialize(&encoded, out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_frame_base64_json_to(self, out)
+    }
 }
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for TimeTriggerRetryState {
@@ -394,6 +400,30 @@ impl<F> json::FastJsonWrite for LoadedAction<F>
 where
     F: json::JsonSerialize,
 {
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('{')?;
+        let mut first = true;
+        macro_rules! field { ($($name:ident),*) => {$(
+            if !first { out.push(',')?; }
+            first = false;
+            out.push_str(concat!("\"", stringify!($name), "\":"))?;
+            JsonSerializeTrait::json_serialize_to(&self.$name, out)?;
+        )*}; }
+        field!(
+            executable,
+            repeats,
+            authority,
+            filter,
+            retry_policy,
+            retry_state,
+            metadata
+        );
+        let _ = first;
+        out.push('}')
+    }
     fn write_json(&self, out: &mut String) {
         out.push('{');
         let mut first = true;
@@ -621,6 +651,14 @@ mod tests {
             "iroha_core::smartcontracts::isi::triggers::specialized::TimeTriggerRetryState",
         );
         let json = norito::json::to_json(&state).expect("retry state JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&state, json.len()).unwrap(),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&state, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let encoded: String = norito::json::from_json(&json).expect("base64 JSON field");
         let frame = base64::engine::general_purpose::STANDARD
             .decode(encoded)

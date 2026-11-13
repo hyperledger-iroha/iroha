@@ -1,14 +1,7 @@
-//! CPU register file: 256 general-purpose registers with optional privacy tags.
+//! CPU register file: 32 general-purpose registers with optional privacy tags.
 //!
-//! The register file implements the full set of helpers required by the
-//! specification, including lane-level accessors for vector registers.
-//!
-//! The original implementation exposed only 32 general purpose registers and a
-//! separate set of vector registers.  The updated architecture requires a much
-//! larger register file (256 entries) and associates a 1‑bit privacy tag with
-//! each register when zero–knowledge mode is active.  Vector operations no
-//! longer use a dedicated register file – instead groups of the general
-//! registers are interpreted as vectors.  This module implements that design.
+//! Each register carries a 1-bit privacy tag that is meaningful when
+//! zero-knowledge mode is active. `r0` is hardwired to zero.
 use crate::zk::{RegEvent, record_register_event};
 use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
 use iroha_allocation::{AllocationBudget, AllocationCharge};
@@ -22,11 +15,11 @@ use std::{
 mod fixed_path;
 pub use fixed_path::REGISTER_MERKLE_PATH_DEPTH;
 pub struct Registers {
-    /// 256 general purpose 64-bit registers. `r0` is hardwired to zero.
-    gpr: [u64; 256],
+    /// 32 general purpose 64-bit registers. `r0` is hardwired to zero.
+    gpr: [u64; REGISTER_COUNT],
     /// Privacy tags associated with each register. `false` denotes public data
     /// and `true` denotes private (secret) data.
-    tags: [bool; 256],
+    tags: [bool; REGISTER_COUNT],
     /// Merkle tree commitment to the register contents and tags (canonical type).
     tree: Mutex<crate::cache_memory::FixedAllocationValue<MerkleTree<[u8; 32]>>>,
     // Drop the node allocation above before refunding its original active charge.
@@ -148,15 +141,15 @@ impl Registers {
 
     fn initial_tree_layout() -> Result<Layout, VMError> {
         let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
-        let bytes = MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(256)
+        let bytes = MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(REGISTER_COUNT)
             .map_err(|_| unavailable())?;
         Layout::from_size_align(bytes, std::mem::align_of::<Option<HashOf<[u8; 32]>>>())
             .map_err(|_| unavailable())
     }
 
     fn try_new_with_charge(tree_charge: Option<AllocationCharge>) -> Result<Self, VMError> {
-        let gpr = [0u64; 256];
-        let tags = [false; 256];
+        let gpr = [0u64; REGISTER_COUNT];
+        let tags = [false; REGISTER_COUNT];
         let zero_leaf: [u8; 32] = {
             let b = [0u8; 9];
             Sha256::digest(b).into()
@@ -165,7 +158,7 @@ impl Registers {
         let requested = Self::initial_tree_allocation_bytes()?;
         let reservation = crate::cache_memory::MemoryReservation::active(requested);
         let tree = crate::cache_memory::FixedAllocationValue::from_pre_reserved(
-            MerkleTree::try_from_repeated_hashed_leaf_sha256(256, zero_leaf)
+            MerkleTree::try_from_repeated_hashed_leaf_sha256(REGISTER_COUNT, zero_leaf)
                 .map_err(|_| unavailable())?,
             reservation,
             MerkleTree::allocated_bytes,
@@ -184,8 +177,8 @@ impl Registers {
     /// The retained nodes are rewritten lazily: the next root or path read
     /// rebuilds them from these values, so a reset nobody reads hashes nothing.
     pub(crate) fn reset_to_zero(&mut self) {
-        self.gpr = [0; 256];
-        self.tags = [false; 256];
+        self.gpr = [0; REGISTER_COUNT];
+        self.tags = [false; REGISTER_COUNT];
         *self.dirty.get_mut() = true;
     }
 
@@ -201,7 +194,7 @@ impl Registers {
     /// Get the value of register `idx`.
     #[inline]
     pub fn get(&self, idx: usize) -> u64 {
-        debug_assert!(idx < 256);
+        debug_assert!(idx < REGISTER_COUNT);
         let val = self.gpr[idx];
         record_register_event(|| {
             let (root, path) = self
@@ -220,7 +213,7 @@ impl Registers {
     /// Set the value of register `idx`. Writes to x0 are ignored (x0 is always 0).
     #[inline]
     pub fn set(&mut self, idx: usize, value: u64) {
-        debug_assert!(idx < 256);
+        debug_assert!(idx < REGISTER_COUNT);
         if idx != 0 {
             self.gpr[idx] = value;
             // Exclusive access needs no atomic read-modify-write.
@@ -249,13 +242,13 @@ impl Registers {
     /// Get the privacy tag of register `idx`.
     #[inline]
     pub fn tag(&self, idx: usize) -> bool {
-        debug_assert!(idx < 256);
+        debug_assert!(idx < REGISTER_COUNT);
         self.tags[idx]
     }
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
     #[inline]
     pub fn set_tag(&mut self, idx: usize, value: bool) {
-        debug_assert!(idx < 256);
+        debug_assert!(idx < REGISTER_COUNT);
         if idx != 0 {
             self.tags[idx] = value;
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
@@ -286,7 +279,7 @@ impl Registers {
     /// cannot inject events. The caller uses this after the callback to publish
     /// only net changes to the VM that actually resumed execution.
     pub(crate) fn record_write_proof(&self, idx: usize) {
-        debug_assert!(idx < 256);
+        debug_assert!(idx < REGISTER_COUNT);
         if idx == 0 {
             return;
         }
@@ -323,12 +316,12 @@ impl Registers {
     }
     /// Return a copy of all general-purpose registers.
     #[inline]
-    pub fn snapshot(&self) -> [u64; 256] {
+    pub fn snapshot(&self) -> [u64; REGISTER_COUNT] {
         self.gpr
     }
     /// Return a copy of all privacy tags.
     #[inline]
-    pub fn snapshot_tags(&self) -> [bool; 256] {
+    pub fn snapshot_tags(&self) -> [bool; REGISTER_COUNT] {
         self.tags
     }
     /// Return the Merkle root of the register file.
@@ -360,7 +353,7 @@ impl Registers {
         let siblings = proof.siblings().to_vec();
         let merkle_proof = MerkleProof::from_audit_path(proof.dirs(), siblings);
         // A depth cap commits only to this path fragment. It is deliberately
-        // not treated as membership in the fixed 256-leaf register tree.
+        // not treated as membership in the fixed 32-leaf register tree.
         let adj_root = if usize::from(proof.depth()) < path.len() {
             merkle_proof
                 .compute_partial_root_sha256(&leaf_hash, usize::from(proof.depth()))
@@ -405,7 +398,10 @@ fn register_leaf_index(idx: usize) -> Result<u32, VMError> {
     }
     u32::try_from(idx).map_err(|_| VMError::RegisterOutOfBounds)
 }
-fn register_leaf_digests(gpr: &[u64; 256], tags: &[bool; 256]) -> [[u8; 32]; 256] {
+fn register_leaf_digests(
+    gpr: &[u64; REGISTER_COUNT],
+    tags: &[bool; REGISTER_COUNT],
+) -> [[u8; 32]; REGISTER_COUNT] {
     std::array::from_fn(|index| register_leaf_digest(gpr[index], tags[index]))
 }
 #[cfg(test)]
@@ -484,11 +480,11 @@ mod tests {
     fn fallible_initial_register_tree_matches_canonical_root_and_capacity() {
         let regs = Registers::try_new().expect("initial register allocation fits test host");
         let zero_leaf: [u8; 32] = Sha256::digest([0_u8; 9]).into();
-        let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![zero_leaf; 256]);
+        let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![zero_leaf; REGISTER_COUNT]);
         let tree = regs.tree.lock();
         assert_eq!(tree.root(), canonical.root());
         assert_eq!(tree.allocated_bytes(), canonical.allocated_bytes());
-        assert_eq!(tree.leaf_count(), 256);
+        assert_eq!(tree.leaf_count(), REGISTER_COUNT);
     }
 
     #[test]
@@ -496,16 +492,16 @@ mod tests {
         let mut regs = Registers::new();
         regs.set(2, 0xfeed_face_dead_beef);
         regs.set_tag(2, true);
-        regs.set(200, 0x0123_4567_89ab_cdef);
-        regs.set_tag(200, true);
+        regs.set(30, 0x0123_4567_89ab_cdef);
+        regs.set_tag(30, true);
         regs.set(7, 0x55aa);
 
         regs.scrub_private();
 
         assert_eq!(regs.get(2), 0);
         assert!(!regs.tag(2));
-        assert_eq!(regs.get(200), 0);
-        assert!(!regs.tag(200));
+        assert_eq!(regs.get(30), 0);
+        assert!(!regs.tag(30));
         assert_eq!(regs.get(7), 0x55aa);
         assert!(!regs.tag(7));
         assert!(!regs.has_private());
@@ -531,16 +527,16 @@ mod tests {
         let mut regs = Registers::new();
         reset_register_leaf_digest_count();
         for value in 1..=1_000_u64 {
-            let index = (value as usize % 255) + 1;
+            let index = (value as usize % (REGISTER_COUNT - 1)) + 1;
             regs.set(index, value);
             regs.set_tag(index, value.is_multiple_of(2));
         }
         assert_eq!(register_leaf_digest_count(), 0);
 
         let first_root = regs.merkle_root();
-        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
         assert_eq!(regs.merkle_root(), first_root);
-        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
     }
     #[test]
     fn cloning_reuses_a_clean_tree_and_rebuilds_a_dirty_tree_once() {
@@ -552,9 +548,9 @@ mod tests {
 
         regs.set(7, 42);
         let dirty = regs.clone();
-        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
         assert_eq!(dirty.merkle_root(), regs.merkle_root());
-        assert_eq!(register_leaf_digest_count(), 512);
+        assert_eq!(register_leaf_digest_count(), 2 * REGISTER_COUNT);
     }
     #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {
@@ -599,10 +595,10 @@ mod tests {
         assert_eq!(worker.snapshot(), template.snapshot());
         assert_eq!(worker.snapshot_tags(), template.snapshot_tags());
         assert_eq!(worker.merkle_root(), template_root);
-        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
 
         worker.reset_to_zero();
-        assert_eq!(register_leaf_digest_count(), 256);
+        assert_eq!(register_leaf_digest_count(), REGISTER_COUNT);
         assert_eq!(worker.merkle_root(), zero_root);
         let (root, path) = worker.merkle_root_and_path(9).unwrap();
         let canonical = canonical_root_and_path(&worker, 9);

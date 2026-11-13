@@ -726,6 +726,18 @@ fn meter_instruction_without_proof_attachment(
     >() {
         return gas_for_parliament_credential_registration(registration);
     }
+    // An anonymous attempt's creation and its account-signed transitions cost their encoded
+    // bytes, as their baseline counterparts do: none verifies a proof.
+    if let Some(create) = any.downcast_ref::<
+        iroha_data_model::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1,
+    >() {
+        return parliament_encoded_input_gas(create.encode().len());
+    }
+    if let Some(transition) = any.downcast_ref::<
+        iroha_data_model::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1,
+    >() {
+        return parliament_encoded_input_gas(transition.encode().len());
+    }
     if let Some(gas) = sccp_instruction_gas(any) {
         return gas;
     }

@@ -240,14 +240,13 @@ pub const COMPONENTS: &[ProofComponent] = &[
             cov!(control::BGEU),
             cov!(control::JAL, "rd = r0 only; linked calls are excluded"),
             cov!(control::JMP),
-            cov!(system::GETGAS),
         ],
         referenced_opcodes: &[
             "ABS", "ADD", "AND", "BEQ", "BGE", "BGEU", "BLT", "BLTU", "BNE", "CLZ", "CMOV",
-            "CMOVI", "CTZ", "DIV", "DIVU", "DIV_CEIL", "GCD", "GETGAS", "ISQRT", "JAL", "JMP",
-            "MAX", "MEAN", "MIN", "MUL", "MULH", "MULHSU", "MULHU", "NEG", "NOT", "OR", "POPCNT",
-            "REM", "REMU", "ROTL", "ROTL_IMM", "ROTR", "ROTR_IMM", "SEQ", "SLL", "SLT", "SLTU",
-            "SNE", "SRA", "SRL", "SUB", "XOR",
+            "CMOVI", "CTZ", "DIV", "DIVU", "DIV_CEIL", "GCD", "ISQRT", "JAL", "JMP", "MAX", "MEAN",
+            "MIN", "MUL", "MULH", "MULHSU", "MULHU", "NEG", "NOT", "OR", "POPCNT", "REM", "REMU",
+            "ROTL", "ROTL_IMM", "ROTR", "ROTR_IMM", "SEQ", "SLL", "SLT", "SLTU", "SNE", "SRA",
+            "SRL", "SUB", "XOR",
         ],
         traps: &[VmTrapKind::AssertionFailed, VmTrapKind::OutOfGas],
         restrictions: &[
@@ -422,14 +421,13 @@ pub const COMPONENTS: &[ProofComponent] = &[
             ),
             cov!(control::JMP),
             cov!(control::JALS),
-            cov!(system::GETGAS),
         ],
         referenced_opcodes: &[
             "ABS", "ADD", "AND", "BEQ", "BGE", "BGEU", "BLT", "BLTU", "BNE", "CLZ", "CMOV",
-            "CMOVI", "CTZ", "DIV", "DIVU", "DIV_CEIL", "GCD", "GETGAS", "ISQRT", "JAL", "JALR",
-            "JALS", "JMP", "LDI64", "LOAD64", "MAX", "MEAN", "MIN", "MUL", "MULH", "MULHSU",
-            "MULHU", "NEG", "NOT", "OR", "POPCNT", "REM", "REMU", "ROTL", "ROTL_IMM", "ROTR",
-            "ROTR_IMM", "SEQ", "SLL", "SLT", "SLTU", "SNE", "SRA", "SRL", "STORE64", "SUB", "XOR",
+            "CMOVI", "CTZ", "DIV", "DIVU", "DIV_CEIL", "GCD", "ISQRT", "JAL", "JALR", "JALS",
+            "JMP", "LDI64", "LOAD64", "MAX", "MEAN", "MIN", "MUL", "MULH", "MULHSU", "MULHU",
+            "NEG", "NOT", "OR", "POPCNT", "REM", "REMU", "ROTL", "ROTL_IMM", "ROTR", "ROTR_IMM",
+            "SEQ", "SLL", "SLT", "SLTU", "SNE", "SRA", "SRL", "STORE64", "SUB", "XOR",
         ],
         traps: &[],
         restrictions: &[
@@ -527,16 +525,8 @@ pub const COMPONENTS: &[ProofComponent] = &[
                 memory::STORE64,
                 "aligned store as a successful private step"
             ),
-            cov!(
-                memory::LOAD128,
-                "conditional bank equations only; not composed into a dispatcher role"
-            ),
-            cov!(
-                memory::STORE128,
-                "conditional bank equations only; not composed into a dispatcher role"
-            ),
         ],
-        referenced_opcodes: &["LOAD128", "LOAD64", "STORE128", "STORE64"],
+        referenced_opcodes: &["LOAD64", "STORE64"],
         traps: &[],
         restrictions: &[
             "conditional post-read and aligned-store equations with no request authority",

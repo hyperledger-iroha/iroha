@@ -316,7 +316,8 @@ internal static class ToriiContractManifestJson
         var accessSetHints = OptionalObject(root, "access_set_hints", $"{context}.access_set_hints")
             is { } access ? ParseAccessSetHints(access, $"{context}.access_set_hints") : null;
         var featuresBitmap = OptionalUInt64(root, "features_bitmap", $"{context}.features_bitmap");
-        if (featuresBitmap is > 3)
+        // ZK (bit 0) is the only Kotodama V1 capability bit.
+        if (featuresBitmap is > 1)
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
@@ -1760,7 +1761,7 @@ internal static class ToriiContractManifestJson
             throw new JsonException($"{context}.seiyaku_name must be a canonical Kotodama declaration identifier.");
         }
         ValidateExactStringOptional(value.CompilerFingerprint, $"{context}.compiler_fingerprint");
-        if (value.FeaturesBitmap is > 3)
+        if (value.FeaturesBitmap is > 1)
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }

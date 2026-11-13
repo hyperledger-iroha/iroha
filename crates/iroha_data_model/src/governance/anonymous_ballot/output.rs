@@ -21,30 +21,36 @@
 //! clock row is at most [`CASTING_CLOCK_ROW_MAX_BYTES_V1`] bytes. Even all sixteen mandatory
 //! prelude rows leave room for one maximal item.
 //!
-//! TODO: the Core integration adds `ExecutionOutputV1::GovernanceBlockStart` carrying
-//! [`GovernanceBlockStartOutputV1`] and `ExecutionOutputPhase::GovernanceStart`, ordered
-//! before the Network, Pipeline and Time rows, reserves the partition before mutation
-//! (mandatory prelude capacity included) so that state mutation and publication commit or
-//! roll back together, validates the genesis output and executed-wire envelopes against the
-//! partition in addition to the existing mandatory capacities, and measures each limit on the
-//! complete `ExecutionOutputV1` row frame.
+//! `ExecutionOutputV1::GovernanceBlockStart` carries one output, in
+//! `ExecutionOutputPhase::GovernanceStart` before the Network, Pipeline and Time rows.
+//! Every limit above is measured on the complete `ExecutionOutputV1` row frame
+//! (`block::output_budget::GovernanceStartOutputBudgetV1`), and the genesis and
+//! executed-wire envelopes are validated against the partition
+//! (`block::execution_output::validate_execution_outputs_v1`).
 //!
-//! TODO: the compact `LifecycleApplied` and `NativeSlotAdvanced` receipt events of every
-//! positioned Parliament item (the item, the affected entities, their resulting statuses and
-//! the relevant state and evidence digests, never candidate snapshots; one receipt covering
-//! all atomic effects of a composite item) are defined with Core's pass item types in the
-//! next integration phase, as further [`GovernanceBlockStartEventV1`] variants.
+//! Every positioned Parliament item emits a compact receipt first
+//! ([`LifecycleAppliedV1`]): the item, its attempt, the attempt's resulting status and stage
+//! and the digests of the attempt State and of the ballot board it left, never a candidate
+//! snapshot. One receipt covers every atomic effect of a composite item. The height-progress
+//! ticket emits [`NativeSlotAdvancedV1`].
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use super::{
-    BallotBodyContextV1, BallotClosureRecordV1, BallotScopeV1, Digest512,
-    SealedCredentialListBytesV1,
+    AdvanceToNativeSlotErrorV1, AdvanceToNativeSlotV1, BallotBodyContextV1, BallotClosureRecordV1,
+    BallotScopeV1, Digest512, SealedCredentialListBytesV1,
 };
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
-    governance::{GovernanceAnchorV1, types::BodyInstanceId},
+    governance::{
+        GovernanceAnchorV1,
+        types::{
+            BodyElectionAttemptId, BodyInstanceId, DeliberationPhaseV1, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentBody,
+        },
+    },
+    parameter::parliament_ballot::ParliamentBallotParametersV1,
 };
 
 /// Complete encoded row bytes of the governance-start output partition of one block.
@@ -65,6 +71,13 @@ pub const LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1: u64 = 16_384;
 /// Rows one positioned Parliament item may emit: one lifecycle receipt, then one richer
 /// ballot output.
 pub const GOVERNANCE_START_ROWS_PER_ITEM_V1: u32 = 2;
+
+/// Casting clocks the prelude of one block may establish: one per casting window opened in
+/// the parent block, at most the ceiling of `K`.
+// `u32::from` is not callable in a constant; the cast widens `u16`.
+#[allow(clippy::cast_lossless)]
+pub const GOVERNANCE_START_PRELUDE_ROWS_V1: u32 =
+    ParliamentBallotParametersV1::MAX_NONTERMINAL_ATTEMPTS as u32;
 
 /// Where a governance block-start output happened.
 #[derive(
@@ -142,6 +155,10 @@ pub enum GovernanceBlockStartOutputErrorV1 {
     /// Only a casting-clock establishment may carry the prelude anchor.
     #[error("only CastingClockEstablished may carry the casting-clock prelude anchor")]
     PreludeAnchorForPassEvent,
+    /// A height-progress receipt records a ticket that is not well formed, or one of
+    /// another height.
+    #[error("NativeSlotAdvanced does not record the ticket of its block")]
+    HeightProgressTicket,
 }
 
 /// The G2a sealing transition published the canonical sealed list.
@@ -240,6 +257,207 @@ pub struct CastingClockEstablishedV1 {
     pub closing_ms: u64,
 }
 
+/// A positioned Parliament item of the block-start pass, with the occurrence it applied to
+/// (design §8.1). The variant order is the order of the pass.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(
+    tag = "kind",
+    content = "detail",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[norito_schema(name = "iroha_data_model::governance::anonymous_ballot::GovernanceLifecycleItemV1")]
+pub enum GovernanceLifecycleItemV1 {
+    /// G1: one generation drew every body of it from the pulse of its exact slot.
+    #[codec(index = 0)]
+    DrawGeneration {
+        /// The generation's slot.
+        slot: u64,
+    },
+    /// G2a rank 0: the qualification window was anchored.
+    #[codec(index = 1)]
+    StartQualification,
+    /// G2a rank 0: qualification ended.
+    #[codec(index = 2)]
+    EndQualification,
+    /// G2a rank 0: the current body left `phase`.
+    #[codec(index = 3)]
+    AdvancePhase {
+        /// The current body.
+        body: ParliamentBody,
+        /// The phase it left.
+        phase: DeliberationPhaseV1,
+    },
+    /// G2a rank 1: the capacity evidence of `slot` left no retry.
+    #[codec(index = 4)]
+    RejectExhausted {
+        /// The slot of the exhausting evidence.
+        slot: u64,
+    },
+    /// G2a rank 1: invitations of `election` closed.
+    #[codec(index = 5)]
+    CloseInvitations {
+        /// The body.
+        body: ParliamentBody,
+        /// Its drawn election.
+        election: BodyElectionAttemptId,
+    },
+    /// G2a rank 2: the public body's sealed `instance` concluded.
+    #[codec(index = 6)]
+    ConcludeFinding {
+        /// The body.
+        body: ParliamentBody,
+        /// Its sealed instance.
+        instance: BodyInstanceId,
+    },
+    /// G2b: the binding jury's ballot closed.
+    #[codec(index = 7)]
+    CloseBallot {
+        /// The jury.
+        body: ParliamentBody,
+    },
+    /// G2c: the binding jury's ballot opened.
+    #[codec(index = 8)]
+    OpenBallot {
+        /// The jury.
+        body: ParliamentBody,
+    },
+}
+
+/// The ballot board a positioned item stored or changed, as the item left it.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::governance::anonymous_ballot::LifecycleBoardDigestV1")]
+pub struct LifecycleBoardDigestV1 {
+    /// The board's ballot scope.
+    pub scope: BallotScopeV1,
+    /// `H(Frame("PARL/BOARD-RECORD/v1"; Enc(board_record)))` of the stored record.
+    pub record_digest: Digest512,
+}
+
+/// The compact receipt of one positioned Parliament item: what it was, and what it left. It
+/// covers every atomic effect of a composite item and never carries a candidate snapshot.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::governance::anonymous_ballot::LifecycleAppliedV1")]
+pub struct LifecycleAppliedV1 {
+    /// The attempt the item belongs to.
+    pub governance_attempt_id: GovernanceAttemptId,
+    /// The item and the occurrence it applied to.
+    pub item: GovernanceLifecycleItemV1,
+    /// The attempt's status after the item.
+    pub status: GovernanceAttemptStatusV1,
+    /// The attempt's stage after the item.
+    pub stage: GovernanceStageV1,
+    /// `H(Frame("PARL/ATTEMPT-STATE/v1"; Enc(attempt_state)))` of the attempt State the item
+    /// left.
+    pub attempt_state_digest: Digest512,
+    /// The board the item stored or changed; absent when it touched none.
+    #[norito(required)]
+    pub board: Option<LifecycleBoardDigestV1>,
+}
+
+/// The height-progress ticket of a pass was consumed (design §9): the cursor advanced one
+/// height towards the nearest admitted slot.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::governance::anonymous_ballot::NativeSlotAdvancedV1")]
+pub struct NativeSlotAdvancedV1 {
+    /// The nearest unresolved requested native slot above the parent height.
+    pub target_height: u64,
+    /// The parent height.
+    pub cursor_height: u64,
+    /// The height the ticket advanced to: the height of the block that consumed it.
+    pub ticket_height: u64,
+}
+
+impl NativeSlotAdvancedV1 {
+    /// The receipt of the consumed `ticket`.
+    #[must_use]
+    pub const fn of(ticket: AdvanceToNativeSlotV1) -> Self {
+        Self {
+            target_height: ticket.target_height,
+            cursor_height: ticket.cursor_height,
+            ticket_height: ticket.ticket_height,
+        }
+    }
+
+    /// The ticket this receipt records.
+    #[must_use]
+    pub const fn ticket(&self) -> AdvanceToNativeSlotV1 {
+        AdvanceToNativeSlotV1 {
+            target_height: self.target_height,
+            cursor_height: self.cursor_height,
+            ticket_height: self.ticket_height,
+        }
+    }
+
+    /// Check that the receipt records a well-formed ticket.
+    ///
+    /// # Errors
+    /// The [`AdvanceToNativeSlotErrorV1`] of the violated rule.
+    pub fn validate(&self) -> Result<(), AdvanceToNativeSlotErrorV1> {
+        self.ticket().validate()
+    }
+}
+
 /// One committed anonymous-ballot block-start event.
 #[expect(
     clippy::large_enum_variant,
@@ -281,6 +499,24 @@ pub enum GovernanceBlockStartEventV1 {
     /// The ballot closed (G2b) with this record.
     #[codec(index = 3)]
     BallotClosed(BallotClosureRecordV1),
+    /// The receipt of one positioned Parliament item (G1 to G2c).
+    #[codec(index = 4)]
+    LifecycleApplied(LifecycleAppliedV1),
+    /// The receipt of the consumed height-progress ticket (G1).
+    #[codec(index = 5)]
+    NativeSlotAdvanced(NativeSlotAdvancedV1),
+}
+
+impl GovernanceBlockStartEventV1 {
+    /// Whether the event is the compact receipt of a positioned item: the first row of its
+    /// position.
+    #[must_use]
+    pub const fn is_receipt(&self) -> bool {
+        matches!(
+            self,
+            Self::LifecycleApplied(_) | Self::NativeSlotAdvanced(_)
+        )
+    }
 }
 
 /// One committed governance block-start output: where it happened and what happened.
@@ -327,18 +563,31 @@ impl GovernanceBlockStartOutputV1 {
             (false, GovernanceOutputAnchorV1::CastingClockPrelude { .. }) => {
                 Err(GovernanceBlockStartOutputErrorV1::PreludeAnchorForPassEvent)
             }
-            _ => Ok(()),
+            _ => match &self.event {
+                GovernanceBlockStartEventV1::NativeSlotAdvanced(advanced)
+                    if advanced.validate().is_err()
+                        || advanced.ticket_height != self.anchor.height() =>
+                {
+                    Err(GovernanceBlockStartOutputErrorV1::HeightProgressTicket)
+                }
+                _ => Ok(()),
+            },
         }
     }
 
     /// The largest complete row this output's event may occupy:
-    /// [`CASTING_CLOCK_ROW_MAX_BYTES_V1`] for a casting clock and
+    /// [`CASTING_CLOCK_ROW_MAX_BYTES_V1`] for a casting clock,
+    /// [`LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1`] for a receipt and
     /// [`GOVERNANCE_START_ROW_MAX_BYTES_V1`] for every other event.
     #[must_use]
     pub const fn row_cap_bytes(&self) -> u64 {
         match self.event {
             GovernanceBlockStartEventV1::CastingClockEstablished(_) => {
                 CASTING_CLOCK_ROW_MAX_BYTES_V1
+            }
+            GovernanceBlockStartEventV1::LifecycleApplied(_)
+            | GovernanceBlockStartEventV1::NativeSlotAdvanced(_) => {
+                LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1
             }
             _ => GOVERNANCE_START_ROW_MAX_BYTES_V1,
         }
@@ -349,7 +598,7 @@ impl GovernanceBlockStartOutputV1 {
 mod tests {
     use super::*;
     use crate::governance::anonymous_ballot::{
-        BALLOT_CONTEXT_MAX_BYTES_V1, MAX_SEALED_SEATS_V1, ParliamentBallotParametersV1,
+        BALLOT_CONTEXT_MAX_BYTES_V1, MAX_SEALED_SEATS_V1,
         framing::{decode_enc, enc},
         test_fixtures::{anchor, body_context, closure, sealed_list},
     };
@@ -378,6 +627,20 @@ mod tests {
             registration_mapping_digest: Digest512::new([0x04; 64]),
             sealed_list_bytes: SealedCredentialListBytesV1::from_list(&sealed_list(seats))
                 .expect("publish"),
+        }
+    }
+
+    fn receipt(item: GovernanceLifecycleItemV1) -> LifecycleAppliedV1 {
+        LifecycleAppliedV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x21; 32]),
+            item,
+            status: GovernanceAttemptStatusV1::Active,
+            stage: GovernanceStageV1::default(),
+            attempt_state_digest: Digest512::new([0x5c; 64]),
+            board: Some(LifecycleBoardDigestV1 {
+                scope: BallotScopeV1::new([0x44; 64]),
+                record_digest: Digest512::new([0x6d; 64]),
+            }),
         }
     }
 
@@ -410,6 +673,22 @@ mod tests {
             GovernanceBlockStartOutputV1 {
                 anchor: pass(90_000, 0, 87_401_500),
                 event: GovernanceBlockStartEventV1::BallotClosed(closure(9, 6, 2, 1)),
+            },
+            GovernanceBlockStartOutputV1 {
+                anchor: pass(90_000, 0, 87_401_500),
+                event: GovernanceBlockStartEventV1::LifecycleApplied(receipt(
+                    GovernanceLifecycleItemV1::CloseBallot {
+                        body: ParliamentBody::PolicyJury,
+                    },
+                )),
+            },
+            GovernanceBlockStartOutputV1 {
+                anchor: pass(64, 0, 640_000),
+                event: GovernanceBlockStartEventV1::NativeSlotAdvanced(NativeSlotAdvancedV1 {
+                    target_height: 99,
+                    cursor_height: 63,
+                    ticket_height: 64,
+                }),
             },
         ]
     }
@@ -535,6 +814,23 @@ mod tests {
                 anchor: pass(u64::MAX, u32::MAX, u64::MAX),
                 event: GovernanceBlockStartEventV1::BallotClosed(closure(1_000, 400, 267, 0)),
             },
+            GovernanceBlockStartOutputV1 {
+                anchor: pass(u64::MAX, u32::MAX, u64::MAX),
+                event: GovernanceBlockStartEventV1::LifecycleApplied(receipt(
+                    GovernanceLifecycleItemV1::CloseInvitations {
+                        body: ParliamentBody::ConfirmationJury,
+                        election: BodyElectionAttemptId::new([0xff; 32]),
+                    },
+                )),
+            },
+            GovernanceBlockStartOutputV1 {
+                anchor: pass(u64::MAX, u32::MAX, u64::MAX),
+                event: GovernanceBlockStartEventV1::NativeSlotAdvanced(NativeSlotAdvancedV1 {
+                    target_height: u64::MAX,
+                    cursor_height: u64::MAX - 1,
+                    ticket_height: u64::MAX,
+                }),
+            },
         ];
         for output in &largest {
             let bytes = frame_len(output);
@@ -546,6 +842,11 @@ mod tests {
             assert!(bytes + ROW_FRAMING_MARGIN <= GOVERNANCE_START_ROW_MAX_BYTES_V1);
         }
         assert_eq!(largest[2].row_cap_bytes(), CASTING_CLOCK_ROW_MAX_BYTES_V1);
+        for receipt in &largest[4..] {
+            assert!(receipt.event.is_receipt());
+            assert_eq!(receipt.row_cap_bytes(), LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1);
+        }
+        assert!(largest[..4].iter().all(|output| !output.event.is_receipt()));
         // Even a list frame at the full context cap would fit a governance row.
         let list_bytes = u64::try_from(
             published(MAX_SEALED_SEATS_V1)
@@ -562,10 +863,102 @@ mod tests {
     }
 
     #[test]
+    fn a_height_progress_receipt_records_the_ticket_of_its_own_block() {
+        let advanced = NativeSlotAdvancedV1 {
+            target_height: 99,
+            cursor_height: 63,
+            ticket_height: 64,
+        };
+        assert_eq!(
+            NativeSlotAdvancedV1::of(advanced.ticket()),
+            advanced,
+            "the receipt and the derived ticket carry the same three heights"
+        );
+        let output = |height, advanced| GovernanceBlockStartOutputV1 {
+            anchor: pass(height, 0, 640_000),
+            event: GovernanceBlockStartEventV1::NativeSlotAdvanced(advanced),
+        };
+        assert_eq!(output(64, advanced).validate(), Ok(()));
+        for (height, advanced) in [
+            // Another block's ticket.
+            (65, advanced),
+            // A ticket that skips a height.
+            (
+                65,
+                NativeSlotAdvancedV1 {
+                    ticket_height: 65,
+                    ..advanced
+                },
+            ),
+            // A ticket beyond its target.
+            (
+                64,
+                NativeSlotAdvancedV1 {
+                    target_height: 63,
+                    ..advanced
+                },
+            ),
+        ] {
+            assert_eq!(
+                output(height, advanced).validate(),
+                Err(GovernanceBlockStartOutputErrorV1::HeightProgressTicket)
+            );
+        }
+    }
+
+    #[test]
+    fn a_lifecycle_receipt_names_every_item_kind_with_a_stable_index() {
+        let body = ParliamentBody::PolicyJury;
+        let items = [
+            GovernanceLifecycleItemV1::DrawGeneration { slot: 7 },
+            GovernanceLifecycleItemV1::StartQualification,
+            GovernanceLifecycleItemV1::EndQualification,
+            GovernanceLifecycleItemV1::AdvancePhase {
+                body,
+                phase: DeliberationPhaseV1::default(),
+            },
+            GovernanceLifecycleItemV1::RejectExhausted { slot: 7 },
+            GovernanceLifecycleItemV1::CloseInvitations {
+                body,
+                election: BodyElectionAttemptId::new([0x31; 32]),
+            },
+            GovernanceLifecycleItemV1::ConcludeFinding {
+                body,
+                instance: BodyInstanceId::new([0x32; 32]),
+            },
+            GovernanceLifecycleItemV1::CloseBallot { body },
+            GovernanceLifecycleItemV1::OpenBallot { body },
+        ];
+        for (index, item) in items.into_iter().enumerate() {
+            assert_eq!(
+                item.encode()[..4],
+                u32::try_from(index).expect("small").to_le_bytes()
+            );
+            let applied = LifecycleAppliedV1 {
+                board: None,
+                ..receipt(item)
+            };
+            assert_eq!(
+                decode_enc::<LifecycleAppliedV1>(&enc(&applied).expect("enc")),
+                Ok(applied)
+            );
+            let json = norito::json::to_json(&applied).expect("json");
+            assert_eq!(
+                norito::json::from_str::<LifecycleAppliedV1>(&json).expect("json"),
+                applied
+            );
+        }
+    }
+
+    #[test]
     fn the_partition_holds_every_prelude_row_and_one_maximal_item() {
         // At most K <= 16 casting clocks are established per block; one maximal positioned
         // item adds a receipt and a full governance row.
-        const PRELUDE_ROWS: u64 = ParliamentBallotParametersV1::MAX_NONTERMINAL_ATTEMPTS as u64;
+        const PRELUDE_ROWS: u64 = GOVERNANCE_START_PRELUDE_ROWS_V1 as u64;
+        assert_eq!(
+            PRELUDE_ROWS,
+            u64::from(ParliamentBallotParametersV1::MAX_NONTERMINAL_ATTEMPTS)
+        );
         const {
             assert!(
                 PRELUDE_ROWS * CASTING_CLOCK_ROW_MAX_BYTES_V1

@@ -19,16 +19,8 @@ pub enum OpcodeFamily {
     Memory,
     /// Branches, jumps, protected calls, returns and halt.
     Control,
-    /// Gas introspection and host calls.
+    /// Host calls.
     System,
-    /// Vector register operations and vector length selection.
-    Vector,
-    /// Parallel-section markers.
-    Parallel,
-    /// Cryptographic precompile opcodes.
-    Crypto,
-    /// Field arithmetic and assertion helpers for ZK mode.
-    Zk,
 }
 
 impl OpcodeFamily {
@@ -40,10 +32,6 @@ impl OpcodeFamily {
             Self::Memory => "memory",
             Self::Control => "control",
             Self::System => "system",
-            Self::Vector => "vector",
-            Self::Parallel => "parallel",
-            Self::Crypto => "crypto",
-            Self::Zk => "zk",
         }
     }
 }
@@ -59,16 +47,6 @@ pub enum StepEffect {
     Control,
     /// A host syscall selected by the instruction word.
     HostCall,
-    /// Vector registers.
-    VectorRegisters,
-    /// Logical vector length.
-    VectorLength,
-    /// Parallel-section marker with no state change.
-    ParallelMarker,
-    /// Cryptographic primitive over registers or memory.
-    CryptographicPrimitive,
-    /// Field arithmetic or a recorded assertion.
-    ZkFieldOrAssertion,
 }
 
 impl StepEffect {
@@ -80,11 +58,6 @@ impl StepEffect {
             Self::MemoryAndRegisters => "memory_and_registers",
             Self::Control => "control",
             Self::HostCall => "host_call",
-            Self::VectorRegisters => "vector_registers",
-            Self::VectorLength => "vector_length",
-            Self::ParallelMarker => "parallel_marker",
-            Self::CryptographicPrimitive => "cryptographic_primitive",
-            Self::ZkFieldOrAssertion => "zk_field_or_assertion",
         }
     }
 }
@@ -103,8 +76,6 @@ pub enum PcTransition {
     DirectRelative24,
     /// Signed 24-bit word offset, link in `r1` and a protected child call.
     DirectRelative24AndLink,
-    /// `JR`: register target; traps under protected return integrity.
-    IndirectRegisterOrStrictTrap,
     /// `JALR`: masked register target; the protected canonical form returns
     /// and may halt at the outer sentinel.
     IndirectMaskedOrProtectedReturn,
@@ -122,7 +93,6 @@ impl PcTransition {
             Self::DirectRelative16WithOptionalLink => "direct_relative16_with_optional_link",
             Self::DirectRelative24 => "direct_relative24",
             Self::DirectRelative24AndLink => "direct_relative24_and_link",
-            Self::IndirectRegisterOrStrictTrap => "indirect_register_or_strict_trap",
             Self::IndirectMaskedOrProtectedReturn => "indirect_masked_or_protected_return",
             Self::HaltOrStrictReturnTrap => "halt_or_strict_return_trap",
         }
@@ -170,20 +140,17 @@ impl OpcodeEntry {
 }
 
 /// Register-tag accessors an interpreter arm can call directly: `tag` reads a
-/// scalar or vector register tag and `set_tag` writes one.
+/// register tag and `set_tag` writes one.
 pub const TAG_ACCESSORS: &[&str] = &["set_tag", "tag"];
 
 /// Interpreter helpers that read, propagate or enforce privacy tags and that a
 /// dispatch arm calls. Tests require this list to equal the functions of
 /// `crates/ivm/src/ivm.rs` that touch a privacy tag and are called by an arm.
 pub const PRIVACY_HELPERS: &[&str] = &[
-    "ensure_public_memory",
     "memory_load_privacy_tag",
     "preflight_memory_store_privacy",
-    "preflight_signature_opcode_payloads",
     "record_memory_store_privacy",
     "validate_memory_store_privacy",
-    "validate_public_crypto_tlv",
     "zk_apply_tag",
     "zk_match_tags",
     "zk_require_public_trap_operands",
@@ -200,13 +167,11 @@ pub const SYSCALL_PRIVACY_FUNCTIONS: &[&str] = &[
 
 use Obligation::{
     Calls, Copyback, Faults, Fetch, Gas, HostResult, Initialization, MemoryOrdering, Padding,
-    Parallel, Pointers, Precompile, PrivateMasking, TypedValues, Vector, VmRecursion,
+    Pointers, PrivateMasking, TypedValues, VmRecursion,
 };
 
 /// Scalar register transition with tag propagation.
 const SCALAR: &[Obligation] = &[Fetch, TypedValues, Gas, Faults, PrivateMasking];
-/// `GETGAS`: the destination equals the post-debit gas word with a public tag.
-const GAS_READ: &[Obligation] = &[Fetch, TypedValues, Gas, Faults, PrivateMasking];
 /// Scalar 64-bit guest memory access.
 const MEMORY: &[Obligation] = &[
     Fetch,
@@ -214,18 +179,6 @@ const MEMORY: &[Obligation] = &[
     Initialization,
     MemoryOrdering,
     Pointers,
-    Gas,
-    Faults,
-    PrivateMasking,
-];
-/// 128-bit guest memory access gated by the vector extension.
-const WIDE_MEMORY: &[Obligation] = &[
-    Fetch,
-    TypedValues,
-    Initialization,
-    MemoryOrdering,
-    Pointers,
-    Vector,
     Gas,
     Faults,
     PrivateMasking,
@@ -267,9 +220,6 @@ const CALL: &[Obligation] = &[
     Faults,
     PrivateMasking,
 ];
-/// `JR`: forbidden under protected return integrity; a secret-tagged target
-/// traps.
-const INDIRECT_JUMP: &[Obligation] = &[Fetch, TypedValues, Gas, Faults, PrivateMasking];
 /// `JALR`: the protected canonical form returns, copies back and may halt. A
 /// secret-tagged target traps and the link register is written public.
 const RETURN: &[Obligation] = &[
@@ -296,64 +246,6 @@ const HOST_CALL: &[Obligation] = &[
     Faults,
     PrivateMasking,
 ];
-/// Vector register operation scaled by the logical vector length.
-const VECTOR: &[Obligation] = &[Fetch, TypedValues, Vector, Gas, Faults, PrivateMasking];
-/// `SETVL`: logical vector length selection.
-const VECTOR_LENGTH: &[Obligation] = &[Fetch, Vector, Gas, Faults];
-/// Parallel-section marker.
-const PARALLEL: &[Obligation] = &[Fetch, Parallel, Gas, Faults];
-/// Precompile over vector registers and guest memory.
-const VECTOR_MEMORY_PRECOMPILE: &[Obligation] = &[
-    Fetch,
-    TypedValues,
-    MemoryOrdering,
-    Pointers,
-    Vector,
-    Precompile,
-    Gas,
-    Faults,
-    PrivateMasking,
-];
-/// Precompile over guest memory.
-const MEMORY_PRECOMPILE: &[Obligation] = &[
-    Fetch,
-    TypedValues,
-    MemoryOrdering,
-    Pointers,
-    Precompile,
-    Gas,
-    Faults,
-    PrivateMasking,
-];
-/// Precompile over scalar registers only.
-const REGISTER_PRECOMPILE: &[Obligation] =
-    &[Fetch, TypedValues, Precompile, Gas, Faults, PrivateMasking];
-/// Precompile over vector registers only.
-const VECTOR_PRECOMPILE: &[Obligation] = &[
-    Fetch,
-    TypedValues,
-    Vector,
-    Precompile,
-    Gas,
-    Faults,
-    PrivateMasking,
-];
-/// Signature verification over public pointer-ABI payloads.
-const SIGNATURE_PRECOMPILE: &[Obligation] = &[
-    Fetch,
-    TypedValues,
-    MemoryOrdering,
-    Pointers,
-    Precompile,
-    Gas,
-    Faults,
-    PrivateMasking,
-];
-/// ZK assertion: a failed assertion keeps executing so the padded trace length
-/// is independent of witness values. Its operands must be public.
-const ASSERTION: &[Obligation] = &[Fetch, TypedValues, Padding, Gas, Faults, PrivateMasking];
-/// ZK field arithmetic.
-const FIELD: &[Obligation] = &[Fetch, TypedValues, Gas, Faults, PrivateMasking];
 
 macro_rules! op {
     (
@@ -382,7 +274,7 @@ macro_rules! op {
 }
 
 /// Number of admitted ABI V1 opcodes.
-pub const OPCODE_COUNT: usize = 90;
+pub const OPCODE_COUNT: usize = 59;
 
 /// Every admitted ABI V1 opcode in ascending opcode order.
 pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
@@ -872,47 +764,6 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         ]
     ),
     op!(
-        memory::LOAD128,
-        Memory,
-        MemoryAndRegisters,
-        Sequential,
-        WIDE_MEMORY,
-        [
-            "MisalignedAccess",
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        ["memory.load_u128", "memory_load_privacy_tag"],
-        ["memory_load_privacy_tag", "set_tag", "tag"]
-    ),
-    op!(
-        memory::STORE128,
-        Memory,
-        MemoryAndRegisters,
-        Sequential,
-        WIDE_MEMORY,
-        [
-            "MisalignedAccess",
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [
-            "memory.store_u128",
-            "preflight_memory_store_privacy",
-            "validate_memory_store_privacy",
-            "zk_match_tags"
-        ],
-        [
-            "preflight_memory_store_privacy",
-            "record_memory_store_privacy",
-            "tag",
-            "validate_memory_store_privacy",
-            "zk_match_tags"
-        ]
-    ),
-    op!(
         memory::LDLIT,
         Memory,
         MemoryAndRegisters,
@@ -1003,16 +854,6 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         ["set_tag"]
     ),
     op!(
-        control::JR,
-        Control,
-        Control,
-        IndirectRegisterOrStrictTrap,
-        INDIRECT_JUMP,
-        ["AssertionFailed", "PrivacyViolation"],
-        [],
-        ["tag"]
-    ),
-    op!(
         control::JALR,
         Control,
         Control,
@@ -1063,16 +904,6 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         []
     ),
     op!(
-        system::GETGAS,
-        System,
-        ScalarRegisters,
-        Sequential,
-        GAS_READ,
-        [],
-        [],
-        ["set_tag"]
-    ),
-    op!(
         system::SYSTEM,
         System,
         HostCall,
@@ -1081,346 +912,6 @@ pub const OPCODES: &[OpcodeEntry; OPCODE_COUNT] = &[
         ["UnknownSyscall"],
         ["execute_syscall_with_register_log"],
         []
-    ),
-    op!(
-        crypto::VADD32,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        ["validate_vadd64_length"],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::VADD64,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        ["validate_vadd64_length"],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::VAND,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::VXOR,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::VOR,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::VROT32,
-        Vector,
-        VectorRegisters,
-        Sequential,
-        VECTOR,
-        ["RegisterOutOfBounds", "VectorExtensionDisabled"],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::SETVL,
-        Vector,
-        VectorLength,
-        Sequential,
-        VECTOR_LENGTH,
-        ["VectorExtensionDisabled"],
-        ["setvl_length"],
-        []
-    ),
-    op!(
-        crypto::PARBEGIN,
-        Parallel,
-        ParallelMarker,
-        Sequential,
-        PARALLEL,
-        [],
-        [],
-        []
-    ),
-    op!(
-        crypto::PAREND,
-        Parallel,
-        ParallelMarker,
-        Sequential,
-        PARALLEL,
-        [],
-        [],
-        []
-    ),
-    op!(
-        crypto::SHA256BLOCK,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        VECTOR_MEMORY_PRECOMPILE,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [
-            "ensure_public_memory",
-            "memory.load_bytes",
-            "memory.merkle_root_and_path"
-        ],
-        ["ensure_public_memory", "set_tag", "tag"]
-    ),
-    op!(
-        crypto::SHA3BLOCK,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        MEMORY_PRECOMPILE,
-        ["PrivacyViolation", "RegisterOutOfBounds"],
-        [
-            "ensure_public_memory",
-            "memory.load_bytes",
-            "memory.store_bytes",
-            "preflight_memory_store_privacy"
-        ],
-        [
-            "ensure_public_memory",
-            "preflight_memory_store_privacy",
-            "record_memory_store_privacy",
-            "tag"
-        ]
-    ),
-    op!(
-        crypto::POSEIDON2,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        REGISTER_PRECOMPILE,
-        ["PrivacyViolation"],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::POSEIDON6,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        REGISTER_PRECOMPILE,
-        ["DecodeError", "PrivacyViolation"],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::AESENC,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        VECTOR_PRECOMPILE,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::AESDEC,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        VECTOR_PRECOMPILE,
-        [
-            "PrivacyViolation",
-            "RegisterOutOfBounds",
-            "VectorExtensionDisabled"
-        ],
-        [],
-        ["set_tag", "tag"]
-    ),
-    op!(
-        crypto::BLAKE2S,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        MEMORY_PRECOMPILE,
-        ["PrivacyViolation", "RegisterOutOfBounds"],
-        ["ensure_public_memory", "memory.load_bytes"],
-        ["ensure_public_memory", "set_tag", "tag"]
-    ),
-    op!(
-        crypto::ED25519VERIFY,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        SIGNATURE_PRECOMPILE,
-        ["PrivacyViolation"],
-        [
-            "preflight_signature_opcode_payloads",
-            "validate_public_crypto_tlv"
-        ],
-        [
-            "preflight_signature_opcode_payloads",
-            "set_tag",
-            "tag",
-            "validate_public_crypto_tlv"
-        ]
-    ),
-    op!(
-        crypto::ED25519BATCHVERIFY,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        SIGNATURE_PRECOMPILE,
-        ["GasCostOverflow", "PrivacyViolation"],
-        ["debit_gas", "validate_public_crypto_tlv"],
-        ["set_tag", "tag", "validate_public_crypto_tlv"]
-    ),
-    op!(
-        crypto::ECDSAVERIFY,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        SIGNATURE_PRECOMPILE,
-        ["PrivacyViolation"],
-        [
-            "preflight_signature_opcode_payloads",
-            "validate_public_crypto_tlv"
-        ],
-        [
-            "preflight_signature_opcode_payloads",
-            "set_tag",
-            "tag",
-            "validate_public_crypto_tlv"
-        ]
-    ),
-    op!(
-        crypto::DILITHIUMVERIFY,
-        Crypto,
-        CryptographicPrimitive,
-        Sequential,
-        SIGNATURE_PRECOMPILE,
-        ["PrivacyViolation"],
-        [
-            "preflight_signature_opcode_payloads",
-            "validate_public_crypto_tlv"
-        ],
-        [
-            "preflight_signature_opcode_payloads",
-            "set_tag",
-            "tag",
-            "validate_public_crypto_tlv"
-        ]
-    ),
-    op!(
-        zk::ASSERT,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        ASSERTION,
-        ["ZkExtensionDisabled"],
-        ["zk_require_public_trap_operands"],
-        ["zk_require_public_trap_operands"]
-    ),
-    op!(
-        zk::ASSERT_EQ,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        ASSERTION,
-        ["ZkExtensionDisabled"],
-        ["zk_require_public_trap_operands"],
-        ["zk_require_public_trap_operands"]
-    ),
-    op!(
-        zk::FADD,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        FIELD,
-        ["ZkExtensionDisabled"],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
-    ),
-    op!(
-        zk::FSUB,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        FIELD,
-        ["ZkExtensionDisabled"],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
-    ),
-    op!(
-        zk::FMUL,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        FIELD,
-        ["ZkExtensionDisabled"],
-        ["zk_match_tags"],
-        ["zk_apply_tag", "zk_match_tags"]
-    ),
-    op!(
-        zk::FINV,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        FIELD,
-        ["ZkExtensionDisabled"],
-        ["zk_require_public_trap_operands"],
-        ["tag", "zk_apply_tag", "zk_require_public_trap_operands"]
-    ),
-    op!(
-        zk::ASSERT_RANGE,
-        Zk,
-        ZkFieldOrAssertion,
-        Sequential,
-        ASSERTION,
-        ["ZkExtensionDisabled"],
-        ["zk_require_public_trap_operands"],
-        ["zk_require_public_trap_operands"]
     ),
 ];
 
@@ -1452,55 +943,5 @@ const _: () = {
         let opcode = candidate as u8;
         assert!(wide::is_valid_opcode(opcode) == opcode_entry(opcode).is_some());
         candidate += 1;
-    }
-};
-
-/// A primary opcode value reserved by ABI V1 but not admitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ReservedOpcode {
-    /// Reserved primary opcode value.
-    pub opcode: u8,
-    /// Reserved constant name in `ivm_abi::instruction::wide::iso20022`.
-    pub name: &'static str,
-}
-
-macro_rules! reserved {
-    ($module:ident :: $name:ident) => {
-        ReservedOpcode {
-            opcode: wide::$module::$name,
-            name: stringify!($name),
-        }
-    };
-}
-
-/// Reserved ISO 20022 opcode values.
-///
-/// They are not admitted: prepared-contract admission and the interpreter
-/// reject them as `InvalidOpcode`, so the relation must prove that rejection
-/// rather than any ISO 20022 semantic.
-pub const RESERVED_OPCODES: &[ReservedOpcode] = &[
-    reserved!(iso20022::MSG_CREATE),
-    reserved!(iso20022::MSG_CLONE),
-    reserved!(iso20022::MSG_SET),
-    reserved!(iso20022::MSG_GET),
-    reserved!(iso20022::MSG_ADD),
-    reserved!(iso20022::MSG_REMOVE),
-    reserved!(iso20022::MSG_CLEAR),
-    reserved!(iso20022::MSG_PARSE),
-    reserved!(iso20022::MSG_SERIALIZE),
-    reserved!(iso20022::MSG_VALIDATE),
-    reserved!(iso20022::MSG_SIGN),
-    reserved!(iso20022::MSG_VERIFY_SIG),
-    reserved!(iso20022::MSG_SEND),
-    reserved!(iso20022::ENCODE_STR),
-    reserved!(iso20022::DECODE_STR),
-    reserved!(iso20022::VALIDATE_FORMAT),
-];
-
-const _: () = {
-    let mut index = 0;
-    while index < RESERVED_OPCODES.len() {
-        assert!(!wide::is_valid_opcode(RESERVED_OPCODES[index].opcode));
-        index += 1;
     }
 };

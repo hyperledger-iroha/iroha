@@ -5,7 +5,7 @@ pub const EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
 ///
 /// This is not a proof and is not independently verifiable or authenticated.
 /// It is a byte-stable summary built
-/// from the VM's recorded trace, constraint, memory, register, and Merkle-root
+/// from the VM's recorded trace, memory, register, and Merkle-root
 /// logs. Full cryptographic proof systems can use these commitments as stable
 /// public material while preserving identical output across hardware.
 #[derive(
@@ -36,8 +36,6 @@ pub struct ExecutionSummary {
     pub delta_trace_hash: [u8; 32],
     /// Hash of the ZK register-state trace.
     pub register_trace_hash: [u8; 32],
-    /// Hash of logged constraints.
-    pub constraint_hash: [u8; 32],
     /// Hash of logged memory-access diagnostics.
     pub memory_log_hash: [u8; 32],
     /// Hash of logged register accesses and their authentication paths.
@@ -58,8 +56,6 @@ pub struct ExecutionSummary {
     pub delta_trace_len: u64,
     /// Number of expanded ZK register-state trace entries.
     pub register_trace_len: u64,
-    /// Number of logged constraints.
-    pub constraint_len: u64,
     /// Number of logged memory events.
     pub memory_log_len: u64,
     /// Number of logged register events.
@@ -70,8 +66,6 @@ pub struct ExecutionSummary {
     pub zk_mode: bool,
     /// Whether execution had halted when the summary was created.
     pub halted: bool,
-    /// Whether a constraint failure had been observed when the summary was created.
-    pub constraint_failed: bool,
 }
 impl ExecutionSummary {
     /// Return the exact framed Norito length of a v1 execution summary.
@@ -98,7 +92,6 @@ mod tests {
             pc_trace_hash: [0x05; 32],
             delta_trace_hash: [0x06; 32],
             register_trace_hash: [0x07; 32],
-            constraint_hash: [0x08; 32],
             memory_log_hash: [0x09; 32],
             register_log_hash: [0x0a; 32],
             step_log_hash: [0x0b; 32],
@@ -109,13 +102,11 @@ mod tests {
             pc_trace_len: u64::MAX - 4,
             delta_trace_len: u64::MAX - 5,
             register_trace_len: u64::MAX - 6,
-            constraint_len: u64::MAX - 7,
             memory_log_len: u64::MAX - 8,
             register_log_len: u64::MAX - 9,
             step_log_len: u64::MAX - 10,
             zk_mode: true,
             halted: true,
-            constraint_failed: true,
         };
         let expected = ExecutionSummary::encoded_len_v1().expect("fixed summary schema encodes");
         assert_eq!(

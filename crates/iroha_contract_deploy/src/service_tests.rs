@@ -1309,3 +1309,34 @@ fn cancellation_refuses_a_valid_replacement_before_publishing_another_plans_hash
     assert!(!other.join("attempt-0000.json").exists());
     Ok(())
 }
+
+#[test]
+fn named_profile_artifact_verification_and_lifecycle_guidance_preserve_exact_identity() -> Result<()>
+{
+    let artifact = kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
+        host_policy: ivm_abi::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ..Default::default()
+    }).compile_source("seiyaku Named { hajimari(int initial) { let value = initial; } view fn read() authorize(anyone) -> int { 1 } }").map_err(|error| eyre!(error))?;
+    let mut request = DeploymentRequest {
+        artifact,
+        alias: "named::universal".parse()?,
+        fee_payment: FeePaymentIntent::authority(
+            Vec::new(),
+            Some(NonZeroU64::new(1_000_000).unwrap()),
+        ),
+        governance_approvers: Vec::new(),
+    };
+    let verified = verify_request(&request)?;
+    assert_eq!(
+        verified.syscall_policy,
+        ivm_abi::SyscallPolicy::AbiV1RuntimeLifecycle
+    );
+    let hook = lifecycle::LifecycleHook::from_artifact(&request.artifact)
+        .expect("named lifecycle guidance");
+    assert_eq!(hook.params[0].name, "initial");
+    call::check_contract_arguments(&request.artifact, "read", &norito::json::json!({}), true)?;
+    request.artifact[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+    assert!(verify_request(&request).is_err());
+    assert!(lifecycle::LifecycleHook::from_artifact(&request.artifact).is_none());
+    Ok(())
+}

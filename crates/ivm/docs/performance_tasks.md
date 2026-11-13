@@ -2,11 +2,12 @@
 
 This document lists potential optimizations that could speed up the IVM
 implementation. Each bullet can be turned into an issue or a future pull
-request.
+request. The vector, hashing, AES and Poseidon functions named below are
+host-side helpers; the instruction set has no vector or cryptographic opcodes.
 
 ## SIMD and Vector Optimizations
 
-- **Complete vectorized Poseidon** – **done.** `src/poseidon.rs` now uses the SIMD field backends so `POSEIDON2` and `POSEIDON6` are accelerated automatically.
+- **Complete vectorized Poseidon** – **done.** `src/poseidon.rs` now uses the SIMD field backends so the `poseidon2` and `poseidon6` helpers are accelerated automatically.
 
 - **SSE/AVX intrinsics for vector helpers** – **done.** The helper
   functions in `src/vector.rs` now include SSE2 and AVX2 implementations

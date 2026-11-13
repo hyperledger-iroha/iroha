@@ -257,14 +257,14 @@ fn foreign_vm_modules_cannot_enter_native_ivm_admission() {
 }
 
 #[test]
-fn host_private_system_syscall_is_rejected() {
+fn host_private_syscall_is_rejected() {
     let fixture = current_fixture();
     let mut mutated = fixture.artifact;
-    // Canonical wide SYSTEM encoding for host-private syscall 0x00fe0000.
+    // Canonical SCALL encoding for host-private syscall 0x00fe0000.
     mutated[fixture.code_offset..fixture.code_offset + 4]
-        .copy_from_slice(&[0x00, 0x00, 0xfe, 0x62]);
+        .copy_from_slice(&ivm_abi::encoding::wide::encode_scall(0x00fe_0000).to_le_bytes());
     let error = verify_contract_artifact(&mutated)
-        .expect_err("host-private SYSTEM syscall must fail shared admission");
+        .expect_err("host-private syscall must fail shared admission");
     assert!(error.to_string().contains("disallowed syscall 0xfe0000"));
 }
 
@@ -362,7 +362,7 @@ fn unassigned_exact_json_getter_syscalls_are_rejected() {
         );
         let mut mutated = fixture.artifact.clone();
         mutated[fixture.code_offset..fixture.code_offset + 4]
-            .copy_from_slice(&ivm_abi::encoding::wide::encode_syscallx(number).to_le_bytes());
+            .copy_from_slice(&ivm_abi::encoding::wide::encode_scall(number).to_le_bytes());
         let error = verify_contract_artifact(&mutated)
             .expect_err("reserved exact-number syscall must fail shared admission");
         assert!(

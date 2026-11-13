@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 /// Number of general purpose registers in the VM register file.
-pub const REGISTER_COUNT: usize = 256;
+pub const REGISTER_COUNT: usize = crate::instruction::wide::REGISTER_COUNT;
 /// Identifier for a state entry in the world state. For the purposes of this crate it is simply a
 /// string key but in a real integration this could be a complex type.
 pub type StateKey = String;

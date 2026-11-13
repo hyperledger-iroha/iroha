@@ -542,6 +542,7 @@ impl AnonymousParliamentAttemptStateV1 {
             {
                 return Err(restore("boards"));
             }
+            self.validate_board_lifecycle(board)?;
         }
         if stored.is_empty() {
             Ok(())

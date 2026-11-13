@@ -161,11 +161,8 @@ impl Reachability {
             let index = slots[head].queued_index;
             head += 1;
             let op = decoded.get(index).ok_or(VMError::DecodeError)?;
-            let syscall = match wide::opcode(op.inst) {
-                wide::system::SCALL => Some(u32::from(wide::imm8(op.inst) as u8)),
-                wide::system::SYSTEM => Some(crate::encoding::wide::decode_syscallx(op.inst)),
-                _ => None,
-            };
+            let syscall = (wide::opcode(op.inst) == wide::system::SCALL)
+                .then(|| wide::syscall_number(op.inst));
             if syscall == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) {
                 return Ok(true);
             }

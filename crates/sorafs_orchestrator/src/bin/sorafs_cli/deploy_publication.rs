@@ -427,13 +427,29 @@ fn preparation(
     }
 }
 
-/// Transport, signer and deadline shared by every publication assertion round trip.
+/// Transport, signer and deadline shared by every publication round trip of one deployment.
 #[derive(Clone, Copy)]
-struct PublicationSession<'a> {
+pub(super) struct PublicationSession<'a> {
     client: &'a HttpClient,
     base: &'a Url,
     config: &'a DeployClientConfig,
     started: Instant,
+}
+
+impl<'a> PublicationSession<'a> {
+    /// Start the ten-minute publication deadline over the deployment's transport and signer.
+    pub(super) fn begin(
+        client: &'a HttpClient,
+        base: &'a Url,
+        config: &'a DeployClientConfig,
+    ) -> Self {
+        Self {
+            client,
+            base,
+            config,
+            started: Instant::now(),
+        }
+    }
 }
 
 fn assert_and_verify(
@@ -529,16 +545,19 @@ fn assert_and_verify(
 }
 
 pub(super) fn qualify(
-    client: &HttpClient,
-    base: &Url,
-    config: &DeployClientConfig,
+    session: PublicationSession<'_>,
     artifacts: &mut DeployPackArtifacts,
     registration_hash: iroha_crypto::HashOf<SignedTransaction>,
     checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
 ) -> Result<Value, String> {
-    let started = Instant::now();
+    let PublicationSession {
+        client,
+        base,
+        config,
+        started,
+    } = session;
     if provider_urls.is_empty() || provider_urls.len() > 64 {
         return Err("publication requires 1..=64 provider source endpoints".to_owned());
     }
@@ -562,12 +581,6 @@ pub(super) fn qualify(
     order
         .validate()
         .map_err(|_| "publication assignment is invalid".to_owned())?;
-    let session = PublicationSession {
-        client,
-        base,
-        config,
-        started,
-    };
     // Both assertions bind the same independently selected checkpoint: the compact proof
     // authenticates execution under it and never replaces it.
     assert_and_verify(
@@ -988,6 +1001,20 @@ mod tests {
             chain_id: "publication-test".parse().unwrap(),
             chain_discriminant: 777,
         }
+    }
+
+    #[test]
+    fn publication_session_starts_a_live_deadline_over_the_supplied_transport_and_signer() {
+        let config = publication_test_config();
+        let client = HttpClient::builder().no_proxy().build().unwrap();
+        let base = Url::parse("http://127.0.0.1:1/").unwrap();
+        let before = Instant::now();
+        let session = PublicationSession::begin(&client, &base, &config);
+        assert!(std::ptr::eq(session.client, &raw const client));
+        assert!(std::ptr::eq(session.base, &raw const base));
+        assert!(std::ptr::eq(session.config, &raw const config));
+        assert!(before <= session.started && session.started <= Instant::now());
+        assert!(ensure_live(session.started).is_ok());
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub enum TryReadError {
     StateVmInitialization(#[source] ivm::VMError),
     /// Local State execution resources were unavailable during snapshot restore
     StateExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// Original complete-State authentication failure or local acquisition refusal: {0}
+    StateRootVerification(#[source] crate::state::WorldStateVerificationError),
     /// Local original-pool admission of restored lane signer/sample custody failed: {0}
     StateNativeLaneCustody(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local original-pool admission of the restored native schedule failed: {0}
@@ -116,15 +118,13 @@ pub enum TryReadError {
         /// Claimed chain identity in the authenticated snapshot envelope.
         actual: ChainId,
     },
-    /// A committed snapshot requires original signed-genesis and certified-history execution on fresh State
+    /// A snapshot without certified complete-State authority requires original signed-genesis and certified-history execution
     NativeExecutionReplayRequired,
-    /// Snapshot at height `{snapshot_height}` has no certified successor block in Kura to authenticate its World
+    /// Snapshot at height `{snapshot_height}` has no certified successor block in Kura to authenticate its complete State
     SuccessorRequired {
         /// Height of the snapshot tip.
         snapshot_height: u64,
     },
-    /// Restored snapshot World is not the certified World: {0}
-    WorldAuthentication(String),
     /// Snapshot exact network id mismatch (expected `{expected}`, got `{actual}`)
     NetworkIdMismatch {
         /// Expected genesis-derived network id from configuration.
@@ -140,6 +140,8 @@ pub enum TryReadError {
     StateSccp(#[source] crate::state::SccpRestoreError),
     /// Snapshot state is incompatible with runtime ZK configuration: {0}
     ZkConfigInstall(#[source] ZkConfigInstallError),
+    /// Pending checkpoint cannot use the original node configuration: {0}
+    ReconciliationConfiguration(#[source] crate::state::SnapshotReconciliationConfigError),
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)
     MismatchedHeight {
         /// The amount of block hashes stored by snapshot
@@ -231,10 +233,6 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
                     snapshot_height: height,
                 }
             }
-            error @ (crate::state::deserialize::StateRestoreError::WorldMismatch { .. }
-            | crate::state::deserialize::StateRestoreError::WorldVerification(_)) => {
-                Self::WorldAuthentication(error.to_string())
-            }
         }
     }
 }
@@ -254,6 +252,7 @@ impl TryReadError {
             | Self::StateRead(_)
             | Self::StateAdmission(_)
             | Self::StateExecutionDeferred(_)
+            | Self::StateRootVerification(_)
             | Self::StateNativeSchedule(_)
             | Self::StateNativeLaneCustody(_)
             | Self::StateBeaconSession(_)
@@ -262,6 +261,7 @@ impl TryReadError {
             | Self::ChainIdMismatch { .. }
             | Self::NetworkIdMismatch { .. }
             | Self::ZkConfigInstall(_)
+            | Self::ReconciliationConfiguration(_)
             | Self::MismatchedHeight { .. } => true,
             // Nested resource refusals halt; completed rejections of the data do not.
             Self::StateEvidence(error) => matches!(

@@ -505,13 +505,13 @@ mod ironwood {
     #[cfg(unix)]
     #[test]
     fn ironwood_viewing_export_failure_is_atomic_and_retryable() {
-        use std::io::{Error, ErrorKind, Write};
+        use std::io::{Error, Write};
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("viewing-key");
         assert!(
             write_ironwood_viewing_credential(&path, |file| {
                 file.write_all(b"partial secret")?;
-                Err(Error::new(ErrorKind::Other, "injected write failure"))
+                Err(Error::other("injected write failure"))
             })
             .is_err()
         );
@@ -869,16 +869,30 @@ mod ironwood {
         keys: Vec<(String, Vec<u8>)>,
     }
 
+    /// The inputs every warm read of one plan shares: its chain, original query,
+    /// trusted checkpoint, schema and payer.
+    #[derive(Clone, Copy)]
+    struct WarmReadFixture<'a> {
+        chain: &'a iroha_core::sumeragi::test_chain::CertifiedTestChain,
+        original: &'a WarmQuery,
+        checkpoint: &'a str,
+        schema: &'a crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
+        payer: &'a AccountId,
+    }
+
     fn warm_read_case(
-        chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+        fixture: WarmReadFixture<'_>,
         height: u64,
-        original: &WarmQuery,
-        checkpoint: &str,
         frames: &[String],
-        schema: &crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
-        payer: &AccountId,
         expected_missing: usize,
     ) {
+        let WarmReadFixture {
+            chain,
+            original,
+            checkpoint,
+            schema,
+            payer,
+        } = fixture;
         use crate::ironwood_payment::state_rows::{
             ironwood_warm_rows_v1_py, verify_ironwood_state_rows_v1_py,
         };
@@ -1075,13 +1089,15 @@ mod ironwood {
         keys.sort();
         let warm = WarmQuery { plan, keys };
         warm_read_case(
-            &chain,
+            WarmReadFixture {
+                chain: &chain,
+                original: &warm,
+                checkpoint: &checkpoint_hex,
+                schema: &schema,
+                payer: &payer,
+            },
             start,
-            &warm,
-            &checkpoint_hex,
             &prepare_frames,
-            &schema,
-            &payer,
             0,
         );
         // The fixture supplies unrelated submitted work for an otherwise empty commit.
@@ -1103,13 +1119,15 @@ mod ironwood {
             })
             .collect::<Vec<_>>();
         warm_read_case(
-            &chain,
+            WarmReadFixture {
+                chain: &chain,
+                original: &warm,
+                checkpoint: &checkpoint_hex,
+                schema: &schema,
+                payer: &payer,
+            },
             start + 2,
-            &warm,
-            &checkpoint_hex,
             &retained,
-            &schema,
-            &payer,
             1,
         );
         chain.commit(Vec::new());

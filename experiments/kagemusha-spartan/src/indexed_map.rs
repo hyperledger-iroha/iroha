@@ -12,6 +12,7 @@ use crate::{
     certificate::{self, Cells, field_modulus},
     fs::SpikeRng,
     full::Wiring,
+    send_arithmetic::Source,
     uniform::{Lin, constant, own, plus, scaled},
 };
 
@@ -88,6 +89,48 @@ pub fn path_root<const D: usize>(mut node: Fp, path: &Path<D>) -> Fp {
         node = poseidon::hash_with_domain(NODE_DOMAIN, &pair);
     }
     node
+}
+
+/// A valid insertion into the canonical sentinel-only map. This is witness
+/// preparation, never authority; `append_insert` proves every resulting path.
+pub fn empty_insert<const D: usize>(key: Fp, value: Fp) -> (InsertWitness<D>, Fp) {
+    assert!((1..=32).contains(&D));
+    let mut empty = [Fp::ZERO; D];
+    for h in 1..D {
+        empty[h] = poseidon::hash_with_domain(NODE_DOMAIN, &[empty[h - 1]; 2]);
+    }
+    let low = Leaf {
+        key: Fp::ZERO,
+        value: Fp::ZERO,
+        next: Fp::ZERO,
+    };
+    let low_path = Path {
+        index: 0,
+        siblings: empty,
+    };
+    let old_root = path_root(leaf_hash(low), &low_path);
+    let mut siblings = empty;
+    siblings[0] = leaf_hash(Leaf { next: key, ..low });
+    let slot = Path { index: 1, siblings };
+    let new_root = path_root(
+        leaf_hash(Leaf {
+            key,
+            value,
+            next: Fp::ZERO,
+        }),
+        &slot,
+    );
+    (
+        InsertWitness {
+            old_root,
+            key,
+            value,
+            low,
+            low_path,
+            slot,
+        },
+        new_root,
+    )
 }
 
 struct Hash {
@@ -371,6 +414,129 @@ pub fn append_insert<const D: usize>(
     }
 }
 
+/// Conditional insertion with a constrained boolean selector. When disabled,
+/// a fixed valid dummy map is proved and the actual root is preserved. The
+/// selector changes witness bytes only; every path, hash and row exists in both
+/// branches. In particular no caller flag can bypass the active insertion.
+pub fn append_insert_if<const D: usize>(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    witness: &InsertWitness<D>,
+    enabled: Source,
+    old: Source,
+    key: Source,
+    value: Source,
+) -> InsertCells {
+    for source in [enabled, old, key, value] {
+        assert_eq!(
+            w.arrays[source.array].family, family,
+            "same-family map source"
+        );
+    }
+    let (dummy, _) = empty_insert::<D>(Fp::ONE, Fp::ONE);
+    let selected = if enabled.value(w) == Fp::ZERO {
+        &dummy
+    } else {
+        witness
+    };
+    let inserted = append_insert(w, family, selected);
+    let mut c = Cells::new(family);
+    c.a.name = "constrained conditional indexed-map insertion";
+    let bit = c.bit(enabled.value(w) == Fp::ONE);
+    c.eq(own(bit, 1), enabled.linear());
+    let inputs = [old, key, value];
+    let actual = [inserted.old_root, inserted.key, inserted.value];
+    let fallback = [dummy.old_root, Fp::ONE, Fp::ONE];
+    let ports: [usize; 3] = std::array::from_fn(|i| {
+        let cell = c.cell(inputs[i].value(w), 255);
+        c.eq(own(cell, 1), inputs[i].linear());
+        c.a.rows.push([
+            own(bit, 1),
+            plus(&own(cell, 1), &constant(vec![-fallback[i]])),
+            plus(
+                &Source {
+                    array: inserted.local,
+                    cell: actual[i],
+                    instance: 0,
+                }
+                .linear(),
+                &constant(vec![-fallback[i]]),
+            ),
+        ]);
+        cell
+    });
+    let selected_root = Source {
+        array: inserted.local,
+        cell: inserted.new_root,
+        instance: 0,
+    };
+    let new_value = old.value(w) + enabled.value(w) * (selected_root.value(w) - old.value(w));
+    let new_root = c.cell(new_value, 255);
+    c.a.rows.push([
+        own(bit, 1),
+        plus(
+            &selected_root.linear(),
+            &scaled(&own(ports[0], 1), -Fp::ONE),
+        ),
+        plus(&own(new_root, 1), &scaled(&own(ports[0], 1), -Fp::ONE)),
+    ]);
+    let local = w.push(c.a);
+    InsertCells {
+        local,
+        old_root: ports[0],
+        key: ports[1],
+        value: ports[2],
+        new_root,
+    }
+}
+
+/// Authenticate the unique search route and insert only if the key is absent.
+/// An existing record is never overwritten. The new record value remains a
+/// caller-bound source, typically the authenticated Payment/status commitment.
+pub fn append_record_if_absent<const D: usize>(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    search: &SearchWitness<D>,
+    insertion: &InsertWitness<D>,
+    root: Source,
+    key: Source,
+    value: Source,
+) -> (SearchCells, InsertCells) {
+    let found = append_search(w, family, search);
+    let mut c = Cells::new(family);
+    c.a.name = "record only absent indexed-map credit";
+    let cell = |k| Source {
+        array: found.local,
+        cell: k,
+        instance: 0,
+    };
+    c.eq(cell(found.root).linear(), root.linear());
+    c.eq(cell(found.key).linear(), key.linear());
+    let absent = c.bit(cell(found.present).value(w) == Fp::ZERO);
+    c.eq(
+        own(absent, 1),
+        plus(
+            &constant(vec![Fp::ONE]),
+            &scaled(&cell(found.present).linear(), -Fp::ONE),
+        ),
+    );
+    let local = w.push(c.a);
+    let updated = append_insert_if(
+        w,
+        family,
+        insertion,
+        Source {
+            array: local,
+            cell: absent,
+            instance: 0,
+        },
+        root,
+        key,
+        value,
+    );
+    (found, updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,11 +670,11 @@ mod tests {
         (c, i, w, cells)
     }
 
-    fn finish_test(
+    fn finish_test<const N: usize>(
         mut w: Wiring<Fp>,
         family: usize,
         local: usize,
-        outputs: [usize; 4],
+        outputs: [usize; N],
     ) -> (UniformCircuit<Fp>, Instance<Fp>, Witness<Fp>) {
         let range = w.push(Array {
             name: "indexed-map range",
@@ -522,19 +688,21 @@ mod tests {
             values: vec![(0..2048).map(|i| Fp::from(i as u64)).collect()],
         });
         w.tables.push((range, nonnative::RANGE_TABLE));
-        let values = outputs.map(|k| w.arrays[local].values[k][0]);
+        let slots = N.next_power_of_two();
+        let mut values = outputs.map(|k| w.arrays[local].values[k][0]).to_vec();
+        values.resize(slots, Fp::ZERO);
         let io = w.push(Array {
             name: "indexed-map authenticated join ports",
             family,
-            rho: 2,
-            r_count: 4,
+            rho: slots.trailing_zeros() as usize,
+            r_count: N,
             fixed: false,
             lookups: vec![],
             widths: vec![255],
             rows: vec![],
-            values: vec![values.to_vec()],
+            values: vec![values],
         });
-        w.io_arrays.push((io, 4));
+        w.io_arrays.push((io, slots));
         for (i, k) in outputs.into_iter().enumerate() {
             w.arrays[local].rows.push([
                 plus(
@@ -554,7 +722,7 @@ mod tests {
             tables,
             copies,
             12,
-            8,
+            slots * 2,
             b"exact indexed insertion",
         );
         (c, i, w)
@@ -566,6 +734,175 @@ mod tests {
         let z = crate::r1cs::z_vector(&c.shape, i, &Witness { w: values });
         let (a, b, c) = rel.abc(&c.shape, &z);
         a.iter().zip(b).zip(c).all(|((a, b), c)| *a * b == c)
+    }
+
+    fn conditional(
+        input: &InsertWitness<3>,
+        enabled: Fp,
+        expected: [Fp; 3],
+    ) -> (UniformCircuit<Fp>, Instance<Fp>, Witness<Fp>) {
+        let mut w = Wiring::default();
+        let family = w.family(0, 1);
+        let mut c = Cells::new(family);
+        let ports = [enabled, expected[0], expected[1], expected[2]].map(|v| c.cell(v, 255));
+        let local = w.push(c.a);
+        let source = |i| Source {
+            array: local,
+            cell: ports[i],
+            instance: 0,
+        };
+        let inserted = append_insert_if(
+            &mut w,
+            family,
+            input,
+            source(0),
+            source(1),
+            source(2),
+            source(3),
+        );
+        let mut out = Cells::new(family);
+        let selected = [
+            source(0),
+            source(1),
+            source(2),
+            source(3),
+            Source {
+                array: inserted.local,
+                cell: inserted.new_root,
+                instance: 0,
+            },
+        ];
+        let cells = selected.map(|p| {
+            let k = out.cell(p.value(&w), 255);
+            out.eq(own(k, 1), p.linear());
+            k
+        });
+        let local = w.push(out.a);
+        finish_test(w, family, local, cells)
+    }
+
+    #[test]
+    fn conditional_insert_is_constrained_and_uses_one_proof_matrix() {
+        let (input, next) = fixture::<3>();
+        let expected = [input.old_root, input.key, input.value];
+        let yes = conditional(&input, Fp::ONE, expected);
+        let mut irrelevant = input.clone();
+        irrelevant.low_path.siblings.fill(Fp::ZERO);
+        let no = conditional(&irrelevant, Fp::ZERO, expected);
+        assert_eq!(yes.1.io[12], next);
+        assert_eq!(no.1.io[12], input.old_root);
+        assert_eq!(
+            yes.0.entries(&[Fp::from(31), Fp::from(47)]),
+            no.0.entries(&[Fp::from(31), Fp::from(47)])
+        );
+        let gens = Gens::<Vesta>::new(yes.0.shape.cols());
+        for (c, i, w) in [&yes, &no] {
+            assert!(holds(c, i, w));
+            let (proof, _) = spartan::prove_circuit(
+                &yes.0.shape,
+                &gens,
+                i,
+                w,
+                &mut SpikeRng::new(b"conditional map proof"),
+                &yes.0,
+            );
+            assert!(
+                spartan::verify_circuit(&yes.0.shape, &gens, i, &proof.to_bytes(), &yes.0).is_ok()
+            );
+            for k in 8..13 {
+                let mut changed = i.clone();
+                changed.io[k] += Fp::ONE;
+                assert!(
+                    spartan::verify_circuit(
+                        &yes.0.shape,
+                        &gens,
+                        &changed,
+                        &proof.to_bytes(),
+                        &yes.0
+                    )
+                    .is_err()
+                );
+            }
+        }
+        for i in 0..3 {
+            let mut changed = expected;
+            changed[i] += Fp::ONE;
+            let (c, i, w) = conditional(&input, Fp::ONE, changed);
+            assert!(!holds(&c, &i, &w));
+        }
+        let (c, i, w) = conditional(&irrelevant, Fp::ONE, expected);
+        assert!(!holds(&c, &i, &w));
+        let (c, i, w) = conditional(&input, Fp::from(2), expected);
+        assert!(!holds(&c, &i, &w), "selector is boolean and source-bound");
+    }
+
+    #[test]
+    fn record_if_absent_preserves_existing_value_and_rejects_wrong_route() {
+        let (input, next) = fixture::<3>();
+        let build = |query: Fp, leaf: Leaf, route: &Path<3>| {
+            let mut w = Wiring::default();
+            let family = w.family(0, 1);
+            let mut c = Cells::new(family);
+            let ports = [input.old_root, query, input.value].map(|v| c.cell(v, 255));
+            let local = w.push(c.a);
+            let source = |i| Source {
+                array: local,
+                cell: ports[i],
+                instance: 0,
+            };
+            let search = SearchWitness {
+                root: input.old_root,
+                key: query,
+                leaf,
+                path: route.clone(),
+            };
+            let (found, inserted) = append_record_if_absent(
+                &mut w,
+                family,
+                &search,
+                &input,
+                source(0),
+                source(1),
+                source(2),
+            );
+            let mut out = Cells::new(family);
+            let cells = [
+                source(0),
+                source(1),
+                source(2),
+                Source {
+                    array: found.local,
+                    cell: found.present,
+                    instance: 0,
+                },
+                Source {
+                    array: inserted.local,
+                    cell: inserted.new_root,
+                    instance: 0,
+                },
+            ]
+            .map(|p| {
+                let k = out.cell(p.value(&w), 255);
+                out.eq(own(k, 1), p.linear());
+                k
+            });
+            let local = w.push(out.a);
+            finish_test(w, family, local, cells)
+        };
+        let yes = build(input.low.key, input.low, &input.low_path);
+        let no = build(input.key, input.low, &input.low_path);
+        assert!(holds(&yes.0, &yes.1, &yes.2));
+        assert!(holds(&no.0, &no.1, &no.2));
+        assert_eq!(yes.1.io[11], Fp::ONE);
+        assert_eq!(yes.1.io[12], input.old_root);
+        assert_eq!(no.1.io[11], Fp::ZERO);
+        assert_eq!(no.1.io[12], next);
+        assert_eq!(
+            yes.0.entries(&[Fp::from(31), Fp::from(47)]),
+            no.0.entries(&[Fp::from(31), Fp::from(47)])
+        );
+        let wrong = build(Fp::from(5), input.low, &input.low_path);
+        assert!(!holds(&wrong.0, &wrong.1, &wrong.2));
     }
 
     #[test]

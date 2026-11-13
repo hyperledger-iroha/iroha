@@ -73,3 +73,49 @@ fn abi_v1_register_asset_requires_owning_domain() {
     );
     assert_eq!(columns[4], "u64=0");
 }
+
+#[test]
+fn named_runtime_lifecycle_profile_has_exact_separate_identity_without_changing_v1() {
+    use ivm::{SyscallPolicy, syscalls};
+    let baseline = compute_abi_hash(SyscallPolicy::AbiV1);
+    let named = compute_abi_hash(SyscallPolicy::AbiV1RuntimeLifecycle);
+    assert_eq!(hex::encode(baseline), ABI_V1_HASH_GOLDEN);
+    assert_eq!(
+        named,
+        compute_abi_hash(SyscallPolicy::AbiV1RuntimeLifecycle)
+    );
+    assert_ne!(named, baseline);
+    assert_eq!(named[31] & 1, 1);
+    assert_eq!(
+        syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE,
+        "iroha.ivm.runtime_lifecycle.v1"
+    );
+    assert_eq!(
+        syscalls::policy_for_abi_hash(&baseline),
+        Some(SyscallPolicy::AbiV1)
+    );
+    assert_eq!(
+        syscalls::policy_for_abi_hash(&named),
+        Some(SyscallPolicy::AbiV1RuntimeLifecycle)
+    );
+    let mut unknown = named;
+    unknown[0] ^= 1;
+    assert_eq!(syscalls::policy_for_abi_hash(&unknown), None);
+    assert_eq!(
+        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+        3
+    );
+    assert_eq!(
+        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
+        4
+    );
+    let baseline_table = syscalls::render_syscalls_markdown_table();
+    let instruction = baseline_table
+        .lines()
+        .find(|line| line.starts_with("| 0xA0 |"))
+        .unwrap();
+    assert!(
+        instruction.contains("operation_tag(1=SubmitBallot;2=SubmitPrivacyZkX509CertificateV1)")
+    );
+    assert!(!instruction.contains("RegisterContractRuntimeObligationV1"));
+}

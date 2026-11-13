@@ -17,3 +17,6 @@ mod manual_decode_tests;
 
 #[cfg(test)]
 mod formatting_tests;
+
+#[cfg(test)]
+mod bounded_json_key_tests;

@@ -27,16 +27,14 @@ pub struct DiagnosticStepState {
     pub gas_remaining: u64,
     /// Completed architectural cycles.
     pub cycles: u64,
-    /// Logical vector length, independent of physical hardware.
-    pub vector_length: usize,
     /// Whether a terminal instruction has completed.
     pub halted: bool,
     /// Whether a ZK assertion has failed.
     pub constraint_failed: bool,
     /// All architectural register values, including the hardwired zero register.
-    pub registers: [u64; 256],
+    pub registers: [u64; crate::parallel::REGISTER_COUNT],
     /// Privacy tags corresponding to `registers`.
-    pub tags: [bool; 256],
+    pub tags: [bool; crate::parallel::REGISTER_COUNT],
 }
 
 impl Default for DiagnosticStepState {
@@ -45,11 +43,10 @@ impl Default for DiagnosticStepState {
             pc: 0,
             gas_remaining: 0,
             cycles: 0,
-            vector_length: 0,
             halted: false,
             constraint_failed: false,
-            registers: [0; 256],
-            tags: [false; 256],
+            registers: [0; crate::parallel::REGISTER_COUNT],
+            tags: [false; crate::parallel::REGISTER_COUNT],
         }
     }
 }

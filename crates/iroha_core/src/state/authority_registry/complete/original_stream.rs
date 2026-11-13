@@ -20,7 +20,10 @@ mod encoding;
 mod registry;
 use registry::{FIELD_COUNT, registry};
 mod keyed;
-pub(in crate::state) use keyed::{verify_keyed_execution_policy, capture_committed_keyed_image, KeyedCaptureError, capture_keyed_image};
+pub(in crate::state) use keyed::{
+    KeyedCaptureError, capture_committed_keyed_image, capture_keyed_image,
+    verify_keyed_execution_policy,
+};
 mod membership;
 mod policies;
 mod world;

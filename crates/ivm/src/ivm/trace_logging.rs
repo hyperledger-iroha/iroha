@@ -150,7 +150,10 @@ impl IVM {
             match invocation.mode {
                 TraceMode::Off => Ok(()),
                 TraceMode::PcOnly => vm.pc_trace.prepare(1, scope),
-                TraceMode::DeltaRegisters => vm.delta_trace.prepare_batch(1, 256, 0, scope),
+                TraceMode::DeltaRegisters => {
+                    vm.delta_trace
+                        .prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, scope)
+                }
             }
         })?;
         Ok(invocation)
@@ -198,7 +201,7 @@ impl IVM {
             return Ok(output);
         }
         let changes = if invocation.cycles || invocation.mode == TraceMode::DeltaRegisters {
-            change_counts::instruction(instruction, self.vector_length)?
+            change_counts::instruction(instruction)?
         } else {
             0
         };

@@ -20,13 +20,20 @@ koto build examples/hello/hello.ko \
   --manifest-out target/examples/hello.manifest.json
 ```
 
-ABI v1 is unconditional. Source cannot select an ABI, vector width, or
-execution feature. `--max-cycles` selects a positive ceiling, up to node
+ABI v1 is unconditional. Source cannot select an ABI or execution feature. `--max-cycles` selects a positive ceiling, up to node
 admission policy, that is embedded in the execution header and covered by the
 artifact hash.
 
 ZK contracts are checked, built, and documented with `--zk`. The flag selects a
 compiler capability; the source still cannot override execution-header metadata.
+
+The separately governed contract kernel profile is selected at build time with
+`--host-profile iroha.ivm.runtime_lifecycle.v1`. It still emits ABI version 1, with its exact named
+profile hash. `ledger::runtime::register_obligation(request)` and
+`ledger::runtime::complete_obligation(request)` accept canonical Norito instruction bytes under
+that profile; baseline builds reject these calls. Deployment and execution require the root to
+activate `iroha.runtime.contract_lifecycle.v1`. The selected profile cannot supply a different
+contract address or owner to registration; those come from the authenticated invocation.
 
 ## State, errors, entries, and views
 

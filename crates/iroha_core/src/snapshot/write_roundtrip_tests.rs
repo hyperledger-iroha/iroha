@@ -849,11 +849,9 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
 }
 #[tokio::test]
 async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_replay() {
-    use crate::{
-        state::World,
-        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
-    };
-    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    // Only the keyed profile certifies the complete State; World-only snapshots are
+    // refused outright (`native_world_only_snapshot_is_refused_even_with_a_certified_successor`).
+    let mut chain = native_snapshot_chain();
     let key_pair = checked_random_snapshot_keypair();
     let mut hostile = state_factory();
     let injected_account = AccountId::new(
@@ -884,7 +882,7 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
         .clone();
     for height in [1, 2] {
         let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
-        // The certified successor binds the World published at the snapshot height.
+        // The certified successor binds the complete State published at the snapshot height.
         chain.commit(Vec::new());
         let state = chain.state();
         let kura = chain.kura();
@@ -935,16 +933,25 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
                     result,
                     Err(TryReadError::NativeExecutionReplayRequired)
                 )),
-                (_, true) => assert_eq!(
-                    result
-                        .expect("the original World restores against its successor")
-                        .committed_height(),
-                    height
-                ),
-                (_, false) => assert!(
-                    result.is_err(),
-                    "hostile accounts cannot restore against the certified World root"
-                ),
+                (_, true) => {
+                    let mut restored = result
+                        .expect("the original State decodes as a claim against its successor");
+                    assert_eq!(restored.committed_height(), height);
+                    authenticate_native_snapshot(state, &mut restored);
+                }
+                // A substituted table is refused by the decoder or, at the latest, when
+                // node preparation rebuilds the complete State against the certified root.
+                (_, false) => {
+                    if let Ok(mut restored) = result {
+                        restored.set_gov(state.gov.clone());
+                        restored
+                            .set_pipeline(iroha_config::parameters::actual::Pipeline::default());
+                        assert!(
+                            restored.authenticate_restored_keyed_state().is_err(),
+                            "hostile accounts cannot authenticate against the certified State root"
+                        );
+                    }
+                }
             }
             assert_eq!(kura.blocks_count(), height + 1);
             assert_eq!(kura.exact_durable_blocks_count().unwrap(), height + 1);

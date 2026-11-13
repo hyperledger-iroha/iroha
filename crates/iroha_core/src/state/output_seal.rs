@@ -559,9 +559,33 @@ impl StateBlock<'_> {
                 .require_storage_admission()
                 .map_err(ExecutionOutputSealError::Storage)?;
             let world_delta = state.world.net_state_delta()?;
+            // The governance block-start rows of this block precede every execution row.
+            // Their pass ran before any input, in this same block overlay, so the rows and
+            // the State they describe are committed or abandoned together.
+            let mut rows = retained.rows;
+            // SPEC: §13.4 HC807 — the executed block commits its governance-start rows.
+            if let Some(governance) = state
+                .fields
+                .as_mut()
+                .expect("original execution output owner")
+                .governance_start_outputs
+                .take()
+                .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC807")))
+            {
+                let (mut leading, _) = governance.finish();
+                if !leading.is_empty() {
+                    leading.try_reserve_exact(rows.len()).map_err(|_| {
+                        ExecutionOutputSealError::Deferred(
+                            ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                        )
+                    })?;
+                    leading.append(&mut rows);
+                    rows = leading;
+                }
+            }
             block
                 .set_execution_outputs(
-                    retained.rows,
+                    rows,
                     fragments,
                     transcripts,
                     envelopes,

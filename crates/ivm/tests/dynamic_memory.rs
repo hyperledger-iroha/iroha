@@ -14,10 +14,7 @@ fn test_heap_growth_allocation() {
     let mut prog = Vec::new();
     // grow heap
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_GROW_HEAP as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_GROW_HEAP)
         .to_le_bytes(),
     );
     // move alloc size into r10 (`ADD r10 = r11 + r0`)
@@ -26,10 +23,7 @@ fn test_heap_growth_allocation() {
     );
     // alloc
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_ALLOC as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC)
         .to_le_bytes(),
     );
     // copy returned addr to r1 (`ADD r1 = r10 + r0`)
@@ -58,10 +52,7 @@ fn test_heap_grow_oob() {
     vm.set_register(10, Memory::HEAP_MAX_SIZE * 2);
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_GROW_HEAP as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_GROW_HEAP)
         .to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);
@@ -79,10 +70,7 @@ fn test_heap_alloc_exact_limit() {
     vm.set_register(11, Memory::HEAP_MAX_SIZE);
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_GROW_HEAP as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_GROW_HEAP)
         .to_le_bytes(),
     );
     // move allocation size into r10 (`ADD r10 = r11 + r0`)
@@ -90,10 +78,7 @@ fn test_heap_alloc_exact_limit() {
         &encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 10, 11, 0).to_le_bytes(),
     );
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_ALLOC as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC)
         .to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);
@@ -109,10 +94,7 @@ fn test_heap_alloc_oob() {
     vm.set_register(10, Memory::HEAP_MAX_SIZE + 8);
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_ALLOC as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC)
         .to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);
@@ -127,10 +109,7 @@ fn test_default_heap_supports_large_alloc_without_growth() {
     vm.set_register(10, 0x14_000); // 80 KiB, larger than the historical 64 KiB default heap.
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_ALLOC as u8,
-        )
+        &encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC)
         .to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);

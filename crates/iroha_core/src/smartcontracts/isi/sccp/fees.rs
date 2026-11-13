@@ -73,7 +73,12 @@ pub(crate) fn exempt_class_from(
             .creation_time_ms
             .checked_add(1)
             .filter(|time| {
-                super::keepalive::due_from(source, committed_time_ms, 0, *time) == Ok(true)
+                // TODO(design §12.3 slice 3, open list): a keepalive justified by Parliament
+                // work alone is not classified exempt, so fee admission refuses it. K3 needs
+                // Parliament's terms at the candidate height for admission and the block's own
+                // `governance_due_applied` at execution.
+                super::keepalive::due_from(source, committed_time_ms, 0, *time, || Ok(false))
+                    == Ok(true)
             })
             .map(|_| SccpExemptClassV1::Keepalive);
     }

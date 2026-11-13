@@ -1,6 +1,28 @@
 /** Closed canonical runtime faults shared by simulation and HTTP error projections. */
 import { rejectType } from "./validationThrow.js";
 
+// `IvmFaultKindV1` unit categories in codec-index order; `Numeric` (10) and
+// `PointerAbi` (11) carry the exact subtype codes below.
+const UNIT_FAULT_KINDS = new Set([
+  "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
+  "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow",
+  "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt", "NullifierAlreadyUsed",
+  "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+  "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
+  "CallDepthExceeded", "ControlFlowViolation",
+]);
+// `NumericFaultV1` codes in ABI tag order (1..=14).
+const NUMERIC_FAULT_CODES = new Set([
+  "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
+  "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
+  "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+]);
+// `PointerAbiFaultV1` codes in ABI tag order (1..=11).
+const POINTER_ABI_FAULT_CODES = new Set([
+  "InvalidAddress", "UnknownType", "TypeNotAllowed", "WrongType", "InvalidEnvelopeVersion", "OversizedLength",
+  "TruncatedEnvelope", "PayloadHashMismatch", "MalformedFrame", "SchemaMismatch", "NonCanonical",
+]);
+
 function exactRecord(value, keys, context) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) rejectType(`${context} must be an object`);
   const own = Reflect.ownKeys(value);
@@ -25,15 +47,14 @@ function hash(value, context) {
 export function normalizeIvmFault(value, context) {
   const fault = exactRecord(value, ["kind", "site"], context);
   const kind = exactRecord(fault.kind, ["kind", "value"], `${context}.kind`);
-  const units = new Set(["OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds", "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength", "MissingHalt", "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed", "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed", "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall", "CallDepthExceeded"]);
   if (kind.kind === "Numeric" || kind.kind === "PointerAbi") {
     const code = exactRecord(kind.value, ["kind", "value"], `${context}.kind.value`);
-    const allowed = kind.kind === "Numeric" ? ["MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow", "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode", "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot"] : ["InvalidAddress", "UnknownType", "TypeNotAllowed", "WrongType", "InvalidEnvelopeVersion", "OversizedLength", "TruncatedEnvelope", "PayloadHashMismatch", "MalformedFrame", "SchemaMismatch", "NonCanonical"];
-    if (!allowed.includes(code.kind) || code.value !== null) {
+    const allowed = kind.kind === "Numeric" ? NUMERIC_FAULT_CODES : POINTER_ABI_FAULT_CODES;
+    if (!allowed.has(code.kind) || code.value !== null) {
       rejectType(`${context}.kind.value must be an exact known fault code`);
     }
     kind.value = code;
-  } else if (!units.has(kind.kind) || kind.value !== null) {
+  } else if (!UNIT_FAULT_KINDS.has(kind.kind) || kind.value !== null) {
     rejectType(`${context}.kind must be an exact known fault category`);
   }
   const site = exactRecord(fault.site, ["code_hash", "selector", "position"], `${context}.site`);
@@ -41,13 +62,13 @@ export function normalizeIvmFault(value, context) {
   if (selector.kind === "Generic") {
     if (selector.value !== null) rejectType(`${context}.site.selector.value must be null`);
   } else if (selector.kind === "Entrypoint") {
-    selector.value = unsigned(selector.value, `${context}.site.selector.value`, {allowZero: true});
+    selector.value = unsigned(selector.value, `${context}.site.selector.value`);
     if (selector.value > 0xffffffff) rejectType(`${context}.site.selector.value exceeds u32`);
   } else rejectType(`${context}.site.selector.kind is unknown`);
   const position = exactRecord(site.position, ["kind", "value"], `${context}.site.position`);
   if (position.kind === "Execute") {
     const location = exactRecord(position.value, ["pc_offset"], `${context}.site.position.value`);
-    position.value = {pc_offset: unsigned(location.pc_offset, `${context}.site.position.value.pc_offset`, {allowZero: true})};
+    position.value = {pc_offset: unsigned(location.pc_offset, `${context}.site.position.value.pc_offset`)};
   } else if (!["Initialization", "ReturnValidation"].includes(position.kind) || position.value !== null) {
     rejectType(`${context}.site.position must be an exact known stage`);
   }

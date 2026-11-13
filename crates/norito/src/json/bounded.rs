@@ -462,7 +462,12 @@ fn visit_json_string_content<E>(
     Ok(())
 }
 
-pub(super) fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
+/// Escape borrowed string content into a checked sink without adding surrounding quotes.
+///
+/// # Errors
+/// Returns the destination's original refusal.
+#[doc(hidden)]
+pub fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
     value: &str,
     output: &mut S,
 ) -> Result<(), BoundedJsonError> {
@@ -557,7 +562,12 @@ fn write_json_object_key<K: JsonObjectKey + ?Sized>(key: &K, output: &mut String
     }
     output.push('"');
 }
-fn write_json_object_key_to<K: JsonObjectKey + ?Sized>(
+/// Stream the key owner's checked canonical text as one quoted JSON string.
+///
+/// # Errors
+/// Returns the key owner's or destination's original refusal.
+#[doc(hidden)]
+pub fn write_json_object_key_to<K: JsonObjectKey + ?Sized>(
     key: &K,
     output: &mut dyn JsonWriteSink,
 ) -> Result<(), BoundedJsonError> {

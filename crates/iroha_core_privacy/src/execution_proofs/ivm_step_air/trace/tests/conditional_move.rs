@@ -14,7 +14,7 @@ fn move_mix() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
             enc::encode_branch(wide::control::BNE, 22, 0, 2),
             enc::encode_ri(wide::arithmetic::ADDI, 23, 0, 99),
             enc::encode_ri(wide::arithmetic::ROTR_IMM, 23, 20, 8),
-            enc::encode_rr(wide::system::GETGAS, 24, 255, 255),
+            enc::encode_rr(wide::arithmetic::NOT, 24, 255, 255),
         ],
         9,
         &[

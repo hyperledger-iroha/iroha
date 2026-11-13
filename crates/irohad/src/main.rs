@@ -2437,7 +2437,7 @@ impl Iroha {
             frozen_startup_lane_manifests,
             frozen_startup_lane_compliance,
             expected_network_id,
-            snapshot_writer_key,
+            snapshot_maker,
             snapshot_read_buffer_budget,
             events_sender,
             startup_trace_started_at,
@@ -3632,18 +3632,10 @@ impl Iroha {
             tx_gossiper
         };
         if let Some(handle) = sumeragi.as_ref() {
-            let maker = snapshot_writer_key.and_then(|key| {
-                SnapshotMaker::from_config(
-                    &config.snapshot,
-                    Arc::clone(&state),
-                    key,
-                    snapshot_read_buffer_budget.clone(),
-                )
-            });
             // Storage maintenance is authorized only by completed native recovery.
             // A failed consensus owner revokes further snapshot publication.
             supervisor.monitor(SnapshotMaker::start(
-                maker,
+                snapshot_maker,
                 Arc::clone(&state),
                 handle.startup_recovery(),
                 supervisor.shutdown_signal(),

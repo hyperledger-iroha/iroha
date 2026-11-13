@@ -387,6 +387,7 @@ public sealed class ContractManifestTests
                 "Amount{amount: quantity}"),
             ReplaceFirst(response, "\"identity\":\"Ledger::TransferError\"", "\"identity\":\"bad identity\""),
             ReplaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":4"),
+            ReplaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":2"),
             ReplaceFirst(response, "\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),
             ReplaceFirst(
                 response,

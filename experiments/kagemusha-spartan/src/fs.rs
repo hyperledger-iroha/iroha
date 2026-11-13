@@ -3,6 +3,7 @@
 use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use iroha_pasta::poseidon::{PoseidonField, RATE, WIDTH, permute};
 use iroha_pasta::{PastaAffine, PastaCurve};
+use zeroize::{Zeroize, Zeroizing};
 
 /// The scalar fields used here: 32-byte canonical encodings, wide reduction.
 pub trait Scalar: PrimeField<Repr = [u8; 32]> + FromUniformBytes<64> {}
@@ -181,7 +182,7 @@ pub fn full_scalar<S: PrimeField>(repr: &[u8; 32]) -> S {
     S::from_u128(lo) + S::from_u128(hi) * S::from(2).pow_vartime([128])
 }
 
-/// The lean challenge schedule (`ZKS_SCHEDULE=lean`, gate 1e):
+/// The fixed challenge schedule of this backend:
 /// - tau_i = t^(2^i) for one full-width challenge t: F(tau) is multilinear, so
 ///   distinct monomials map to distinct powers (binary), degree < 2^sx;
 /// - a committed round's k challenges are r^(3^j) for one 126-bit challenge:
@@ -191,7 +192,7 @@ pub fn full_scalar<S: PrimeField>(repr: &[u8; 32]) -> S {
 /// - the inner rounds holding r_sel and the row bits keep per-variable
 ///   challenges (the row bits are endoscalars for the Hyrax fold).
 pub fn lean_schedule() -> bool {
-    std::env::var("ZKS_SCHEDULE").as_deref() == Ok("lean")
+    true
 }
 
 pub fn powers2<S: Field>(t: S, n: usize) -> Vec<S> {
@@ -268,6 +269,38 @@ pub fn io_digest<S: PoseidonField>(io: &[S]) -> S {
 /// A wallet draws these from its CSPRNG.
 #[derive(Clone)]
 pub struct SpikeRng(blake3::OutputReader);
+
+impl Drop for SpikeRng {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// Fresh secret randomness for one complete native proof operation. The seed
+/// is never exported or serialized; distinct operations require fresh OS
+/// entropy. Recreating a named stream is only for the same operation's private
+/// first-phase replay while constructing its linked proof pair.
+pub struct ProofEntropy(Zeroizing<[u8; 32]>);
+
+impl ProofEntropy {
+    /// Fail closed if the operating system cannot supply cryptographic entropy.
+    pub fn fresh() -> Result<Self, getrandom::Error> {
+        let mut key = Zeroizing::new([0u8; 32]);
+        getrandom::fill(&mut *key)?;
+        Ok(Self(key))
+    }
+
+    /// Domain-separated blinding stream within this single proof operation.
+    pub(crate) fn stream(&self, purpose: &[u8]) -> SpikeRng {
+        let mut hasher = blake3::Hasher::new_keyed(&self.0);
+        hasher.update(b"kagemusha-spartan/prover-entropy/v1");
+        hasher.update(&(purpose.len() as u64).to_le_bytes());
+        hasher.update(purpose);
+        let reader = hasher.finalize_xof();
+        hasher.zeroize();
+        SpikeRng(reader)
+    }
+}
 
 impl SpikeRng {
     pub fn new(seed: &[u8]) -> Self {

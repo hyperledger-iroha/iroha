@@ -2,11 +2,12 @@
 
 use super::{HashOf, MerkleTree, Registers, VMError, register_leaf_index};
 
-/// Exact authentication depth of the canonical 256-register tree.
-pub const REGISTER_MERKLE_PATH_DEPTH: usize = 8;
+/// Exact authentication depth of the canonical 32-register tree.
+pub const REGISTER_MERKLE_PATH_DEPTH: usize = 5;
+const _: () = assert!(1 << REGISTER_MERKLE_PATH_DEPTH == super::REGISTER_COUNT);
 
 impl Registers {
-    /// Return the eight canonical siblings for register `idx` without allocating.
+    /// Return the five canonical siblings for register `idx` without allocating.
     ///
     /// # Errors
     /// Returns [`VMError::RegisterOutOfBounds`] for an invalid register index.
@@ -17,7 +18,7 @@ impl Registers {
         self.merkle_root_and_path(idx).map(|(_, path)| path)
     }
 
-    /// Return the original root and eight leaf-to-root siblings without allocating.
+    /// Return the original root and five leaf-to-root siblings without allocating.
     ///
     /// Dirty register nodes are rewritten in their existing fixed backing before
     /// the root and path are copied under the same original tree guard.

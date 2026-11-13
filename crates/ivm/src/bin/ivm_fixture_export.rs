@@ -458,7 +458,7 @@ fn main() -> Result<(), String> {
         Path::new("decoded.json"),
         Path::new("index.json"),
         Path::new("artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to"),
-        Path::new("artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to"),
+        Path::new("artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to"),
     ] {
         let expected = fs::read(stage.join(relative))
             .map_err(|error| format!("read staged {}: {error}", relative.display()))?;

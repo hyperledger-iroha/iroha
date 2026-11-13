@@ -172,12 +172,9 @@ fn json_encode_decode_roundtrip() {
     // ENCODE
     let enc_prog = common::assemble(
         &[
-            encoding::wide::encode_sys(
-                wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            )
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
             .to_le_bytes(),
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_JSON_ENCODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_ENCODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -192,12 +189,9 @@ fn json_encode_decode_roundtrip() {
     // DECODE
     let dec_prog = common::assemble(
         &[
-            encoding::wide::encode_sys(
-                wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            )
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
             .to_le_bytes(),
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_JSON_DECODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -218,12 +212,9 @@ fn json_decode_rejects_retired_blob_carrier() {
     let p_blob = vm.alloc_input_tlv(&tlv(PointerType::Blob, json)).unwrap();
     let dec_prog = common::assemble(
         &[
-            encoding::wide::encode_sys(
-                wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            )
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
             .to_le_bytes(),
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_JSON_DECODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -313,7 +304,7 @@ fn schema_encode_decode_roundtrip() {
     // ENCODE (inputs are already in INPUT via alloc_input_tlv)
     let enc = common::assemble(
         &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_ENCODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -329,7 +320,7 @@ fn schema_encode_decode_roundtrip() {
     // DECODE (inputs are already in INPUT via alloc_input_tlv)
     let dec = common::assemble(
         &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_DECODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -353,7 +344,7 @@ fn schema_decode_rejects_blob() {
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     let enc = common::assemble(
         &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_ENCODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -370,7 +361,7 @@ fn schema_decode_rejects_blob() {
         .unwrap();
     let dec = common::assemble(
         &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_DECODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
@@ -400,10 +391,7 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
             .unwrap();
         let dec = common::assemble(
             &[
-                encoding::wide::encode_sys(
-                    wide::system::SCALL,
-                    syscalls::SYSCALL_SCHEMA_DECODE as u8,
-                )
+                encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
                 .to_le_bytes(),
                 encoding::wide::encode_halt().to_le_bytes(),
             ]
@@ -426,7 +414,7 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
         .unwrap();
     let enc = common::assemble(
         &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_ENCODE as u8)
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
                 .to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]

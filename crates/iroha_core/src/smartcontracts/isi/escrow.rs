@@ -894,6 +894,31 @@ pub(crate) fn partition_orderbook_asset_lock(
     }
     let source = AssetId::new(parent.asset_definition.clone(), parent.custody.clone());
     let destination = AssetId::new(parent.asset_definition.clone(), child_custody.clone());
+    let child_capture = crate::runtime::native_escrow_capture::prepare_child_from(
+        state_transaction,
+        parent_id,
+        || AssetEscrowRecord {
+            id: child_id,
+            seller: parent.seller.clone(),
+            buyer: Some(provider.clone()),
+            asset_definition: parent.asset_definition.clone(),
+            amount: amount.clone(),
+            custody: child_custody.clone(),
+            status: AssetEscrowStatus::Locked,
+            kind: AssetEscrowKind::Lock,
+            remaining_amount: amount.clone(),
+            release_authority: Some(release_authority.clone()),
+            expires_at_ms: Some(expires_at_ms),
+            evidence_hashes: Vec::new(),
+            conditions: Vec::new(),
+            created_at_ms: now_ms,
+            accepted_at_ms: None,
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        },
+    )?;
     let custody_created = ensure_custody_account(&child_custody, state_transaction)?;
     let transfer = transfer_numeric_asset_for_escrow(
         state_transaction,
@@ -946,7 +971,7 @@ pub(crate) fn partition_orderbook_asset_lock(
         .insert_asset_escrow_entry(&(parent.clone()))?;
     state_transaction
         .world
-        .insert_asset_escrow_entry(&(child.clone()))?;
+        .insert_captured_asset_escrow_entry(&child, child_capture)?;
     mark_orderbook_channel_lock(state_transaction, &child.id)?;
     state_transaction.world.emit_events([
         EscrowEvent::Released(parent.clone()),
@@ -1302,6 +1327,31 @@ impl Execute for OpenAssetEscrow {
         );
         let seller_asset = AssetId::new(self.asset_definition.clone(), authority.clone());
         let custody_asset = AssetId::new(self.asset_definition.clone(), custody.clone());
+        let capture = crate::runtime::native_escrow_capture::prepare_opening_from(
+            state_transaction,
+            iroha_data_model::runtime::native_escrow::NativeEscrowKindV1::Marketplace,
+            || AssetEscrowRecord {
+                id: self.escrow_id,
+                seller: authority.clone(),
+                buyer: None,
+                asset_definition: self.asset_definition.clone(),
+                amount: self.amount.clone(),
+                custody: custody.clone(),
+                status: AssetEscrowStatus::Open,
+                kind: AssetEscrowKind::Marketplace,
+                remaining_amount: self.amount.clone(),
+                release_authority: None,
+                expires_at_ms: None,
+                evidence_hashes: self.evidence_hashes.clone(),
+                conditions: Vec::new(),
+                created_at_ms: state_transaction.block_unix_timestamp_ms(),
+                accepted_at_ms: None,
+                payment_sent_at_ms: None,
+                disputed_at_ms: None,
+                closed_at_ms: None,
+                resolution: None,
+            },
+        )?;
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
         let transfer_result = transfer_numeric_asset_for_escrow(
             state_transaction,
@@ -1340,7 +1390,7 @@ impl Execute for OpenAssetEscrow {
         };
         state_transaction
             .world
-            .insert_asset_escrow_entry(&(record.clone()))?;
+            .insert_captured_asset_escrow_entry(&record, capture)?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Opened(record)));
@@ -1684,6 +1734,41 @@ fn execute_open_asset_lock(
     );
     let source_asset = AssetId::new(instruction.asset_definition.clone(), authority.clone());
     let custody_asset = AssetId::new(instruction.asset_definition.clone(), custody.clone());
+    let capture = crate::runtime::native_escrow_capture::prepare_opening_from(
+        state_transaction,
+        match namespace {
+            AssetLockNamespace::Generic => {
+                iroha_data_model::runtime::native_escrow::NativeEscrowKindV1::Lock
+            }
+            AssetLockNamespace::Controlled => {
+                iroha_data_model::runtime::native_escrow::NativeEscrowKindV1::ControlledLock
+            }
+            AssetLockNamespace::Orderbook => {
+                iroha_data_model::runtime::native_escrow::NativeEscrowKindV1::OrderbookLock
+            }
+        },
+        || AssetEscrowRecord {
+            id: instruction.escrow_id,
+            seller: authority.clone(),
+            buyer: Some(instruction.destination.clone()),
+            asset_definition: instruction.asset_definition.clone(),
+            amount: instruction.amount.clone(),
+            custody: custody.clone(),
+            status: AssetEscrowStatus::Locked,
+            kind: AssetEscrowKind::Lock,
+            remaining_amount: instruction.amount.clone(),
+            release_authority: instruction.release_authority.clone(),
+            expires_at_ms: instruction.expires_at_ms,
+            evidence_hashes: instruction.evidence_hashes.clone(),
+            conditions: Vec::new(),
+            created_at_ms: state_transaction.block_unix_timestamp_ms(),
+            accepted_at_ms: None,
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        },
+    )?;
     let custody_created = ensure_custody_account(&custody, state_transaction)?;
     let transfer_result = transfer_numeric_asset_for_escrow(
         state_transaction,
@@ -1722,7 +1807,7 @@ fn execute_open_asset_lock(
     };
     state_transaction
         .world
-        .insert_asset_escrow_entry(&(record.clone()))?;
+        .insert_captured_asset_escrow_entry(&record, capture)?;
     state_transaction
         .world
         .emit_events(Some(EscrowEvent::Opened(record)));
@@ -2052,6 +2137,7 @@ pub(crate) struct ConditionalEscrowTerms {
 /// and then records the retained escrow with [`Self::record_funded`].
 pub(crate) struct ConditionalEscrowOpening {
     record: AssetEscrowRecord,
+    capture: crate::runtime::native_escrow_capture::PreparedCapture,
     source: AssetId,
     uid_holding_ceiling: Option<Quantity>,
 }
@@ -2094,7 +2180,7 @@ impl ConditionalEscrowOpening {
         )?;
         state_transaction
             .world
-            .insert_asset_escrow_entry(&(self.record.clone()))?;
+            .insert_captured_asset_escrow_entry(&self.record, self.capture)?;
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Opened(self.record)));
@@ -2251,35 +2337,42 @@ pub(crate) fn prepare_conditional_escrow_opening(
         &escrow_id,
         &asset_definition,
     );
+    let record = AssetEscrowRecord {
+        id: escrow_id,
+        seller: opener,
+        buyer: Some(beneficiary),
+        asset_definition,
+        amount: amount.clone(),
+        custody,
+        status: AssetEscrowStatus::Locked,
+        kind: AssetEscrowKind::Conditional,
+        remaining_amount: amount,
+        release_authority: None,
+        expires_at_ms: Some(effective_expiry_ms),
+        evidence_hashes,
+        conditions: conditions
+            .into_iter()
+            .map(|condition| ConditionalEscrowConditionState {
+                condition,
+                attestation: None,
+                satisfied_at_ms: None,
+            })
+            .collect(),
+        created_at_ms,
+        accepted_at_ms: None,
+        payment_sent_at_ms: None,
+        disputed_at_ms: None,
+        closed_at_ms: None,
+        resolution: None,
+    };
+    let capture = crate::runtime::native_escrow_capture::prepare_opening(
+        state_transaction,
+        &record,
+        iroha_data_model::runtime::native_escrow::NativeEscrowKindV1::Conditional,
+    )?;
     Ok(ConditionalEscrowOpening {
-        record: AssetEscrowRecord {
-            id: escrow_id,
-            seller: opener,
-            buyer: Some(beneficiary),
-            asset_definition,
-            amount: amount.clone(),
-            custody,
-            status: AssetEscrowStatus::Locked,
-            kind: AssetEscrowKind::Conditional,
-            remaining_amount: amount,
-            release_authority: None,
-            expires_at_ms: Some(effective_expiry_ms),
-            evidence_hashes,
-            conditions: conditions
-                .into_iter()
-                .map(|condition| ConditionalEscrowConditionState {
-                    condition,
-                    attestation: None,
-                    satisfied_at_ms: None,
-                })
-                .collect(),
-            created_at_ms,
-            accepted_at_ms: None,
-            payment_sent_at_ms: None,
-            disputed_at_ms: None,
-            closed_at_ms: None,
-            resolution: None,
-        },
+        record,
+        capture,
         uid_holding_ceiling: crate::state::asset_uid::opening_holding_ceiling(
             state_transaction.world(),
             &source,
@@ -2725,6 +2818,7 @@ impl ValidQuery for FindAssetEscrowsByStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("escrow/native_capture_tests.rs");
     use crate::state::State;
     use iroha_data_model::{
         Registrable,

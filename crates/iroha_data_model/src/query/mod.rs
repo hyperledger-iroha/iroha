@@ -2865,6 +2865,8 @@ impl CommittedTransaction {
             crate::block::execution_output::ExecutionOutputV1::TimeWithLifecycle(row) => {
                 &mut row.execution.result.0
             }
+            // A governance block-start row has no result to swap.
+            crate::block::execution_output::ExecutionOutputV1::GovernanceBlockStart(_) => return,
         };
         *result = if result.is_ok() {
             Err(TransactionRejectionReason::Validation(

@@ -686,13 +686,12 @@ fn funded_child_return_backing_defers_before_gas_and_keeps_its_charge() {
 #[test]
 fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     let mut vm = quiet_vm(1_000_000);
-    let mut gpr = [0; 256];
+    let mut gpr = [0; crate::parallel::REGISTER_COUNT];
     gpr[7] = 91;
-    vm.constraints.record(Constraint::Zero { reg: 8, cycle: 1 });
-    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
-    vm.trace_log.record_reserved(4, gpr, [false; 256]);
-    vm.delta_trace.prepare_batch(1, 256, 0, None).unwrap();
-    vm.delta_trace.record_reserved(4, gpr, [false; 256]);
+    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
+    vm.trace_log.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
+    vm.delta_trace.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
+    vm.delta_trace.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
     let reg_root = vm.registers.merkle_root();
     let mem_root = vm.memory.root();
     vm.step_log.prepare_cycles(1).expect("prepaid cycle row");
@@ -704,7 +703,6 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     let copied = vm
         .try_clone_snapshot()
         .expect("bounded diagnostic and proof logs");
-    assert_eq!(copied.constraints.list, vm.constraints.list);
     assert!(copied.trace_log.entries().eq(vm.trace_log.entries()));
     assert!(copied.delta_trace.entries().eq(vm.delta_trace.entries()));
     assert_eq!(copied.step_log.as_slice(), vm.step_log.as_slice());
@@ -717,9 +715,9 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     vm.pc_trace.prepare(1, None).unwrap();
     vm.pc_trace.record_reserved(12);
     vm.trace_log.scrub();
-    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
+    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
     gpr[7] = 0;
-    vm.trace_log.record_reserved(4, gpr, [false; 256]);
+    vm.trace_log.record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
     assert_ne!(copied.pc_trace.as_slice(), vm.pc_trace.as_slice());
     assert!(!copied.trace_log.entries().eq(vm.trace_log.entries()));
 }
@@ -842,13 +840,11 @@ fn worker_private_range_copy_refusal_leaves_source_intact() {
 #[test]
 fn idle_retention_rejects_live_trace_allocations_without_discarding_them() {
     let mut vm = quiet_vm(1_000_000);
-    vm.constraints.record(Constraint::Zero { reg: 7, cycle: 1 });
-    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
-    vm.trace_log.record_reserved(4, [0; 256], [false; 256]);
+    vm.trace_log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
+    vm.trace_log.record_reserved(4, [0; crate::parallel::REGISTER_COUNT], [false; crate::parallel::REGISTER_COUNT]);
     let retained_trace = vm.trace_log.try_clone_allocation(None).unwrap();
     assert!(!vm.try_retain_cache_allocations());
     assert!(vm.trace_log.entries().eq(retained_trace.entries()));
-    assert_eq!(vm.constraints.list.len(), 1);
 }
 #[test]
 fn try_new_preserves_public_gas_limit_with_charged_memory() {

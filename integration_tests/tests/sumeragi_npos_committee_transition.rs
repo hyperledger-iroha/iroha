@@ -143,16 +143,13 @@ const POLL: Duration = Duration::from_millis(150);
 const TAIRA_XOR: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 
 /// Preserve the server's backpressure delay within the original test read deadline.
+///
+/// Torii's capacity refusal is the same answer with or without its error envelope.
 fn committee_read_retry_delay(error: &iroha::Error, remaining: Duration) -> Option<Duration> {
-    let iroha::Error::Http {
-        status: 429,
-        retry_after,
-        ..
-    } = error
-    else {
+    if error.http_status() != Some(429) {
         return None;
-    };
-    let delay = retry_after.unwrap_or(POLL).max(POLL);
+    }
+    let delay = error.retry_after().unwrap_or(POLL).max(POLL);
     (delay < remaining).then_some(delay)
 }
 
@@ -214,9 +211,32 @@ fn committee_read_backoff_honors_server_delay_without_extending_deadline() {
         committee_read_retry_delay(&error(429, None), Duration::ZERO),
         None
     );
-    for status in [400, 401, 403, 404, 500, 503] {
+    for status in [400, 401, 403, 404, 409, 500, 503] {
         assert_eq!(committee_read_retry_delay(&error(status, None), WAIT), None);
     }
+    let typed = |status, retry_after: Option<Duration>| {
+        let envelope = iroha::ApiError::new(status, "request_rate_limited", "capacity exhausted");
+        iroha::Error::Api {
+            operation: "nexus.staking.prepare",
+            error: Box::new(match retry_after {
+                Some(delay) => envelope.with_retry_after(delay),
+                None => envelope,
+            }),
+        }
+    };
+    assert_eq!(
+        committee_read_retry_delay(&typed(429, None), WAIT),
+        Some(POLL)
+    );
+    assert_eq!(
+        committee_read_retry_delay(&typed(429, Some(Duration::from_secs(3))), WAIT),
+        Some(Duration::from_secs(3)),
+    );
+    assert_eq!(
+        committee_read_retry_delay(&typed(429, Some(WAIT)), WAIT),
+        None
+    );
+    assert_eq!(committee_read_retry_delay(&typed(409, None), WAIT), None);
     assert_eq!(
         committee_read_retry_delay(
             &iroha::Error::Timeout {

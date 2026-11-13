@@ -133,3 +133,31 @@ fn checked_key_default_and_nested_tuple_refuse_before_ordinary_fallback() {
         Err(json::BoundedJsonError::Unsupported)
     );
 }
+
+#[test]
+fn nested_json_storage_keys_stream_identical_escapes_and_refusals() {
+    struct Nested<'a>(&'a Vec<String>);
+    impl json::JsonSerialize for Nested<'_> {
+        fn json_serialize(&self, out: &mut String) {
+            json::write_json_string(&json::to_json(self.0).unwrap(), out);
+        }
+        fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            write_json_value_as_string_to(self.0, out)
+        }
+    }
+    let values = vec!["quote\"\\\n\u{1f}😀".to_owned(), "plain".to_owned()];
+    let value = Nested(&values);
+    let expected = json::to_json(&value).unwrap();
+    assert_eq!(
+        json::to_json_bounded(&value, expected.len()).unwrap(),
+        expected
+    );
+    for maximum in 0..expected.len() {
+        assert_eq!(
+            json::to_json_bounded(&value, maximum),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+    }
+    let inner: String = json::from_str(&expected).unwrap();
+    assert_eq!(json::from_str::<Vec<String>>(&inner).unwrap(), values);
+}

@@ -25378,6 +25378,8 @@ async fn handler_post_contract_verified_source_job(
     let artifact_id = routing::parse_contract_artifact_path(&dataspace_id, &code_hash)?;
     admit_contract_artifact_read(&app, &headers, remote, &verified.account, artifact_id).await?;
     let network_id = *app.state.network_id_ref();
+    let host_policy =
+        crate::contract_sources::verified_source_host_policy(&app.state.world_view(), artifact_id)?;
     let compile_permit = compile_admission.take()?;
     let sorafs_node = app.sorafs_node.clone();
     let ((status, body), compile_permit) = run_transaction_ingress_compute_job(
@@ -25389,6 +25391,7 @@ async fn handler_post_contract_verified_source_job(
                 artifact_id,
                 payload,
                 sorafs_node,
+                host_policy,
             )
         },
     )

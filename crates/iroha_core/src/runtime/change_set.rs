@@ -514,10 +514,9 @@ pub fn activate_due(
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
                     }
-                    // No grant of the content-publishing name crosses a change of its selection.
-                    if super::content_publish_permission::selected(&current)
-                        != super::content_publish_permission::selected(&applied.selection)
-                        && let Err(reason) = super::content_publish_permission::validate_inventory(&*wtx)
+                    if !super::content_publish_permission::selected(&current)
+                        && super::content_publish_permission::selected(&applied.selection)
+                        && let Err(reason) = super::content_publish_permission::validate_activation_inventory(&*wtx)
                     {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
@@ -534,7 +533,35 @@ pub fn activate_due(
                             return false;
                         }
                     }
+                    if let Err(reason) = super::deferred_consent::check_transition(&*wtx, &current, &applied.selection) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    if let Err(reason) = super::native_amx_capture::check_transition(&*wtx, &current, &applied.selection) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    if let Err(reason) = super::native_escrow_capture::check_transition(&*wtx, &current, &applied.selection) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     if let Err(reason) = super::committed_policy::check_retirement(
+                        &*wtx,
+                        &current,
+                        &applied.selection,
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    if let Err(reason) = super::content_publish_permission::check_retirement(
+                        &*wtx,
+                        &current,
+                        &applied.selection,
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    if let Err(reason) = super::content_publish_permission::check_cleanup(
                         &*wtx,
                         &current,
                         &applied.selection,

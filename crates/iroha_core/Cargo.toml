@@ -19,7 +19,7 @@ categories.workspace = true
 [[bin]]
 name = "trigger_lifecycle_preflight"
 path = "src/bin/trigger_lifecycle_preflight.rs"
-required-features = ["json"]
+required-features = ["json", "dev-tools"]
 
 [[bin]]
 name = "fastpq_fixture_capture"
@@ -39,7 +39,7 @@ required-features = ["privacy-release-evidence"]
 [[bin]]
 name = "ironwood_activation_preflight"
 path = "src/bin/ironwood_activation_preflight.rs"
-required-features = ["node"]
+required-features = ["node", "dev-tools"]
 
 [[bin]]
 name = "kagemusha_enrollment_journal_init"

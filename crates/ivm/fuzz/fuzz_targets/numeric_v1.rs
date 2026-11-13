@@ -311,7 +311,7 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
 }
 fn numeric_program(syscall: u32) -> Vec<u8> {
     let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
-    program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    program.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
 }

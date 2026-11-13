@@ -29,17 +29,32 @@ individual files directly from Torii.
   activates it. A root that has not activated it admits `PublishContentBundle`
   and `RetireContentBundle` in genesis only, exactly as the baseline does. On a
   root that has activated it:
-  - an authority holding the exact unit permission, directly or through a role,
-    may publish while no `Disabled` restriction names the definition;
-  - only a `CanSetParameters` holder grants or revokes the permission, on an
-    account or a role, and it may remove the permission from a role it does
-    not hold; a holder cannot delegate it and may renounce its own direct
-    grant;
-  - a `Disabled` restriction stops publishing and new grants, while
-    revocation continues;
+  - the permission is a direct account grant of the exact unit token, the
+    deleted publisher allow-list one entry per account; no role carries it,
+    and Core refuses to put it in a role for every executor;
+  - an account holding it may publish while no restriction of any kind names
+    the definition;
+  - only a `CanSetParameters` holder grants or revokes it; a holder cannot
+    delegate it and may renounce its own grant;
+  - any restriction (`live_runtime_upgrades.md` §7.1) stops publishing and new
+    grants, while revocation, renunciation and retirement continue;
   - the creator of a bundle may retire it after genesis;
-  - a change set that activates or retires the definition lapses while any
-    account or role holds a permission of that name.
+  - revoking a direct grant an account holds and retiring a bundle published
+    after genesis stay executable. Under closed admission or completion-only
+    on either instruction they run as completion work; a change set that would
+    leave `iroha.revoke` unbound or disabled lapses while a direct grant
+    remains, and one that would do so to `RetireContentBundle` lapses while a
+    bundle published after genesis remains. Grants and bundles hold no custody
+    and pin no completion closure, so rebinding either instruction, changing
+    the kernel or a profile, and replacing the executor do not wait for them.
+    The executor still checks the issuer, holder or bundle creator's authority;
+  - a change set that activates the definition lapses while any account or
+    role holds a permission of that name;
+  - a change set that retires the definition lapses while any account or role
+    holds it, or while any bundle published after genesis remains, expired
+    ones included: retiring returns `RetireContentBundle` to genesis-only, and
+    nothing prunes expired bundles. Governance keeps the definition restricted
+    until both clear.
 - **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
   hash with reference counts; retiring a bundle decrements and prunes chunks.
 - **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream

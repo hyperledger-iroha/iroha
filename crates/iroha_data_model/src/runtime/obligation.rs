@@ -12,8 +12,8 @@
 //!
 //! - when its owner issues one of the committed instructions, it runs although the definitions
 //!   behind it have admission closed or are completion-only, once;
-//! - a change set that would change a captured binding or stop executing a captured definition
-//!   lapses.
+//! - a changed binding leaves the captured implementation executable in its retained context;
+//!   removing required definitions or changing root-wide execution profiles still lapses.
 //!
 //! A capability is narrow. It covers only the exact instructions committed at registration, each
 //! once, only for its owner and until it expires, so it creates no new work. An owner holds one
@@ -138,6 +138,9 @@ pub enum ObligationError {
     /// The value cannot be encoded canonically.
     #[error("obligation encoding failed: {0}")]
     Encoding(String),
+    /// The root no longer retains a closed executable context for a captured completion.
+    #[error("captured completion context is unavailable: {0}")]
+    ExecutionContext(String),
 }
 
 /// The identity of a terminal effect: `H(TERMINAL_EFFECT_DOMAIN ‖ canonical instruction)`. It
@@ -411,8 +414,8 @@ impl CompletionCaptureV1 {
 
     /// The implementation the capture resolves `wire_id` to, whose active interface is
     /// `interface`: its terminal or nested binding, or the default implementation when that
-    /// answers the interface. `None` when the closure does not reach the interface, which then
-    /// resolves against the root's current selection.
+    /// answers the interface. `None` when the closure does not reach the interface; a scoped
+    /// completion cannot dispatch an instruction outside that closure.
     #[must_use]
     pub fn implementation_for(
         &self,
@@ -476,15 +479,106 @@ impl CompletionCaptureV1 {
         Ok(closure)
     }
 
+    /// Resolve the captured execution context while retaining the current restrictions.
+    ///
+    /// A replacement binding does not transfer an old obligation to new code. This context
+    /// binds every reached interface to its captured implementation and contains only the
+    /// captured definition closure. All its storage and active definitions must still be
+    /// retained by the root. Kernel, commitment and services changes still require draining:
+    /// their root-wide effects cannot be scoped to an individual completion.
+    ///
+    /// The returned value is an ephemeral execution context, never a replacement for the
+    /// root's committed selection. Disabled definitions remain disabled in the context.
+    ///
+    /// # Errors
+    /// A capture is malformed, a root-wide profile changed, or the retained closure is absent.
+    pub fn execution_selection(
+        &self,
+        current: &RootSelectionV1,
+        lookup: &impl DefinitionLookup,
+    ) -> Result<RootSelectionV1, ObligationError> {
+        self.validate()?;
+        if (self.kernel, self.commitment_profile, self.services_profile)
+            != (
+                current.kernel,
+                current.commitment_profile,
+                current.services_profile,
+            )
+        {
+            return Err(ObligationError::ExecutionContext(
+                "the kernel, commitment or execution services profile changed".into(),
+            ));
+        }
+        let closure = self.closure(lookup)?;
+        let mut active = Vec::new();
+        let mut installed_storage = Vec::new();
+        let mut bindings = Vec::new();
+        for id in &closure {
+            let descriptor = lookup
+                .definition(id)
+                .ok_or(ObligationError::Unpublished(*id))?;
+            match descriptor {
+                DefinitionDescriptorV1::Kernel(_)
+                | DefinitionDescriptorV1::CommitmentProfile(_)
+                | DefinitionDescriptorV1::ServicesProfile(_) => continue,
+                DefinitionDescriptorV1::Storage(_) => {
+                    if current.installed_storage.binary_search(id).is_err() {
+                        return Err(ObligationError::ExecutionContext(format!(
+                            "captured storage {id} is no longer installed"
+                        )));
+                    }
+                    installed_storage.push(*id);
+                }
+                _ => {
+                    if current.active.binary_search(id).is_err() {
+                        return Err(ObligationError::ExecutionContext(format!(
+                            "captured definition {id} is no longer active"
+                        )));
+                    }
+                    active.push(*id);
+                    if let DefinitionDescriptorV1::Interface(interface) = descriptor {
+                        let implementation = self
+                            .implementation_for(&interface.wire_id, id, lookup)
+                            .ok_or_else(|| ObligationError::Unbound(interface.wire_id.clone()))?;
+                        bindings.push(BindingV1 {
+                            wire_id: interface.wire_id.clone(),
+                            interface: *id,
+                            implementation,
+                        });
+                    }
+                }
+            }
+        }
+        bindings.sort_by(|left, right| left.wire_id.cmp(&right.wire_id));
+        let selection = RootSelectionV1 {
+            kernel: self.kernel,
+            commitment_profile: self.commitment_profile,
+            services_profile: self.services_profile,
+            installed_storage,
+            active,
+            bindings,
+            restrictions: current
+                .restrictions
+                .iter()
+                .filter(|entry| closure.contains(&entry.definition))
+                .cloned()
+                .collect(),
+            completion_closures: Vec::new(),
+        };
+        selection
+            .check_closure(lookup)
+            .map_err(|error| ObligationError::ExecutionContext(error.to_string()))?;
+        Ok(selection)
+    }
+
     /// Why `successor` does not preserve this closure, if it does not (§7.2): it stops executing
     /// a captured definition that `predecessor` executes, or binds an interface the closure
     /// reaches to another implementation than the obligation captured.
     ///
-    /// A release answers a wire ID from the selection it executes, so a registered completion
-    /// runs the code the root binds now. Until dispatch can run a captured implementation beside
-    /// its replacement, the only way to keep a completion as it was registered is to keep its
-    /// bindings: a change set that rebinds what a live obligation reaches lapses, as it does for
-    /// escrows and AMX participations.
+    /// This checks execution equivalence, including exact bindings. When the root rebinds an
+    /// interface, pass the context produced by [`Self::execution_selection`] as `successor`:
+    /// that context runs the captured code beside its replacement while preserving the root's
+    /// current restrictions and retained dependencies.
     ///
     /// # Errors
     /// A captured definition is not published.

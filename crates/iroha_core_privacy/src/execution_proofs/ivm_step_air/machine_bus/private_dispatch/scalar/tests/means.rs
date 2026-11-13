@@ -247,7 +247,7 @@ fn private_mean_binds_two_gas_three_cycles_and_native_last_attempt_boundary() {
 fn private_mean_preserves_mixed_instruction_continuity_and_inactive_bank() {
     let instructions = [
         enc::encode_rr(wide::arithmetic::MEAN, 4, 2, 3),
-        enc::encode_rr(wide::system::GETGAS, 5, 0, 0),
+        enc::encode_rr(wide::arithmetic::XOR, 5, 0, 0),
         enc::encode_rr(wide::arithmetic::ADD, 4, 4, 3),
         enc::encode_rr(wide::arithmetic::MEAN, 4, 4, 3),
     ];

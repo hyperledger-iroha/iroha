@@ -62,6 +62,43 @@ pub fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
     serialize_fields!(world, out, serialize_block);
 }
 
+/// Append exact service envelopes through the bounded checkpoint destination.
+pub(crate) fn serialize_block_bounded(
+    world: &WorldBlock<'_>,
+    out: &mut crate::snapshot::checkpoint_capture::encoding::Writer,
+) -> Result<(), json::BoundedJsonError> {
+    use json::JsonWriteSink as _;
+    macro_rules! stores { ($($field:ident),*) => {$(
+        out.push_str(concat!(",\"", stringify!($field), "\":"))?;
+        snapshot_storage::serialize_block_bounded(&world.$field, out)?;
+    )*}; }
+    macro_rules! cells { ($($field:ident),*) => {$(
+        out.push_str(concat!(",\"", stringify!($field), "\":"))?;
+        out.value(&world.$field)?;
+    )*}; }
+    stores!(
+        capacity_fee_ledger,
+        capacity_disputes,
+        provider_credit_ledger
+    );
+    cells!(sorafs_pricing);
+    stores!(
+        soradns_directory_records,
+        soradns_directory_pending,
+        soradns_directory_history,
+        soradns_directory_prev_of,
+        soradns_directory_revocations,
+        soradns_release_signers
+    );
+    cells!(
+        soradns_directory_latest,
+        soradns_rotation_policy,
+        soradns_last_publish_ms,
+        soradns_history_len
+    );
+    Ok(())
+}
+
 fn invalid(message: impl Into<String>) -> json::Error {
     json::Error::InvalidField {
         field: "state.service_state".to_owned(),

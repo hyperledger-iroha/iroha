@@ -157,7 +157,6 @@ fn vm_error_samples() -> Vec<VMError> {
         VMError::UnsupportedProgramFeatureBits { bits: 0x80 },
         VMError::UnsupportedProgramAbiVersion { version: 9 },
         VMError::ProgramVectorLengthTooLarge {
-            vector_length: 255,
             max_allowed: 1,
         },
         VMError::ArtifactAbiHashMismatch {
@@ -165,10 +164,7 @@ fn vm_error_samples() -> Vec<VMError> {
             actual: [1; 32],
         },
         VMError::GenericSyscallNotAllowed { syscall: 0 },
-        VMError::InvalidVectorLength { vector_length: 0 },
         VMError::MissingHalt,
-        VMError::VectorExtensionDisabled,
-        VMError::ZkExtensionDisabled,
         VMError::NullifierAlreadyUsed,
         VMError::PermissionDenied,
         VMError::ReentrantCall,
@@ -192,12 +188,12 @@ fn vm_error_samples() -> Vec<VMError> {
 }
 
 #[test]
-fn opcode_inventory_names_exactly_the_ninety_admitted_opcodes() {
+fn opcode_inventory_names_exactly_the_admitted_opcodes() {
     let admitted: Vec<u8> = (0..=u8::MAX)
         .filter(|opcode| wide::is_valid_opcode(*opcode))
         .collect();
-    assert_eq!(admitted.len(), 90, "the admitted opcode count changed");
-    assert_eq!(OPCODE_COUNT, 90);
+    assert_eq!(admitted.len(), 59, "the admitted opcode count changed");
+    assert_eq!(OPCODE_COUNT, 59);
     assert_eq!(
         OPCODES.iter().map(|entry| entry.opcode).collect::<Vec<_>>(),
         admitted,
@@ -214,7 +210,7 @@ fn opcode_inventory_names_exactly_the_ninety_admitted_opcodes() {
             wide::is_valid_opcode(opcode).then_some(opcode)
         );
     }
-    assert_eq!(summary().opcodes, 90);
+    assert_eq!(summary().opcodes, 59);
 }
 
 /// Compare the opcode constants declared by `source` with the inventory.
@@ -246,31 +242,14 @@ fn check_opcode_constants(source: &str) -> Result<(), String> {
                 .collect::<Vec<_>>()
         )
     })?;
-    let reserved_source: BTreeSet<(String, u8)> = constants
-        .iter()
-        .filter(|(module, _, _)| module == "iso20022")
-        .map(|(_, name, value)| (name.clone(), *value))
-        .collect();
-    let reserved: BTreeSet<(String, u8)> = RESERVED_OPCODES
-        .iter()
-        .map(|entry| (entry.name.to_owned(), entry.opcode))
-        .collect();
-    ensure(reserved_source == reserved, || {
-        "reserved ISO 20022 opcodes differ".to_owned()
-    })?;
-    ensure(
-        constants.len() == OPCODES.len() + RESERVED_OPCODES.len(),
-        || "an opcode constant lives outside the admitted and reserved modules".to_owned(),
-    )
+    ensure(constants.len() == OPCODES.len(), || {
+        "an opcode constant lives outside the admitted opcode modules".to_owned()
+    })
 }
 
 #[test]
 fn opcode_names_and_values_match_the_abi_constant_source() {
     passes(check_opcode_constants(&scan::read(ABI_INSTRUCTION)));
-    for entry in RESERVED_OPCODES {
-        assert!(!wide::is_valid_opcode(entry.opcode));
-        assert!(opcode_entry(entry.opcode).is_none());
-    }
 }
 
 /// Every function or method name the terminal block of `run_with_host_ref`
@@ -640,28 +619,9 @@ fn opcode_traps_and_obligation_profiles_are_consistent() {
                 entry.name
             );
         }
-        assert_eq!(
-            has(Obligation::Vector),
-            traps("VectorExtensionDisabled"),
-            "{}: vector obligation must follow the vector-extension gate",
-            entry.name
-        );
-        assert_eq!(
-            entry.effect == StepEffect::ZkFieldOrAssertion,
-            traps("ZkExtensionDisabled"),
-            "{}: ZK effect must follow the ZK-extension gate",
-            entry.name
-        );
-        assert_eq!(
-            has(Obligation::Precompile),
-            entry.effect == StepEffect::CryptographicPrimitive,
-            "{}",
-            entry.name
-        );
-        assert_eq!(
-            has(Obligation::Parallel),
-            entry.effect == StepEffect::ParallelMarker,
-            "{}",
+        assert!(
+            !has(Obligation::Precompile),
+            "{}: cryptographic primitives are syscalls, never opcodes",
             entry.name
         );
         assert_eq!(
@@ -694,17 +654,14 @@ fn opcode_traps_and_obligation_profiles_are_consistent() {
             entry.name
         );
     }
-    // Only opcodes that touch no register, vector register or guest memory
-    // stay outside private masking.
+    // Only opcodes that touch no register or guest memory stay outside
+    // private masking.
     let unmasked: BTreeSet<_> = OPCODES
         .iter()
         .filter(|entry| !entry.obligations.contains(&Obligation::PrivateMasking))
         .map(|entry| entry.name)
         .collect();
-    assert_eq!(
-        unmasked,
-        BTreeSet::from(["HALT", "JMP", "PARBEGIN", "PAREND", "SETVL"])
-    );
+    assert_eq!(unmasked, BTreeSet::from(["HALT", "JMP"]));
     let call_helpers: BTreeSet<_> = OPCODES
         .iter()
         .filter(|entry| {
@@ -717,20 +674,14 @@ fn opcode_traps_and_obligation_profiles_are_consistent() {
         .collect();
     assert_eq!(call_helpers, BTreeSet::from(["JAL", "JALR", "JALS"]));
     assert_eq!(
-        opcode_entry(wide::control::JR).map(|entry| entry.pc),
-        Some(PcTransition::IndirectRegisterOrStrictTrap)
-    );
-    assert_eq!(
         opcode_entry(wide::control::HALT).map(|entry| entry.pc),
         Some(PcTransition::HaltOrStrictReturnTrap)
     );
-    for strict in [wide::control::JR, wide::control::HALT] {
-        assert!(
-            opcode_entry(strict)
-                .is_some_and(|entry| entry.direct_traps.contains(&"AssertionFailed")),
-            "forbidden protected forms trap"
-        );
-    }
+    assert!(
+        opcode_entry(wide::control::HALT)
+            .is_some_and(|entry| entry.direct_traps.contains(&"AssertionFailed")),
+        "HALT traps inside a protected contract call"
+    );
 }
 
 #[test]
@@ -1576,9 +1527,7 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
             "a rejected artifact has no trace"
         );
     }
-    for interpreter_only in [VmTrapKind::MissingHalt, VmTrapKind::InvalidVectorLength] {
-        assert_eq!(kind(interpreter_only).origins(), [InterpreterTrap]);
-    }
+    assert_eq!(kind(VmTrapKind::MissingHalt).origins(), [InterpreterTrap]);
     for syscall_only in [
         VmTrapKind::NumericFault,
         VmTrapKind::PointerAbiFault,
@@ -1884,19 +1833,19 @@ fn mutated_sources_fail_every_completeness_check() {
             "pub const MEAN: u8 = 0x2A;\n",
             "        pub const BRAND_NEW: u8 = 0x2B;\n",
         )),
-        "91 admitted opcode constants",
+        "60 admitted opcode constants",
     );
     rejects(
         check_opcode_constants(&remove_once(&instruction, "pub const MEAN: u8 = 0x2A;\n")),
-        "89 admitted opcode constants",
+        "58 admitted opcode constants",
     );
     rejects(
         check_opcode_constants(&insert_after(
             &instruction,
-            "pub const VALIDATE_FORMAT: u8 = 0x9F;\n",
-            "        pub const BRAND_NEW: u8 = 0x8F;\n",
+            "pub const SYSTEM: u8 = 0x62;\n    }\n",
+            "    pub mod extension {\n        pub const BRAND_NEW: u8 = 0x8F;\n    }\n",
         )),
-        "reserved ISO 20022 opcodes differ",
+        "an opcode constant lives outside the admitted opcode modules",
     );
 
     // Interpreter: a new dispatch arm, a new direct trap and a new fallible
@@ -2186,8 +2135,8 @@ fn mutated_sources_fail_every_completeness_check() {
         })
     };
     rejects(
-        mutate(&|text| format!("{text}\nconst NEW: u8 = wide::crypto::SHA256BLOCK;\n")),
-        "SHA256BLOCK",
+        mutate(&|text| format!("{text}\nconst NEW: u8 = wide::memory::LDLIT;\n")),
+        "LDLIT",
     );
     rejects(
         mutate(&|text| text.replace("wide::arithmetic::GCD", "wide::arithmetic::ADD")),
@@ -2294,7 +2243,6 @@ fn component_claims_are_admitted_bounded_and_unregistered() {
         Some("rd = r0 only; linked calls are excluded")
     );
     assert!(restricted("private_dispatch", wide::control::JALR).is_some());
-    assert!(restricted("private_memory", wide::memory::LOAD128).is_some());
 }
 
 #[test]
@@ -2453,9 +2401,9 @@ fn open_semantics_are_unique_and_still_evidenced() {
 #[test]
 fn coverage_is_derived_from_components_and_never_complete() {
     let counts = summary();
-    assert_eq!(counts.opcodes_uncovered + counts.opcodes_component_only, 90);
-    assert_eq!(counts.opcodes_component_only, 58);
-    assert_eq!(counts.opcodes_uncovered, 32);
+    assert_eq!(counts.opcodes_uncovered + counts.opcodes_component_only, 59);
+    assert_eq!(counts.opcodes_component_only, 55);
+    assert_eq!(counts.opcodes_uncovered, 4);
     assert_eq!(counts.components, COMPONENTS.len());
     for entry in OPCODES.iter() {
         let covered = components_for_opcode(entry.opcode).next().is_some();
@@ -2470,39 +2418,20 @@ fn coverage_is_derived_from_components_and_never_complete() {
             entry.name
         );
     }
-    assert_eq!(
-        opcode_coverage(wide::iso20022::MSG_CREATE),
-        CoverageStatus::Uncovered
-    );
+    // An unassigned opcode byte has no inventory entry and therefore no coverage.
+    assert_eq!(opcode_coverage(0x90), CoverageStatus::Uncovered);
     let uncovered: BTreeSet<_> = OPCODES
         .iter()
         .filter(|entry| opcode_coverage(entry.opcode) == CoverageStatus::Uncovered)
         .map(|entry| entry.name)
         .collect();
-    for name in [
-        "SCALL",
-        "SYSTEM",
-        "LDLIT",
-        "JR",
-        "HALT",
-        "SETVL",
-        "VADD32",
-        "PARBEGIN",
-        "PAREND",
-        "SHA256BLOCK",
-        "POSEIDON2",
-        "ED25519VERIFY",
-        "ASSERT",
-        "FADD",
-    ] {
-        assert!(uncovered.contains(name), "{name} has no proof component");
-    }
+    assert_eq!(
+        uncovered,
+        BTreeSet::from(["HALT", "LDLIT", "SCALL", "SYSTEM"]),
+        "opcodes without any proof component"
+    );
     for entry in OPCODES.iter() {
-        let uncovered_family = matches!(
-            entry.family,
-            OpcodeFamily::Vector | OpcodeFamily::Parallel | OpcodeFamily::Crypto | OpcodeFamily::Zk
-        ) || entry.effect == StepEffect::HostCall;
-        if uncovered_family {
+        if entry.effect == StepEffect::HostCall {
             assert_eq!(
                 opcode_coverage(entry.opcode),
                 CoverageStatus::Uncovered,
@@ -2594,8 +2523,6 @@ fn obligation_classes_cover_the_acceptance_terms_and_are_all_used() {
         "faults",
         "gas",
         "padding",
-        "vector",
-        "parallel",
         "precompile",
         "continuation",
         "proof_composition",
@@ -2687,8 +2614,7 @@ fn rendered_inventory_matches_the_tracked_artifact() {
     for file in VM_ERROR_PRODUCERS {
         assert!(rendered.contains(file.path), "{} is rendered", file.path);
     }
-    assert_eq!(rows("opcodes"), 90);
-    assert_eq!(rows("reserved_opcodes"), RESERVED_OPCODES.len());
+    assert_eq!(rows("opcodes"), 59);
     assert_eq!(rows("syscalls"), syscalls::abi_syscall_list().len());
     assert_eq!(rows("host_private_syscalls"), HOST_PRIVATE_SYSCALLS.len());
     assert_eq!(rows("syscall_relations"), SyscallRelation::COUNT);
@@ -2727,7 +2653,7 @@ fn rendered_inventory_matches_the_tracked_artifact() {
     }
     assert_eq!(
         statuses,
-        90 + 4 * SYSCALLS.len()
+        59 + 4 * SYSCALLS.len()
             + TRAP_KINDS.len()
             + NUMERIC_FAULTS.len()
             + POINTER_ABI_FAULTS.len()

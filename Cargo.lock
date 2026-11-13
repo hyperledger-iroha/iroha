@@ -4591,6 +4591,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "zeroize",
+ "zk-spartan",
  "zstd",
 ]
 
@@ -12646,6 +12647,26 @@ dependencies = [
  "memuse",
  "subtle",
  "zcash_spec",
+ "zeroize",
+]
+
+[[package]]
+name = "zk-spartan"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "blake3",
+ "ff 0.14.0",
+ "getrandom 0.4.3",
+ "group 0.14.0",
+ "iroha_data_model",
+ "iroha_pasta",
+ "norito",
+ "num-bigint 0.4.8",
+ "num-integer",
+ "num-traits",
+ "rayon",
+ "w3f-bls",
  "zeroize",
 ]
 

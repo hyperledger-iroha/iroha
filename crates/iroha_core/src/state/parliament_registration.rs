@@ -21,6 +21,11 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 
+mod history;
+#[cfg(test)]
+pub(crate) use history::assert_registration_history;
+pub use history::{CredentialHistoryErrorV1, resolve_credential_registration_v1};
+
 /// Exact original coordinate. No Clone, codec or constructor outside this module.
 pub(super) struct DirectRegistrationOriginal {
     signed_hash: HashOf<SignedTransaction>,

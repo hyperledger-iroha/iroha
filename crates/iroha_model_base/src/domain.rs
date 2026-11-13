@@ -325,6 +325,12 @@ impl JsonKeyCodec for crate::domain::DomainId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_display_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::domain::DomainId::parse_fully_qualified(encoded)
             .map_err(|err| json::Error::Message(err.to_string()))

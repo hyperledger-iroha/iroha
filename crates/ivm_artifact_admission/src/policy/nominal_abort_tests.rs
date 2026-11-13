@@ -7,20 +7,12 @@ mod cases;
 
 fn abort_tail() -> [u32; 6] {
     [
-        enc::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                .expect("fixed syscall fits compact opcode"),
-        ),
+        enc::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV),
         enc::encode_ri(wide::arithmetic::ADDI, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 13, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 14, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 15, 0, 0),
-        enc::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_CONTRACT_ABORT)
-                .expect("fixed syscall fits compact opcode"),
-        ),
+        enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT),
     ]
 }
 fn ops(words: &[u32]) -> Vec<DecodedOp> {
@@ -103,10 +95,7 @@ fn shared_abort_suffix_rejects_every_substituted_word_effect_return_and_reserved
         assert_shared_refusal(&mutated, &roots);
     }
     for replacement in [
-        enc::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_STATE_SET).expect("fixed syscall fits compact opcode"),
-        ),
+        enc::encode_scall(syscalls::SYSCALL_STATE_SET),
         enc::encode_rr(wide::control::JALR, 0, 1, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 12, 1, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 13, 0, 0),
@@ -119,15 +108,12 @@ fn shared_abort_suffix_rejects_every_substituted_word_effect_return_and_reserved
     noncanonical_publish[2] |= 0x100;
     assert_shared_refusal(&noncanonical_publish, &roots);
     let mut substituted_terminal = words.clone();
-    substituted_terminal[7] = enc::encode_syscallx(syscalls::SYSCALL_CONTRACT_ABORT);
+    substituted_terminal[7] = enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT);
     assert_shared_refusal(&substituted_terminal, &roots);
     let mut inserted_effect = words.clone();
     inserted_effect.insert(
         2,
-        enc::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_STATE_SET).expect("fixed syscall fits compact opcode"),
-        ),
+        enc::encode_scall(syscalls::SYSCALL_STATE_SET),
     );
     assert_shared_refusal(&inserted_effect, &roots);
 }
@@ -194,12 +180,8 @@ fn terminal_abort_suffix_does_not_relax_original_direct_recursion_or_unknown_sys
     let error = validate_nonrecursive_direct_calls(&decoded, &roots).unwrap_err();
     assert!(error.to_string().contains("recursive direct-call cycle"));
     let unknown = ops(&[
-        enc::encode_sys(
-            wide::system::SCALL,
-            u8::try_from(syscalls::SYSCALL_CONTRACT_ABORT)
-                .expect("fixed syscall fits compact opcode"),
-        ),
-        enc::encode_syscallx(0x00ff_ffff),
+        enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT),
+        enc::encode_scall(0x00ff_ffff),
     ]);
     assert_eq!(
         reachable_syscalls(&unknown, 0, "source").unwrap().pcs,
@@ -215,14 +197,8 @@ fn terminal_abort_suffix_does_not_relax_original_direct_recursion_or_unknown_sys
 
 #[test]
 fn terminal_abort_reachability_keeps_prior_effects_and_stops_before_following_entrypoint() {
-    let abort = enc::encode_sys(
-        wide::system::SCALL,
-        u8::try_from(syscalls::SYSCALL_CONTRACT_ABORT).expect("fixed syscall fits compact opcode"),
-    );
-    let write = enc::encode_sys(
-        wide::system::SCALL,
-        u8::try_from(syscalls::SYSCALL_STATE_SET).expect("fixed syscall fits compact opcode"),
-    );
+    let abort = enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT);
+    let write = enc::encode_scall(syscalls::SYSCALL_STATE_SET);
     let after = ops(&[abort, write, enc::encode_halt()]);
     let reach = reachable_syscalls(&after, 0, "source").unwrap();
     assert_eq!(reach.pcs, BTreeSet::from([0]));
@@ -255,7 +231,6 @@ fn genuine_complete_scalar_and_compact_artifacts_both_pass_canonical_admission_w
                 metadata.version_major,
                 metadata.version_minor,
                 metadata.mode,
-                metadata.vector_length,
                 metadata.max_cycles,
                 metadata.abi_version,
             )

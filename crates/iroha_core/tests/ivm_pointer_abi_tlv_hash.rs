@@ -9,10 +9,7 @@ fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).unwrap(),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -20,7 +17,6 @@ fn build_program() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 10_000,
         abi_version: 1,
     };

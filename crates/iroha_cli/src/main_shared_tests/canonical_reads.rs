@@ -931,6 +931,52 @@ fn staking_prepare_dispatch_preserves_exact_plan_tip_and_both_reserves() {
 }
 
 #[test]
+fn staking_prepare_refusal_reports_the_committed_reason() {
+    const REASON: &str =
+        "Iroha invariant violation: no funded reward entitlement is available to claim";
+    let code = iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE;
+    let prepared = staking_preparation_fixture();
+    let file = NamedTempFile::new().unwrap();
+    fs::write(
+        file.path(),
+        norito::json::to_json(&prepared.request).unwrap(),
+    )
+    .unwrap();
+    let response = iroha::http::Response::builder()
+        .status(409)
+        .header("content-type", "application/x-norito")
+        .header("x-iroha-reject-code", code)
+        .body(
+            norito::encode_canonical(&iroha_torii_shared::ErrorEnvelope::new(code, REASON))
+                .unwrap(),
+        )
+        .unwrap();
+    let (mut context, transport) = canonical_read_context(vec![response]);
+    let error = Args::try_parse_from([
+        "iroha",
+        "app",
+        "staking",
+        "prepare",
+        "--request",
+        file.path().to_str().unwrap(),
+    ])
+    .unwrap()
+    .command
+    .run(&mut context)
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!("nexus.staking.prepare returned HTTP 409: {code}: {REASON}")
+    );
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    assert!(context.output.is_none(), "a refusal displays no plan");
+    assert!(
+        context.submitted.is_none(),
+        "preparation never signs or submits"
+    );
+}
+
+#[test]
 fn staking_prepare_rejects_missing_unknown_and_retired_request_fields_before_http() {
     let request = norito::json::to_value(&staking_preparation_fixture().request).unwrap();
     for mutation in 0..5 {

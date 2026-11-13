@@ -1026,8 +1026,9 @@ impl DeploymentService {
                 "stored contract bytes differ from the exact deployed artifact"
             )));
         }
-        let verified = ivm_artifact_admission::verify_contract_artifact(&stored)
-            .map_err(|error| DeploymentError::Readback(eyre!(error)))?;
+        let verified =
+            ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&stored)
+                .map_err(|error| DeploymentError::Readback(eyre!(error)))?;
         if verified.code_hash != preflight.code_hash || verified.abi_hash != preflight.abi_hash {
             return Err(DeploymentError::Readback(eyre!(
                 "stored contract code/ABI identity disagrees with the deployment"
@@ -1055,7 +1056,7 @@ fn verify_request(
         .fee_payment
         .validate()
         .map_err(|error| DeploymentError::InvalidRequest(error.to_string()))?;
-    ivm_artifact_admission::verify_contract_artifact(&request.artifact)
+    ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&request.artifact)
         .map_err(|error| DeploymentError::Artifact(error.to_string()))
 }
 fn preflight_error(operation: &'static str, source: eyre::Report) -> DeploymentError {

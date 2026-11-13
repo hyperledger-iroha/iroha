@@ -10,8 +10,7 @@ use std::{
 };
 
 /// Opcode constant modules of `ivm_abi::instruction::wide` that hold admitted opcodes.
-pub(super) const OPCODE_MODULES: [&str; 6] =
-    ["arithmetic", "memory", "control", "system", "crypto", "zk"];
+pub(super) const OPCODE_MODULES: [&str; 4] = ["arithmetic", "memory", "control", "system"];
 
 /// Result adapters whose error argument is already a direct trap token.
 const ADAPTERS: [&str; 4] = ["ok_or", "ok_or_else", "map_err", "transpose"];
@@ -1056,7 +1055,7 @@ fn tail() {
     #[test]
     fn token_scans_respect_identifier_boundaries() {
         let text = "wide::arithmetic::ADD | instruction::wide::control::JAL if x \
-                    narrow_wide::zk::FADD VMError::OutOfGas MyVMError::Hidden wide::crypto::tests";
+                    narrow_wide::memory::LOAD64 VMError::OutOfGas MyVMError::Hidden wide::system::tests";
         assert_eq!(
             opcode_tokens(text).into_iter().collect::<Vec<_>>(),
             [
@@ -1170,7 +1169,7 @@ impl IVM {
                     if self.registers.tag(rs1) { return Err(VMError::PrivacyViolation); }
                     continue;
                 }
-                instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
+                instruction::wide::system::SCALL | instruction::wide::system::SYSTEM => {
                     continue;
                 }
                 _ => {
@@ -1216,7 +1215,7 @@ impl IVM {
         );
         assert!(dispatch.arms[0].calls.contains("zk_apply_tag"));
         assert_eq!(dispatch.arms[1].tag_surface, set(&["tag"]));
-        assert_eq!(dispatch.arms[2].names, ["PARBEGIN", "PAREND"]);
+        assert_eq!(dispatch.arms[2].names, ["SCALL", "SYSTEM"]);
         assert!(dispatch.arms[2].tag_surface.is_empty());
         assert!(dispatch.arms[3].names.is_empty());
         assert_eq!(dispatch.arms[3].direct_traps, set(&["InvalidOpcode"]));

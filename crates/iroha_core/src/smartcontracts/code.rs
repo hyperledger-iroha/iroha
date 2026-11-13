@@ -566,7 +566,7 @@ fn stored_artifact_has_retired_abi(
     let Some(bytes) = world.contract_code().get(&artifact_id) else {
         return Ok(false);
     };
-    let current = ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1);
+    let current = ivm_abi::syscalls::compute_abi_hash(super::ivm::artifact_policy(world, bytes));
     Ok(bytes.len() >= ivm_abi::metadata::HEADER_SIZE
         && bytes[0..4] == ivm_abi::metadata::MAGIC[..]
         && bytes[16] == 1
@@ -602,17 +602,16 @@ pub(crate) fn contract_upgrade_added_scalars(
                 "upgrade artifact `{code_hash}` has no stored bytecode"
             ))
         })?;
-        let artifact =
-            ivm::verify_contract_artifact_with_memory_budget(bytes, budget).map_err(|error| {
-                match error.try_into_local_vm_error() {
-                    Ok(local) => crate::execution_attempt::vm_attempt_error(local, |error| {
-                        ValidationFail::InternalError(error.to_string())
-                    }),
-                    Err(error) => ExecutionAttemptError::Rejected(ValidationFail::InternalError(
-                        error.to_string(),
-                    )),
-                }
-            })?;
+        let artifact = super::ivm::verify_contract_in_world(world, bytes, budget).map_err(
+            |error| match error.try_into_local_vm_error() {
+                Ok(local) => crate::execution_attempt::vm_attempt_error(local, |error| {
+                    ValidationFail::InternalError(error.to_string())
+                }),
+                Err(error) => ExecutionAttemptError::Rejected(ValidationFail::InternalError(
+                    error.to_string(),
+                )),
+            },
+        )?;
         if artifact.code_hash != code_hash || !manifest.same_signed_content(&artifact.manifest) {
             return Err(ValidationFail::InternalError(
                 "upgrade artifact does not match its immutable stored identity and manifest".into(),
@@ -808,7 +807,8 @@ pub fn register_code_bytes(
     code: Vec<u8>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<Hash, RegistryError> {
-    let verified = ivm::verify_contract_artifact_with_memory_budget(
+    let verified = super::ivm::verify_contract_in_world(
+        &state_transaction.world,
         &code,
         &state_transaction.execution_budget(),
     )
@@ -1382,7 +1382,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version,
         };

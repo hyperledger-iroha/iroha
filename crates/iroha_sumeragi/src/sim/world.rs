@@ -974,6 +974,8 @@ impl World {
             let _ = write!(what, " [m{sender}]");
         }
         let is_tick = matches!(event, Event::Tick);
+        let clock_refusal = self.clock_guard_failure(r, &event);
+        let rep = &mut self.replicas[r];
         let before = rep.crypto.pairings();
         let actions = rep.host.handle(local_now, event);
         let after_wake = core_wakeup(&*rep.host);
@@ -1004,7 +1006,7 @@ impl World {
         let actions = if byz {
             self.byz_filter(r, actions, at)
         } else {
-            self.after_handle(r, &actions);
+            self.after_handle(r, &actions, clock_refusal);
             actions
         };
         if self.replicas[r].host.owns_io() {
@@ -1867,6 +1869,14 @@ impl World {
         let m = self.replicas[r].machine;
         let profile = self.machines[m].profile;
         let injected = self.rng.chance(profile.exec_fail_ppm);
+        // Deterministic time floors are independent of the local wall clock. A stale
+        // invalid proposal must reach Core's rejection path instead of an endless retry.
+        if !injected
+            && !cfg!(sumeragi_mutation = "ML36")
+            && let Some(invalid) = self.clock_payload_validity(self.replicas[r].inst, block)
+        {
+            return (invalid, 1);
+        }
         if !injected && let Some(refused) = self.clock_guard_refusal(r, block, bh, certified) {
             return (refused, 1);
         }
@@ -2536,7 +2546,7 @@ impl World {
                     rep.bodies.retain(|_, b| b.header().height > applied);
                     self.oracle_on_start(r);
                     if !byz {
-                        self.after_handle(r, &actions);
+                        self.after_handle(r, &actions, None);
                     }
                     let actions = if byz {
                         self.byz_filter(r, actions, self.now)

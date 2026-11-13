@@ -101,9 +101,14 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
   field registry the same way). This release declares the following additions, in activation order:
   `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the
-  six `iroha.game_partition.*.v1` instructions and the `world.game_partitions` table. Activating
-  the game-partition addition on a live network waits until in-flight unit exports are live
-  obligations (TODO in `additions.rs`). The third addition, `iroha.sorafs.bootstrap.repair.v1`,
+  six `iroha.game_partition.*.v1` instructions and the `world.game_partitions` table. Operator
+  drafting and node-owned support signing refuse newly selecting its export definitions
+  until in-flight unit exports own captured completion obligations. This also refuses dependent
+  additions and service recompositions that introduce those definitions. Pure catalog assembly
+  remains available for schema inventories and component fixtures; it grants no activation
+  authority. This is a release qualification guard, not a retrofit to the frozen kernel's
+  consensus rules. Already selected historical definitions remain executable, and containment,
+  drain and retirement remain possible. The third addition, `iroha.sorafs.bootstrap.repair.v1`,
   publishes a new interface, implementation and separately identified kernel; its exact
   Taira-only transition changes no existing binding, profile or installed storage.
   The independent `iroha.sorafs.authority_governance.v1` candidate adds two tolerant
@@ -119,8 +124,8 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   The independent `iroha.runtime.lifecycle.v1` addition is the kernel's lifecycle State: the
   `world.runtime_obligations`, `world.runtime_migrations` and `world.runtime_boundaries` tables,
   the two `iroha.runtime.obligation.*.v1` instructions and the two `iroha.runtime.boundary.*.v1`
-  instructions (Obligations, Migrations and Checkpoint records, below). It is declared last, so
-  no ordered addition declares its tables. An implementation commits its services profile and
+  instructions (Obligations, Migrations and Checkpoint records, below). It is independent of the
+  ordered additions, which do not declare its tables. An implementation commits its services profile and
   the closure it may touch, and an interface the events it may emit, so the catalog compiles
   the addition once per predecessor family it supports (`runtime::catalog::kernel_lifecycle`):
   the baseline, Time, Ironwood and Ironwood with Time. Each composition keeps the addition's
@@ -262,7 +267,7 @@ A restriction never removes their settlement authority:
   transaction before verifying its proof, and refusing one strands nothing, because the global
   chain aborts by the deadline and the `Yes` voters settle that abort. The deadline step is a
   block hook, not an instruction.
-- **Activation.** A change set whose successor changes an original binding of a live obligation's
+- **Activation without captured custody.** A change set whose successor changes an original binding of a live obligation's
   completions or of their transitive declared calls (rebinding, unbinding or newly binding it), or
   stops executing a required definition the predecessor executes (its storage, the kernel, the
   commitment or services profile, and for escrows the host profiles, since controlled locks invoke
@@ -271,9 +276,9 @@ A restriction never removes their settlement authority:
   no part of the executable closure: keeping it so blocks no change set, and lifting such a
   restriction restores the same code. The baseline bundle conservatively declares all its native
   callees. Keeping a replacement active does not transfer the original obligation to it. Until
-  captured completion capabilities exist, rebinding those dependencies requires draining the
-  obligations first: closing admission to new escrows, `Begin` and `Prepare`, then completing
-  what is live.
+  a root selects native escrow capture below, rebinding those escrow dependencies requires
+  draining the obligations first: closing admission to new escrows, `Begin` and `Prepare`, then completing
+  what is live. AMX requires the same drain until its independent capture service is selected.
 - **Closure.** A selection's completion closure may name the kernel and the commitment and
   services profiles besides active and installed definitions, but no disabled one
   (`SelectionError::ObligationStranded`). A restriction targets only an active or installed
@@ -287,6 +292,71 @@ A restriction never removes their settlement authority:
   on, runs before any check that depends on what the instruction is, on every path that executes
   one: the native dispatch table and the controlled-lock, linked-FI and multisig paths that bypass
   it. A containment therefore holds whichever path runs an instruction.
+
+### Captured native escrow custody
+
+The independent `iroha.runtime.native_escrow_capture.v1` addition selects a new escrow-opening
+implementation and services profile with the `world.runtime_escrow_captures` table. Activation
+drains earlier live custody; it never reconstructs an original capture from current bindings.
+The frozen escrow record and baseline definitions remain unchanged.
+
+Before funding, each native owner prepares its canonical completion graph and binds it to the
+escrow's immutable custody identity, fixed recipient and conditional release terms. The row and
+capture publish together. Ordinary progress retains the capture; successful terminal custody
+updates remove it. A child orderbook lock inherits its parent's original graph before partitioning
+funds. Restore refuses missing, orphaned or substituted captures.
+
+Direct marketplace, generic-lock, conditional and controlled-lock operations select that captured
+graph before permissions and native execution, retaining current restrictions. Acceptance remains
+`Continue`, so completion-only still refuses it. A caller's registered terminal effect cannot
+replace the escrow's context or turn acceptance into completion; matching registered consent is
+consumed only after success. Nested contexts must agree, and scope cleanup restores the enclosing
+selection on rejection or unwind without changing the canonical selection.
+
+Controlled-lock captures retain native runtime bindings and host profiles. Existing controller
+authentication still requires the active contract instance; these captures do not retain a
+deployed contract's earlier code or bypass its lifecycle. Contract-owned captured execution and
+the new host-profile kernel call remain separate work.
+
+Orderbook operations can act on several locks, so their original graph remains pinned while any
+orderbook custody lives. Internal monetary paths check the actual execution context before moving
+funds, including when an enclosing registered obligation selected older code. Root-wide profile
+changes and executor replacement still require draining custody. These source paths require the
+current candidate's funded and transition regressions; they do not qualify AMX or game exports.
+Until native parent completion dispatch is implemented, live orderbook custody also prevents
+admission-closed or completion-only restrictions on cancellation, maintenance and settlement-receipt
+interfaces or their shared implementations. New-order and matching interfaces can still close so
+custody can drain. Emergency disabling retains its separate quarantine semantics.
+
+### Captured native AMX custody
+
+The independent `iroha.runtime.native_amx_capture.v1` addition installs
+`world.runtime_amx_captures` and a services profile owning native AMX decisions, settlement and
+automatic deadline expiry. Activation drains prior undecided global transactions and unsettled
+participant Yes custody; it never infers their original authority from current bindings. The
+frozen baseline and original AMX record layouts remain unchanged.
+
+Before a Begin witness or a verified Yes witness and debit, the native owner captures its
+original completion graph and immutable opening identity. Global captures bind the original
+Begin, timing and participant tracker identities; participant captures bind the authenticated
+global root, original vote and exact funded monetary effects. Only a successful authoritative
+decision or settlement removes its capture. Local codec and allocation refusals retain their
+typed resource custody and leave the original owner retryable.
+
+Direct relays, expiry and settlement execute the captured bindings with current restrictions.
+Every operation that changes a shared tracker checks all its live owners; differing original
+contexts refuse before mutation. A creator, unknown transaction or empty handoff cohort has
+ordinary admission and cannot borrow an enclosing completion capability. New work must also
+agree with existing shared tracker custody. Restore refuses missing, orphaned or substituted
+captures and inconsistent cohorts.
+
+Automatic expiry checks every due capture and disabled dependency before its first witness,
+then removes captures only after all original decision writes succeed. Its pinned services
+profile supplies the fixed finalizer. AMX operations invoke no IVM code, so their captures retain
+no unrelated host profile; transitive implementation dependencies remain retained. Root kernel,
+commitment or services changes and executor replacement still require draining live custody.
+These connected source paths require the current candidate's signed-root, resource-refusal and
+transition regressions before qualification.
 
 ### Registered obligations
 
@@ -308,45 +378,53 @@ no record and executes exactly as before.
   every syscall and operation tag, and the host profile commits that descriptor. The account that
   controls a contract's lifecycle therefore registers for it (`contract: Some(address)`), and the
   contract's subject account owns the obligation.
-- **Complete.** When the owner issues one of the committed instructions, the kernel marks it
-  performed and executes it as a completion: admission closure and completion-only on the
+- **Complete.** When the owner issues one of the committed instructions, the kernel executes it
+  as a completion and marks it performed on success: admission closure and completion-only on the
   definitions behind it, or behind what it invokes, do not stop it. Each committed instruction
   lends that capability once, to its owner alone, so a capability creates no new work. The
   instructions a contract queues carry its subject account as their authority and complete its
   obligation in the same way. `CompleteRuntimeObligationV1 { owner }` ends the obligation: its
   owner, the account that controls the owning contract's lifecycle, or anyone once it has
   expired or performed every committed instruction.
-- **Activation.** While a registered obligation is live, a change set that stops executing a
-  definition of its captured closure, or binds an interface the closure reaches to another
-  implementation, lapses. Executor replacement waits for registered obligations as it does for
-  escrows.
+- **Activation.** A new binding may coexist with a registered obligation's captured implementation.
+  The completion reads an ephemeral selection containing its captured bindings, host profiles and
+  dependency closure, with the root's current restrictions. Native dispatch, authorization and IVM
+  host selection read that same context. Calls outside the captured closure receive no completion
+  capability. The context never replaces the committed selection or its undo journal, and is
+  released after success, a returned error or unwind. A rejected effect remains pending even when its
+  caller catches the rejection and commits surrounding work; the registry remains live during
+  execution, so an in-flight completion cannot bypass executor-replacement drain checks.
+  Root-wide policy writes explicitly preserve the canonical selection.
+  Removing or disabling a required definition, removing captured storage, or changing the kernel,
+  commitment profile or services profile still lapses while the obligation is live. Executor
+  replacement still waits for registered obligations as it does for escrows.
 
-A release answers a wire ID from the selection it executes: handlers, authorization and services
-switch on the root's current selection. A completion therefore runs the code the root binds now,
-and keeping it as it was registered means keeping its bindings. Running a captured implementation
-beside its replacement, which would let a change set rebind what a live obligation reaches, needs
-one handler per implementation and wire ID and an execution context that every such switch
-reads; it is not built. Selection-level `RetainCompletion` and `ReleaseCompletion` stay refused:
-the registry holds every completion closure, and no engine reads one from the selection.
+Selection-level `RetainCompletion` and `ReleaseCompletion` stay refused: the registry holds every
+completion closure, and no engine reads one from the selection. Native escrow and AMX captures use
+their separate custody tables above; roots without those services retain the original drain rules.
 
 ## Deferred consent
 
-Not implemented. Multisig proposals and triggers execute with the frozen baseline's semantics:
-registration and proposal store no captured closure, and approval and trigger execution check
-none, so a network that installed the baseline (Taira) replays and restores its pending proposals
-and registered triggers unchanged.
+The independent `iroha.runtime.deferred_consent.v1` addition publishes the
+`world.runtime_deferred_consents` table, explicit current-binding registration interfaces and new
+services-profile compositions. Its activation selects the service and table together and replaces
+native implementations with definitions that declare the consent table. The frozen baseline stores
+and checks no capture; its proposal and trigger layouts remain unchanged. Activating or retiring
+the service requires every existing trigger and pending multisig occurrence to drain; current
+bindings never manufacture consent for earlier work.
 
-TODO(design §8.2): capturing the resolved closure of each multisig occurrence and trigger
-incarnation, and refusing changed or restricted semantics, changes what the baseline's
-registration, proposal, approval and trigger execution write and decide. It ships as a release
-addition that rebinds those interfaces, activated by a change set; its activation must first
-certify or drain the deferred work already registered without a capture, because no fallback
-manufactures consent from the current selection.
+Under the selected service, default registrations capture resolved bindings and transitive declared
+dependencies for the exact trigger incarnation or multisig occurrence. Opaque contract execution
+conservatively captures the whole selected call surface. The record binds its authority and
+executable digest. Each approval and execution checks the capture; every nested instruction must
+also satisfy each enclosing expectation. Changed or restricted captures suspend scheduled triggers
+without consuming their repetitions. Multisig renewal uses authorized cancellation or invalidation
+followed by a fresh nonce and fresh approvals.
 
-Escrows and AMX participations register no closure: their committed records are their
-registration, and rebinding what their completions reach still requires draining them first. No
-live obligation of any kind retains a completion capability that dispatch honors after a
-rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
+`RegisterCurrentBindingTriggerV1` and `ProposeCurrentBindingMultisigV1` explicitly consent to current
+bindings when creating a new occurrence, through the same native authorization paths. There is no
+endpoint that changes an existing occurrence's consent. Opt-in execution still obeys ordinary
+permissions and runtime restrictions. Narrower authenticated dynamic-call manifests remain open.
 
 ## Migrations and storage retirement
 
@@ -442,10 +520,15 @@ the committee of that height and the founded selection; for a floor, the block, 
 time and that the node holds the checkpoint.
 
 `checkpoint::history_boundary` is the height at or below which no release re-executes a block:
-the highest boundary in force. At startup a snapshot generation below the node's boundary is not
-a restore candidate, a configured `[snapshot.upgrade_checkpoint]` must name the block of a
-ratified anchor, and a State that carries a boundary gives it to Kura when the configuration
-names none.
+the highest boundary in force. Kura retains the highest authenticated boundary in its private,
+atomically synchronized `runtime-history-boundary.norito` record, bound to the durable genesis and
+boundary hashes. It loads this record before choosing a snapshot, even without adoption
+configuration. A lower configured anchor or older State never lowers it; malformed, foreign or
+conflicting records fail closed. Certified publication persists an advance before State visibility,
+and restored State advances it only after its snapshot claim authenticates. A snapshot below the
+boundary is not a restore candidate. `[snapshot.upgrade_checkpoint]` remains the original adoption
+anchor, separate from the highest learned startup floor. Isolated replay that cannot seed from an
+authenticated checkpoint refuses a store with a boundary instead of copying and replaying genesis.
 
 - **Operations.** `POST /v1/runtime/boundaries/anchor/attest` has a node derive the adoption
   record from its own store and return it with its statement; `POST
@@ -463,11 +546,39 @@ names none.
 
 A checkpoint at height `h` is the published State after block `h`, where `h` is the first block
 committed in a cadence interval of the committed policy (`snapshot::checkpoint_store`). The
-snapshot maker looks at the tip every half second: when the tip is at a checkpoint height it
-has not kept, it writes the tip, and when the generation it published is at that height it
-keeps the generation's five canonical artifacts under `checkpoints/<height>-<committed_ms>` of
-the snapshot store as hard links, so keeping copies no bytes and the rolling GC never removes
-them. It then keeps what the policy retains (the floor's own checkpoint, the newest, every one
+publication owner captures that height's canonical State from the finalized, frozen overlay before
+visibility. Capture and persistence retries retain that original overlay and its exact prepared
+bytes. After every State/World writer and commit fence is released, a nonblocking bounded channel
+requests persistence of the same image. The publisher defers locally until the worker acknowledges
+its durable private artifacts; it neither recaptures nor reexecutes the original. One writer-owned
+job and one queued job bound work. Encoding checks the local payload limit, and queue, startup and
+I/O refusals preserve bounded typed retry reasons. Original execution and reader resource failures
+move once to publication with their actual cause; only real capacity refusals supply a pool release
+observation. The writer cannot replace an unobserved refusal. Permanent artifact corruption retains
+the original typed cause and image and requires recovery, without scheduling a resource retry.
+Serialization and durable acknowledgement add
+latency at cadence heights; writing an older image never moves the rolling snapshot pointer.
+
+The durable spool is `checkpoint-pending/<height>-<committed_ms>`, separate from rolling GC and
+committed retention. Its quota is two checkpoint identities, including unfinished staging copies.
+Before acknowledging, the worker verifies and syncs bounded private copies of all five signed
+artifacts and their parents. Pending images grant no floor or retention authority. Original State
+visibility permits atomic directory promotion into the retained store, followed by parent syncs and
+retention using the current committed schedule. After successful startup recovery, the worker first
+reconciles orphaned pending images through the ordinary strict decoder and complete-State
+certificate authentication, with no durable-journal recovery on the isolated decoded State. The
+native tip and undo prove the original cadence. A valid image without its actual certified `H+1`
+remains pending; the second slot allows the chain to progress. Damaged artifacts, excess quota,
+configuration mismatch, and below-floor candidates remain refusals rather than being silently
+removed. Pending startup candidates use the same strict chain, floor, custody and successor checks.
+
+The writer keeps the generation's five canonical artifacts under
+`checkpoints/<height>-<committed_ms>` as private independent files. Bounded copies verify exact
+lengths and digests and preserve the strict single-link custody of both the retained checkpoint and
+its source generation; rolling GC never removes the retained files. Strict restart discovers signed
+immutable generations even if a crash preceded the first rolling snapshot pointer, and retained
+checkpoints after rolling GC removes their source generations, with the same chain, floor,
+successor and complete-State authentication checks. It then keeps what the policy retains (the floor's own checkpoint, the newest, every one
 younger than `retain_all_ms` and one per `retain_spacing_ms` above the floor) and every floor
 waiting out its notice, and removes the other checkpoints. A root without a committed policy
 produces and keeps none. A node holds a checkpoint at `h` when an entry of its checkpoint store
@@ -475,11 +586,17 @@ at `h` has a manifest that verifies under its snapshot key and names its chain a
 five canonical artifacts whose payload matches the signed digest
 (`snapshot::checkpoints::SnapshotCheckpoints`); only then does it sign a floor at `h`.
 
-Production does not hold back block publication: when the next block publishes before the
-capture of a checkpoint height completes, the capture is overtaken and that node holds no
-checkpoint at that height, and a floor needs every validator to hold one. TODO(§7.3): capture a
-checkpoint height's State from a view pinned at its publication, so a chain whose blocks commit
-faster than a capture still yields every checkpoint.
+The configured writer is also owned by synchronous certified startup replay. If Kura append survives
+without a capture or acknowledgement, replay prepares the certified block's original frozen overlay,
+persists that exact image before visibility, and retries the same execution owner. It promotes each
+visible replay image without retention, so a suffix with many cadence cuts does not fill the bounded
+pending spool. A repeated restart verifies and syncs the exact retained original instead of making a
+duplicate pending image. An interrupted staging copy is rebuilt only for that same certified height
+and committed time; foreign or excess entries remain refusals. Rolling publication, orphan
+reconciliation and policy retention still wait for successful startup. Crash and resource regressions
+for these paths require current-candidate qualification. Transferred checkpoint bootstrap still requires a portable,
+body-independent certificate-chain witness and sparse Kura history support; a locally signed
+snapshot alone grants neither authority nor permission to discard earlier bodies.
 
 The startup re-validation of the signed genesis execution policy stays after an anchor is
 ratified. It is the only guard on the validity inputs a node still takes from its
@@ -599,6 +716,26 @@ control. Use a current client: a deployed client that still sends an unsigned
 runtime request fails with `operator_signature_missing` even when its global
 operator-key option is supplied.
 
+## Contract kernel host profile
+
+The independent `iroha.runtime.contract_lifecycle.v1` addition selects
+`iroha.ivm.runtime_lifecycle.v1` beside installed lifecycle State. It uses ABI version 1 with its
+own immutable descriptor hash. Baseline header admission and operation tags keep their existing
+meaning. `koto build --host-profile iroha.ivm.runtime_lifecycle.v1` emits the exact named header,
+embedded interface and manifest. The root must select that profile for execution, including queries,
+triggers, nested calls and warmed cache entries. Effective restrictions apply at the original
+execution height; only an original captured completion can borrow its retained host profile.
+
+The named profile extends `0xA0` with registration and completion tags. Registration has no
+caller-supplied address or owner: it uses the authenticated active contract subject and entrypoint
+permission, then queues the canonical instruction through ordinary host gas, output and authorization
+checks. It cannot register from pending lifecycle hooks or borrow a retained scope for new work.
+The kernel captures the exact terminal instructions; completion uses the existing registry handler.
+Registration retains runtime definitions, not deployed contract code. Broad captures conservatively
+refuse new obligations that would retain an already restricted named profile; narrower authenticated
+dynamic-call manifests remain open. The contract, cache, compiler and deployment regressions require
+current-candidate qualification.
+
 ## Handshake
 
 Each peer's handshake advertises the host profiles its release implements
@@ -690,18 +827,15 @@ from snapshots; Strict start on stores holding a660d601da triggers and a
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
 
-- **Obligations:** running a captured implementation beside its replacement, so a change set may
-  rebind what a live obligation reaches (one handler per implementation and wire ID, and an
-  execution context for every selection-dependent switch); registration of escrows, AMX
-  participations and in-flight game-unit exports with a captured closure; a kernel call for
-  contracts, which needs a new host profile; pending consent and scheduled triggers, with the
-  deferred-consent addition; narrower authenticated dynamic-call manifests.
+- **Obligations:** qualify the selected native escrow and AMX captures and the selected contract
+  kernel bridge; register in-flight game-unit exports with a captured closure;
+  narrower authenticated dynamic-call manifests. Registered account/contract obligations now
+  execute captured bindings, but replacing root-wide profiles still requires draining them.
 - **Migrations:** storage capabilities and generic carriers.
-- **Checkpoints:** exact capture of every checkpoint height on a chain whose blocks commit
-  faster than a capture (a view-pinned capture); starting a node from a transferred checkpoint
-  without the block bodies below it (Kura base offsets and a peer transfer); a durable record of
-  the highest boundary a store has seen, so a node needs no configured checkpoint before it has
-  State; the deletion guard and the retirement rehearsal.
+- **Checkpoints:** qualify original-image replay across pre-acknowledgement crashes, interrupted
+  staging and repeated startup, including typed resource retries and pending-spool crash recovery; starting a node from a
+  transferred checkpoint without the block bodies below it (a body-independent certified prefix,
+  sparse Kura history and peer transfer); the deletion guard and the retirement rehearsal.
 - **Taira's anchor:** Taira's validators run a release with these records, a change set
   activates `iroha.runtime.lifecycle.v1` (its Ironwood with Time composition, after Taira's Time
   and Ironwood activation), each validator signs the record against its own store, and any

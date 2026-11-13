@@ -52,7 +52,7 @@ impl Region {
     }
     fn table(start: u64, words: u64) -> Result<Self, VMError> {
         if words > MAX_CALL_WORDS_V1 as u64 || (words == 0 && start != 0) {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         if !start.is_multiple_of(CALL_WORD_BYTES_V1 as u64) {
             return Err(VMError::MisalignedAccess { addr: start as u32 });
@@ -266,7 +266,7 @@ impl FrameStack {
                     .as_ref()
                     .is_some_and(|owner| owner.as_slice().len() == capacity)
                 {
-                    return Err(VMError::AssertionFailed);
+                    return Err(VMError::CallDepthExceeded);
                 }
                 let plan = ExecutionMemoryPlan::array::<Frame>(capacity)
                     .map_err(VMError::AllocationDeferred)?;
@@ -454,13 +454,13 @@ impl CallFrameMemory {
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
         if !self.frames.is_empty() {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let descriptor = Self::descriptor(stack_pointer, callable, tables, stack_top)?;
         if descriptor.stack.overlaps(descriptor.arguments)
             || descriptor.stack.overlaps(descriptor.results)
         {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let frame = self.frame(descriptor)?;
         self.reserve_frame_slot()?;
@@ -495,15 +495,15 @@ impl CallFrameMemory {
         tables: CallTables,
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
-        let parent = self.frames.last().ok_or(VMError::AssertionFailed)?;
+        let parent = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
         if stack_pointer != parent.stack.region.start {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let descriptor = Self::descriptor(stack_pointer, callable, tables, stack_top)?;
         if (!descriptor.arguments.empty() && !parent.stack.initialized(descriptor.arguments))
             || (!descriptor.results.empty() && !parent.stack.region.contains(descriptor.results))
         {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let frame = self.frame(descriptor)?;
         self.reserve_frame_slot()?;
@@ -530,7 +530,7 @@ impl CallFrameMemory {
             || !stack_pointer.is_multiple_of(CALL_WORD_BYTES_V1 as u64)
             || stack_pointer > stack_top
         {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let start = stack_pointer
             .checked_sub(u64::from(frame_bytes))
@@ -539,7 +539,7 @@ impl CallFrameMemory {
         let arguments = Region::table(tables.argument_base, tables.argument_words)?;
         let results = Region::table(tables.result_base, tables.result_words)?;
         if arguments.overlaps(results) {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         Ok(FrameDescriptor {
             stack: Region::new(start, u64::from(frame_bytes))?,
@@ -688,13 +688,13 @@ impl CallFrameMemory {
         result_base: u64,
         initialized_words: u64,
     ) -> Result<(), VMError> {
-        let frame = self.frames.last().ok_or(VMError::AssertionFailed)?;
+        let frame = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
         let returned = Region::table(result_base, initialized_words)?;
         if stack_pointer != frame.entry_stack_pointer
             || returned != frame.results.region
             || !frame.results.initialized(returned)
         {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         self.frames.pop();
         if let Some(parent) = self.frames.last_mut() {
@@ -745,7 +745,7 @@ impl CallFrameMemory {
         self.frames
             .last()
             .map(|frame| frame.entry_pc)
-            .ok_or(VMError::AssertionFailed)
+            .ok_or(VMError::ControlFlowViolation)
     }
 
     pub(crate) fn try_retain(&self) -> bool {
@@ -778,24 +778,24 @@ impl CallFrameMemory {
 
     /// Return the validated word count only after a successful root return.
     pub(crate) fn completed_word_count(&self) -> Result<usize, VMError> {
-        let table = self.completed.ok_or(VMError::AssertionFailed)?;
+        let table = self.completed.ok_or(VMError::ControlFlowViolation)?;
         Ok(((table.end - table.start) / CALL_WORD_BYTES_V1 as u64) as usize)
     }
 
     /// Resolve an initialized active result word for trusted return validation.
     pub(crate) fn active_result_word(&self, index: usize) -> Result<u64, VMError> {
-        let frame = self.frames.last().ok_or(VMError::AssertionFailed)?;
+        let frame = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
         let address = Self::word_address(frame.results.region, index)?;
         let range = Region::new(address, CALL_WORD_BYTES_V1 as u64)?;
         if !frame.results.initialized(range) {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         Ok(address)
     }
 
     /// Resolve a successful root result without trusting mutable guest descriptor registers.
     pub(crate) fn completed_result_word(&self, index: usize) -> Result<u64, VMError> {
-        Self::word_address(self.completed.ok_or(VMError::AssertionFailed)?, index)
+        Self::word_address(self.completed.ok_or(VMError::ControlFlowViolation)?, index)
     }
 
     fn word_address(table: Region, index: usize) -> Result<u64, VMError> {
@@ -1219,7 +1219,7 @@ mod tests {
                 tables(TOP - 32, 1, TOP - 16, 1),
                 TOP,
             ),
-            Err(VMError::AssertionFailed)
+            Err(VMError::ControlFlowViolation)
         ));
         assert_eq!(budget.reserved_bytes(), FRAME_BACKING_BYTES + 17);
         drop(frames);

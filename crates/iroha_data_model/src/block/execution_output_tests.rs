@@ -3,6 +3,9 @@
 #[path = "execution_output_ballot_tests.rs"]
 mod anonymous_ballot;
 
+#[path = "execution_output_governance_tests.rs"]
+mod governance_start;
+
 use super::*;
 use crate::{
     NetworkId, ValidationFail,
@@ -551,7 +554,8 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                 ExecutionOutputV1::Network(_)
                 | ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
-                | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!("internal fixture"),
+                | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!("internal fixture"),
             };
             *result = rejected();
             *failure_root = Some(diagnostic);
@@ -569,7 +573,10 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                     ExecutionOutputV1::Network(_)
                     | ExecutionOutputV1::NetworkWithLifecycle(_)
                     | ExecutionOutputV1::PipelineWithLifecycle(_)
-                    | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!("internal fixture"),
+                    | ExecutionOutputV1::TimeWithLifecycle(_)
+                    | ExecutionOutputV1::GovernanceBlockStart(_) => {
+                        unreachable!("internal fixture")
+                    }
                 };
                 match mutation {
                     0 => completions[0].outcome = TriggerCompletedOutcome::Success,
@@ -984,7 +991,8 @@ fn bounded_terminals_roundtrip_maximum_trigger_name_and_scalar_positions() {
             ExecutionOutputV1::Network(_)
             | ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!(),
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!(),
         }
         assert_eq!(
             norito::encode_canonical(&changed).unwrap().len(),
@@ -1005,7 +1013,8 @@ fn omitted_internal_rejection(mut row: ExecutionOutputV1) -> ExecutionOutputV1 {
         ExecutionOutputV1::Network(_)
         | ExecutionOutputV1::NetworkWithLifecycle(_)
         | ExecutionOutputV1::PipelineWithLifecycle(_)
-        | ExecutionOutputV1::TimeWithLifecycle(_) => panic!("internal fixture"),
+        | ExecutionOutputV1::TimeWithLifecycle(_)
+        | ExecutionOutputV1::GovernanceBlockStart(_) => panic!("internal fixture"),
     };
     *result = TransactionResult::new(Err(TransactionRejectionReason::LimitCheck(
         crate::transaction::error::TransactionLimitError {
@@ -1076,7 +1085,8 @@ fn omitted_internal_rejection_refuses_tampered_result_root_completion_and_receip
                 ExecutionOutputV1::Network(_)
                 | ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
-                | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!(),
+                | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::GovernanceBlockStart(_) => unreachable!(),
             };
             match fault {
                 0 => *result = rejected(),
@@ -1277,7 +1287,10 @@ fn lifecycle_mut(row: &mut ExecutionOutputV1) -> &mut TriggerLifecycleEffectsV1 
         ExecutionOutputV1::TimeWithLifecycle(row) => &mut row.trigger_lifecycle,
         ExecutionOutputV1::Network(_)
         | ExecutionOutputV1::Pipeline(_)
-        | ExecutionOutputV1::Time(_) => panic!("explicit successor fixture required"),
+        | ExecutionOutputV1::Time(_)
+        | ExecutionOutputV1::GovernanceBlockStart(_) => {
+            panic!("explicit successor fixture required")
+        }
     }
 }
 

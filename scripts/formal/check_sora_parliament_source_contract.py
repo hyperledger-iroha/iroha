@@ -1589,7 +1589,7 @@ def require_block_start_construction(state: str) -> None:
     # its invocation binds exactly the original four State Cell sources.
     owners = (
         (path, "pub(super) fn construct_acquired_block<'state, R>(", "impl State", (lint,),
-         "original writers and armed continuation", "620e06ef6c2edb080c87ede36b2070f07cad426e02d464436b065f9692314b4e"),
+         "original writers and armed continuation", "36d2a42e18c4d4e0c5a124f1cad40b1690b2d596040811faf202c4ae619bfd2d"),
         (path, "fn finish_state_block_construction<R>(", None, ("#[inline(never)]",),
          "bounded borrowed finish", "aa4f6e7dd39969dd98751ac40f7f1b87bd4664a960a937cd8ccadc99487831b1"),
         (acquisition_path, "macro_rules! runtime_cells", None, (),
@@ -1611,7 +1611,7 @@ def require_block_start_construction(state: str) -> None:
         (state_path, "pub struct StateBlock<'state>", None, (),
          "original armed State owner", "ee7a37d3566f8a3fad4f005953b388cb00aeb4324a49d8243cfb5c0e755b3cd9"),
         (state_path, "pub struct StateBlockFields<'state>", None, (fields_lint,),
-         "original armed State owner fields and paired cfg", "decd4eea8a43b5d0ffbcc519362f3b1e3a0f666199943f3add88b969cf9da76c"),
+         "original armed State owner fields and paired cfg", "3daab44a8e81091a260aad5b4b843b14903e4929e40bf883996425bc71247f54"),
         (state_path, "fn from_fields(", "impl<'state> StateBlock<'state>", (),
          "original armed State owner", "098683d5a1eef932becc2dc383c875f30a3bea4b6f2dcebb15bc3022b8cd21ce"),
         (state_path, "impl mv::BlockRetirement for StateBlock<'_>", None, (),
@@ -1634,7 +1634,7 @@ def require_block_start_construction(state: str) -> None:
     # This still trusts the surrounding Rust crate/dependency resolver/compiler;
     # it is not a complete semantic proof of arbitrary Rust programs.
     for location, expected in (
-        (path, "d0978756633efb8a930a7eccfdae56bf46b6f564cddffdd33fb444b2005ef99b"),
+        (path, "cabcd14a5126e6496321ffc104ddf98e18c3b7bf45554e32100cdd594a1a56c2"),
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "95e29efa980f923489f440950d351c69d514b929a0aa52ca687a7b50775cedc8"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
@@ -1818,9 +1818,9 @@ def require_block_start_phase_call_order(state: str) -> None:
     # This small statement region contains only the original height, the voted
     # SoraFS authority term pass (selected by the committed runtime, inside its
     # own rollback boundary on the same block), and the unconditional calls:
-    # private-settlement expiry, SCCP S0, G0 draw, G2a reconciliation, Parliament
-    # enactment, the same returned pause batch's G3 enactment, then G4 lapse
-    # cleanup (specs/sccp.md §4.7.2, §4.14.7).
+    # private-settlement expiry, SCCP S0, G0 draw, the one positioned pass (which
+    # runs the baseline Parliament enactments between G2c and its G3 pause
+    # enactments), then G4 lapse cleanup (specs/sccp.md §4.7.2, §4.14.7).
     # Ignore comments, but reject hidden conditions,
     # substituted owners/heights, duplicate calls, or swapped execution order.
     phases = strip_rust_comments(phases)
@@ -1841,10 +1841,9 @@ def require_block_start_phase_call_order(state: str) -> None:
         "crate::smartcontracts::isi::sccp::hook::begin_block(&mut sb)"
         ".map_err(StateBlockStartError::Storage)?;"
         "crate::smartcontracts::isi::sccp::fast_pause::draw::at_boundary(&mut sb)?;"
-        "let sccp_pauses = "
-        "crate::smartcontracts::isi::sccp::governance_clock::advance_reconciliation(&mut sb)?;"
-        "Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;"
-        "sccp_pauses.enact(&mut sb)?;"
+        "governance_start::run(&mut sb, |sb| {"
+        "Self::apply_block_start_parliament_enactments(sb, now_h)"
+        "})?;"
         "crate::smartcontracts::isi::sccp::pause_lifecycle::lapse_after_enactments(&mut sb)"
         ".map_err(StateBlockStartError::Storage)?;"
     )
@@ -1876,9 +1875,7 @@ def require_block_start_phase_call_order(state: str) -> None:
         "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
         "crate::smartcontracts::isi::sccp::hook::begin_block(&mutsb).map_err(StateBlockStartError::Storage)?;",
         "crate::smartcontracts::isi::sccp::fast_pause::draw::at_boundary(&mutsb)?;",
-        "letsccp_pauses=crate::smartcontracts::isi::sccp::governance_clock::advance_reconciliation(&mutsb)?;",
-        "Self::apply_block_start_parliament_enactments(&mutsb,now_h)?;",
-        "sccp_pauses.enact(&mutsb)?;",
+        "governance_start::run(&mutsb,|sb|{Self::apply_block_start_parliament_enactments(sb,now_h)})?;",
         "crate::smartcontracts::isi::sccp::pause_lifecycle::lapse_after_enactments(&mutsb)"
         ".map_err(StateBlockStartError::Storage)?;",
         "sb.start_of_block_effects_applied=true;",
@@ -1892,8 +1889,43 @@ def require_block_start_phase_call_order(state: str) -> None:
     # closure, or early successful return around intact call text. Pin the whole
     # reviewed entry bodies with literal-preserving tokens; changes need review.
     if (rust_token_digest(wrapper_source) != "36d421b3f6c6311c4a41af89ad1982e9f9c9647fed5c27659b86b219487c8ca8"
-            or rust_token_digest(constructor) != "bac6ca196a23e8264863dc8352fac8ffbc6498930eb4334eff9d12b1d46a3a8e"):
+            or rust_token_digest(constructor) != "56bab9a2caa1dd208a8ba5c1f366d0fa65204b73609781b9d8aec36f4b488872"):
         raise RuntimeError(f"{state_path}: start phases changed their reviewed complete entry bodies")
+
+
+def require_governance_start_dispatch(dispatch: str) -> None:
+    """Bind the one positioned pass to the global chain and to the root's selection.
+
+    The pass runs once per block of the global chain. Parliament's items exist only where
+    the committed selection installs the anonymous family, the baseline enactments run
+    exactly once on every path, and the pass's rows and its applied flag stay with the
+    block that ran it (design section 12.3, slice 3; specs/sccp.md section 4.7.2).
+    """
+    path = "crates/iroha_core/src/state/governance_start.rs"
+    compact = compact_rust(mask_rust(strip_rust_comments(dispatch)))
+    ordered = (
+        "ifstate.sumeragi_schedule.original_root_scope()!=Some(SumeragiRootScope::Global)"
+        "{returnbefore_enactments(state);}",
+        "run_on_global_chain(state,before_enactments)",
+        "letinstalled=crate::runtime::parliament_anonymous_installed(state.world.runtime_selection())"
+        ".map_err(StateBlockStartError::Policy)?",
+        "letparliament=installed.then(||{",
+        "letreport=run_governance_pass(state,parliament,&mutsccp,before_enactments)"
+        ".map_err(start_error)?;",
+        "state.governance_due_applied=report.governance_due_applied();",
+        "ifinstalled{state.governance_start_outputs=Some(report.rows);}",
+    )
+    positions = [compact.find(token) for token in ordered]
+    if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{path}: the positioned pass must run once on the selected global root")
+    # A refusal the node cannot decide is a deferral, never a verdict on the block.
+    require_all(path, dispatch, (
+        "let local = error.is_local()",
+        "AnonymousPassWorldErrorV1::Storage(error) if local => StateBlockStartError::Storage(error),",
+        "StateBlockStartError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable.into())",
+        "ExecutionDeferral::VerifierArtifactsUnavailable.into(),",
+        'error => StateBlockStartError::Policy(format!("governance block-start pass: {error}")),',
+    ))
 
 
 def require_block_start_enactment_phases(state: str) -> None:
@@ -1901,6 +1933,7 @@ def require_block_start_enactment_phases(state: str) -> None:
     state_path = "crates/iroha_core/src/state.rs"
     require_block_start_phase_call_order(state)
     require_block_start_construction(state)
+    require_governance_start_dispatch(read("crates/iroha_core/src/state/governance_start.rs"))
     expiry = section(
         state,
         "    fn apply_block_start_private_settlement_expiry(",
@@ -2676,13 +2709,21 @@ def require_parliament_commit_publication(state: str) -> None:
     # reject replacing the source of an otherwise unchanged local binding.
     # After the frozen keyed cut borrows the original fields, the publication
     # fields are borrowed again from that same original owner, each by its name.
+    # Checkpoint preparation serializes that same finalized overlay directly
+    # after the joint freeze, before the keyed cut installs the membership
+    # publisher, and retains its original result before publication is attempted.
     require_ordered_once(path, "original capture inputs", preparation_code, (
         "letStatePublication{capture_policy,geometry_cleanup,",
         "refunds:_,}=original;letthis=self;",
         "letstate_ref=this.state_ref;",
         "}=this.fields.as_mut().expect();#[cfg(feature=)]letcommitted_parliament_attempt_counts=",
         "letcurrent_generation=state_ref.state_view_generation();",
-        "*keyed_cut=Some(published);}letStateBlockFields{canonical_runtime,native_execution_tip,"
+        "*fields_frozen=true;}if!*runtime_checkpoint_prepared{"
+        "*runtime_checkpoint=state_ref.runtime_checkpoint_capture.prepare(this)?;"
+        "*runtime_checkpoint_prepared=true;}"
+        "ifkeyed_cut.is_none()&&letSome(execution)=&this.keyed_execution{",
+        "*keyed_cut=Some(published);}"
+        "letStateBlockFields{canonical_runtime,native_execution_tip,"
         "world,block_hashes,transactions,commit_topology:committed_topology,"
         "prev_commit_topology:prev_committed_topology,nexus,pending_da_commitments,"
         "pending_autoscale_lifecycle,#[cfg(feature=)]pending_parliament_telemetry_events,"
@@ -2818,6 +2859,9 @@ impl<'state> StateBlock<'state> {
                 state_ref.telemetry.record_citizens_total(citizens_total);
             }
         }
+        if let Some(checkpoint) = runtime_checkpoint.take() {
+            checkpoint.publish()?;
+        }
         tiered_snapshot.take().expect("original prepared tiered snapshot").publish(state_ref);
         {
             state_ref.enforce_nexus_storage_budget(block_height);
@@ -2837,7 +2881,7 @@ impl<'state> StateBlock<'state> {
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "47e8d77c8ff4e89745bf75ef5ecc2e3308f258fb107a29a8c2e1c2247cea3949":
+    if rust_token_digest(original_attempt) != "ee81e0b63a5a3bafc522e52e51ec82f5c256addf23b0d077bac9d5ed2ba2893b":
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
 
 
@@ -7124,7 +7168,7 @@ def main() -> int:
             "->Result<ParliamentDerivedReadIndexesV1,String>{")
             or "global_beacon" in derived_code or "finalized_beacon" in derived_code):
         raise RuntimeError(
-            f"{state_path}: Parliament derived indexes must be rebuilt from attempts alone"
+            f"{state_path}: Parliament derived indexes must be rebuilt from attempts and closure receipts alone"
         )
     if derived_code.count(
             "forpulse_slotinattempt.required_beacon_pulse_slots_v1().into_iter()"

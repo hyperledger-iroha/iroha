@@ -51,12 +51,15 @@ pub enum VmTrapKind {
     UnsupportedProgramVersion,
     UnsupportedProgramFeatureBits,
     UnsupportedProgramAbiVersion,
-    ProgramVectorLengthTooLarge,
+    MissingMaxCycles,
+    MaxCyclesWithoutZk,
     ArtifactAbiHashMismatch,
     GenericSyscallNotAllowed,
-    InvalidVectorLength,
     MissingHalt,
     PermissionDenied,
+    ReentrantCall,
+    CallDepthExceeded,
+    ControlFlowViolation,
     PrivacyViolation,
     RegisterOutOfBounds,
     NoritoInvalid,
@@ -97,7 +100,8 @@ pub struct VmBudgetSnapshot {
 pub struct VmExecutionContext<'a> {
     pub entrypoint_pc: Option<u64>,
     pub current_function: Option<&'a str>,
-    pub opcode: Option<u16>,
+    /// Primary opcode byte of the rejected instruction word, when the trap is an opcode rejection.
+    pub opcode: Option<u8>,
     pub syscall: Option<u32>,
     pub predecoded_loaded: bool,
     pub predecoded_hit: Option<bool>,
@@ -219,7 +223,8 @@ pub enum VMError {
     MemoryOutOfBounds,
     /// Instruction decoding failed due to invalid data or out-of-bounds fetch.
     DecodeError,
-    InvalidOpcode(u16),
+    /// The instruction word's primary opcode byte (bits 31..24) is not an admitted opcode.
+    InvalidOpcode(u8),
     UnknownSyscall(u32),
     /// VM was asked to run or execute a host-dependent operation without a host attached.
     HostUnavailable,
@@ -291,12 +296,12 @@ pub enum VMError {
         /// Declared ABI version.
         version: u8,
     },
-    /// The fixed header requests more logical vector lanes than ABI V1 permits.
-    ProgramVectorLengthTooLarge {
-        /// Declared vector length.
-        vector_length: u8,
-        /// Maximum accepted vector length.
-        max_allowed: u8,
+    /// A ZK-mode header declares no trace bound (`max_cycles == 0`).
+    MissingMaxCycles,
+    /// A header without the ZK bit declares a trace bound; gas is the only non-ZK budget.
+    MaxCyclesWithoutZk {
+        /// Declared, non-zero `max_cycles`.
+        max_cycles: u64,
     },
     /// A self-describing artifact targets a different canonical ABI descriptor.
     ArtifactAbiHashMismatch {
@@ -310,19 +315,17 @@ pub enum VMError {
         /// Rejected syscall number.
         syscall: u32,
     },
-    InvalidVectorLength {
-        vector_length: usize,
-    },
     /// Program reached the end of the executable region without an explicit terminating syscall or HALT.
     MissingHalt,
-    VectorExtensionDisabled,
-    ZkExtensionDisabled,
     NullifierAlreadyUsed,
     PermissionDenied,
     /// A nested invocation targeted an address already active in its ancestry.
     ReentrantCall,
-    /// A nested invocation exceeded the canonical call-depth bound.
+    /// A nested invocation or protected direct call exceeded the canonical call-depth bound.
     CallDepthExceeded,
+    /// A protected contract violated call/return integrity: a return to an untrusted PC, an
+    /// indirect transfer, or `HALT` inside a deployable contract.
+    ControlFlowViolation,
     PrivacyViolation,
     RegisterOutOfBounds,
     /// Malformed Norito TLV envelope or checksum mismatch.
@@ -440,14 +443,12 @@ impl VMError {
             Self::AssertionFailed => F::AssertionFailed,
             Self::ExceededMaxCycles => F::ExceededMaxCycles,
             Self::InvalidMetadata => F::InvalidMetadata,
-            Self::InvalidVectorLength { .. } => F::InvalidVectorLength,
             Self::MissingHalt => F::MissingHalt,
-            Self::VectorExtensionDisabled => F::VectorExtensionDisabled,
-            Self::ZkExtensionDisabled => F::ZkExtensionDisabled,
             Self::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
             Self::PermissionDenied => F::PermissionDenied,
             Self::ReentrantCall => F::ReentrantCall,
             Self::CallDepthExceeded => F::CallDepthExceeded,
+            Self::ControlFlowViolation => F::ControlFlowViolation,
             Self::PrivacyViolation => F::PrivacyViolation,
             Self::RegisterOutOfBounds => F::RegisterOutOfBounds,
             Self::NoritoInvalid => F::NoritoInvalid,
@@ -473,7 +474,8 @@ impl VMError {
             | Self::UnsupportedProgramVersion { .. }
             | Self::UnsupportedProgramFeatureBits { .. }
             | Self::UnsupportedProgramAbiVersion { .. }
-            | Self::ProgramVectorLengthTooLarge { .. }
+            | Self::MissingMaxCycles
+            | Self::MaxCyclesWithoutZk { .. }
             | Self::ArtifactAbiHashMismatch { .. }
             | Self::GenericSyscallNotAllowed { .. } => return None,
             Self::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
@@ -608,12 +610,12 @@ impl fmt::Display for VMError {
             VMError::UnsupportedProgramAbiVersion { version } => {
                 write!(f, "unsupported IVM program ABI version {version}")
             }
-            VMError::ProgramVectorLengthTooLarge {
-                vector_length,
-                max_allowed,
-            } => write!(
+            VMError::MissingMaxCycles => {
+                write!(f, "ZK-mode IVM program header declares no trace bound")
+            }
+            VMError::MaxCyclesWithoutZk { max_cycles } => write!(
                 f,
-                "IVM program vector length {vector_length} exceeds maximum {max_allowed}"
+                "IVM program header declares trace bound {max_cycles} without ZK mode"
             ),
             VMError::ArtifactAbiHashMismatch { expected, actual } => write!(
                 f,
@@ -625,16 +627,12 @@ impl fmt::Display for VMError {
                 f,
                 "syscall 0x{syscall:02x} is not allowed in a generic IVM program"
             ),
-            VMError::InvalidVectorLength { vector_length } => {
-                write!(f, "invalid vector length {vector_length}")
-            }
             VMError::MissingHalt => write!(f, "program terminated without HALT, EXIT, or ABORT"),
-            VMError::VectorExtensionDisabled => write!(f, "vector extension not enabled"),
-            VMError::ZkExtensionDisabled => write!(f, "zk extension not enabled"),
             VMError::NullifierAlreadyUsed => write!(f, "nullifier already used"),
             VMError::PermissionDenied => write!(f, "permission denied"),
             VMError::ReentrantCall => write!(f, "contract address is already active"),
             VMError::CallDepthExceeded => write!(f, "contract call depth exceeded"),
+            VMError::ControlFlowViolation => write!(f, "protected control-flow violation"),
             VMError::PrivacyViolation => write!(f, "privacy tag violation"),
             VMError::RegisterOutOfBounds => write!(f, "register index out of bounds"),
             VMError::NoritoInvalid => write!(f, "invalid Norito TLV envelope"),

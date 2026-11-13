@@ -26,6 +26,7 @@ fn parts(prepared: &PreparedContract) -> PreparedContractParts {
     PreparedContractParts {
         artifact: prepared.shared_artifact(),
         metadata: prepared.metadata().clone(),
+        syscall_policy: prepared.syscall_policy(),
         manifest: prepared.manifest().clone(),
         header_len: prepared.header_len(),
         code_offset: prepared.code_offset(),

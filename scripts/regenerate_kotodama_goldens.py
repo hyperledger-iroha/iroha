@@ -49,8 +49,8 @@ from typing import Callable, Iterable, Sequence
 MAX_CYCLES = 1_000_000
 HEADER_SIZE = 49
 ZK_MODE_BIT = 0x01
-VECTOR_MODE_BIT = 0x02
-KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
+# ZK is the only IVM ABI v1 execution-mode bit.
+KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT
 MAP_PATH = Path("scripts/ivm_artifacts.tsv")
 ATTRIBUTES_PATH = Path(".gitattributes")
 TEST_SOURCE = Path("crates/ivm/docs/examples/19_contract_flow_test.test.ko")

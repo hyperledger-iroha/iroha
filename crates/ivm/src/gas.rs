@@ -3,23 +3,14 @@
 //! Canonical schedule
 //! - This table is the canonical source for gas costs used by the interpreter.
 //!   Tests compare runtime accounting against this table to ensure conformance.
-//! - Costs follow the IVM spec. Variants (e.g., DIV vs MUL) are distinguished by
-//!   decoding full instruction words (funct fields), not just opcodes.
-//!
-//! Scope
-//! - Includes extended vector/parallel and cryptographic instructions.
-//! - Vector costs scale from the two-lane baseline by the deterministic logical
-//!   vector length.
+//! - Every admitted opcode has one fixed price selected by its primary opcode byte;
+//!   only the terminating `HALT` is free, so gas alone bounds the number of executed steps.
+//! - Gas is the only execution budget. The caller owns it and nested invocations draw
+//!   from their parent's remaining gas; no program header converts into a gas limit.
 use crate::instruction::wide;
 use iroha_crypto::Hash;
-/// Gas accounting treats two lanes as the baseline for vector operations.
-pub const VECTOR_BASE_LANES: usize = 2;
 /// Default byte multiplier for syscall host-work gas families.
 pub const SYSCALL_GAS_PER_BYTE: u64 = 1;
-/// Version of the V1 direct signature-opcode byte gas formula.
-pub const SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1: u64 = 1;
-/// Gas charged for each payload byte consumed by a direct signature opcode.
-pub const SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE: u64 = SYSCALL_GAS_PER_BYTE;
 /// Fixed gas for `transfer_v1` FastPQ batch begin/end scope operations.
 pub const G_FASTPQ_BATCH: u64 = 16;
 /// Fixed gas for governance/admin contract-management bridge syscalls.
@@ -50,32 +41,6 @@ pub const LEDGER_QUERY_GAS_PER_ITEM: u64 = 250;
 pub const LEDGER_QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
 /// Gas charged for each canonically measured query or projection byte.
 pub const LEDGER_QUERY_GAS_PER_BYTE: u64 = 2;
-/// Version of the bounded Ed25519 batch-verification gas formula.
-pub const ED25519_BATCH_GAS_FORMULA_VERSION_V1: u64 = 1;
-/// Gas charged for each encoded request byte before TLV hashing or Norito decoding.
-pub const ED25519_BATCH_GAS_PER_PAYLOAD_BYTE: u64 = 1;
-/// Gas charged before strictly verifying one Ed25519 batch entry.
-pub const ED25519_BATCH_GAS_PER_ENTRY: u64 = 1_000;
-/// Maximum entries accepted by one Ed25519 batch-verification instruction.
-pub const ED25519_BATCH_MAX_ENTRIES: usize = 512;
-/// Maximum encoded Norito request bytes accepted by batch verification.
-pub const ED25519_BATCH_MAX_PAYLOAD_BYTES: usize = 512 * 1024;
-/// Maximum elements in one nested sequence, including an entry message.
-pub const ED25519_BATCH_MAX_SEQUENCE_ELEMENTS: usize = 64 * 1024;
-/// Maximum total decoded elements across one batch request.
-pub const ED25519_BATCH_MAX_TOTAL_ELEMENTS: usize = ED25519_BATCH_MAX_PAYLOAD_BYTES;
-/// Maximum cumulative allocation permitted while decoding a batch request.
-pub const ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES: usize = 2 * ED25519_BATCH_MAX_PAYLOAD_BYTES;
-/// Maximum structural nesting depth accepted by a batch request.
-pub const ED25519_BATCH_MAX_DECODE_DEPTH: usize = 8;
-/// Decode budget for one attacker-authored Ed25519 batch request.
-pub const ED25519_BATCH_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
-    ED25519_BATCH_MAX_SEQUENCE_ELEMENTS,
-    ED25519_BATCH_MAX_PAYLOAD_BYTES,
-    ED25519_BATCH_MAX_TOTAL_ELEMENTS,
-    ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES,
-    ED25519_BATCH_MAX_DECODE_DEPTH,
-);
 /// Compute the V1 ledger-query charge from canonical schedule parameters.
 ///
 /// `base` and `per_item` are selected before execution from the request kind
@@ -92,31 +57,6 @@ pub const fn ledger_query_gas_v1(
     base.saturating_add(per_item.saturating_mul(processed_items))
         .saturating_add(per_item.saturating_mul(offset_items))
         .saturating_add(LEDGER_QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
-}
-/// Compute gas that must be reserved before Ed25519 batch request work.
-///
-/// The fixed opcode base is charged by [`cost_of`]. This function covers the
-/// complete request bytes and every strict per-entry verification.
-#[must_use]
-pub const fn ed25519_batch_extra_gas(payload_bytes: u64, entries: u64) -> u64 {
-    ED25519_BATCH_GAS_PER_PAYLOAD_BYTE
-        .saturating_mul(payload_bytes)
-        .saturating_add(ED25519_BATCH_GAS_PER_ENTRY.saturating_mul(entries))
-}
-/// Compute the byte-linear surcharge for one direct signature opcode.
-///
-/// Aliased operands are charged independently because the opcode validates
-/// each message, signature, and public-key TLV independently.
-#[must_use]
-pub fn signature_opcode_extra_gas(
-    message_bytes: u64,
-    signature_bytes: u64,
-    public_key_bytes: u64,
-) -> Option<u64> {
-    message_bytes
-        .checked_add(signature_bytes)?
-        .checked_add(public_key_bytes)?
-        .checked_mul(SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE)
 }
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
@@ -361,13 +301,6 @@ pub fn zk_verify_gas(payload_bytes: usize) -> u64 {
 pub fn zk_verify_batch_gas(proof_count: usize, payload_bytes: usize) -> u64 {
     ZkGasScheduleV1::default().conservative_batch_gas(proof_count, payload_bytes)
 }
-/// Scale a vector opcode's base cost by the actual logical lane count.
-pub(crate) fn scaled_vector_cost(base_cost: u64, vector_len: usize) -> u64 {
-    let lanes = vector_len.max(1) as u64;
-    base_cost
-        .saturating_mul(lanes)
-        .div_ceil(VECTOR_BASE_LANES as u64)
-}
 /// Canonical opcode set covered by the gas schedule.
 ///
 /// Keep this list in opcode order so `schedule_hash` remains deterministic across platforms.
@@ -418,8 +351,6 @@ pub const SCHEDULE_OPCODES: &[u8] = &[
     // Memory
     wide::memory::LOAD64,
     wide::memory::STORE64,
-    wide::memory::LOAD128,
-    wide::memory::STORE128,
     wide::memory::LDLIT,
     wide::memory::LDI64,
     // Control flow
@@ -431,43 +362,11 @@ pub const SCHEDULE_OPCODES: &[u8] = &[
     wide::control::BGEU,
     wide::control::JAL,
     wide::control::JALR,
-    wide::control::JR,
     wide::control::JMP,
     wide::control::JALS,
     wide::control::HALT,
     // System
     wide::system::SCALL,
-    wide::system::GETGAS,
-    wide::system::SYSTEM,
-    // Crypto/vector
-    wide::crypto::VADD32,
-    wide::crypto::VADD64,
-    wide::crypto::VAND,
-    wide::crypto::VXOR,
-    wide::crypto::VOR,
-    wide::crypto::VROT32,
-    wide::crypto::SETVL,
-    wide::crypto::PARBEGIN,
-    wide::crypto::PAREND,
-    wide::crypto::SHA256BLOCK,
-    wide::crypto::SHA3BLOCK,
-    wide::crypto::POSEIDON2,
-    wide::crypto::POSEIDON6,
-    wide::crypto::AESENC,
-    wide::crypto::AESDEC,
-    wide::crypto::BLAKE2S,
-    wide::crypto::ED25519VERIFY,
-    wide::crypto::ED25519BATCHVERIFY,
-    wide::crypto::ECDSAVERIFY,
-    wide::crypto::DILITHIUMVERIFY,
-    // ZK helpers
-    wide::zk::ASSERT,
-    wide::zk::ASSERT_EQ,
-    wide::zk::FADD,
-    wide::zk::FSUB,
-    wide::zk::FMUL,
-    wide::zk::FINV,
-    wide::zk::ASSERT_RANGE,
 ];
 /// Return the gas cost for the given 32-bit instruction word.
 ///
@@ -515,75 +414,19 @@ pub fn cost_of(instr: u32) -> Option<u64> {
         wide::arithmetic::CMOV | wide::arithmetic::CMOVI => Some(3),
         wide::memory::LDLIT | wide::memory::LDI64 => Some(1),
         wide::memory::LOAD64 | wide::memory::STORE64 => Some(3),
-        wide::memory::LOAD128 | wide::memory::STORE128 => Some(5),
         wide::control::BEQ
         | wide::control::BNE
         | wide::control::BLT
         | wide::control::BGE
         | wide::control::BLTU
         | wide::control::BGEU => Some(1),
-        wide::control::JAL
-        | wide::control::JALR
-        | wide::control::JR
-        | wide::control::JMP
-        | wide::control::JALS => Some(2),
-        wide::control::HALT => Some(0),
-        wide::system::SCALL | wide::system::SYSTEM => Some(5),
-        wide::system::GETGAS => Some(0),
-        wide::crypto::VADD32 | wide::crypto::VADD64 => Some(2),
-        wide::crypto::VAND | wide::crypto::VXOR | wide::crypto::VOR | wide::crypto::VROT32 => {
-            Some(1)
+        wide::control::JAL | wide::control::JALR | wide::control::JMP | wide::control::JALS => {
+            Some(2)
         }
-        wide::crypto::SETVL => Some(1),
-        wide::crypto::PARBEGIN | wide::crypto::PAREND => Some(0),
-        wide::crypto::SHA256BLOCK | wide::crypto::SHA3BLOCK => Some(50),
-        wide::crypto::POSEIDON2 | wide::crypto::POSEIDON6 => Some(10),
-        wide::crypto::AESENC | wide::crypto::AESDEC => Some(30),
-        wide::crypto::BLAKE2S => Some(40),
-        wide::crypto::ED25519VERIFY => Some(1000),
-        wide::crypto::ED25519BATCHVERIFY => Some(500),
-        wide::crypto::ECDSAVERIFY => Some(1500),
-        wide::crypto::DILITHIUMVERIFY => Some(5000),
-        wide::zk::ASSERT | wide::zk::ASSERT_EQ | wide::zk::ASSERT_RANGE => Some(1),
-        wide::zk::FADD | wide::zk::FSUB => Some(1),
-        wide::zk::FMUL => Some(3),
-        wide::zk::FINV => Some(5),
+        wide::control::HALT => Some(0),
+        wide::system::SCALL => Some(5),
         _ => None,
     }
-}
-/// Maximum base cost across all scheduled opcodes.
-#[must_use]
-pub fn max_instruction_cost() -> u64 {
-    SCHEDULE_OPCODES
-        .iter()
-        .map(|op| cost_of((*op as u32) << 24).expect("scheduled opcode must have gas cost"))
-        .max()
-        .unwrap_or(0)
-}
-/// Compute gas cost when the base cost and opcode were already extracted.
-pub(crate) fn cost_from_parts(
-    base_cost: Option<u64>,
-    wide_op: u8,
-    vector_len: usize,
-) -> Option<u64> {
-    let mut cost = base_cost?;
-    if matches!(
-        wide_op,
-        wide::crypto::VADD32
-            | wide::crypto::VADD64
-            | wide::crypto::VAND
-            | wide::crypto::VXOR
-            | wide::crypto::VOR
-            | wide::crypto::VROT32
-    ) {
-        cost = scaled_vector_cost(cost, vector_len);
-    }
-    Some(cost)
-}
-/// Compute gas cost using the supplied deterministic logical vector length.
-pub fn cost_of_with_vector_len(instr: u32, vector_len: usize) -> Option<u64> {
-    let wide_op = wide::opcode(instr);
-    cost_from_parts(cost_of(instr), wide_op, vector_len)
 }
 const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v4";
 const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 4;
@@ -628,16 +471,7 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ("call_pointer_base", crate::call_gas::POINTER_BASE),
         ("call_bitmap_coverage", crate::call_gas::BITMAP_COVERAGE),
         ("call_word_bytes", ivm_abi::call::CALL_WORD_BYTES_V1 as u64),
-        ("vector_base_lanes", VECTOR_BASE_LANES as u64),
         ("syscall_per_byte", SYSCALL_GAS_PER_BYTE),
-        (
-            "signature_opcode_formula_version",
-            SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
-        ),
-        (
-            "signature_opcode_per_payload_byte",
-            SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
-        ),
         ("fastpq_batch_base", G_FASTPQ_BATCH),
         ("contract_admin_base", G_CONTRACT_ADMIN),
         ("call_contract_base", G_CALL_CONTRACT),
@@ -656,43 +490,6 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             LEDGER_QUERY_GAS_SORT_MULTIPLIER,
         ),
         ("ledger_query_per_byte", LEDGER_QUERY_GAS_PER_BYTE),
-        (
-            "ed25519_batch_formula_version",
-            ED25519_BATCH_GAS_FORMULA_VERSION_V1,
-        ),
-        (
-            "ed25519_batch_per_payload_byte",
-            ED25519_BATCH_GAS_PER_PAYLOAD_BYTE,
-        ),
-        ("ed25519_batch_per_entry", ED25519_BATCH_GAS_PER_ENTRY),
-        (
-            "ed25519_batch_max_entries",
-            ED25519_BATCH_MAX_ENTRIES as u64,
-        ),
-        (
-            "ed25519_batch_max_payload_bytes",
-            ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
-        ),
-        (
-            "ed25519_batch_decode_max_sequence_elements",
-            ED25519_BATCH_MAX_SEQUENCE_ELEMENTS as u64,
-        ),
-        (
-            "ed25519_batch_decode_max_field_bytes",
-            ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
-        ),
-        (
-            "ed25519_batch_decode_max_total_elements",
-            ED25519_BATCH_MAX_TOTAL_ELEMENTS as u64,
-        ),
-        (
-            "ed25519_batch_decode_max_total_allocated_bytes",
-            ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES as u64,
-        ),
-        (
-            "ed25519_batch_decode_max_nesting_depth",
-            ED25519_BATCH_MAX_DECODE_DEPTH as u64,
-        ),
         (
             "numeric_formula_version",
             crate::numeric_gas::NUMERIC_GAS_FORMULA_VERSION_V1,
@@ -1124,97 +921,6 @@ mod tests {
         );
     }
     #[test]
-    fn schedule_hash_binds_the_complete_live_ed25519_batch_formula() {
-        let expected = [
-            (
-                "ed25519_batch_formula_version",
-                ED25519_BATCH_GAS_FORMULA_VERSION_V1,
-            ),
-            (
-                "ed25519_batch_per_payload_byte",
-                ED25519_BATCH_GAS_PER_PAYLOAD_BYTE,
-            ),
-            ("ed25519_batch_per_entry", ED25519_BATCH_GAS_PER_ENTRY),
-            (
-                "ed25519_batch_max_entries",
-                ED25519_BATCH_MAX_ENTRIES as u64,
-            ),
-            (
-                "ed25519_batch_max_payload_bytes",
-                ED25519_BATCH_MAX_PAYLOAD_BYTES as u64,
-            ),
-            (
-                "ed25519_batch_decode_max_sequence_elements",
-                ED25519_BATCH_DECODE_LIMITS.max_sequence_elements() as u64,
-            ),
-            (
-                "ed25519_batch_decode_max_field_bytes",
-                ED25519_BATCH_DECODE_LIMITS.max_field_bytes() as u64,
-            ),
-            (
-                "ed25519_batch_decode_max_total_elements",
-                ED25519_BATCH_DECODE_LIMITS.max_total_elements() as u64,
-            ),
-            (
-                "ed25519_batch_decode_max_total_allocated_bytes",
-                ED25519_BATCH_DECODE_LIMITS.max_total_allocated_bytes() as u64,
-            ),
-            (
-                "ed25519_batch_decode_max_nesting_depth",
-                ED25519_BATCH_DECODE_LIMITS.max_nesting_depth() as u64,
-            ),
-        ];
-        let canonical = canonical_gas_schedule_descriptor();
-        for (name, value) in expected {
-            let matches = canonical
-                .parameters
-                .iter()
-                .enumerate()
-                .filter(|(_, parameter)| parameter.name == name)
-                .collect::<Vec<_>>();
-            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
-            let (index, parameter) = matches[0];
-            assert_eq!(parameter.value, value, "descriptor value for {name}");
-            assert_descriptor_mutation_changes_hash(|changed| {
-                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
-            });
-        }
-        assert_eq!(
-            ed25519_batch_extra_gas(123, 2),
-            123 * ED25519_BATCH_GAS_PER_PAYLOAD_BYTE + 2 * ED25519_BATCH_GAS_PER_ENTRY,
-        );
-    }
-    #[test]
-    fn schedule_hash_binds_the_complete_live_signature_opcode_formula() {
-        let expected = [
-            (
-                "signature_opcode_formula_version",
-                SIGNATURE_OPCODE_GAS_FORMULA_VERSION_V1,
-            ),
-            (
-                "signature_opcode_per_payload_byte",
-                SIGNATURE_OPCODE_GAS_PER_PAYLOAD_BYTE,
-            ),
-        ];
-        let canonical = canonical_gas_schedule_descriptor();
-        for (name, value) in expected {
-            let matches = canonical
-                .parameters
-                .iter()
-                .enumerate()
-                .filter(|(_, parameter)| parameter.name == name)
-                .collect::<Vec<_>>();
-            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
-            let (index, parameter) = matches[0];
-            assert_eq!(parameter.value, value, "descriptor value for {name}");
-            assert_descriptor_mutation_changes_hash(|changed| {
-                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
-            });
-        }
-        assert_eq!(signature_opcode_extra_gas(11, 64, 32), Some(107));
-        assert_eq!(signature_opcode_extra_gas(u64::MAX, 1, 0), None);
-    }
-    #[test]
     fn schedule_hash_binds_the_complete_live_vrf_formula() {
         let decode_limits = ivm_abi::host_payload::VRF_VERIFY_DECODE_LIMITS_V1;
         let expected = [
@@ -1483,16 +1189,27 @@ mod tests {
         );
     }
     #[test]
-    fn cost_from_parts_matches_full_cost_path() {
-        for &op in SCHEDULE_OPCODES {
-            let instr = u32::from(op) << 24;
-            for vector_len in [0, 1, 2, 4, 16] {
-                assert_eq!(
-                    cost_from_parts(cost_of(instr), op, vector_len),
-                    cost_of_with_vector_len(instr, vector_len),
-                    "op=0x{op:02x} vector_len={vector_len}",
-                );
-            }
+    fn the_schedule_prices_exactly_the_admitted_opcodes() {
+        for opcode in u8::MIN..=u8::MAX {
+            let word = u32::from(opcode) << 24;
+            assert_eq!(
+                cost_of(word).is_some(),
+                wide::is_valid_opcode(opcode),
+                "{opcode:#04x}"
+            );
+            assert_eq!(
+                SCHEDULE_OPCODES.contains(&opcode),
+                wide::is_valid_opcode(opcode),
+                "{opcode:#04x}"
+            );
+        }
+    }
+    #[test]
+    fn only_the_terminating_halt_is_free() {
+        // A free instruction that can repeat would not be bounded by gas.
+        for &opcode in SCHEDULE_OPCODES {
+            let cost = cost_of(u32::from(opcode) << 24).expect("scheduled opcode has a price");
+            assert_eq!(cost == 0, opcode == wide::control::HALT, "{opcode:#04x}");
         }
     }
 }

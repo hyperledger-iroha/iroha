@@ -41,7 +41,7 @@ def _output_stage(root: Path, suffix: str = "A1b2C3d4") -> Path:
 def _artifact_and_manifest() -> tuple[bytes, dict[str, object]]:
     abi_hash = bytes.fromhex("ab" * 32)
     artifact = bytearray(b"IVM\0")
-    artifact.extend((1, 1, 0, 0))
+    artifact.extend((1, 1, 0))
     artifact.extend((0).to_bytes(8, "little"))
     artifact.append(1)
     artifact.extend(abi_hash)
@@ -118,8 +118,8 @@ def test_semantic_expectation_derives_only_platform_independent_fields() -> None
     assert MODULE._semantic_expectation(artifact, manifest) == {
         "code_hash_hex": MODULE._contract_hash(artifact),
         "abi_hash_hex": "ab" * 32,
-        "header_len": 49,
-        "code_offset": 58,
+        "header_len": 48,
+        "code_offset": 57,
         "entrypoint_count": 1,
     }
 

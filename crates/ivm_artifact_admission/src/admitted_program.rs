@@ -8,12 +8,13 @@
 
 use super::VerifiedContractArtifact;
 use iroha_crypto::Hash;
-use ivm_abi::{VMError, metadata::ProgramMetadata};
+use ivm_abi::{SyscallPolicy, VMError, metadata::ProgramMetadata};
 
 /// Fixed scalar identity derived only by the native admission owner.
 #[derive(Clone, Debug)]
 pub struct AdmittedProgramSeal {
     metadata: ProgramMetadata,
+    syscall_policy: SyscallPolicy,
     header_len: usize,
     code_offset: usize,
     code_hash: Hash,
@@ -23,12 +24,14 @@ impl AdmittedProgramSeal {
     /// The native verifier calls this after policy/literal/interface checks have completed.
     pub(super) fn new(
         metadata: &ProgramMetadata,
+        syscall_policy: SyscallPolicy,
         header_len: usize,
         code_offset: usize,
         code_hash: Hash,
     ) -> Self {
         Self {
             metadata: metadata.clone(),
+            syscall_policy,
             header_len,
             code_offset,
             code_hash,
@@ -40,7 +43,6 @@ fn same_metadata(left: &ProgramMetadata, right: &ProgramMetadata) -> bool {
     left.version_major == right.version_major
         && left.version_minor == right.version_minor
         && left.mode == right.mode
-        && left.vector_length == right.vector_length
         && left.max_cycles == right.max_cycles
         && left.abi_version == right.abi_version
 }
@@ -53,12 +55,18 @@ fn same_metadata(left: &ProgramMetadata, right: &ProgramMetadata) -> bool {
 #[derive(Clone, Copy)]
 pub struct AdmittedProgram<'a> {
     metadata: &'a ProgramMetadata,
+    syscall_policy: SyscallPolicy,
     code: &'a [u8],
 }
 impl AdmittedProgram<'_> {
     /// Borrow the admission owner's fixed scalar execution header.
     pub fn metadata(&self) -> &ProgramMetadata {
         self.metadata
+    }
+
+    /// Return the exact named policy authenticated by the original admission.
+    pub fn syscall_policy(&self) -> SyscallPolicy {
+        self.syscall_policy
     }
 
     /// Borrow the unchanged executable stream, with no artifact-prefix payloads.
@@ -80,7 +88,8 @@ impl VerifiedContractArtifact {
         artifact: &'a [u8],
     ) -> Result<AdmittedProgram<'a>, VMError> {
         let seal = &self.admitted_program;
-        if self.code_hash != seal.code_hash
+        if self.syscall_policy != seal.syscall_policy
+            || self.code_hash != seal.code_hash
             || self.header_len != seal.header_len
             || self.code_offset != seal.code_offset
             || !same_metadata(&self.metadata, &seal.metadata)
@@ -95,6 +104,7 @@ impl VerifiedContractArtifact {
             .ok_or(VMError::InvalidMetadata)?;
         Ok(AdmittedProgram {
             metadata: &seal.metadata,
+            syscall_policy: seal.syscall_policy,
             code,
         })
     }
@@ -128,12 +138,44 @@ mod tests {
             bytes[verified.code_offset..].as_ptr()
         ));
         assert!(same_metadata(range.metadata(), &verified.metadata));
+        assert_eq!(range.syscall_policy(), SyscallPolicy::AbiV1);
+    }
+
+    #[test]
+    fn admitted_range_preserves_the_exact_named_host_policy() {
+        let policy = SyscallPolicy::AbiV1RuntimeLifecycle;
+        let bytes = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                host_policy: policy,
+                ..kotodama_lang::compiler::CompilerOptions::default()
+            },
+        )
+        .compile_source("seiyaku NamedRange { view fn main() authorize(anyone) { () } }")
+        .unwrap();
+        let mut verified = crate::verify_contract_artifact_for_policy(&bytes, policy).unwrap();
+        assert_eq!(
+            verified
+                .borrow_admitted_program(&bytes)
+                .unwrap()
+                .syscall_policy(),
+            policy
+        );
+        verified.syscall_policy = SyscallPolicy::AbiV1;
+        assert!(matches!(
+            verified.borrow_admitted_program(&bytes),
+            Err(VMError::InvalidMetadata)
+        ));
     }
 
     #[test]
     fn mutable_summary_and_complete_artifact_substitutions_do_not_change_native_range() {
         let (bytes, verified) = actual();
         for changed in [
+            {
+                let mut changed = crate::verify_contract_artifact(&bytes).unwrap();
+                changed.syscall_policy = SyscallPolicy::AbiV1RuntimeLifecycle;
+                changed
+            },
             {
                 let mut changed = crate::verify_contract_artifact(&bytes).unwrap();
                 changed.code_offset += 4;

@@ -387,7 +387,7 @@ fn read_request(path: &Path) -> Result<(ExportRequest, Vec<u8>), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
     let mut file = options.open(path).map_err(|error| error.to_string())?;
     let opened = file.metadata().map_err(|error| error.to_string())?;

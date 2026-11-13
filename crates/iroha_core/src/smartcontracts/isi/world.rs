@@ -751,19 +751,23 @@ pub mod isi {
         })
     }
     fn validate_trigger_callback_dispatch(
+        world: &impl crate::state::WorldReadOnly,
         trigger_id: &TriggerId,
         metadata: &Metadata,
         code_bytes: &[u8],
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
-        crate::executor::validate_trigger_call_execution_context(metadata, code_bytes).map_err(
-            |error| {
-                error.map_rejection(|err| {
-                    invalid_smart_contract_parameter(format!(
-                        "invalid trigger `{trigger_id}` callback dispatch metadata: {err}"
-                    ))
-                })
-            },
+        crate::executor::validate_trigger_call_execution_context_for_policy(
+            metadata,
+            code_bytes,
+            crate::smartcontracts::ivm::artifact_policy(world, code_bytes),
         )
+        .map_err(|error| {
+            error.map_rejection(|err| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid trigger `{trigger_id}` callback dispatch metadata: {err}"
+                ))
+            })
+        })
     }
     fn register_manifest_triggers(
         authority: &AccountId,
@@ -843,6 +847,7 @@ pub mod isi {
                     iroha_primitives::json::Json::from(trigger_id_string.as_str()),
                 )?;
                 validate_trigger_callback_dispatch(
+                    &state_transaction.world,
                     &descriptor.id,
                     &metadata,
                     callback_contract.code_bytes.as_ref(),
@@ -2586,9 +2591,12 @@ pub mod isi {
                     "contract bytecode for manifest.code_hash not found".into(),
                 ))
             })?;
-        let verified =
-            ivm::verify_contract_artifact_with_memory_budget(&code_bytes, execution_budget)
-                .map_err(|error| artifact_admission_instruction_error(world, error))?;
+        let verified = crate::smartcontracts::ivm::verify_contract_in_world(
+            world,
+            &code_bytes,
+            execution_budget,
+        )
+        .map_err(|error| artifact_admission_instruction_error(world, error))?;
         if verified.code_hash != artifact_id.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "stored contract bytecode hash does not match manifest.code_hash".into(),
@@ -2852,8 +2860,10 @@ pub mod isi {
             }
             let contract_address = self.contract_address.clone();
             validate_governance_deploy_contract_input(&self)?;
-            let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-            if self.abi_hash.into_bytes() != expected_abi_hash {
+            if !crate::smartcontracts::ivm::known_selected_abi(
+                &state_transaction.world,
+                &self.abi_hash.into_bytes(),
+            ) {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "abi_hash does not match canonical hash for abi_version {}",
@@ -3003,9 +3013,10 @@ pub mod isi {
                             "abi_version must be exactly 1",
                         ));
                     }
-                    if action.abi_hash.into_bytes()
-                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
-                    {
+                    if !crate::smartcontracts::ivm::known_selected_abi(
+                        &state_transaction.world,
+                        &action.abi_hash.into_bytes(),
+                    ) {
                         return Err(invalid_governance_parameter(
                             "abi_hash does not match canonical ABI V1 hash",
                         ));
@@ -5506,7 +5517,8 @@ pub mod isi {
                         .into(),
                 ))
             })?;
-        let verified = ivm::verify_contract_artifact_with_memory_budget(
+        let verified = crate::smartcontracts::ivm::verify_contract_in_world(
+            &state_transaction.world,
             code_bytes,
             &state_transaction.execution_budget(),
         )
@@ -5975,8 +5987,10 @@ pub mod isi {
                     ));
                 }
                 if action.abi_version != AbiVersion::new(1)
-                    || action.abi_hash.into_bytes()
-                        != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                    || !crate::smartcontracts::ivm::known_selected_abi(
+                        &state_transaction.world,
+                        &action.abi_hash.into_bytes(),
+                    )
                 {
                     return Err(invalid_governance_parameter(
                         "certified activation must retain the canonical ABI V1 hash",
@@ -7909,7 +7923,8 @@ pub mod isi {
                 format!("code bytes exceed cap: {code_len} > {cap_bytes}").into(),
             ));
         }
-        let verified = ivm::verify_contract_artifact_with_memory_budget(
+        let verified = crate::smartcontracts::ivm::verify_contract_in_world(
+            &state_transaction.world,
             &code,
             &state_transaction.execution_budget(),
         )
@@ -8369,7 +8384,7 @@ pub mod isi {
             )
     }
 
-    fn parliament_expected_head_v1(
+    pub(crate) fn parliament_expected_head_v1(
         proposal: &ProposalKind,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<GovernanceExpectedHeadV1, crate::execution_attempt::ExecutionAttemptError<Error>>
@@ -9159,7 +9174,7 @@ pub mod isi {
     /// A Permissioned chain has no `NPoS` policy and genesis execution has no schedule yet:
     /// both are rejected with [`PARLIAMENT_SORTITION_REQUIRES_NPOS_CADENCE_V1`]. Node-local
     /// configuration and the mutable Permissioned `epoch_length_blocks` are never read.
-    fn parliament_sortition_pulse_epoch_length_v1(
+    pub(crate) fn parliament_sortition_pulse_epoch_length_v1(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<u64, Error> {
         let no_native_cadence = || {
@@ -17382,6 +17397,10 @@ pub mod isi {
                     &state_transaction.world,
                     token,
                 )?;
+                crate::runtime::content_publish_permission::guard_role_grant(
+                    &state_transaction.world,
+                    token,
+                )?;
                 super::sorafs_authority::guard_permission_mutation(
                     &state_transaction.world,
                     token,
@@ -17479,6 +17498,10 @@ pub mod isi {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
             crate::runtime::state_row_permission::guard_role_grant(
+                &state_transaction.world,
+                &permission,
+            )?;
+            crate::runtime::content_publish_permission::guard_role_grant(
                 &state_transaction.world,
                 &permission,
             )?;
@@ -26457,7 +26480,6 @@ AccountEvent::PermissionRemoved(change))
                 version_major: 1,
                 version_minor: 1,
                 mode: 0,
-                vector_length: 0,
                 max_cycles,
                 abi_version: 1,
             };

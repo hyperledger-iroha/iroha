@@ -277,3 +277,27 @@ fn assert_strictly_increasing(values: &[u32]) {
         }
     }
 }
+
+#[test]
+fn named_runtime_lifecycle_profile_keeps_the_exact_v1_syscall_numbers() {
+    use ivm::{SyscallPolicy, syscalls};
+    let baseline = syscalls::abi_syscall_list();
+    let named = syscalls::syscalls_for_policy(SyscallPolicy::AbiV1RuntimeLifecycle);
+    assert_eq!(named, baseline);
+    assert!(named.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(named.contains(&syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION));
+    for &number in baseline {
+        assert!(syscalls::is_syscall_allowed(
+            SyscallPolicy::AbiV1RuntimeLifecycle,
+            number
+        ));
+    }
+    assert!(!syscalls::is_syscall_allowed(
+        SyscallPolicy::AbiV1RuntimeLifecycle,
+        u32::MAX
+    ));
+    assert!(!syscalls::is_generic_program_syscall_allowed(
+        SyscallPolicy::AbiV1RuntimeLifecycle,
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+    ));
+}

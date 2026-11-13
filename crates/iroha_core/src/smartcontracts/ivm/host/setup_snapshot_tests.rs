@@ -642,10 +642,7 @@ fn deferred_host_setup_charges_a_representative_contract_identically() {
     ]
     .into_iter()
     .flat_map(|number| {
-        ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(number).expect("syscall id fits in u8"),
-        )
+        ivm::encoding::wide::encode_scall(number)
         .to_le_bytes()
     })
     .chain(ivm::encoding::wide::encode_halt().to_le_bytes())

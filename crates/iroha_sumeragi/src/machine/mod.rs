@@ -98,6 +98,9 @@ pub struct Core {
     late_entry: bool,
     /// A `Status{want_proposal}` was sent to `L(h, view)` in this round (§6.11).
     asked: bool,
+    /// A verified manifest from this round's original leader proves a proposal exists.
+    /// This is only a request hint; it grants no proposal, payload or execution custody.
+    manifest_hint: bool,
     me: Option<Me>,
     safety: Option<SafetyRecord>,
     timeout_view: Option<u64>,

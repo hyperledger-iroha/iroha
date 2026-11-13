@@ -12,24 +12,8 @@ fn push32(code: &mut Vec<u8>, word: u32) {
 fn halt32(code: &mut Vec<u8>) {
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 }
-fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
-    use iroha_crypto::Hash;
-    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-    out.extend_from_slice(&type_id.to_be_bytes());
-    out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload.as_ref());
-    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
-    out.extend_from_slice(&h);
-    out
-}
-// Execution mode flag for VECTOR operations in ProgramMetadata
-const MODE_VECTOR: u8 = 0x02;
 fn cost_of(word: u32) -> u64 {
     cost_of_opt(word).expect("valid opcode must have gas cost")
-}
-fn cost_of_with_vl(word: u32, vector_len: usize) -> u64 {
-    ivm::cost_of_with_vector_len(word, vector_len).expect("valid opcode must have gas cost")
 }
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)
@@ -50,7 +34,7 @@ fn wide_jump(op: u8, rd: u8, offset_words: i16) -> u32 {
     ivm::encoding::wide::encode_jump(op, rd, offset_words)
 }
 fn wide_sys(op: u8, imm8: u8) -> u32 {
-    ivm::encoding::wide::encode_sys(op, imm8)
+    ivm::encoding::wide::encode_scall(u32::from(imm8))
 }
 fn classic_encode_r16(op: u8, rd: u8, rs1: u8, rs2: u8) -> u16 {
     ((op & 0xF) as u16) << 12
@@ -119,9 +103,9 @@ fn indexed_scalar_load_has_one_gas_base_cost() {
     assert_eq!(cost_of(load), 1);
 }
 #[test]
-fn gas_getgas_and_jumps_and_vector_sha() {
+fn gas_linear_sequence_syscall_and_jumps() {
     // Property: sum(cost_of) over a linear sequence equals runtime gas
-    // Build a linear sequence with ALU + LOAD/STORE + GETGAS and compare sums
+    // Build a linear sequence with ALU + LOAD/STORE and compare sums
     {
         let mut code = Vec::new();
         // ADD r1 = r2 + r3
@@ -132,8 +116,6 @@ fn gas_getgas_and_jumps_and_vector_sha() {
         push32(&mut code, wide_store(wide::memory::STORE64, 6, 4, 0));
         // LD r7 = [r6+0]
         push32(&mut code, wide_load(wide::memory::LOAD64, 7, 6, 0));
-        // GETGAS rd=8
-        push32(&mut code, wide_rr(wide::system::GETGAS, 8, 0, 0));
         halt32(&mut code);
         // Sum schedule
         let words: Vec<u32> = code
@@ -153,10 +135,7 @@ fn gas_getgas_and_jumps_and_vector_sha() {
         vm.run().unwrap();
         assert_eq!(start - vm.gas_remaining, expected);
     }
-    // GETGAS: low 7 bits = 0x51
-    let getgas = wide_rr(wide::system::GETGAS, 0, 0, 0);
-    assert_eq!(cost_of(getgas), 0);
-    let scallx = ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
+    let scallx = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
     assert_eq!(cost_of(scallx), 5);
     // JAL: opcode 0x6F (test schedule via low 7-bit opcode)
     let jal = wide_jump(wide::control::JAL, 0, 0);
@@ -164,12 +143,6 @@ fn gas_getgas_and_jumps_and_vector_sha() {
     // JALR: I-type, opcode 0x67
     let jalr = wide_ri(wide::control::JALR, 2, 1, 0);
     assert_eq!(cost_of(jalr), 2);
-    // VADD32: high byte 0x70
-    let vadd32 = wide_rr(wide::crypto::VADD32, 0, 0, 0);
-    assert_eq!(cost_of(vadd32), 2);
-    // SHA256BLOCK: high byte 0x70
-    let sha256blk = wide_rr(wide::crypto::SHA256BLOCK, 0, 0, 0);
-    assert_eq!(cost_of(sha256blk), 50);
 }
 #[test]
 fn schedule_vs_runtime_syscall_extra() {
@@ -220,14 +193,6 @@ fn v1_json_build_charge_golden() {
         46,
         "typed JSON getters charge their base plus inspected and materialized bytes"
     );
-}
-fn run_gas(code: &[u8]) -> u64 {
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(code);
-    vm.load_program(&program).unwrap();
-    vm.run().unwrap();
-    start - vm.gas_remaining
 }
 #[test]
 fn branch_run_cost_taken_and_not_taken() {
@@ -286,185 +251,6 @@ fn branch_run_cost_taken_and_not_taken() {
     assert_eq!(mk_code(beq_taken, 5, 5, true), expected_taken);
 }
 #[test]
-fn getgas_run_is_zero() {
-    // GETGAS with rd=1
-    let getgas = wide_rr(wide::system::GETGAS, 1, 0, 0);
-    let mut code = Vec::new();
-    push32(&mut code, getgas);
-    halt32(&mut code);
-    assert_eq!(run_gas(&code), 0);
-}
-#[test]
-fn vector_and_sha_run_costs() {
-    use ivm::ProgramMetadata;
-    // Build a tiny program with metadata (VECTOR enabled)
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    // VADD32 vd=0, vs1=0, vs2=0; HALT
-    let vadd32 = ivm::encoding::wide::encode_rr(wide::crypto::VADD32, 0, 0, 0);
-    program.extend_from_slice(&vadd32.to_le_bytes());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    vm.load_program(&program).unwrap();
-    // Seed vector registers
-    vm.set_vector_register(0, [1, 2, 3, 4]);
-    let before = vm.gas_remaining;
-    vm.run().unwrap();
-    assert_eq!(before - vm.gas_remaining, 4);
-    // Now SHA256BLOCK: needs a state in two vector registers and a 64-byte block in memory
-    let mut program2 = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    // Place SHA256BLOCK with rd=0 (first vreg pair), rs1=1 (address in r1)
-    let sha_word = ivm::encoding::wide::encode_rr(wide::crypto::SHA256BLOCK, 0, 1, 0);
-    program2.extend_from_slice(&sha_word.to_le_bytes());
-    program2.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let start2 = 10_000u64;
-    let mut vm2 = IVM::new(start2);
-    vm2.load_program(&program2).unwrap();
-    // r1 points to a 64-byte block at HEAP_START
-    let base = ivm::Memory::HEAP_START + 0x500;
-    vm2.registers.set(1, base);
-    // Write a zero block (already zeroed, but write for clarity)
-    let block = [0u8; 64];
-    vm2.memory.store_bytes(base, &block).unwrap();
-    // Seed initial state (eight u32 zeros)
-    vm2.set_vector_register(0, [0; 4]);
-    vm2.set_vector_register(1, [0; 4]);
-    let before2 = vm2.gas_remaining;
-    vm2.run().unwrap();
-    assert_eq!(before2 - vm2.gas_remaining, 50);
-}
-#[test]
-fn vector_vand_vxor_vor_run_costs() {
-    use ivm::ProgramMetadata;
-    // Helper to run one vector op and measure gas
-    let run_vec = |op_hi: u8| -> u64 {
-        let mut program = ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: MODE_VECTOR,
-            vector_length: 0,
-            max_cycles: 0,
-            abi_version: 1,
-        }
-        .encode();
-        let word = ivm::encoding::wide::encode_rr(op_hi, 0, 0, 0);
-        program.extend_from_slice(&word.to_le_bytes());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let start = 10_000u64;
-        let mut vm = IVM::new(start);
-        vm.load_program(&program).unwrap();
-        // Seed vector registers used
-        vm.set_vector_register(0, [0xFFFF_FFFF, 0x0, 0x1234_5678, 0xAAAA_AAAA]);
-        let before = vm.gas_remaining;
-        vm.run().unwrap();
-        before - vm.gas_remaining
-    };
-    assert_eq!(run_vec(wide::crypto::VAND), 2);
-    assert_eq!(run_vec(wide::crypto::VXOR), 2);
-    assert_eq!(run_vec(wide::crypto::VOR), 2);
-}
-#[test]
-fn getgas_variants_different_rd() {
-    // Build three GETGAS with different rd fields and HALT
-    let mk_getgas = |rd: u8| -> u32 { wide_rr(wide::system::GETGAS, rd, 0, 0) };
-    let mut code = Vec::new();
-    push32(&mut code, mk_getgas(1));
-    push32(&mut code, mk_getgas(15));
-    push32(&mut code, mk_getgas(31));
-    halt32(&mut code);
-    assert_eq!(run_gas(&code), 0);
-}
-#[test]
-fn getgas_operand_variants_invariant_cost() {
-    // Vary unused operand slots in GETGAS; gas remains 0
-    let mk = |rd: u8, rs1: u8, rs2: u8| -> u32 { wide_rr(wide::system::GETGAS, rd, rs1, rs2) };
-    let mut code = Vec::new();
-    push32(&mut code, mk(1, 0, 0));
-    push32(&mut code, mk(2, 5, 7));
-    push32(&mut code, mk(3, 0xAA, 0x55));
-    halt32(&mut code);
-    assert_eq!(run_gas(&code), 0);
-}
-#[test]
-fn vector_vadd64_vrot32_run_costs() {
-    use ivm::ProgramMetadata;
-    // VADD64
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    let vadd64 = ivm::encoding::wide::encode_rr(wide::crypto::VADD64, 0, 0, 0);
-    program.extend_from_slice(&vadd64.to_le_bytes());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    vm.load_program(&program).unwrap();
-    vm.set_vector_register(0, [1, 1, 1, 1]);
-    let before = vm.gas_remaining;
-    vm.run().unwrap();
-    assert_eq!(before - vm.gas_remaining, 4);
-    // VROT32 (rotate each lane by imm)
-    let mut program2 = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    let word2 = ivm::encoding::wide::encode_ri(wide::crypto::VROT32, 0, 0, 5);
-    program2.extend_from_slice(&word2.to_le_bytes());
-    program2.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let start2 = 10_000u64;
-    let mut vm2 = IVM::new(start2);
-    vm2.load_program(&program2).unwrap();
-    vm2.set_vector_register(0, [0x0000_0001, 0x8000_0000, 0x1234_5678, 0xFFFF_FFFF]);
-    let before2 = vm2.gas_remaining;
-    vm2.run().unwrap();
-    assert_eq!(before2 - vm2.gas_remaining, 2);
-}
-#[test]
-fn getgas_imm_variants_invariant_cost() {
-    // Vary destination and unused operand fields in GETGAS; gas remains 0
-    let mut code = Vec::new();
-    push32(
-        &mut code,
-        ivm::encoding::wide::encode_rr(wide::system::GETGAS, 1, 0, 0),
-    );
-    push32(
-        &mut code,
-        ivm::encoding::wide::encode_rr(wide::system::GETGAS, 2, 5, 7),
-    );
-    push32(
-        &mut code,
-        ivm::encoding::wide::encode_rr(wide::system::GETGAS, 31, 0xAA, 0x55),
-    );
-    halt32(&mut code);
-    assert_eq!(run_gas(&code), 0);
-}
-#[test]
 fn mixed_sequence_cumulative_gas() {
     // Build: BEQ not taken (1) + ADD (1) + SD (3) + LD (3) + HALT (0) = 8
     let mut code = Vec::new();
@@ -498,30 +284,6 @@ fn mixed_sequence_cumulative_gas() {
     assert_eq!(start - vm.gas_remaining, expected);
 }
 #[test]
-fn vector_vadd64_vl_override_gas() {
-    use ivm::ProgramMetadata;
-    // Set an explicit vector_length to a non-zero value and verify gas scales by lane count.
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 8,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::VADD64, 0, 0, 0);
-    program.extend_from_slice(&word.to_le_bytes());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    vm.load_program(&program).unwrap();
-    vm.set_vector_register(0, [0x1, 0x2, 0x3, 0x4]);
-    let before = vm.gas_remaining;
-    vm.run().unwrap();
-    assert_eq!(before - vm.gas_remaining, 8);
-}
-#[test]
 fn jalr_invariance_gas() {
     // Helper to encode I-type JALR
     for &(rd, rs1) in &[(1u32, 1u32), (31, 1), (5, 2)] {
@@ -545,34 +307,6 @@ fn alignment_error_gas_charged_then_error() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
     assert_eq!(start - vm.gas_remaining, cost_of(ld));
-}
-#[test]
-fn vector_vand_vxor_vor_vl_override_gas() {
-    use ivm::ProgramMetadata;
-    let run_vec = |op_hi: u8| -> u64 {
-        let mut program = ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: MODE_VECTOR,
-            vector_length: 8,
-            max_cycles: 0,
-            abi_version: 1,
-        }
-        .encode();
-        let word = ivm::encoding::wide::encode_rr(op_hi, 0, 0, 0);
-        program.extend_from_slice(&word.to_le_bytes());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let start = 10_000u64;
-        let mut vm = IVM::new(start);
-        vm.load_program(&program).unwrap();
-        vm.set_vector_register(0, [0xFFFF_FFFF, 0x0, 0x1234_5678, 0xAAAA_AAAA]);
-        let before = vm.gas_remaining;
-        vm.run().unwrap();
-        before - vm.gas_remaining
-    };
-    assert_eq!(run_vec(wide::crypto::VAND), 4);
-    assert_eq!(run_vec(wide::crypto::VXOR), 4);
-    assert_eq!(run_vec(wide::crypto::VOR), 4);
 }
 #[test]
 fn alignment_error_misaligned_offsets() {
@@ -723,56 +457,6 @@ fn mixed_16_32_sequence_cumulative_gas() {
     }
 }
 #[test]
-fn vector_sequence_cumulative_gas() {
-    use ivm::ProgramMetadata;
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    // VAND vd=0, vs1=0, vs2=0; VXOR vd=0, vs1=0, vs2=0; VROT32 vd=0, vs=0, imm=3
-    let vand = ivm::encoding::wide::encode_rr(wide::crypto::VAND, 0, 0, 0);
-    let vxor = ivm::encoding::wide::encode_rr(wide::crypto::VXOR, 0, 0, 0);
-    let vrot = ivm::encoding::wide::encode_ri(wide::crypto::VROT32, 0, 0, 3);
-    program.extend_from_slice(&vand.to_le_bytes());
-    program.extend_from_slice(&vxor.to_le_bytes());
-    program.extend_from_slice(&vrot.to_le_bytes());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let words: Vec<u32> = program[ivm::ProgramMetadata::default().encode().len()..]
-        .chunks(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    let expected: u64 = words.iter().map(|&w| cost_of_with_vl(w, 4)).sum();
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    vm.load_program(&program).unwrap();
-    // Seed vector regs
-    vm.set_vector_register(0, [0xFFFF_FFFF, 0x0, 0x1234_5678, 0xAAAA_AAAA]);
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn poseidon_cost_property() {
-    // Build register-form POSEIDON2 and HALT.
-    let word = ivm::encoding::wide::encode_poseidon2(6, 2, 3);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected: u64 = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    vm.registers.set(2, 1234);
-    vm.registers.set(3, 5678);
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
 fn nested_branches_executed_set_property() {
     // Layout:
     // 0: BEQ r1,r2,+4  -> to 8 when taken (PC+len base)
@@ -821,89 +505,6 @@ fn nested_branches_executed_set_property() {
         vm.run().unwrap();
         assert_eq!(start - vm.gas_remaining, expected);
     }
-}
-#[test]
-fn vector_long_chain_cumulative_gas() {
-    use ivm::ProgramMetadata;
-    // Build a longer vector chain and compare cumulative schedule vs runtime
-    let mut program = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: MODE_VECTOR,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    }
-    .encode();
-    let seq = [
-        ivm::encoding::wide::encode_rr(wide::crypto::VAND, 0, 0, 0),
-        ivm::encoding::wide::encode_rr(wide::crypto::VOR, 0, 0, 0),
-        ivm::encoding::wide::encode_rr(wide::crypto::VXOR, 0, 0, 0),
-        ivm::encoding::wide::encode_rr(wide::crypto::VADD64, 0, 0, 0),
-        ivm::encoding::wide::encode_ri(wide::crypto::VROT32, 0, 0, 13),
-        ivm::encoding::wide::encode_rr(wide::crypto::VADD32, 0, 0, 0),
-    ];
-    for w in &seq {
-        program.extend_from_slice(&w.to_le_bytes());
-    }
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let expected: u64 = seq.iter().map(|&w| cost_of_with_vl(w, 4)).sum();
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    vm.load_program(&program).unwrap();
-    vm.set_vector_register(0, [0x1234_5678, 0xFFFF_0000, 0x0, 0xAAAA_AAAA]);
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn crypto_schedule_cost_constants() {
-    // Validate cost_of for several crypto ops that may be unimplemented at runtime
-    let mk = |op_hi: u8| -> u32 { ivm::encoding::wide::encode_rr(op_hi, 0, 0, 0) };
-    assert_eq!(cost_of(mk(wide::crypto::AESENC)), 30);
-    assert_eq!(cost_of(mk(wide::crypto::AESDEC)), 30);
-    assert_eq!(cost_of(mk(wide::crypto::BLAKE2S)), 40);
-    assert_eq!(cost_of(mk(wide::crypto::SHA3BLOCK)), 50);
-    assert_eq!(cost_of(mk(wide::crypto::ED25519VERIFY)), 1000);
-    assert_eq!(cost_of(mk(wide::crypto::ED25519BATCHVERIFY)), 500);
-    assert_eq!(cost_of(mk(wide::crypto::ECDSAVERIFY)), 1500);
-    assert_eq!(cost_of(mk(wide::crypto::DILITHIUMVERIFY)), 5000);
-}
-#[test]
-fn ed25519_batchverify_charges_per_entry() {
-    use ed25519_dalek::{Signer, SigningKey};
-    let sk = SigningKey::from_bytes(&[6u8; 32]);
-    let pk_bytes = sk.verifying_key().to_bytes();
-    let entries = ["a-sample", "b-sample"]
-        .iter()
-        .map(|msg| {
-            let msg = msg.as_bytes();
-            let sig = sk.sign(msg);
-            ivm::signature::Ed25519BatchEntry {
-                message: msg.to_vec(),
-                signature: sig.to_bytes().to_vec(),
-                public_key: pk_bytes.to_vec(),
-            }
-        })
-        .collect();
-    let request = ivm::signature::Ed25519BatchRequest { entries };
-    let payload = norito::to_bytes(&request).expect("encode request");
-    let tlv = make_tlv(ivm::PointerType::NoritoBytes as u16, &payload);
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::ED25519BATCHVERIFY, 5, 1, 2);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let program = common::assemble(&code);
-    let mut vm = IVM::new(10_000);
-    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc request");
-    vm.set_register(1, ptr);
-    vm.set_register(2, 0xFFFF);
-    vm.load_program(&program).unwrap();
-    vm.run().unwrap();
-    let expected = cost_of(word)
-        + ivm::gas::ed25519_batch_extra_gas(payload.len() as u64, request.entries.len() as u64);
-    assert_eq!(10_000 - vm.gas_remaining, expected);
-    assert_eq!(vm.register(5), 1);
-    assert_eq!(vm.register(2), 0);
 }
 #[test]
 fn back_to_back_branches_executed_set() {
@@ -980,98 +581,6 @@ fn load_store_pair_executed_set() {
     assert_eq!(start - vm.gas_remaining, expected);
     let stored = vm.memory.load_u64(base + 8).expect("store should succeed");
     assert_eq!(stored, 0x0102_0304_0506_0708u64);
-}
-// The following tests should be un-ignored once runtime handlers land for these ops.
-// They validate that runtime gas equals the schedule when execution succeeds.
-#[test]
-fn sha3block_runtime_gas_matches_schedule() {
-    // SHA3BLOCK with explicit state and block pointers
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::SHA3BLOCK, 3, 1, 2); // rd=3 (out ptr), rs1=1 (state ptr), rs2=2 (block ptr)
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    // Prepare state and block in memory
-    let base = ivm::Memory::HEAP_START + 0xD00;
-    let state_ptr = base;
-    let block_ptr = base + 25 * 8;
-    let out_ptr = base + 25 * 8 + 136;
-    vm.registers.set(1, state_ptr);
-    vm.registers.set(2, block_ptr);
-    vm.registers.set(3, out_ptr);
-    // 25 lanes zero, block zero by default; write explicitly
-    vm.memory.store_bytes(state_ptr, &[0u8; 25 * 8]).unwrap();
-    vm.memory.store_bytes(block_ptr, &[0u8; 136]).unwrap();
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn blake2s_runtime_gas_matches_schedule() {
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::BLAKE2S, 5, 1, 0);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    let base = ivm::Memory::HEAP_START + 0xE00;
-    vm.registers.set(1, base);
-    // Fill 64 bytes input deterministically
-    let mut input = [0u8; 64];
-    for (i, b) in input.iter_mut().enumerate() {
-        *b = i as u8;
-    }
-    vm.memory.store_bytes(base, &input).unwrap();
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn ed25519verify_runtime_gas_matches_schedule() {
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::ED25519VERIFY, 0, 0, 0);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn ecdsaverify_runtime_gas_matches_schedule() {
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::ECDSAVERIFY, 0, 0, 0);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
-}
-#[test]
-fn dilithiumverify_runtime_gas_matches_schedule() {
-    let word = ivm::encoding::wide::encode_rr(wide::crypto::DILITHIUMVERIFY, 0, 0, 0);
-    let mut code = Vec::new();
-    push32(&mut code, word);
-    halt32(&mut code);
-    let expected = cost_of(word) + cost_of(ivm::encoding::wide::encode_halt());
-    let start = 10_000u64;
-    let mut vm = IVM::new(start);
-    let program = common::assemble(&code);
-    vm.load_program(&program).unwrap();
-    vm.run().unwrap();
-    assert_eq!(start - vm.gas_remaining, expected);
 }
 #[test]
 fn executed_set_branch_taken_and_not_taken() {

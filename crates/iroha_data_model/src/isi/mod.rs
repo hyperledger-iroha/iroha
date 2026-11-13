@@ -288,12 +288,19 @@ impl_direct_instruction_box!(crate::isi::asset_fi_context::AssertAssetFiTransfer
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
-impl_direct_instruction_box!(crate::governance::anonymous_ballot::RegisterParliamentCredentialV1);
 impl_direct_instruction_box!(
+    crate::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1,
+    crate::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1,
+    crate::governance::anonymous_ballot::RegisterParliamentCredentialV1,
+);
+impl_direct_instruction_box!(
+    crate::isi::runtime_obligation::RegisterContractRuntimeObligationV1,
     crate::isi::runtime_obligation::RegisterRuntimeObligationV1,
     crate::isi::runtime_obligation::CompleteRuntimeObligationV1,
     crate::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1,
     crate::isi::runtime_boundary::RaiseRuntimeStartupFloorV1,
+    crate::isi::runtime_deferred::RegisterCurrentBindingTriggerV1,
+    crate::isi::runtime_deferred::ProposeCurrentBindingMultisigV1,
 );
 impl_direct_instruction_box!(
     crate::isi::game_partition::InstallGamePartitionV1,
@@ -302,6 +309,13 @@ impl_direct_instruction_box!(
     crate::isi::game_partition::AdvanceGameUnitV1,
     crate::isi::game_partition::ExportGameUnitV1,
     crate::isi::game_partition::ImportGameUnitV1,
+    crate::isi::game_partition::ReserveGameUnitImportV1,
+    crate::isi::game_partition::RequestGameUnitExportV1,
+    crate::isi::game_partition::ExportReservedGameUnitV1,
+    crate::isi::game_partition::ImportReservedGameUnitV1,
+    crate::isi::game_partition::AcknowledgeGameUnitImportV1,
+    crate::isi::game_partition::CancelGameUnitExportRequestV1,
+    crate::isi::game_partition::CancelReservedGameUnitImportV1,
 );
 impl_direct_instruction_box!(
     crate::isi::sumeragi_amx::RegisterAmxDataspaceV1,
@@ -2236,6 +2250,8 @@ pub mod repo;
 pub mod retail_daily_limit;
 /// Ratification of a root's adoption anchor and raising of its startup floor.
 pub mod runtime_boundary;
+/// Explicit current-binding consent for new deferred execution occurrences.
+pub mod runtime_deferred;
 /// Kernel registration and completion of obligations.
 pub mod runtime_obligation;
 /// Runtime upgrade instructions and payloads.

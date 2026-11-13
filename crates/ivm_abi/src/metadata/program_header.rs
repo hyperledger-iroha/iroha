@@ -8,8 +8,15 @@ use super::*;
 pub struct ParsedProgramHeader<'a> {
     bytes: &'a [u8],
     metadata: ProgramMetadata,
+    syscall_policy: crate::SyscallPolicy,
 }
 impl<'a> ParsedProgramHeader<'a> {
+    /// Exact named policy authenticated by this original artifact's fixed header.
+    #[must_use]
+    pub const fn syscall_policy(&self) -> crate::SyscallPolicy {
+        self.syscall_policy
+    }
+
     /// Whether the next section starts with the sole canonical CNTR marker.
     /// A true value does not establish canonical payload or contract validity.
     #[must_use]
@@ -22,11 +29,14 @@ impl<'a> ParsedProgramHeader<'a> {
     /// All section, codec-limit and malformed-input checks retain their canonical ordering.
     /// This consumes the borrowed header; it accepts no replacement bytes or offsets.
     pub fn parse_sections(self) -> Result<ParsedProgramMetadata, VMError> {
-        super::parse_program_sections(self.bytes, self.metadata)
+        super::parse_program_sections(self.bytes, self.metadata, self.syscall_policy)
     }
 }
 
-pub(super) fn parse(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
+pub(super) fn parse(
+    bytes: &[u8],
+    syscall_policy: crate::SyscallPolicy,
+) -> Result<ParsedProgramHeader<'_>, VMError> {
     if bytes.len() < HEADER_SIZE {
         return Err(VMError::InvalidMetadata);
     }
@@ -35,28 +45,28 @@ pub(super) fn parse(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
     if magic != MAGIC {
         return Err(VMError::InvalidMetadata);
     }
-    let abi_version = bytes[16];
-    let abi_hash: [u8; 32] = bytes[17..49]
+    let abi_version = bytes[HEADER_ABI_VERSION_OFFSET];
+    let abi_hash: [u8; 32] = bytes[HEADER_ABI_HASH_OFFSET..HEADER_SIZE]
         .try_into()
         .map_err(|_| VMError::InvalidMetadata)?;
     let version_minor = bytes[5];
     let mode = bytes[6];
-    let vector_length = bytes[7];
-    let max_cycles_bytes: [u8; 8] = bytes[8..16]
+    let max_cycles_bytes: [u8; 8] = bytes[HEADER_BUDGET_OFFSET..HEADER_ABI_VERSION_OFFSET]
         .try_into()
         .map_err(|_| VMError::InvalidMetadata)?;
     let max_cycles = u64::from_le_bytes(max_cycles_bytes);
     // Validate consensus-visible header policy in stable precedence order:
-    // version, unknown feature bits, ABI version, vector length, ABI hash.
+    // version, unknown feature bits, ABI version, ZK cycle bound, ABI hash.
     // Structural length and magic failures necessarily precede these.
     //
     // Validate header fields according to the current implementation policy.
     // - The sole current program header is 1.1 for every execution profile.
     // - CNTR presence selects contract admission; test capabilities are separate.
-    // - Mode must not contain unknown bits (only ZK and VECTOR).
-    // - `vector_length` is either 0 (use runtime default) or 1..=64.
+    // - Mode must not contain unknown bits (only ZK).
     // - ABI V1 is the only first-release ABI.
-    const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR;
+    // - `max_cycles` is the ZK trace bound: nonzero exactly when the ZK bit is set.
+    //   Gas is the only execution budget and is supplied by the caller.
+    const KNOWN_MODE_BITS: u8 = mode::ZK;
     if version_major != 1 || version_minor != 1 {
         return Err(VMError::UnsupportedProgramVersion {
             major: version_major,
@@ -74,13 +84,14 @@ pub(super) fn parse(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
             version: abi_version,
         });
     }
-    if vector_length > VECTOR_LENGTH_MAX {
-        return Err(VMError::ProgramVectorLengthTooLarge {
-            vector_length,
-            max_allowed: VECTOR_LENGTH_MAX,
-        });
+    match (mode & mode::ZK != 0, max_cycles) {
+        (true, 0) => return Err(VMError::MissingMaxCycles),
+        (false, max_cycles) if max_cycles != 0 => {
+            return Err(VMError::MaxCyclesWithoutZk { max_cycles });
+        }
+        _ => {}
     }
-    let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1);
+    let expected = crate::syscalls::compute_abi_hash(syscall_policy);
     if abi_hash != expected {
         return Err(VMError::ArtifactAbiHashMismatch {
             expected,
@@ -96,11 +107,11 @@ pub(super) fn parse(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
     }
     Ok(ParsedProgramHeader {
         bytes,
+        syscall_policy,
         metadata: ProgramMetadata {
             version_major,
             version_minor,
             mode,
-            vector_length,
             max_cycles,
             abi_version,
         },
@@ -145,6 +156,37 @@ mod tests {
         );
     }
     #[test]
+    fn cycle_bound_is_present_exactly_for_zk_headers() {
+        let zk_without_bound = ProgramMetadata {
+            mode: mode::ZK,
+            ..ProgramMetadata::default()
+        }
+        .encode();
+        assert!(matches!(
+            ProgramMetadata::parse_header(&zk_without_bound),
+            Err(VMError::MissingMaxCycles)
+        ));
+        let bound_without_zk = ProgramMetadata {
+            max_cycles: 7,
+            ..ProgramMetadata::default()
+        }
+        .encode();
+        assert!(matches!(
+            ProgramMetadata::parse_header(&bound_without_zk),
+            Err(VMError::MaxCyclesWithoutZk { max_cycles: 7 })
+        ));
+        for metadata in [
+            ProgramMetadata::default(),
+            ProgramMetadata {
+                mode: mode::ZK,
+                max_cycles: 7,
+                ..ProgramMetadata::default()
+            },
+        ] {
+            assert!(ProgramMetadata::parse_header(&metadata.encode()).is_ok());
+        }
+    }
+    #[test]
     fn retired_header_rejects_every_prefix_before_decode_or_local_capacity() {
         for suffix in [b"".as_slice(), b"CNTR", b"DBG1", b"LTLB"] {
             let mut bytes = ProgramMetadata::default().encode();
@@ -154,9 +196,8 @@ mod tests {
             for corrupt_other_policy in [false, true] {
                 if corrupt_other_policy {
                     bytes[6] = 0xff;
-                    bytes[7] = 0xff;
-                    bytes[16] = 2;
-                    bytes[17] ^= 1;
+                    bytes[HEADER_ABI_VERSION_OFFSET] = 2;
+                    bytes[HEADER_ABI_HASH_OFFSET] ^= 1;
                 }
                 let (header, sections) = norito::core::with_decode_limits_scope(limits, || {
                     (

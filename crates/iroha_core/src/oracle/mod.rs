@@ -187,6 +187,12 @@ impl JsonKeyCodec for ObservationWindowKey {
         json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         json::JsonDeserialize::json_deserialize(&mut parser)

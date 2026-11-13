@@ -16,13 +16,14 @@
 //! sealed binding jury has exactly the board its attempt and credentials give, and no row
 //! belongs to no attempt.
 //!
-//! TODO(design §12.3): bound every anchor of a restored attempt by the cut's height, as the
-//! baseline reducer's `validate_restored_height_v1` does for its attempts.
+//! Realized lifecycle anchors and ballot corpus entries cannot lie above the restored cut.
+//! Future sortition slots and lifecycle deadlines remain pending work, not realized facts.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::{
     NetworkId,
+    account::AccountId,
     governance::{
         anonymous_ballot::{
             BallotScopeV1, ParliamentBallotBoardRecordV1, ParliamentCredentialRecordV1,
@@ -30,11 +31,12 @@ use iroha_data_model::{
         types::{AssignmentId, GovernanceAttemptId},
     },
 };
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
-use super::WorldReadOnly;
+use super::{CitizenshipRecord, WorldReadOnly};
 use crate::governance::parliament_anonymous::{
-    AnonymousElectionCredentialsV1, AnonymousParliamentErrorV1,
+    AnonymousElectionCredentialsV1, AnonymousParliamentAttemptStateV1, AnonymousParliamentErrorV1,
 };
 
 /// The World members of the three tables, in registry order.
@@ -59,6 +61,34 @@ pub(crate) fn election_credentials(
                 .map(|record| (*assignment, *record))
         })
         .collect()
+}
+
+/// The citizens whose bond is at least `minimum_bond`, in account order: the candidate snapshot
+/// of an anonymous attempt's sortition registrations and of its Confirmation generation
+/// (design §8.1). Enrollment and restore keep the registry within the V1 citizen cap, and the
+/// reducer checks the snapshot's bounds.
+pub(crate) fn eligible_citizens(
+    citizens: &impl StorageReadOnly<AccountId, CitizenshipRecord>,
+    minimum_bond: &Quantity,
+) -> Vec<AccountId> {
+    let mut eligible: Vec<AccountId> = citizens
+        .iter()
+        .filter(|(_, record)| record.amount >= *minimum_bond)
+        .map(|(account, _)| account.clone())
+        .collect();
+    eligible.sort_unstable();
+    eligible
+}
+
+/// The anonymous attempts that are not terminal. Each holds one casting position until it ends,
+/// so their number is what the admission cap bounds (design §9).
+pub(crate) fn nonterminal_attempts(
+    attempts: &impl StorageReadOnly<GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+) -> usize {
+    attempts
+        .iter()
+        .filter(|(_, attempt)| !attempt.is_terminal())
+        .count()
 }
 
 /// Why the anonymous Parliament tables of a restored cut are refused.
@@ -113,6 +143,9 @@ pub(crate) fn validate_cut(
                 "anonymous Parliament attempt {id:?} is stored under another identifier"
             )));
         }
+        attempt
+            .validate_restored_height_v1(height)
+            .map_err(|error| Invalid(format!("anonymous Parliament attempt {id:?}: {error}")))?;
         accepted.extend(
             attempt
                 .generations()
@@ -132,6 +165,28 @@ pub(crate) fn validate_cut(
     type StoredBoard<'a> = (&'a BallotScopeV1, &'a ParliamentBallotBoardRecordV1);
     let mut boards: BTreeMap<GovernanceAttemptId, Vec<StoredBoard<'_>>> = BTreeMap::new();
     for (scope, board) in stored_boards.iter() {
+        if board.opening.is_some_and(|anchor| anchor.height > height)
+            || board
+                .casting_clock
+                .is_some_and(|clock| clock.height > height)
+            || board.entries.iter().any(|entry| entry.height > height)
+            || board.closure.as_ref().is_some_and(|closure| {
+                closure.opening_anchor.height > height
+                    || closure.casting_clock_height > height
+                    || closure.closure_anchor.height > height
+            })
+        {
+            return Err(Invalid(format!(
+                "anonymous Parliament board {scope:?} records a block above restored height {height}"
+            )));
+        }
+        if board.opening.is_some_and(|opening| opening.height < height)
+            && board.casting_clock.is_none()
+        {
+            return Err(Invalid(format!(
+                "anonymous Parliament board {scope:?} is missing its mandatory casting clock at restored height {height}"
+            )));
+        }
         let attempt = board.context.body_context.governance_attempt_id;
         if attempts.get(&attempt).is_none() {
             return Err(Invalid(format!(

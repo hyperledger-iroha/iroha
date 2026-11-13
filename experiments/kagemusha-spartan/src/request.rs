@@ -44,10 +44,10 @@ pub mod word {
     pub const NONCE: [usize; 2] = [22, 23];
 }
 
-const PAYER_WORDS: [usize; 5] = [5, 6, 7, 8, 13];
+pub(crate) const PAYER_WORDS: [usize; 5] = [5, 6, 7, 8, 13];
 // (byte offset, byte width). Identifiers are two LE128 words; fields are
 // canonical 32-byte little-endian Fp values, never reduced aliases.
-const WORDS: [(usize, usize); 24] = [
+pub(crate) const WORDS: [(usize, usize); 24] = [
     (0, 2),
     (2, 16),
     (18, 16),
@@ -110,7 +110,7 @@ pub struct RequestCells {
     pub credit: usize,
 }
 
-fn values(input: &CompletedRequest) -> [Fp; 24] {
+pub(crate) fn values(input: &CompletedRequest) -> [Fp; 24] {
     WORDS.map(|(start, len)| {
         let bytes = &input.body[start..start + len];
         if len == 32 {
@@ -121,6 +121,58 @@ fn values(input: &CompletedRequest) -> [Fp; 24] {
             fp(&BigUint::from_bytes_le(bytes))
         }
     })
+}
+
+/// Exact Request commitments. This is an encoding computation, not signature,
+/// credential, fee-policy or monetary admission.
+pub struct Commitments {
+    pub words: [Fp; 24],
+    pub message: Fp,
+    pub digest: Fp,
+    pub credit: Fp,
+}
+
+fn compute(input: &CompletedRequest, words: [Fp; 24]) -> Commitments {
+    let terms: Vec<_> = (0..24)
+        .filter(|i| !PAYER_WORDS.contains(i))
+        .map(|i| words[i])
+        .collect();
+    let message = poseidon::hash_with_domain(TERMS_DOMAIN, &terms);
+    let signature = [16, 0, 48, 32]
+        .map(|start| fp(&BigUint::from_bytes_be(&input.signature[start..start + 16])));
+    let digest = poseidon::hash_with_domain(
+        OBJECT_DOMAIN,
+        &[
+            message,
+            signature[0],
+            signature[1],
+            signature[2],
+            signature[3],
+        ],
+    );
+    let credit = poseidon::hash_with_domain(CREDIT_DOMAIN, &words);
+    Commitments {
+        words,
+        message,
+        digest,
+        credit,
+    }
+}
+
+/// Compute commitments without accepting aliases for canonical field bytes.
+/// Semantic and signature checks remain the operation/native admission owner.
+pub fn commitments(input: &CompletedRequest) -> Result<Commitments, &'static str> {
+    for (start, len) in WORDS {
+        if len == 32
+            && Option::<Fp>::from(Fp::from_repr(
+                input.body[start..start + len].try_into().unwrap(),
+            ))
+            .is_none()
+        {
+            return Err("noncanonical Request field");
+        }
+    }
+    Ok(compute(input, values(input)))
 }
 
 fn nonzero(c: &mut Cells, expression: Lin<Fp>, value: Fp) {
@@ -155,6 +207,7 @@ pub fn append_completed(
         c.byte(*byte);
     }
     let native = values(input);
+    let native_commitments = compute(input, native);
     let words: [usize; 24] = std::array::from_fn(|i| {
         let (start, len) = WORDS[i];
         let indices: Vec<_> = (start..start + len).collect();
@@ -256,8 +309,7 @@ pub fn append_completed(
         .map(|i| (native[i], own(words[i], 1)))
         .collect();
     assert_eq!(terms.len(), 19);
-    let message =
-        poseidon::hash_with_domain(TERMS_DOMAIN, &terms.iter().map(|x| x.0).collect::<Vec<_>>());
+    let message = native_commitments.message;
     let message_state = [
         c.cell(Fp::ZERO, 255),
         c.cell(message, 255),
@@ -266,16 +318,13 @@ pub fn append_completed(
     let object: Vec<_> = std::iter::once((message, own(message_state[1], 1)))
         .chain(signature.iter().map(|k| (c.a.values[*k][0], own(*k, 1))))
         .collect();
-    let digest = poseidon::hash_with_domain(
-        OBJECT_DOMAIN,
-        &object.iter().map(|x| x.0).collect::<Vec<_>>(),
-    );
+    let digest = native_commitments.digest;
     let digest_state = [
         c.cell(Fp::ZERO, 255),
         c.cell(digest, 255),
         c.cell(Fp::ZERO, 255),
     ];
-    let credit = poseidon::hash_with_domain(CREDIT_DOMAIN, &native);
+    let credit = native_commitments.credit;
     let credit_state = [
         c.cell(Fp::ZERO, 255),
         c.cell(credit, 255),

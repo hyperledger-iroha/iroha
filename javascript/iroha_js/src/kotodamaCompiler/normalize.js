@@ -126,8 +126,11 @@ const MAX_JSON_NODES = 65_536;
 const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
 // IVM ABI v1 authenticates the syscall descriptor directly in the fixed
-// header: 17 execution bytes followed by the canonical 32-byte ABI hash.
-const IVM_EXECUTION_HEADER_BYTES = 17;
+// header: 16 execution bytes (magic[0..4], version 1.1 at [4] and [5], mode
+// [6], little-endian u64 budget [7..15], ABI version [15]) followed by the
+// canonical 32-byte ABI hash.
+const IVM_EXECUTION_HEADER_BYTES = 16;
+const IVM_HEADER_ABI_VERSION_OFFSET = 15;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const NORITO_FRAME_HEADER_BYTES = 40;
@@ -575,7 +578,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
       (TEXT_KOTODAMA_MANIFEST + ("identity/capabilities " + TEXT_DO_NOT_MATCH_THE_EMBEDDED + "contract " + TEXT_INTERFACE)),
     );
   }
-  if (Number(embeddedFeatures) !== (headerMode & 0x03)) {
+  if (Number(embeddedFeatures) !== (headerMode & 0x01)) {
     rejectType(
       (TEXT_KOTODAMA_EMBEDDED_CONTRACT + "capabilities do not match the IVM execution header"),
     );
@@ -753,10 +756,10 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   if (!hasMagic(bytes, 0, "IVM\0")) {
     rejectAt(label, " has invalid IVM header magic");
   }
-  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x03) !== 0 || bytes[7] > 64) {
+  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x01) !== 0) {
     rejectAt(label, " has unsupported IVM execution metadata");
   }
-  if (bytes[16] !== 1) {
+  if (bytes[IVM_HEADER_ABI_VERSION_OFFSET] !== 1) {
     rejectAt(label, " must use IVM ABI version 1");
   }
   if (toHex(bytes.subarray(IVM_EXECUTION_HEADER_BYTES, IVM_HEADER_BYTES)) !== abiHashHex) {
@@ -1321,7 +1324,7 @@ function validateCompilerManifest(manifest) {
   requireString(manifest.compiler_fingerprint, (TEXT_KOTODAMA_MANIFEST + (TEXT_COMPILER_FINGERPRINT)));
   requireUnsignedInteger(
     manifest.features_bitmap,
-    3,
+    1,
     (TEXT_KOTODAMA_MANIFEST + (TEXT_FEATURES_BITMAP)),
   );
   validateAccessSetHints(manifest.access_set_hints, (TEXT_KOTODAMA_MANIFEST + TEXT_ACCESS_SET_HINTS));

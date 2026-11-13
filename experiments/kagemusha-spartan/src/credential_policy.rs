@@ -37,15 +37,8 @@ fn sum_bytes(body: &[u8; BODY_BYTES], start: usize, len: usize) -> (Lin<Fp>, Fp)
     (expression, value)
 }
 
-fn nonzero(c: &mut Cells, expression: Lin<Fp>, value: Fp) {
-    let inverse = c.cell(Option::<Fp>::from(value.invert()).unwrap_or(Fp::ZERO), 255);
-    c.a.rows
-        .push([expression, own(inverse, 1), constant(vec![Fp::ONE])]);
-}
-
-/// Return a constrained zero predicate, including both implications. The
-/// bounded byte sums used here cannot wrap the field or cancel nonzero bytes.
-fn is_zero(c: &mut Cells, expression: Lin<Fp>, value: Fp) -> usize {
+/// A total zero predicate: both implications are hard constraints.
+pub(crate) fn zero_predicate(c: &mut Cells, expression: Lin<Fp>, value: Fp) -> usize {
     let zero = c.bit(value == Fp::ZERO);
     let inverse = c.cell(Option::<Fp>::from(value.invert()).unwrap_or(Fp::ZERO), 255);
     c.a.rows.push([
@@ -55,6 +48,32 @@ fn is_zero(c: &mut Cells, expression: Lin<Fp>, value: Fp) -> usize {
     ]);
     c.a.rows.push([expression, own(zero, 1), vec![]]);
     zero
+}
+pub(crate) fn negate(c: &mut Cells, bit: usize) -> usize {
+    let out = c.bit(c.a.values[bit][0] == Fp::ZERO);
+    c.eq(
+        own(out, 1),
+        plus(&constant(vec![Fp::ONE]), &scaled(&own(bit, 1), -Fp::ONE)),
+    );
+    out
+}
+pub(crate) fn all(c: &mut Cells, bits: &[usize]) -> usize {
+    let mut out = c.bit(true);
+    c.eq(own(out, 1), constant(vec![Fp::ONE]));
+    for &bit in bits {
+        let next = c.bit(c.a.values[out][0] == Fp::ONE && c.a.values[bit][0] == Fp::ONE);
+        c.a.rows.push([own(out, 1), own(bit, 1), own(next, 1)]);
+        out = next;
+    }
+    out
+}
+fn implies(c: &mut Cells, gate: usize, conclusion: usize) -> usize {
+    let no = negate(c, conclusion);
+    let bad = all(c, &[gate, no]);
+    negate(c, bad)
+}
+fn equal(c: &mut Cells, left: Lin<Fp>, right: Lin<Fp>, value: Fp) -> usize {
+    zero_predicate(c, plus(&left, &scaled(&right, -Fp::ONE)), value)
 }
 
 fn bits32(c: &mut Cells, body: &[u8; BODY_BYTES], start: usize) -> [usize; 32] {
@@ -71,19 +90,10 @@ fn bits32(c: &mut Cells, body: &[u8; BODY_BYTES], start: usize) -> [usize; 32] {
     bits
 }
 
-fn require_bit(c: &mut Cells, gate: &Lin<Fp>, bit: usize, expected: bool) {
-    let difference = if expected {
-        plus(&constant(vec![Fp::ONE]), &scaled(&own(bit, 1), -Fp::ONE))
-    } else {
-        own(bit, 1)
-    };
-    c.a.rows.push([gate.clone(), difference, vec![]]);
-}
-
 /// Constrain LE64(a) <= LE64(b) as A + D = B with eight range-checked
 /// difference bytes, boolean carries and final carry zero. Even A > B produces
 /// a witness of the same shape; it is rejected by the final carry constraint.
-fn le64(c: &mut Cells, body: &[u8; BODY_BYTES], a: usize, b: usize) {
+fn le64(c: &mut Cells, body: &[u8; BODY_BYTES], a: usize, b: usize) -> usize {
     let av = u64::from_le_bytes(body[a..a + 8].try_into().unwrap()) as u128;
     let bv = u64::from_le_bytes(body[b..b + 8].try_into().unwrap()) as u128;
     let difference = ((bv + (1u128 << 64) - av) % (1u128 << 64)) as u64;
@@ -104,7 +114,7 @@ fn le64(c: &mut Cells, body: &[u8; BODY_BYTES], a: usize, b: usize) {
         previous = Some(next_cell);
         carry = next;
     }
-    c.zero(own(previous.unwrap(), 1));
+    negate(c, previous.unwrap())
 }
 
 /// Add the complete self-contained evidence, renewal and regulatory predicate.
@@ -113,81 +123,101 @@ fn le64(c: &mut Cells, body: &[u8; BODY_BYTES], a: usize, b: usize) {
 /// authenticated by the caller. `body` supplies witnesses only: no body value
 /// becomes a coefficient, table, selector or host acceptance decision.
 pub(crate) fn constrain(c: &mut Cells, body: &[u8; BODY_BYTES]) {
-    assert!(c.a.values.len() >= BODY_BYTES);
-    let kind: [usize; 3] = std::array::from_fn(|i| c.bit(body[KIND] as usize == i + 1));
-    let one_kind = kind.iter().fold(vec![], |a, k| plus(&a, &own(*k, 1)));
-    c.eq(one_kind, constant(vec![Fp::ONE]));
-    let tag = kind.iter().enumerate().fold(vec![], |a, (i, k)| {
-        plus(&a, &scaled(&own(*k, 1), Fp::from(i as u64 + 1)))
-    });
-    c.eq(own(KIND, 1), tag);
-    let android = plus(&own(kind[0], 1), &own(kind[1], 1));
-    let apple = own(kind[2], 1);
+    let valid = validity(c, body);
+    c.eq(own(valid, 1), constant(vec![Fp::ONE]));
+}
 
+/// Total evidence/regulatory predicate. Helpers are determined by the hard byte
+/// tape and all arithmetic is enforced even when the returned verdict is false.
+pub(crate) fn validity(c: &mut Cells, body: &[u8; BODY_BYTES]) -> usize {
+    assert!(c.a.values.len() >= BODY_BYTES);
+    let kind: [usize; 3] = std::array::from_fn(|i| {
+        zero_predicate(
+            c,
+            plus(&own(KIND, 1), &constant(vec![-Fp::from(i as u64 + 1)])),
+            Fp::from(body[KIND] as u64) - Fp::from(i as u64 + 1),
+        )
+    });
+    let mut checks = vec![];
+    let sum = kind.iter().fold(vec![], |a, k| plus(&a, &own(*k, 1)));
+    checks.push(zero_predicate(
+        c,
+        plus(&sum, &constant(vec![-Fp::ONE])),
+        kind.iter().map(|k| c.a.values[*k][0]).sum::<Fp>() - Fp::ONE,
+    ));
+    let android = c.bit(body[KIND] == 1 || body[KIND] == 2);
+    c.eq(own(android, 1), plus(&own(kind[0], 1), &own(kind[1], 1)));
     for start in [ENROLLMENT, FRESH] {
-        let (expression, value) = sum_bytes(body, start, 32);
-        nonzero(c, expression, value);
+        let (expr, v) = sum_bytes(body, start, 32);
+        let z = zero_predicate(c, expr, v);
+        checks.push(negate(c, z));
         let facts = bits32(c, body, start + 40);
-        for index in std::iter::once(9).chain(12..32) {
-            c.zero(own(facts[index], 1));
+        for i in std::iter::once(9).chain(12..32) {
+            checks.push(negate(c, facts[i]));
         }
-        for index in 6..9 {
-            require_bit(c, &android, facts[index], false);
+        for i in 6..9 {
+            let no = negate(c, facts[i]);
+            checks.push(implies(c, android, no));
         }
-        for index in 0..6 {
-            require_bit(c, &apple, facts[index], false);
+        for i in 0..6 {
+            let no = negate(c, facts[i]);
+            checks.push(implies(c, kind[2], no));
         }
         for byte in start + 44..start + RECORD_BYTES {
-            c.a.rows.push([apple.clone(), own(byte, 1), vec![]]);
+            let z = zero_predicate(c, own(byte, 1), Fp::from(body[byte] as u64));
+            checks.push(implies(c, kind[2], z));
         }
         if start == ENROLLMENT {
-            for index in [0, 2, 3, 5] {
-                require_bit(c, &android, facts[index], true);
+            for i in [0, 2, 3, 5] {
+                checks.push(implies(c, android, facts[i]));
             }
-            require_bit(c, &own(kind[0], 1), facts[1], false);
-            require_bit(c, &own(kind[1], 1), facts[1], true);
-            for index in [6, 7] {
-                require_bit(c, &apple, facts[index], true);
+            let no = negate(c, facts[1]);
+            checks.push(implies(c, kind[0], no));
+            checks.push(implies(c, kind[1], facts[1]));
+            for i in [6, 7] {
+                checks.push(implies(c, kind[2], facts[i]));
             }
         }
     }
-
-    let (sequence, value) = sum_bytes(body, RENEWAL, 4);
-    let first = is_zero(c, sequence, value);
+    let (expr, v) = sum_bytes(body, RENEWAL, 4);
+    let first = zero_predicate(c, expr, v);
     for i in 0..RECORD_BYTES {
-        c.a.rows.push([
-            own(first, 1),
-            plus(
-                &own(ENROLLMENT + i, 1),
-                &scaled(&own(FRESH + i, 1), -Fp::ONE),
-            ),
-            vec![],
-        ]);
+        let eq = equal(
+            c,
+            own(ENROLLMENT + i, 1),
+            own(FRESH + i, 1),
+            Fp::from(body[ENROLLMENT + i] as u64) - Fp::from(body[FRESH + i] as u64),
+        );
+        checks.push(implies(c, first, eq));
     }
-    // Renewal zero already makes the times equal; this unconditional comparison
-    // is equivalent to the native first/every-later-renewal branches.
-    le64(c, body, ENROLLMENT + 32, FRESH + 32);
-
+    checks.push(le64(c, body, ENROLLMENT + 32, FRESH + 32));
     let controls = bits32(c, body, CONTROLS);
     for bit in &controls[2..] {
-        c.zero(own(*bit, 1));
+        checks.push(negate(c, *bit));
     }
-    let time_rules = plus(&own(controls[0], 1), &own(controls[1], 1));
-    let time_value =
-        Fp::from(u64::from(body[CONTROLS] & 1 != 0) + u64::from(body[CONTROLS] & 2 != 0));
-    let no_time = is_zero(c, time_rules, time_value);
-    let (response, value) = sum_bytes(body, RESPONSE, 8);
-    let no_response = is_zero(c, response, value);
-    c.eq(own(no_time, 1), own(no_response, 1));
-    let (lease, value) = sum_bytes(body, LEASE, 8);
-    let no_lease = is_zero(c, lease, value);
-    c.eq(
-        own(no_lease, 1),
-        plus(
-            &constant(vec![Fp::ONE]),
-            &scaled(&own(controls[1], 1), -Fp::ONE),
-        ),
+    let no_time = zero_predicate(
+        c,
+        plus(&own(controls[0], 1), &own(controls[1], 1)),
+        Fp::from(u64::from(body[CONTROLS] & 1 != 0) + u64::from(body[CONTROLS] & 2 != 0)),
     );
+    let (expr, v) = sum_bytes(body, RESPONSE, 8);
+    let no_response = zero_predicate(c, expr, v);
+    checks.push(equal(
+        c,
+        own(no_time, 1),
+        own(no_response, 1),
+        c.a.values[no_time][0] - c.a.values[no_response][0],
+    ));
+    let (expr, v) = sum_bytes(body, LEASE, 8);
+    let no_lease = zero_predicate(c, expr, v);
+    let no_control = negate(c, controls[1]);
+    checks.push(equal(
+        c,
+        own(no_lease, 1),
+        own(no_control, 1),
+        c.a.values[no_lease][0] - c.a.values[no_control][0],
+    ));
+    all(c, &checks)
 }
 
 #[cfg(test)]

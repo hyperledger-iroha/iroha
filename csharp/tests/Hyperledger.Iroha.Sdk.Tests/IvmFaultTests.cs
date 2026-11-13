@@ -17,6 +17,65 @@ public sealed class IvmFaultTests
         },
     };
 
+    // `IvmFaultKindV1` in dense codec-index order (0..=27).
+    private static readonly string[] FaultKinds =
+    [
+        "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
+        "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow", "Numeric",
+        "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt",
+        "NullifierAlreadyUsed", "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid",
+        "AbiTypeNotAllowed", "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded",
+        "ReentrantCall", "CallDepthExceeded", "ControlFlowViolation",
+    ];
+
+    // `NumericFaultV1` in ABI tag order (1..=14).
+    private static readonly string[] NumericFaults =
+    [
+        "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
+        "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
+        "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+    ];
+
+    [Fact]
+    public void FaultEnumsMirrorTheCurrentCodecOrder()
+    {
+        Assert.Equal(FaultKinds, Enum.GetNames<ToriiIvmFaultCode>());
+        Assert.Equal(NumericFaults, Enum.GetNames<ToriiIvmNumericFaultCode>());
+        Assert.Equal(27, (int)ToriiIvmFaultCode.ControlFlowViolation);
+    }
+
+    [Fact]
+    public void EveryCurrentFaultCategoryAndNumericCodeRoundTrips()
+    {
+        foreach (var name in FaultKinds.Where(name => name is not "Numeric" and not "PointerAbi"))
+        {
+            var json = Fixture();
+            json["kind"] = new JsonObject { ["kind"] = name, ["value"] = null };
+            var fault = JsonSerializer.Deserialize<ToriiIvmFault>(json.ToJsonString())!;
+            Assert.Equal(name, fault.Kind.Code.ToString());
+            Assert.True(JsonNode.DeepEquals(json, JsonNode.Parse(JsonSerializer.Serialize(fault))), name);
+        }
+        foreach (var name in NumericFaults)
+        {
+            var json = Fixture();
+            json["kind"]!["value"]!["kind"] = name;
+            var fault = JsonSerializer.Deserialize<ToriiIvmFault>(json.ToJsonString())!;
+            Assert.Equal(name, fault.Kind.Numeric.ToString());
+            Assert.True(JsonNode.DeepEquals(json, JsonNode.Parse(JsonSerializer.Serialize(fault))), name);
+        }
+    }
+
+    [Theory]
+    [InlineData("InvalidVectorLength")]
+    [InlineData("VectorExtensionDisabled")]
+    [InlineData("ZkExtensionDisabled")]
+    public void RetiredFaultCategoriesAreRejected(string retired)
+    {
+        var json = Fixture();
+        json["kind"] = new JsonObject { ["kind"] = retired, ["value"] = null };
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiIvmFault>(json.ToJsonString()));
+    }
+
     [Fact]
     public void TypedFaultRoundTripsExactOriginAndU64Pc()
     {

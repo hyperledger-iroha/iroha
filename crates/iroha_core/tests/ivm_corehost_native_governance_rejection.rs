@@ -158,15 +158,11 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     vm.set_register(10, ptr);
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            ivm_sys::SYSCALL_VERIFY_PROOF as u8,
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_VERIFY_PROOF)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = ProgramMetadata {
-        vector_length: 4,
         ..ProgramMetadata::default()
     }
     .encode();
@@ -203,15 +199,11 @@ fn generic_native_verification_cannot_authorize_vendor_ballot() {
     // 2) Generic programs cannot enter the operation-specific contract bridge.
     let mut code2 = Vec::new();
     code2.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
         .to_le_bytes(),
     );
     code2.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog2 = ProgramMetadata {
-        vector_length: 4,
         ..ProgramMetadata::default()
     }
     .encode();

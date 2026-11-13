@@ -503,6 +503,19 @@ mod addition_tests {
         {
             expected.extend(composition.definitions());
         }
+        for composition in catalog.deferred_consent_compositions.values() {
+            expected.insert(composition.services);
+            expected.extend(composition.replacements.values().copied());
+            expected.extend(composition.addition.definitions());
+        }
+        // Native escrow custody compiles one services profile per supported predecessor profile,
+        // with its replacement implementations and opening interfaces; each is published, never
+        // selected.
+        for composition in catalog.native_escrow_capture_compositions.values() {
+            expected.insert(composition.services);
+            expected.extend(composition.replacements.values().copied());
+            expected.extend(composition.addition.definitions());
+        }
         // The typed committed parameters are published, never part of a founded selection.
         expected.extend(catalog.parameter_definitions());
         // The keyed State profile publishes storage for the State-level owners it adopts, its

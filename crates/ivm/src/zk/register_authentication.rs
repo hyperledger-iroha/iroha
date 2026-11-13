@@ -6,12 +6,12 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTreeCommitment};
 use sha2::{Digest, Sha256};
 
 use super::DiagnosticRegisterEvent;
-use crate::{REGISTER_MERKLE_PATH_DEPTH, VMError};
+use crate::{REGISTER_MERKLE_PATH_DEPTH, VMError, parallel::REGISTER_COUNT};
 
 pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     let leaf_index = u32::try_from(event.index)
         .ok()
-        .filter(|index| *index < 256)
+        .filter(|index| (*index as usize) < REGISTER_COUNT)
         .ok_or(VMError::AssertionFailed)?;
     let mut leaf = [0u8; 9];
     leaf[0] = u8::from(event.tag);
@@ -21,7 +21,7 @@ pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     iroha_crypto::zeroize_value_for_confidential_discard(&mut leaf);
     let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
     // Detached diagnostic views remain untrusted even though live register events
-    // own exactly eight siblings. Validate the view before copying fixed storage.
+    // own exactly five siblings. Validate the view before copying fixed storage.
     let path: &[[u8; 32]; REGISTER_MERKLE_PATH_DEPTH] = event
         .path
         .try_into()
@@ -31,7 +31,7 @@ pub(super) fn check(event: DiagnosticRegisterEvent<'_>) -> Result<(), VMError> {
     });
     let commitment = MerkleTreeCommitment::new(
         HashOf::from_untyped_unchecked(Hash::prehashed(*event.root)),
-        NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
+        NonZeroU64::new(REGISTER_COUNT as u64).expect("register tree leaf count is non-zero"),
     );
     if MerkleProof::verify_audit_path_sha256(leaf_index, &siblings, &leaf, &commitment) {
         Ok(())

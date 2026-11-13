@@ -7,9 +7,16 @@
 //! cursors; [`checkpoint`] holds the startup floor and the policy records a selection carries.
 pub mod adoption;
 pub mod checkpoint;
+pub mod deferred;
 pub mod definition;
 pub mod keyed_state;
 pub mod lifecycle;
+/// Kernel-owned captures of native AMX decisions and settlement.
+pub mod native_amx;
+/// Kernel-owned captures of native escrow custody.
+pub mod native_escrow;
+/// Destination-reserved native game transfers and original completion custody.
+pub mod native_game;
 pub mod obligation;
 /// Explicit one-time SoraFS successor authorization and certificate.
 pub mod sorafs_repair;

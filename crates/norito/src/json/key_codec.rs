@@ -274,5 +274,22 @@ impl JsonWriteSink for EscapedKeySink<'_> {
     }
 }
 
+/// Stream one typed JSON value as the contents of a quoted persisted-map key.
+///
+/// The value's checked serializer feeds the same escaping walker used by ordinary
+/// JSON strings, without allocating an intermediate JSON representation.
+///
+/// # Errors
+/// Returns the value serializer's or destination's original refusal.
+#[doc(hidden)]
+pub fn write_json_value_as_string_to<T: json::JsonSerialize + ?Sized>(
+    value: &T,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    out.push('"')?;
+    value.json_serialize_to(&mut EscapedKeySink(out))?;
+    out.push('"')
+}
+
 #[cfg(test)]
 mod tests;

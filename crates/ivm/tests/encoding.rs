@@ -35,22 +35,6 @@ mod wide {
         assert_eq!(imm_s, 4);
     }
     #[test]
-    fn encode_decode_mem128() {
-        let load128 = encoding::wide::encode_load128(instruction::wide::memory::LOAD128, 9, 4, 10);
-        let (op, rd_lo, base, rd_hi) = encoding::wide::decode_load128(load128);
-        assert_eq!(op, instruction::wide::memory::LOAD128);
-        assert_eq!(rd_lo, 9);
-        assert_eq!(base, 4);
-        assert_eq!(rd_hi, 10);
-        let store128 =
-            encoding::wide::encode_store128(instruction::wide::memory::STORE128, 3, 5, 6);
-        let (op_s, base_s, rs_lo, rs_hi) = encoding::wide::decode_store128(store128);
-        assert_eq!(op_s, instruction::wide::memory::STORE128);
-        assert_eq!(base_s, 3);
-        assert_eq!(rs_lo, 5);
-        assert_eq!(rs_hi, 6);
-    }
-    #[test]
     fn encode_decode_branch() {
         let word = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, -4);
         let (op, rs1, rs2, off) = encoding::wide::decode_mem(word);
@@ -69,7 +53,7 @@ mod wide {
     }
     #[test]
     fn encode_decode_sys() {
-        let sys = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0xAB);
+        let sys = encoding::wide::encode_scall(0xAB);
         let (op_sys, code) = encoding::wide::decode_sys(sys);
         assert_eq!(op_sys, instruction::wide::system::SCALL);
         assert_eq!(code, 0xAB);

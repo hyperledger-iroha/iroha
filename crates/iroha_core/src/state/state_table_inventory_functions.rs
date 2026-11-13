@@ -1379,12 +1379,6 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
-        "verify_state_accumulator",
-        1,
-        UseOwner::Roots(&["world_state_root"]),
-    ),
-    function(
-        "crates/iroha_core/src/state/world_state_accumulator.rs",
         "verify_world_state_accumulator",
         1,
         UseOwner::Roots(&["world_state_root"]),

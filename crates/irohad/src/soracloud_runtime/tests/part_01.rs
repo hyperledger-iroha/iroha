@@ -528,7 +528,7 @@ fn run_low_gas_soracloud_syscall(
     request_payload: &[u8],
 ) -> Result<VMError> {
     let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     // SCALLX consumes five gas. The single remaining unit is deliberately
     // below the header-derived request quote, so dispatch must trap before
@@ -586,7 +586,7 @@ fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
             Err(VMError::UnknownSyscall(actual)) if actual == syscall
         ));
         let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&code)?;
         assert!(matches!(
@@ -671,7 +671,7 @@ fn soracloud_public_input_spills_to_heap_from_heap_backed_name() -> Result<()> {
     .with_public_inputs(BTreeMap::from([(input_name.clone(), response_tlv)]));
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_syscallx(ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(u64::MAX);
@@ -2577,7 +2577,6 @@ fn soracloud_contract_artifact_with_functions(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };

@@ -1252,7 +1252,91 @@ impl RuntimeRejectionV1 {
 }
 
 impl ExpectationV1 {
+    /// Capture the resolved closure of `wire_ids` in an authenticated selection (§8.1–8.2).
+    ///
+    /// Traversal follows both immutable descriptor dependencies and the current binding of
+    /// every reached interface. Execution cycles are visited once. An opaque executable sets
+    /// `exact_bindings`: every callable interface and active host profile is then captured,
+    /// because its dynamic calls cannot be narrowed to the listed wire IDs.
+    ///
+    /// This records semantics, not authority to execute them. Admission must additionally call
+    /// [`Self::check_at`] at its committed height, and deferred execution must check again.
+    ///
+    /// # Errors
+    /// The selection is malformed, a requested wire ID is unbound, or a dependency is absent.
+    pub fn capture(
+        selection: &RootSelectionV1,
+        lookup: &impl DefinitionLookup,
+        wire_ids: &[String],
+        exact_bindings: bool,
+    ) -> Result<Self, SelectionError> {
+        selection.check_closure(lookup)?;
+        let mut pending = vec![
+            selection.kernel,
+            selection.commitment_profile,
+            selection.services_profile,
+        ];
+        for wire_id in wire_ids {
+            let index = selection
+                .bindings
+                .binary_search_by(|binding| binding.wire_id.cmp(wire_id))
+                .map_err(|_| SelectionError::Unbound(wire_id.clone()))?;
+            let binding = &selection.bindings[index];
+            pending.extend([binding.interface, binding.implementation]);
+        }
+        if exact_bindings {
+            for binding in &selection.bindings {
+                pending.extend([binding.interface, binding.implementation]);
+            }
+            pending.extend(selection.active.iter().copied().filter(|id| {
+                matches!(
+                    lookup.definition(id),
+                    Some(DefinitionDescriptorV1::HostProfile(_))
+                )
+            }));
+        }
+        let mut definitions = BTreeSet::new();
+        let mut bindings = BTreeMap::new();
+        while let Some(id) = pending.pop() {
+            if !definitions.insert(id) {
+                continue;
+            }
+            let descriptor = lookup
+                .definition(&id)
+                .ok_or(SelectionError::Unpublished(id))?;
+            if let DefinitionDescriptorV1::Interface(interface) = descriptor {
+                let index = selection
+                    .bindings
+                    .binary_search_by(|binding| binding.wire_id.cmp(&interface.wire_id))
+                    .map_err(|_| SelectionError::Unbound(interface.wire_id.clone()))?;
+                let binding = &selection.bindings[index];
+                if binding.interface != id {
+                    return Err(SelectionError::BadBinding(interface.wire_id.clone()));
+                }
+                bindings.insert(binding.wire_id.clone(), binding.clone());
+                pending.push(binding.implementation);
+            }
+            pending.extend(
+                descriptor
+                    .typed_dependencies()
+                    .into_iter()
+                    .map(|(_, dependency)| dependency),
+            );
+        }
+        Ok(Self {
+            bindings: bindings.into_values().collect(),
+            services_profile: selection.services_profile,
+            kernel: selection.kernel,
+            commitment_profile: selection.commitment_profile,
+            definitions: definitions.into_iter().collect(),
+            exact_bindings,
+        })
+    }
+
     /// Check the expectation against a selection.
+    ///
+    /// This compares immutable semantics only. Execution additionally uses [`Self::check_at`]
+    /// so a still-bound but restricted definition cannot reuse earlier consent.
     ///
     /// # Errors
     /// The stable rejection for the first difference.
@@ -1295,6 +1379,67 @@ impl ExpectationV1 {
             }
         }
         Ok(())
+    }
+
+    /// Check captured semantics and restrictions at the committed execution `height`.
+    ///
+    /// Deprecation does not stop already registered work. Admission closure, completion-only
+    /// and disabling refuse ordinary deferred execution from their effective height: an
+    /// expectation never grants a completion capability or selects a previous implementation.
+    ///
+    /// # Errors
+    /// The stable rejection for changed semantics or the first restricted captured definition.
+    pub fn check_at(
+        &self,
+        selection: &RootSelectionV1,
+        height: u64,
+    ) -> Result<(), RuntimeRejectionV1> {
+        self.check(selection)?;
+        for entry in &selection.restrictions {
+            let captured = self.definitions.binary_search(&entry.definition).is_ok()
+                || self.bindings.iter().any(|binding| {
+                    binding.interface == entry.definition
+                        || binding.implementation == entry.definition
+                });
+            let blocking = match entry.restriction {
+                RestrictionV1::Deprecated(_) => false,
+                RestrictionV1::AdmissionClosed(from)
+                | RestrictionV1::CompletionOnly(from)
+                | RestrictionV1::Disabled(from) => height >= from,
+            };
+            if captured && blocking {
+                return Err(RuntimeRejectionV1::DefinitionRestricted {
+                    definition: entry.definition,
+                    restriction: entry.restriction,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check one dynamic call against the captured closure and current selection.
+    ///
+    /// A call outside the declared closure requires new consent even if the root currently
+    /// binds it. Callers must invoke this at every dynamic dispatch boundary (§8.1).
+    ///
+    /// # Errors
+    /// The wire ID was not captured, semantics changed, or a captured definition is restricted.
+    pub fn check_call(
+        &self,
+        selection: &RootSelectionV1,
+        wire_id: &str,
+        height: u64,
+    ) -> Result<(), RuntimeRejectionV1> {
+        if self
+            .bindings
+            .binary_search_by(|binding| binding.wire_id.as_str().cmp(wire_id))
+            .is_err()
+        {
+            return Err(RuntimeRejectionV1::ExpectationMismatch {
+                wire_id: Some(wire_id.to_owned()),
+            });
+        }
+        self.check_at(selection, height)
     }
 }
 

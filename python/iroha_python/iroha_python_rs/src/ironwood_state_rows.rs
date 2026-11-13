@@ -48,6 +48,10 @@ impl PyFinalityPage {
     }
 
     /// Finish a live read against this same verified page.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+    )]
     fn verify_rows(
         &self,
         py: Python<'_>,
@@ -65,11 +69,13 @@ impl PyFinalityPage {
                 &self.0,
                 pool_rows,
                 balance_rows,
-                chain_discriminant,
-                pool_id_hex,
-                asset_definition_id,
-                payer_account_id,
-                expected_profile_digest_hex,
+                IronwoodSelection {
+                    chain_discriminant,
+                    pool_id_hex,
+                    asset_definition_id,
+                    payer_account_id,
+                    expected_profile_digest_hex,
+                },
                 expected_schema,
             )
         })
@@ -137,6 +143,10 @@ pub(crate) fn ironwood_pool_rows_request_v1_py(pool_id_hex: &str) -> PyResult<St
 /// Authenticate pool and head against the trusted checkpoint before exposing dependent selectors.
 #[pyfunction]
 #[pyo3(name = "ironwood_balance_rows_request_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(crate) fn ironwood_balance_rows_request_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -297,10 +307,18 @@ struct WarmRead {
     detail: Option<Vec<u8>>,
 }
 
+/// Python tuple of the current plan, the request for its missing rows, the canonical pool
+/// proof and, once every balance row is verified, the canonical balance proof.
+type WarmRowsPy = (PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>);
+
 /// Normalize only verified rows into the same canonical two proof batches used for recovery.
 /// The SDK also retains the original combined response and any supplementary response.
 #[pyfunction]
 #[pyo3(name="ironwood_warm_rows_v1", signature=(plan, primary, supplement, verified, network_id_hex, chain_discriminant, pool_id_hex, asset_definition_id, payer_account_id, expected_schema))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(crate) fn ironwood_warm_rows_v1_py(
     py: Python<'_>,
     plan: &PyIronwoodReadPlan,
@@ -313,7 +331,7 @@ pub(crate) fn ironwood_warm_rows_v1_py(
     asset_definition_id: &str,
     payer_account_id: &str,
     expected_schema: &PyIronwoodStateSchema,
-) -> PyResult<(PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>)> {
+) -> PyResult<WarmRowsPy> {
     let read = py
         .detach(move || {
             plan.check(
@@ -408,6 +426,10 @@ pub(crate) fn ironwood_warm_rows_v1_py(
 /// Verify the pool and balance row witnesses against an independently retained checkpoint and consecutive finality frames.
 #[pyfunction]
 #[pyo3(name = "verify_ironwood_state_rows_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(crate) fn verify_ironwood_state_rows_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -432,11 +454,13 @@ pub(crate) fn verify_ironwood_state_rows_v1_py(
             checkpoint_hex,
             proof_frames_hex,
             network_id_hex,
-            chain_discriminant,
-            pool_id_hex,
-            asset_definition_id,
-            payer_account_id,
-            expected_profile_digest_hex,
+            IronwoodSelection {
+                chain_discriminant,
+                pool_id_hex,
+                asset_definition_id,
+                payer_account_id,
+                expected_profile_digest_hex,
+            },
             expected_schema,
         )
     })
@@ -448,11 +472,7 @@ fn verify_ironwood_state_rows_v1(
     checkpoint_hex: &str,
     proof_frames_hex: Vec<String>,
     network_id_hex: &str,
-    chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
+    selection: IronwoodSelection<'_>,
     expected_schema: &PyIronwoodStateSchema,
 ) -> Result<String, NativeValidationError> {
     if pool_rows.is_empty()
@@ -462,42 +482,28 @@ fn verify_ironwood_state_rows_v1(
         return Err(invalid());
     }
     let page = finality_page(checkpoint_hex, &proof_frames_hex, network_id_hex)?;
-    verify_rows_at_page(
-        &page,
-        pool_rows,
-        balance_rows,
-        chain_discriminant,
-        pool_id_hex,
-        asset_definition_id,
-        payer_account_id,
-        expected_profile_digest_hex,
-        expected_schema,
-    )
+    verify_rows_at_page(&page, pool_rows, balance_rows, selection, expected_schema)
 }
 
 fn verify_rows_at_page(
     page: &VerifiedFinalityPage,
     pool_rows: &[u8],
     balance_rows: &[u8],
-    chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
+    selection: IronwoodSelection<'_>,
     expected_schema: &PyIronwoodStateSchema,
 ) -> Result<String, NativeValidationError> {
     if pool_rows.len().saturating_add(balance_rows.len()) > MAX {
         return Err(invalid());
     }
-    let _guard = ChainDiscriminantGuard::enter(chain_discriminant);
+    let _guard = ChainDiscriminantGuard::enter(selection.chain_discriminant);
     let initial = decode_rows(pool_rows)?;
     let (context, asset, payer) = pool_context(
         &initial,
         page,
-        chain_discriminant,
-        pool_id_hex,
-        asset_definition_id,
-        payer_account_id,
+        selection.chain_discriminant,
+        selection.pool_id_hex,
+        selection.asset_definition_id,
+        selection.payer_account_id,
         expected_schema,
     )?;
     let (payer_balance, reserve_balance) = context
@@ -506,10 +512,9 @@ fn verify_rows_at_page(
     let state = context.state();
     verified_context_json(
         page,
-        pool_id_hex,
+        selection,
         &asset,
         &payer,
-        expected_profile_digest_hex,
         state,
         &payer_balance,
         &reserve_balance,
@@ -520,6 +525,10 @@ fn verify_rows_at_page(
 /// No live-tip balance subtraction is used: unrelated transactions may change either account.
 #[pyfunction]
 #[pyo3(name = "verify_ironwood_payment_effect_from_rows_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -541,64 +550,30 @@ pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     // and owned frame strings cross this boundary; errors become Python values
     // after reattachment. Keep decoding, finality, cut and signature checks detached.
     py.detach(move || {
-        verify_ironwood_payment_effect_from_rows_v1(
-            pool_rows,
-            balance_rows,
-            checkpoint_hex,
-            proof_frames_hex,
-            payment_proof_frames_hex,
-            signed_transaction_versioned,
-            network_id_hex,
+        let selection = IronwoodSelection {
             chain_discriminant,
             pool_id_hex,
             asset_definition_id,
             payer_account_id,
             expected_profile_digest_hex,
+        };
+        let cut_json = verify_ironwood_state_rows_v1(
+            pool_rows,
+            balance_rows,
+            checkpoint_hex,
+            proof_frames_hex,
+            network_id_hex,
+            selection,
             expected_schema,
+        )?;
+        verify_payment_from_context(
+            &cut_json,
+            payment_proof_frames_hex,
+            signed_transaction_versioned,
+            network_id_hex,
+            selection,
             expected_amount_decimal,
         )
     })
     .map_err(NativeValidationError::into_py)
-}
-fn verify_ironwood_payment_effect_from_rows_v1(
-    pool_rows: &[u8],
-    balance_rows: &[u8],
-    checkpoint_hex: &str,
-    proof_frames_hex: Vec<String>,
-    payment_proof_frames_hex: Vec<String>,
-    signed_transaction_versioned: &[u8],
-    network_id_hex: &str,
-    chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
-    expected_schema: &PyIronwoodStateSchema,
-    expected_amount_decimal: &str,
-) -> Result<String, NativeValidationError> {
-    let cut_json = verify_ironwood_state_rows_v1(
-        pool_rows,
-        balance_rows,
-        checkpoint_hex,
-        proof_frames_hex,
-        network_id_hex,
-        chain_discriminant,
-        pool_id_hex,
-        asset_definition_id,
-        payer_account_id,
-        expected_profile_digest_hex,
-        expected_schema,
-    )?;
-    verify_payment_from_context(
-        &cut_json,
-        payment_proof_frames_hex,
-        signed_transaction_versioned,
-        network_id_hex,
-        chain_discriminant,
-        pool_id_hex,
-        asset_definition_id,
-        payer_account_id,
-        expected_profile_digest_hex,
-        expected_amount_decimal,
-    )
 }

@@ -24,7 +24,6 @@ impl IVM {
     ) -> Result<zk::RegEventBatch, VMError> {
         zk::RegEventBatch::begin(event_counts::instruction(
             word,
-            self.vector_length,
             self.strict_return_integrity,
             self.native_packets.is_some(),
         )?)
@@ -67,7 +66,6 @@ impl IVM {
     }
     pub(super) fn clear_zk_trace_logs(&mut self) {
         self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
-        self.constraints.list.clear();
         self.mem_log.scrub();
         if let Some(log) = &self.reg_log {
             log.lock().scrub();

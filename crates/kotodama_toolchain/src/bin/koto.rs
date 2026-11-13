@@ -240,6 +240,9 @@ struct BuildArgs {
     /// Cycle ceiling recorded in the artifact header; must not exceed node admission policy.
     #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
     max_cycles: Option<u64>,
+    /// Exact named ABI V1 host profile required by the produced contract.
+    #[arg(long, value_parser = ["abi-v1", "iroha.ivm.runtime_lifecycle.v1"], default_value = "abi-v1")]
+    host_profile: String,
     /// Check durable-state compatibility with the previous complete `.to` artifact before
     /// publishing one replacement. Runtime migration must still initialize newly added scalars.
     #[arg(long, value_name = "PREVIOUS.to")]
@@ -1022,6 +1025,14 @@ fn check_paths(
     }
     (checked, DiagnosticBundle::new(diagnostics))
 }
+/// Offline upgrade comparison selects only a compiled, exact authenticated profile. This does
+/// not authorize deployment: node admission separately requires the root's committed selection.
+fn verify_build_contract_artifact(
+    bytes: &[u8],
+) -> Result<ivm::VerifiedContractArtifact, ivm::ContractArtifactError> {
+    ivm::verify_contract_artifact_with_declared_profile(bytes)
+}
+
 fn build(args: BuildArgs) -> Result<(), KotoError> {
     let BuildArgs {
         format: diagnostic_format,
@@ -1030,6 +1041,7 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         out: explicit_output,
         manifest_out: explicit_manifest_output,
         max_cycles,
+        host_profile,
         upgrade_from,
         verify,
         capabilities,
@@ -1067,7 +1079,7 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
                     path.display()
                 ))
             })?;
-            ivm::verify_contract_artifact(&bytes).map_err(|error| {
+            verify_build_contract_artifact(&bytes).map_err(|error| {
                 upgrade_diagnostic(
                     diagnostic_format,
                     "E_UPGRADE_BASE_INVALID",
@@ -1080,6 +1092,11 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         })
         .transpose()?;
     let mut compiler_options = CompilerOptions::default();
+    compiler_options.host_policy = match host_profile.as_str() {
+        "iroha.ivm.runtime_lifecycle.v1" => ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+        "abi-v1" => ivm::SyscallPolicy::AbiV1,
+        _ => unreachable!("clap validates the exact named host profile"),
+    };
     if let Some(max_cycles) = max_cycles {
         compiler_options.max_cycles = max_cycles;
     }
@@ -1127,7 +1144,7 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
             .compile_project(graph.clone(), source_name)
             .map_err(|error| located_build_error(diagnostic_format, error, &diagnostic_sources))?;
         let replacement =
-            ivm::verify_contract_artifact(&replacement.artifact).map_err(|error| {
+            verify_build_contract_artifact(&replacement.artifact).map_err(|error| {
                 KotoError::Internal(format!(
                     "fresh replacement artifact failed canonical admission: {error}"
                 ))
@@ -3178,6 +3195,30 @@ mod tests {
             KotoCommand::Build(args) => args,
             other => panic!("expected build, got {other:?}"),
         }
+    }
+    #[test]
+    fn offline_upgrade_verification_accepts_only_exact_compiled_host_profiles() {
+        for policy in [
+            ivm::SyscallPolicy::AbiV1,
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ] {
+            let session = CompilerSession::new(CompilerOptions {
+                host_policy: policy,
+                ..CompilerOptions::default()
+            });
+            let output = session
+                .build(CompileRequest {
+                    source: "seiyaku Profile { view fn read() authorize(anyone) -> int { 1 } }",
+                    source_name: Some("profile.ko"),
+                })
+                .unwrap();
+            let verified = verify_build_contract_artifact(&output.artifact).unwrap();
+            assert_eq!(verified.syscall_policy, policy);
+            let mut unknown = output.artifact;
+            unknown[ivm::metadata::HEADER_ABI_HASH_OFFSET..ivm::metadata::HEADER_SIZE].fill(0xA5);
+            assert!(verify_build_contract_artifact(&unknown).is_err());
+        }
+        assert!(verify_build_contract_artifact(b"truncated").is_err());
     }
     #[test]
     fn upgrade_build_checks_admitted_interfaces_before_publishing() {

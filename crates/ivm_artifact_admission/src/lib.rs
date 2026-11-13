@@ -42,6 +42,8 @@ pub struct VerifiedContractArtifact {
     private_input_entrypoints: Vec<String>,
     /// Validated fixed-header execution metadata.
     pub metadata: ProgramMetadata,
+    /// Named policy authenticated by the fixed header and matching CNTR.
+    pub syscall_policy: SyscallPolicy,
     /// Fixed metadata header length in artifact bytes.
     pub header_len: usize,
     /// Absolute executable-stream offset in the artifact.
@@ -85,7 +87,28 @@ pub use error::ContractArtifactError;
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, None)
+    verify_contract_artifact_owned(artifact, None, SyscallPolicy::AbiV1)
+}
+/// Verify an offline contract against its exact implemented declared host profile.
+///
+/// This is artifact inspection for compilers, importers and deployment tooling. It authenticates
+/// the fixed header, CNTR and manifest identity; it does not authorize execution or establish that
+/// any root selected the profile. Runtime callers must use an explicit policy from committed State.
+/// Unknown hashes and malformed headers retain the ordinary canonical admission rejection order.
+///
+/// # Errors
+/// Returns the original artifact or local resource error; no unknown profile is accepted.
+pub fn verify_contract_artifact_with_declared_profile(
+    artifact: &[u8],
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    let policy = artifact
+        .get(ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE)
+        .and_then(|hash| <&[u8; 32]>::try_from(hash).ok())
+        .and_then(ivm_abi::syscalls::policy_for_abi_hash);
+    match policy {
+        Some(policy) => verify_contract_artifact_for_policy(artifact, policy),
+        None => verify_contract_artifact(artifact),
+    }
 }
 /// Verify with temporary instruction-array custody in the original State pool.
 ///
@@ -99,13 +122,30 @@ pub fn verify_contract_artifact_with_memory_budget(
     artifact: &[u8],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, Some(budget))
+    verify_contract_artifact_owned(artifact, Some(budget), SyscallPolicy::AbiV1)
+}
+/// Verify an artifact under one explicitly selected named ABI V1 host profile.
+/// The ordinary verifier continues to require the frozen baseline profile.
+pub fn verify_contract_artifact_for_policy(
+    artifact: &[u8],
+    policy: SyscallPolicy,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, None, policy)
+}
+/// Verify for an explicit named profile with the original State allocation budget.
+pub fn verify_contract_artifact_with_memory_budget_for_policy(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+    policy: SyscallPolicy,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, Some(budget), policy)
 }
 fn verify_contract_artifact_owned(
     artifact: &[u8],
     budget: Option<&iroha_allocation::AllocationBudget>,
+    policy: SyscallPolicy,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let mut parsed = parse_contract_metadata(artifact)?;
+    let mut parsed = parse_contract_metadata_for_policy(artifact, policy)?;
     let contract_interface = validate_contract_envelope(artifact, &parsed)?;
     let code = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
@@ -196,11 +236,13 @@ fn verified_from_parts(
         private_input_entrypoints,
         admitted_program: admitted_program::AdmittedProgramSeal::new(
             &parsed.metadata,
+            parsed.syscall_policy,
             parsed.header_len,
             parsed.code_offset,
             code_hash,
         ),
         metadata: parsed.metadata,
+        syscall_policy: parsed.syscall_policy,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,
         literal_section: parsed.literal_section,
@@ -213,7 +255,13 @@ fn verified_from_parts(
 fn parse_contract_metadata(
     artifact: &[u8],
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
-    ProgramMetadata::parse(artifact).map_err(|error| match error {
+    parse_contract_metadata_for_policy(artifact, SyscallPolicy::AbiV1)
+}
+fn parse_contract_metadata_for_policy(
+    artifact: &[u8],
+    policy: SyscallPolicy,
+) -> Result<ParsedProgramMetadata, ContractArtifactError> {
+    ProgramMetadata::parse_for_policy(artifact, policy).map_err(|error| match error {
         VMError::ArtifactAbiHashMismatch { expected, actual } => {
             ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
@@ -234,7 +282,7 @@ fn validate_contract_envelope<'a>(
             metadata.version_major, metadata.version_minor
         )));
     }
-    if metadata.mode & !(mode::ZK | mode::VECTOR) != 0 {
+    if metadata.mode & !mode::ZK != 0 {
         return Err(ContractArtifactError::invalid(format!(
             "unsupported contract execution mode bits 0x{:02x}",
             metadata.mode
@@ -264,14 +312,7 @@ fn validate_contract_envelope<'a>(
         .contract_interface
         .as_ref()
         .ok_or_else(|| ContractArtifactError::invalid("missing required CNTR section"))?;
-    let policy = match metadata.abi_version {
-        1 => SyscallPolicy::AbiV1,
-        other => {
-            return Err(ContractArtifactError::invalid(format!(
-                "unsupported abi_version {other}; expected 1"
-            )));
-        }
-    };
+    let policy = parsed.syscall_policy;
     let expected_abi_hash = ivm_abi::syscalls::compute_abi_hash(policy);
     if contract_interface.abi_hash != expected_abi_hash {
         return Err(ContractArtifactError::abi_hash_mismatch(
@@ -293,16 +334,11 @@ fn validate_koto_test_envelope(
             metadata.version_major, metadata.version_minor
         )));
     }
-    if metadata.mode & !(mode::ZK | mode::VECTOR) != 0 {
+    if metadata.mode & !mode::ZK != 0 {
         return Err(ContractArtifactError::invalid(format!(
             "unsupported Kotodama test execution mode bits 0x{:02x}",
             metadata.mode
         )));
-    }
-    if metadata.vector_length != 0 {
-        return Err(ContractArtifactError::invalid(
-            "Kotodama test harness must use the compiler-owned default vector length",
-        ));
     }
     if artifact.len() < HEADER_SIZE {
         return Err(ContractArtifactError::invalid(
@@ -962,5 +998,61 @@ mod tests {
     }
     fn encoded_value<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::to_bytes(value).expect("encode canonical capability value")
+    }
+}
+
+#[cfg(test)]
+mod declared_profile_tests {
+    use super::*;
+    use kotodama_lang::compiler::{Compiler, CompilerOptions};
+
+    #[test]
+    fn offline_verification_authenticates_exact_known_profiles_without_changing_default_admission()
+    {
+        let source = "seiyaku Profile { view fn read() authorize(anyone) -> int { 1 } }";
+        for policy in [SyscallPolicy::AbiV1, SyscallPolicy::AbiV1RuntimeLifecycle] {
+            let artifact = Compiler::new_with_options(CompilerOptions {
+                host_policy: policy,
+                ..Default::default()
+            })
+            .compile_source(source)
+            .unwrap();
+            let verified = verify_contract_artifact_with_declared_profile(&artifact).unwrap();
+            assert_eq!(verified.syscall_policy, policy);
+            assert_eq!(verified.metadata.abi_version, 1);
+            assert_eq!(
+                verified.abi_hash,
+                Hash::prehashed(ivm_abi::syscalls::compute_abi_hash(policy))
+            );
+            assert_eq!(verified.manifest.abi_hash, Some(verified.abi_hash));
+            assert_eq!(
+                verify_contract_artifact(&artifact).is_ok(),
+                policy == SyscallPolicy::AbiV1
+            );
+            let mut unknown = artifact.clone();
+            unknown[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+            assert!(verify_contract_artifact_with_declared_profile(&unknown).is_err());
+            let mut mismatched = artifact;
+            let other = if policy == SyscallPolicy::AbiV1 {
+                SyscallPolicy::AbiV1RuntimeLifecycle
+            } else {
+                SyscallPolicy::AbiV1
+            };
+            mismatched[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE]
+                .copy_from_slice(&ivm_abi::syscalls::compute_abi_hash(other));
+            assert!(verify_contract_artifact_with_declared_profile(&mismatched).is_err());
+        }
+        let mut generic =
+            ProgramMetadata::default().encode_for_policy(SyscallPolicy::AbiV1RuntimeLifecycle);
+        generic.extend_from_slice(&ivm_abi::encoding::wide::encode_halt().to_le_bytes());
+        assert!(verify_contract_artifact_with_declared_profile(&generic).is_err());
+        for malformed in [b"".as_slice(), b"IVM\0".as_slice()] {
+            assert_eq!(
+                verify_contract_artifact_with_declared_profile(malformed)
+                    .unwrap_err()
+                    .to_string(),
+                verify_contract_artifact(malformed).unwrap_err().to_string()
+            );
+        }
     }
 }

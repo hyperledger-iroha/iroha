@@ -541,7 +541,7 @@ fn ironwood_import_deposit_from(
         return Err(WorkerError::CapacityExceeded);
     }
     let value: norito::json::Value =
-        norito::json::from_slice(&action).map_err(|_| WorkerError::InvalidExecutionBundle)?;
+        norito::json::from_slice(action).map_err(|_| WorkerError::InvalidExecutionBundle)?;
     if value
         .get("changes")
         .and_then(norito::json::Value::as_array)
@@ -573,7 +573,7 @@ fn ironwood_import_deposit_from(
     ] {
         put_text(&mut bundle, field);
     }
-    put_bytes_u32(&mut bundle, &action)?;
+    put_bytes_u32(&mut bundle, action)?;
     let witness = br#"{"changes":[],"spends":[]}"#;
     // Reserve the complete suffix before the first seed byte enters this allocation.
     // No subsequent growth may leave a seed in a freed Vec backing allocation.
@@ -583,7 +583,7 @@ fn ironwood_import_deposit_from(
     put_bytes_u32(&mut bundle, witness)?;
     debug_assert_eq!(bundle.capacity(), capacity);
     // Full typed validation occurs before a lease is created. It does not prove or sign.
-    decode_privacy_wallet_execution_bundle_v1(&mut bundle, &action)
+    decode_privacy_wallet_execution_bundle_v1(&mut bundle, action)
         .map_err(|_| WorkerError::InvalidExecutionBundle)?;
     vault.import_material(binding, ttl, bundle, now, Some(chain_discriminant))
 }

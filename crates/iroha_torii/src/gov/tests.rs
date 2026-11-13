@@ -1163,6 +1163,46 @@ async fn protected_namespaces_set_returns_checked_signable_payload_for_authority
     assert_eq!(payload.instructions.instruction_count(), 1);
 }
 #[tokio::test]
+async fn propose_deploy_named_host_profile_requires_committed_selection() {
+    let named = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+    for selected in [false, true] {
+        let world = World::default();
+        if selected {
+            iroha_core::runtime::activate_additions_for_testing(
+                &world,
+                "iroha.runtime.lifecycle.v1",
+            )
+            .unwrap();
+            iroha_core::runtime::activate_additions_for_testing(
+                &world,
+                "iroha.runtime.contract_lifecycle.v1",
+            )
+            .unwrap();
+        }
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let dto = DeployContractProposalDraftRequestV1 {
+            proposal_operator: ALICE_ID.clone(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new([0x31; 32]),
+            abi_hash: ContractAbiHash::new(named),
+            manifest_provenance: None,
+        };
+        let result = handle_gov_propose_deploy(state, NoritoJson(dto)).await;
+        assert_eq!(
+            result.is_ok(),
+            selected,
+            "selected={selected}: {:?}",
+            result.as_ref().err()
+        );
+    }
+}
+#[tokio::test]
 async fn propose_deploy_builds_instruction_skeleton() {
     let (state, _queue, _chain_id) = mk_basic_context();
     let code_hash_bytes = [0x11; 32];

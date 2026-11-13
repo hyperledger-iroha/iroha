@@ -42,8 +42,7 @@ pub use invocation::{
 };
 pub use opcodes::{
     OPCODE_COUNT, OPCODES, OpcodeEntry, OpcodeFamily, PRIVACY_HELPERS, PcTransition,
-    RESERVED_OPCODES, ReservedOpcode, SYSCALL_PRIVACY_FUNCTIONS, StepEffect, TAG_ACCESSORS,
-    opcode_entry,
+    SYSCALL_PRIVACY_FUNCTIONS, StepEffect, TAG_ACCESSORS, opcode_entry,
 };
 pub use phases::{RUN_PHASES, RunPhase, run_phase};
 pub use render::render_inventory_json;
@@ -117,10 +116,6 @@ pub enum Obligation {
     Gas,
     /// Terminal state and ZK cycle padding.
     Padding,
-    /// Vector registers and logical vector length.
-    Vector,
-    /// Parallel-section marker semantics.
-    Parallel,
     /// Cryptographic precompile relation.
     Precompile,
     /// Proof continuation: segment boundaries bound to one invocation.
@@ -146,7 +141,7 @@ pub enum Obligation {
 
 impl Obligation {
     /// Number of obligation classes.
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 20;
 
     /// Every obligation class in stable order.
     pub const ALL: [Self; Self::COUNT] = [
@@ -160,8 +155,6 @@ impl Obligation {
         Self::Faults,
         Self::Gas,
         Self::Padding,
-        Self::Vector,
-        Self::Parallel,
         Self::Precompile,
         Self::Continuation,
         Self::ProofComposition,
@@ -188,8 +181,6 @@ impl Obligation {
             Self::Faults => "faults",
             Self::Gas => "gas",
             Self::Padding => "padding",
-            Self::Vector => "vector",
-            Self::Parallel => "parallel",
             Self::Precompile => "precompile",
             Self::Continuation => "continuation",
             Self::ProofComposition => "proof_composition",
@@ -235,10 +226,6 @@ impl Obligation {
             Self::Padding => {
                 "the terminal state and each padded cycle are constrained up to the cycle horizon"
             }
-            Self::Vector => {
-                "vector register lanes and logical vector length follow the scalar reference"
-            }
-            Self::Parallel => "parallel markers change no architectural state",
             Self::Precompile => "the primitive's exact output is constrained inside the relation",
             Self::Continuation => {
                 "segment boundaries bind the same invocation, complete machine state, gas, reads and effects"

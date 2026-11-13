@@ -14694,7 +14694,7 @@ fn python_zk_ams_action_inspection_result_v1<'py>(
         signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        &envelope,
+        envelope,
         ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(ledger_effect),
     )?;

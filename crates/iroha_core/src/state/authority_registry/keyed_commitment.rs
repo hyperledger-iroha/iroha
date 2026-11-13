@@ -35,10 +35,10 @@ pub(crate) mod selected_schema;
 
 use super::{Canonical, CanonicalLayout, Field, Role, Schema};
 
+use iroha_data_model::sumeragi_finality::keyed_schema::StateTableDirectoryV1;
 pub use iroha_data_model::sumeragi_finality::keyed_schema::{
     CELL_KEY, SchemaError, StatementError, TableDescriptor, TableShape,
 };
-use iroha_data_model::sumeragi_finality::keyed_schema::StateTableDirectoryV1;
 
 /// Byte length of every keyed State root.
 pub const ROOT_BYTES: usize = 32;
@@ -51,7 +51,9 @@ pub struct StateSchema(StateTableDirectoryV1);
 
 impl std::ops::Deref for StateSchema {
     type Target = StateTableDirectoryV1;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl StateSchema {
@@ -114,11 +116,16 @@ fn collect_registry(
 ) -> Result<(), SchemaError> {
     for field in fields {
         match field.role {
-            Role::Canonical(Canonical::Table { key, value }) => tables.push(TableDescriptor::table(
-                field.id, codec_identity(field.id, key)?, codec_identity(field.id, value)?
-            )),
+            Role::Canonical(Canonical::Table { key, value }) => {
+                tables.push(TableDescriptor::table(
+                    field.id,
+                    codec_identity(field.id, key)?,
+                    codec_identity(field.id, value)?,
+                ))
+            }
             Role::Canonical(Canonical::Cell(value)) => tables.push(TableDescriptor::cell(
-                field.id, codec_identity(field.id, value)?
+                field.id,
+                codec_identity(field.id, value)?,
             )),
             Role::Canonical(Canonical::Owner(children)) => collect_registry(children, tables)?,
             Role::Derived { .. } | Role::History { .. } | Role::Local(_) => {}
@@ -400,6 +407,6 @@ pub mod conformance;
 #[cfg(test)]
 pub mod reference;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod selected_tests;
+#[cfg(test)]
+mod tests;

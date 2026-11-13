@@ -16,10 +16,9 @@ fn main() {
     let parsed = ProgramMetadata::parse(&code).unwrap();
     let meta = parsed.metadata;
     println!(
-        "abi_version={} mode=0x{:02x} vl={} max_cycles={}",
+        "abi_version={} mode=0x{:02x} max_cycles={}",
         meta.abi_version,
         meta.mode,
-        meta.vector_length,
         meta.max_cycles
     );
 }
@@ -37,8 +36,8 @@ Build options include `--profile`, `--target-dir`, `--out`,
 `--manifest-out`, `--max-cycles`, the explicit `--zk` build capability, and
 `--verify` for read-only generated-output validation.
 Use `--manifest-out -` to print the manifest JSON to stdout instead of writing a file.
-ABI v1 and required execution capabilities are selected by release policy and
-compiler analysis; source files cannot override ABI or vector metadata.
+ABI v1 and the ZK execution capability are selected by release policy and
+compiler analysis; source files cannot override header metadata.
 
 After building fresh `target/debug/koto` and `target/debug/iroha` binaries,
 verify every tracked source and checked-in `.to` golden with:
@@ -88,8 +87,8 @@ Notes
 - Typed constructors are compiled into Norito-encoded TLV blobs and passed to
   the host through the validated pointer ABI. Raw pointers and direct syscall
   variants are not source APIs.
-- ABI v1 is unconditional. The compiler derives capability bits from emitted
-  instructions and uses the configured/default cycle ceiling.
+- ABI v1 is unconditional. The compiler derives the `ZK` capability bit, the
+  only header mode bit, and uses the configured/default cycle ceiling.
 - Durable `StateMap<K, V>` iteration uses `.take(n)` with a compiler-proven
   constant limit of at most 64 items. Use the map's typed `page` method and
   opaque cursor for pagination; `.range(start, end)` is not a map method.

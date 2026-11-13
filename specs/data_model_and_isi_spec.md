@@ -198,14 +198,16 @@ authority. Activation rejects pre-existing direct grants carrying that name.
 
 `CanPublishContentBundle` has the exact unit (`null`) payload and carries
 authority only on a root whose selection activates its governed Permission
-definition (`content_hosting.md`, "Publishers"). There, only a
-`CanSetParameters` holder may grant or revoke it, on an account or a role, and
-it may remove it from a role it does not hold; a recipient cannot delegate it
-directly or through a role and may renounce its own direct grant. A `Disabled`
-restriction on the definition refuses new grants. A change set that activates
-or retires the definition lapses while any account or role holds a permission
-of that name. A root that has not activated it treats the name as the frozen
-baseline treats any unknown permission.
+definition (`content_hosting.md`, "Publishers"). There it is a direct account
+grant: registering a role with it, or granting it to a role, fails with an
+invariant violation for every executor. Only a `CanSetParameters` holder may
+grant or revoke it; a recipient cannot delegate it and may renounce its own
+grant. Any restriction on the definition refuses new grants. A change set that
+activates the definition lapses while any account or role holds a permission
+of that name, and one that retires it lapses while any account or role holds
+it or any content bundle published after genesis remains. A root that has not
+activated it treats the name as the frozen baseline treats any unknown
+permission.
 
 - Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
 - Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.

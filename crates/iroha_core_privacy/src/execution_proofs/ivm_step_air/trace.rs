@@ -2,8 +2,8 @@
 //!
 //! This internal relation proves 1–64 attempted scalar steps from an explicitly
 //! supplied public boundary. Signed/unsigned comparison and signed MIN/MAX use
-//! the same comparison equations as conditional branches. Wrapping NEG, bitwise
-//! NOT and GETGAS reuse the ALU bank; direct JMP and JAL with rd0 change only
+//! the same comparison equations as conditional branches. Wrapping NEG and
+//! bitwise NOT reuse the ALU bank; direct JMP and JAL with rd0 change only
 //! the PC. CMOV/CMOVI use the full-word nonzero predicate and preserve the old
 //! destination when false. POPCNT/CLZ/CTZ share the existing Boolean source
 //! bits and one zero-prefix bank. MUL/MULHU/MULHSU/MULH reuse that workspace
@@ -138,7 +138,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-scalar-segment-fri-beta-v1",
     query_seed: b"ivm-scalar-segment-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:getgas:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:isqrt:root32:square-plus-remainder:strict-next-square:gas6-cycles6:div-ceil:signed-quotient:nonzero-same-sign-correction:gas12-cycles12:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:gcd:signed-input-unsigned-magnitude:euclid-exact-product-remainder:terminal-denominator-zero:fixed91-divisions:program-derived-stride=93-if-any-code-word-opcode-is-gcd-else-1:entry-work-commit:gas12-cycles12-once:no-internal-traps:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
+const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:isqrt:root32:square-plus-remainder:strict-next-square:gas6-cycles6:div-ceil:signed-quotient:nonzero-same-sign-correction:gas12-cycles12:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:gcd:signed-input-unsigned-magnitude:euclid-exact-product-remainder:terminal-denominator-zero:fixed91-divisions:program-derived-stride=93-if-any-code-word-opcode-is-gcd-else-1:entry-work-commit:gas12-cycles12-once:no-internal-traps:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
 const BRANCH_OPS: [u8; 6] = [
     wide::control::BEQ,
     wide::control::BNE,
@@ -236,7 +236,6 @@ fn family(word: u32) -> Option<Family> {
         wide::arithmetic::MEAN => return Some(Family::Mean),
         wide::arithmetic::NEG => return Some(Family::Alu(wide::arithmetic::SUB)),
         wide::arithmetic::NOT => return Some(Family::Alu(wide::arithmetic::XOR)),
-        wide::system::GETGAS => return Some(Family::Alu(wide::arithmetic::ADD)),
         wide::control::JMP => return Some(Family::Jump(i64::from(wide::imm24(word)) * 4)),
         // The admitted interpreter only changes PC for rd0. Linked calls own
         // protected return/call-table state and cannot enter this scalar cut.
@@ -302,12 +301,11 @@ fn immediate(word: u32) -> Option<u64> {
 }
 
 /// Canonical reads for the shared arithmetic banks. Unused instruction fields
-/// never become semantic operands; gas is already range constrained in the row.
+/// never become semantic operands.
 #[derive(Clone, Copy)]
 enum Operand {
     Register(usize),
     Constant(u64),
-    GasRemaining,
 }
 
 impl Operand {
@@ -315,7 +313,6 @@ impl Operand {
         match self {
             Self::Register(index) => state.registers[index],
             Self::Constant(value) => value,
-            Self::GasRemaining => state.gas_remaining,
         }
     }
 
@@ -323,17 +320,15 @@ impl Operand {
         match self {
             Self::Register(index) => row[2 * index + half],
             Self::Constant(value) => halves(value)[half],
-            Self::GasRemaining => row[GAS + half],
         }
     }
 }
 
 fn operands(word: u32, family: Family) -> [Operand; 2] {
-    use Operand::{Constant, GasRemaining, Register};
+    use Operand::{Constant, Register};
     match wide::opcode(word) {
         wide::arithmetic::NEG => [Constant(0), Register(wide::rs1(word))],
         wide::arithmetic::NOT => [Register(wide::rs1(word)), Constant(u64::MAX)],
-        wide::system::GETGAS => [GasRemaining, Constant(0)],
         _ => match family {
             Family::Branch(_) => [Register(wide::rd(word)), Register(wide::rs1(word))],
             Family::Jump(_) => [Constant(0), Constant(0)],
@@ -508,7 +503,6 @@ impl ScalarSegment {
                 != Some(self.first_pc as usize)
             || u64::from(self.first_pc) + executable.len() as u64 > u64::from(u32::MAX)
             || (observed_completed < completed || observed_completed > maximum_completed)
-            || self.before.vector_length != self.after.vector_length
             || (self.cycle_limit() != 0
                 && (self.after.cycles > self.cycle_limit().saturating_add(maximum_step_cycles - 1)
                     || last_attempt >= self.cycle_limit()))
@@ -536,12 +530,7 @@ impl ScalarSegment {
         self.validate()?;
         let mut boundaries = Vec::with_capacity(2 * (6 * 8 + REGISTERS * 9));
         for state in [&self.before, &self.after] {
-            for value in [
-                state.pc,
-                state.gas_remaining,
-                state.cycles,
-                u64::try_from(state.vector_length).map_err(|_| Error::InvalidProfile)?,
-            ] {
+            for value in [state.pc, state.gas_remaining, state.cycles] {
                 boundaries.extend_from_slice(&value.to_be_bytes());
             }
             boundaries.extend([u8::from(state.halted), u8::from(state.constraint_failed)]);
@@ -618,7 +607,6 @@ impl ScalarSegment {
             return Err(Error::InvalidTrace);
         }
         let mut rows = Vec::with_capacity(self.physical_steps() + 1);
-        let scalar_vector_length = self.before.vector_length;
         for (index, record) in records.iter().enumerate() {
             let outcome = if index + 1 == self.steps {
                 self.outcome
@@ -637,8 +625,6 @@ impl ScalarSegment {
                 || record.after.halted
                 || record.before.constraint_failed
                 || record.after.constraint_failed
-                || record.before.vector_length != scalar_vector_length
-                || record.after.vector_length != scalar_vector_length
             {
                 return Err(Error::InvalidTrace);
             }

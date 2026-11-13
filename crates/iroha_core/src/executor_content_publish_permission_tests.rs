@@ -13,7 +13,7 @@ use iroha_data_model::{
 enum Root {
     Baseline,
     Selected,
-    Disabled,
+    Restricted(RestrictionV1),
 }
 
 /// A root after genesis on which `issuer` holds `CanSetParameters`; `publisher` and `stranger`
@@ -34,9 +34,9 @@ fn fixture(root: Root) -> (State, AccountId, AccountId, AccountId) {
     match root {
         Root::Baseline => {}
         Root::Selected => governed::activate_for_testing(&world).unwrap(),
-        Root::Disabled => {
+        Root::Restricted(restriction) => {
             governed::activate_for_testing(&world).unwrap();
-            governed::restrict_for_testing(&world, RestrictionV1::Disabled(1));
+            governed::restrict_for_testing(&world, restriction);
         }
     }
     (state_after_genesis(world), issuer, publisher, stranger)
@@ -65,7 +65,7 @@ fn tarball(body: &[u8]) -> Vec<u8> {
     archive
 }
 
-fn publish(body: &[u8]) -> (Hash, InstructionBox) {
+fn publication(body: &[u8]) -> (Hash, PublishContentBundle) {
     let tarball = tarball(body);
     let bundle_id = Hash::new(&tarball);
     let instruction = PublishContentBundle {
@@ -73,9 +73,13 @@ fn publish(body: &[u8]) -> (Hash, InstructionBox) {
         tarball,
         expires_at_height: None,
         manifest: None,
-    }
-    .into();
+    };
     (bundle_id, instruction)
+}
+
+fn publish(body: &[u8]) -> (Hash, InstructionBox) {
+    let (bundle_id, instruction) = publication(body);
+    (bundle_id, instruction.into())
 }
 
 fn retire(bundle_id: Hash) -> InstructionBox {
@@ -99,7 +103,10 @@ fn holds(tx: &StateTransaction<'_, '_>, account: &AccountId, permission: &Permis
 
 /// The refusal, with the Core error it carries.
 fn rejection(result: Result<(), ValidationFail>) -> String {
-    format!("{:?}", result.expect_err("the Initial executor must refuse"))
+    format!(
+        "{:?}",
+        result.expect_err("the Initial executor must refuse")
+    )
 }
 
 #[test]
@@ -121,7 +128,8 @@ fn a_root_without_the_definition_keeps_the_frozen_baseline_rules() {
         );
     }
     assert!(tx.world.content_bundles.get(&bundle_id).is_none());
-    // The parameter authority gains nothing over an unknown name; its holder may pass it on.
+    // The parameter authority gains nothing over an unknown name; its holder may pass it on,
+    // and a role may carry it.
     run(
         &mut tx,
         &issuer,
@@ -140,14 +148,17 @@ fn a_root_without_the_definition_keeps_the_frozen_baseline_rules() {
         rejection(run(
             &mut tx,
             &issuer,
-            Register::role(Role::new(role, issuer.clone()).add_permission(token)),
+            Register::role(Role::new(role.clone(), issuer.clone()).add_permission(token.clone())),
         ))
         .contains("Unknown permission")
     );
+    Register::role(Role::new(role, issuer.clone()).add_permission(token))
+        .execute(&issuer, &mut tx)
+        .expect("Core keeps the baseline's opaque role permissions");
 }
 
 #[test]
-fn publishing_after_genesis_requires_the_permission_directly_or_through_a_role() {
+fn publishing_after_genesis_requires_a_direct_grant() {
     let (state, issuer, publisher, stranger) = fixture(Root::Selected);
     let mut block = state.block(header(&state));
     let mut tx = block.transaction();
@@ -156,7 +167,7 @@ fn publishing_after_genesis_requires_the_permission_directly_or_through_a_role()
     let (first, instruction) = publish(b"direct");
     assert!(
         rejection(run(&mut tx, &publisher, instruction.clone()))
-            .contains("requires CanPublishContentBundle")
+            .contains("requires a direct CanPublishContentBundle grant")
     );
     assert!(tx.world.content_bundles.get(&first).is_none());
     run(
@@ -169,14 +180,36 @@ fn publishing_after_genesis_requires_the_permission_directly_or_through_a_role()
     let record = tx.world.content_bundles.get(&first).cloned().unwrap();
     assert_eq!(record.created_by, publisher);
 
-    // Holding it through a role is enough.
+    // No role carries it, so assigning a role never confers publishing: the Initial executor
+    // refuses, and Core refuses for every executor.
     let role: RoleId = "content_publishers".parse().unwrap();
-    Register::role(Role::new(role, stranger.clone()).add_permission(token))
+    assert!(
+        rejection(run(
+            &mut tx,
+            &issuer,
+            Register::role(Role::new(role.clone(), issuer.clone()).add_permission(token.clone())),
+        ))
+        .contains("direct account permission")
+    );
+    let refusal =
+        Register::role(Role::new(role.clone(), stranger.clone()).add_permission(token.clone()))
+            .execute(&issuer, &mut tx)
+            .expect_err("Core keeps the permission off roles");
+    assert!(format!("{refusal:?}").contains("direct account permissions"));
+    Register::role(Role::new(role.clone(), stranger.clone()))
         .execute(&issuer, &mut tx)
-        .expect("seed a publisher role");
+        .expect("seed an empty role");
+    let refusal = Grant::role_permission(token.clone(), role.clone())
+        .execute(&issuer, &mut tx)
+        .expect_err("Core keeps the permission off an existing role");
+    assert!(format!("{refusal:?}").contains("direct account permissions"));
+    assert!(
+        rejection(run(&mut tx, &stranger, Grant::role_permission(token, role)))
+            .contains("direct account permission")
+    );
     let (second, instruction) = publish(b"through a role");
-    run(&mut tx, &stranger, instruction).expect("a role holder publishes");
-    assert!(tx.world.content_bundles.get(&second).is_some());
+    run(&mut tx, &stranger, instruction).expect_err("holding a role confers nothing");
+    assert!(tx.world.content_bundles.get(&second).is_none());
 
     // Only the creator retires a bundle; Core decides that after the executor admits it.
     assert!(
@@ -247,81 +280,127 @@ fn only_the_parameter_authority_grants_or_revokes_the_permission() {
     )
     .expect("the parameter authority withdraws it");
     assert!(!holds(&tx, &publisher, &token));
-
-    // Roles: a role holder cannot spread or strip it; the parameter authority strips it from a
-    // role it does not hold, but adds it only to a role it holds.
-    let role: RoleId = "content_publishers".parse().unwrap();
-    Register::role(Role::new(role.clone(), stranger.clone()).add_permission(token.clone()))
-        .execute(&issuer, &mut tx)
-        .expect("seed a publisher role");
-    run(
-        &mut tx,
-        &stranger,
-        Grant::account_role(role.clone(), publisher.clone()),
-    )
-    .expect_err("a role holder cannot pass the permission on through the role");
-    run(
-        &mut tx,
-        &stranger,
-        Revoke::role_permission(token.clone(), role.clone()),
-    )
-    .expect_err("a role holder cannot withdraw it from the role");
-    run(
-        &mut tx,
-        &issuer,
-        Revoke::role_permission(token.clone(), role.clone()),
-    )
-    .expect("the parameter authority removes it from any role");
-    assert!(
-        !tx.world
-            .roles()
-            .get(&role)
-            .unwrap()
-            .permissions()
-            .any(|permission| permission == &token)
-    );
-    run(&mut tx, &issuer, Grant::role_permission(token, role))
-        .expect_err("adding it to a role still requires holding that role");
 }
 
 #[test]
-fn a_disabled_definition_stops_publishing_and_grants_but_not_revocation_or_retirement() {
-    let (state, issuer, publisher, stranger) = fixture(Root::Disabled);
+fn every_restriction_stops_publishing_and_grants_but_not_revocation_or_retirement() {
+    for restriction in [
+        RestrictionV1::Deprecated(1),
+        RestrictionV1::AdmissionClosed(1),
+        RestrictionV1::CompletionOnly(1),
+        RestrictionV1::Disabled(1),
+    ] {
+        let (state, issuer, publisher, stranger) = fixture(Root::Restricted(restriction));
+        let mut block = state.block(header(&state));
+        let mut tx = block.transaction();
+        let token = governed::token();
+        // Grants and a bundle from before the restriction.
+        for holder in [&publisher, &stranger] {
+            Grant::account_permission(token.clone(), holder.clone())
+                .execute(&issuer, &mut tx)
+                .expect("seed a grant");
+        }
+        let (bundle_id, seeded) = publication(b"before the restriction");
+        seeded.execute(&publisher, &mut tx).expect("seed a bundle");
+
+        let (_, later) = publish(b"after the restriction");
+        assert!(
+            rejection(run(&mut tx, &publisher, later)).contains("content publishing is restricted"),
+            "{restriction:?}"
+        );
+        let fresh = checked_account_id();
+        assert!(
+            rejection(run(
+                &mut tx,
+                &issuer,
+                Grant::account_permission(token.clone(), fresh),
+            ))
+            .contains("cannot be granted"),
+            "{restriction:?}"
+        );
+        run(&mut tx, &publisher, retire(bundle_id))
+            .unwrap_or_else(|error| panic!("{restriction:?}: the creator retires: {error:?}"));
+        assert!(tx.world.content_bundles.get(&bundle_id).is_none());
+        run(
+            &mut tx,
+            &publisher,
+            Revoke::account_permission(token.clone(), publisher.clone()),
+        )
+        .unwrap_or_else(|error| panic!("{restriction:?}: a holder renounces: {error:?}"));
+        run(
+            &mut tx,
+            &issuer,
+            Revoke::account_permission(token.clone(), stranger.clone()),
+        )
+        .unwrap_or_else(|error| panic!("{restriction:?}: the issuer withdraws: {error:?}"));
+        assert!(!holds(&tx, &publisher, &token));
+        assert!(!holds(&tx, &stranger, &token));
+    }
+}
+
+#[test]
+fn retirement_waits_for_grants_and_post_genesis_bundles() {
+    let (state, issuer, publisher, _) = fixture(Root::Selected);
     let mut block = state.block(header(&state));
     let mut tx = block.transaction();
     let token = governed::token();
-    // A grant and a bundle from before the restriction.
-    Grant::account_permission(token.clone(), publisher.clone())
-        .execute(&issuer, &mut tx)
-        .expect("seed a grant");
-    let archive = tarball(b"before the restriction");
-    let bundle_id = Hash::new(&archive);
-    PublishContentBundle {
-        bundle_id,
-        tarball: archive,
-        expires_at_height: None,
-        manifest: None,
-    }
-    .execute(&publisher, &mut tx)
-    .expect("seed a bundle");
+    let current = tx.world.runtime_selection().clone();
+    let definition = governed::descriptor().id().unwrap();
+    let mut retired = current.clone();
+    retired.active.retain(|id| *id != definition);
+    assert!(governed::check_retirement(&tx.world, &current, &retired).is_ok());
+    // Every other change of the selection is not a retirement.
+    assert!(governed::check_retirement(&tx.world, &current, &current).is_ok());
 
-    let (_, later) = publish(b"after the restriction");
-    assert!(rejection(run(&mut tx, &publisher, later)).contains("content publishing is disabled"));
-    assert!(
-        rejection(run(
-            &mut tx,
-            &issuer,
-            Grant::account_permission(token.clone(), stranger.clone()),
-        ))
-        .contains("cannot be granted")
-    );
-    run(&mut tx, &publisher, retire(bundle_id)).expect("the creator still retires its bundle");
-    assert!(tx.world.content_bundles.get(&bundle_id).is_none());
     run(
         &mut tx,
         &issuer,
-        Revoke::account_permission(token.clone(), publisher.clone()),
+        Grant::account_permission(token.clone(), publisher.clone()),
     )
-    .expect("the parameter authority still withdraws it");
-    assert!(!holds(&tx, &publisher, &token));
+    .expect("issue the permission");
+    assert!(
+        governed::check_retirement(&tx.world, &current, &retired)
+            .unwrap_err()
+            .contains("direct grant")
+    );
+    let (bundle_id, instruction) = publish(b"published under the permission");
+    run(&mut tx, &publisher, instruction).expect("publish after genesis");
+    run(
+        &mut tx,
+        &issuer,
+        Revoke::account_permission(token, publisher.clone()),
+    )
+    .expect("withdraw the permission");
+    // A bundle published after genesis keeps the definition, even once it has expired:
+    // retirement would leave it without its only removal path.
+    let record = tx.world.content_bundles.get(&bundle_id).cloned().unwrap();
+    assert!(record.created_height > 1);
+    assert!(
+        governed::check_retirement(&tx.world, &current, &retired)
+            .unwrap_err()
+            .contains("content bundle")
+    );
+    let expired_id = Hash::new(b"an expired bundle");
+    tx.world.content_bundles.insert(
+        expired_id,
+        iroha_data_model::content::ContentBundleRecord {
+            bundle_id: expired_id,
+            expires_at_height: Some(record.created_height),
+            ..record.clone()
+        },
+    );
+    run(&mut tx, &publisher, retire(bundle_id)).expect("the creator retires its bundle");
+    assert!(governed::check_retirement(&tx.world, &current, &retired).is_err());
+    tx.world.content_bundles.remove(expired_id);
+    // A bundle genesis published never depended on the definition.
+    let genesis_id = Hash::new(b"a genesis bundle");
+    tx.world.content_bundles.insert(
+        genesis_id,
+        iroha_data_model::content::ContentBundleRecord {
+            bundle_id: genesis_id,
+            created_height: 1,
+            ..record
+        },
+    );
+    assert!(governed::check_retirement(&tx.world, &current, &retired).is_ok());
 }

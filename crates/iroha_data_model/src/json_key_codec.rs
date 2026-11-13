@@ -9,6 +9,12 @@ macro_rules! impl_id_key_codec {
                 fn encode_json_key(&self, out: &mut String) {
                     json::write_json_string(&self.to_string(), out);
                 }
+                fn encode_json_key_to(
+                    &self,
+                    out: &mut dyn json::JsonWriteSink,
+                ) -> Result<(), json::BoundedJsonError> {
+                    json::write_json_display_to(self, out)
+                }
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     encoded
                         .parse::<$ty>()
@@ -27,6 +33,12 @@ macro_rules! impl_nested_json_key_codec {
                     norito::json::JsonSerialize::json_serialize(self, &mut encoded);
                     json::write_json_string(&encoded, out);
                 }
+                fn encode_json_key_to(
+                    &self,
+                    out: &mut dyn json::JsonWriteSink,
+                ) -> Result<(), json::BoundedJsonError> {
+                    json::write_json_value_as_string_to(self, out)
+                }
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     let mut parser = json::Parser::new(encoded);
                     norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -37,14 +49,34 @@ macro_rules! impl_nested_json_key_codec {
 }
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
-    crate::asset::AssetId,
     crate::nft::NftId,
     crate::role::RoleId,
     crate::trigger::TriggerId,
     crate::oracle::FeedId,
     crate::proof::ProofId,
-    crate::isi::settlement::SettlementId,
 );
+// These compound identities use the canonical checked key visitor so account
+// formatting never allocates an intermediate address or whole key string.
+macro_rules! impl_object_key_codec {
+    ($($ty:path),+ $(,)?) => { $(
+        impl JsonKeyCodec for $ty {
+            fn encode_json_key(&self, out: &mut String) {
+                json::write_json_string(&self.to_string(), out);
+            }
+            fn encode_json_key_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                json::write_json_object_key_to(self, out)
+            }
+            fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+                encoded.parse::<$ty>().map_err(|err| json::Error::Message(err.to_string()))
+            }
+        }
+    )+ };
+}
+impl_object_key_codec!(crate::asset::AssetId, crate::isi::settlement::SettlementId);
+
 // Parliament certificate identities are available without governance instructions;
 // their canonical storage keys must have the same availability.
 impl_id_key_codec!(
@@ -86,6 +118,12 @@ impl JsonKeyCodec for crate::nexus::AxtHandleBudgetKey {
         norito::json::JsonSerialize::json_serialize(self, &mut encoded);
         json::write_json_string(&encoded, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
@@ -107,6 +145,12 @@ impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
         let mut encoded = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut encoded);
         json::write_json_string(&encoded, out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
     }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
@@ -133,6 +177,12 @@ impl JsonKeyCodec for crate::nexus::AxtAnchoredSpendReplayKeyV1 {
         norito::json::JsonSerialize::json_serialize(self, &mut encoded);
         json::write_json_string(&encoded, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
@@ -157,6 +207,12 @@ impl JsonKeyCodec for crate::nexus::AxtSourceTransferReplayKeyV1 {
         let mut encoded = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut encoded);
         json::write_json_string(&encoded, out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
     }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
@@ -183,6 +239,12 @@ impl JsonKeyCodec for crate::bond::BondEntitlementId {
         norito::json::JsonSerialize::json_serialize(self, &mut encoded);
         json::write_json_string(&encoded, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
@@ -200,6 +262,12 @@ impl JsonKeyCodec for crate::bond::BondEntitlementId {
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_object_key_to(self, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Self as json::JsonObjectKeyOwned>::from_json_key_text(encoded).map_err(|error| {
@@ -221,6 +289,12 @@ impl JsonKeyCodec for crate::proof::VerifyingKeyId {
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -230,6 +304,12 @@ impl JsonKeyCodec for crate::da::types::StorageTicketId {
     fn encode_json_key(&self, out: &mut String) {
         self.as_bytes().encode_json_key(out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.as_bytes().encode_json_key_to(out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
     }
@@ -237,6 +317,12 @@ impl JsonKeyCodec for crate::da::types::StorageTicketId {
 impl JsonKeyCodec for crate::runtime::definition::DefinitionId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key_to(&self.0, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
@@ -246,6 +332,12 @@ impl JsonKeyCodec for crate::runtime::obligation::ObligationId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key_to(&self.0, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
@@ -254,6 +346,12 @@ impl JsonKeyCodec for crate::runtime::lifecycle::ChangeSetId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key_to(&self.0, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
@@ -261,6 +359,12 @@ impl JsonKeyCodec for crate::runtime::lifecycle::ChangeSetId {
 impl JsonKeyCodec for crate::escrow::EscrowId {
     fn encode_json_key(&self, out: &mut String) {
         self.as_hash().encode_json_key(out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.as_hash().encode_json_key_to(out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
@@ -272,6 +376,12 @@ impl JsonKeyCodec for crate::account::rekey::AccountAlias {
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -280,6 +390,12 @@ impl JsonKeyCodec for crate::account::rekey::AccountAlias {
 impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(self.as_ref(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_ref(), out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
@@ -293,6 +409,12 @@ impl JsonKeyCodec for crate::smart_contract::ContractAddress {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_ref(), out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
@@ -305,6 +427,12 @@ impl JsonKeyCodec for crate::confidential::ConfidentialParamsId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_display_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<u32>()
@@ -316,6 +444,12 @@ impl JsonKeyCodec for crate::sorafs::capacity::ProviderId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key_to(&self.0, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
@@ -324,6 +458,12 @@ impl JsonKeyCodec for crate::sorafs::pin_registry::ReplicationOrderId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(self.as_bytes(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key_to(self.as_bytes(), out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
     }
@@ -331,6 +471,16 @@ impl JsonKeyCodec for crate::sorafs::pin_registry::ReplicationOrderId {
 impl JsonKeyCodec for crate::sorafs::pin_registry::ManifestAliasId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.as_label(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('"')?;
+        json::write_json_string_content_to(&self.namespace, out)?;
+        out.push('/')?;
+        json::write_json_string_content_to(&self.name, out)?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (namespace, name) = encoded
@@ -343,6 +493,12 @@ impl JsonKeyCodec for crate::oracle::OracleDisputeId {
     fn encode_json_key(&self, out: &mut String) {
         <u64 as JsonKeyCodec>::encode_json_key(&self.0, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <u64 as JsonKeyCodec>::encode_json_key_to(&self.0, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
@@ -352,6 +508,12 @@ impl JsonKeyCodec for crate::oracle::OracleProviderKey {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
@@ -364,6 +526,12 @@ impl JsonKeyCodec for crate::oracle::DefiOracleAttestationKey {
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_value_as_string_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
@@ -373,6 +541,12 @@ impl JsonKeyCodec for crate::oracle::OracleChangeId {
     fn encode_json_key(&self, out: &mut String) {
         self.0.encode_json_key(out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.encode_json_key_to(out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
@@ -380,6 +554,12 @@ impl JsonKeyCodec for crate::oracle::OracleChangeId {
 impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <Hash as JsonKeyCodec>::encode_json_key_to(self.as_hash(), out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded)
@@ -389,6 +569,18 @@ impl JsonKeyCodec for crate::nexus::UniversalAccountId {
 impl JsonKeyCodec for crate::nexus::FeeSponsorProgramId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('"')?;
+        json::JsonObjectKey::visit_json_key_text_checked(&self.sponsor, |chunk| {
+            json::write_json_string_content_to(chunk, out)
+        })?;
+        out.push('/')?;
+        json::write_json_string_content_to(self.name.as_ref(), out)?;
+        out.push('"')
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
@@ -404,6 +596,12 @@ macro_rules! impl_fee_sponsor_struct_key_codec {
                     let mut encoded = String::new();
                     norito::json::JsonSerialize::json_serialize(self, &mut encoded);
                     json::write_json_string(&encoded, out);
+                }
+                fn encode_json_key_to(
+                    &self,
+                    out: &mut dyn json::JsonWriteSink,
+                ) -> Result<(), json::BoundedJsonError> {
+                    json::write_json_value_as_string_to(self, out)
                 }
                 fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
                     let mut parser = json::Parser::new(encoded);
@@ -423,6 +621,12 @@ impl JsonKeyCodec for crate::account::OpaqueAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        <Hash as JsonKeyCodec>::encode_json_key_to(self.as_hash(), out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(crate::account::OpaqueAccountId::from)
     }
@@ -430,6 +634,12 @@ impl JsonKeyCodec for crate::account::OpaqueAccountId {
 impl JsonKeyCodec for crate::identifier::IdentifierPolicyId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_display_to(self, out)
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
@@ -441,6 +651,12 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_display_to(self, out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<crate::ram_lfe::RamLfeProgramId>()
@@ -450,6 +666,33 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
 
 #[cfg(test)]
 mod tests {
+    struct CheckedKey<'a, T>(&'a T);
+    impl<T: JsonKeyCodec> norito::json::JsonSerialize for CheckedKey<'_, T> {
+        fn json_serialize(&self, out: &mut String) {
+            self.0.encode_json_key(out);
+        }
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            self.0.encode_json_key_to(out)
+        }
+    }
+    fn bounded_key_parity<T: JsonKeyCodec>(key: &T) {
+        let value = CheckedKey(key);
+        let expected = norito::json::to_json(&value).unwrap();
+        assert_eq!(
+            norito::json::to_json_bounded(&value, expected.len()).unwrap(),
+            expected
+        );
+        for maximum in [0, 1, expected.len() - 1] {
+            assert_eq!(
+                norito::json::to_json_bounded(&value, maximum),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+    }
+
     #[test]
     fn da_pin_keys_roundtrip_with_retained_undo() {
         use super::*;
@@ -457,6 +700,7 @@ mod tests {
         use iroha_model_base::topology::LaneId;
         use mv::storage::StorageReadOnly;
         let ticket = StorageTicketId::new([0xa7; 32]);
+        bounded_key_parity(&ticket);
         let storage = mv::storage::Storage::<StorageTicketId, u64>::new();
         {
             let mut block = storage.block();
@@ -468,6 +712,7 @@ mod tests {
         assert_eq!(restored.view().get(&ticket), Some(&7));
         assert!(restored.block_and_revert().is_empty());
         let key = (LaneId::new(u32::MAX), u64::MAX, 0_u64);
+        bounded_key_parity(&key);
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);
         let inner: String = json::from_str(&encoded).unwrap();
@@ -495,11 +740,147 @@ mod tests {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
     }
     #[test]
+    fn checked_storage_keys_preserve_scalar_compound_and_escaped_identity_bytes() {
+        use super::*;
+        use crate::{asset::AssetDefinitionId, nexus::*};
+        use iroha_crypto::HashOf;
+        use iroha_model_base::{domain::DomainId, topology::LaneId};
+        let hash = Hash::new(b"bounded storage key");
+        let owner = AccountId::new(checked_random_keypair().public_key().clone());
+        let network = crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(hash));
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("bounded", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
+        bounded_key_parity(&asset);
+        bounded_key_parity(&crate::asset::AssetId::new(asset.clone(), owner.clone()));
+        bounded_key_parity(&crate::runtime::definition::DefinitionId([1; 32]));
+        bounded_key_parity(&crate::runtime::obligation::ObligationId([2; 32]));
+        bounded_key_parity(&crate::runtime::lifecycle::ChangeSetId([3; 32]));
+        bounded_key_parity(&crate::escrow::EscrowId::new(hash));
+        bounded_key_parity(&crate::account::OpaqueAccountId::from(hash));
+        bounded_key_parity(&UniversalAccountId::from_hash(hash));
+        bounded_key_parity(&ProviderId([4; 32]));
+        bounded_key_parity(&ReplicationOrderId::new([5; 32]));
+        bounded_key_parity(&crate::oracle::OracleDisputeId(u64::MAX));
+        bounded_key_parity(&crate::oracle::OracleChangeId(hash));
+        bounded_key_parity(&crate::confidential::ConfidentialParamsId::from(u32::MAX));
+        bounded_key_parity(&crate::sorafs::pin_registry::ManifestAliasId::new(
+            "quote\"\\\n",
+            "unicode😀",
+        ));
+        bounded_key_parity(&crate::proof::VerifyingKeyId::new("proof\"\\", "key\n😀"));
+        bounded_key_parity(&crate::account::rekey::AccountAlias::domainless(
+            "alias".parse().unwrap(),
+            DataSpaceId::new(7),
+        ));
+        bounded_key_parity(
+            &"bounded::universal"
+                .parse::<crate::smart_contract::ContractAlias>()
+                .unwrap(),
+        );
+        bounded_key_parity(
+            &crate::smart_contract::ContractAddress::derive(
+                &network,
+                &owner,
+                7,
+                DataSpaceId::new(7),
+            )
+            .unwrap(),
+        );
+        bounded_key_parity(&crate::oracle::OracleProviderKey::new(
+            "feed".parse().unwrap(),
+            owner.clone(),
+        ));
+        bounded_key_parity(&crate::oracle::DefiOracleAttestationKey::new(4, u64::MAX));
+        bounded_key_parity(&crate::bond::BondEntitlementId::new(
+            asset.clone(),
+            3,
+            owner.clone(),
+        ));
+        let program = FeeSponsorProgramId::new(owner.clone(), "fees".parse().unwrap());
+        bounded_key_parity(&program);
+        bounded_key_parity(&FeeSponsorProgramRevisionKey::new(program.clone(), 2));
+        bounded_key_parity(&FeeSponsorEnrollmentKey {
+            program_id: program.clone(),
+            beneficiary: owner.clone(),
+        });
+        bounded_key_parity(&FeeSponsorVaultKey {
+            program_id: program,
+            asset_definition_id: asset.clone(),
+        });
+        let incarnation = AxtAssetIncarnationV1::derive(
+            &network,
+            &asset,
+            &HashOf::from_untyped_unchecked(hash),
+            &hash,
+            1,
+        );
+        let context = AxtHandleIssuerContextV1 {
+            network_id: network,
+            asset_dsid: DataSpaceId::new(7),
+            asset_definition_incarnation: incarnation,
+            issuer: UniversalAccountId::from_hash(hash),
+            issuer_manifest_root: [6; 32],
+            code_root: [7; 32],
+            abi_version: 1,
+            abi_hash: [8; 32],
+        };
+        bounded_key_parity(&AxtHandleBudgetKey::from_issuer_payload_v1(
+            &AssetHandleIssuerPayloadV1 {
+                context,
+                asset_definition_id: asset,
+                scope: vec!["transfer\"\\\n".into()],
+                subject: HandleSubject {
+                    account: owner.to_string(),
+                    origin_dsid: Some(DataSpaceId::new(7)),
+                },
+                budget: HandleBudget {
+                    remaining: 10_u32.into(),
+                    per_use: Some(1_u32.into()),
+                },
+                active_handle_era: 1,
+                next_handle_counter: 2,
+                group_binding: GroupBinding {
+                    composability_group_id: vec![1, 2],
+                    epoch_id: 3,
+                },
+                target_lane: LaneId::new(4),
+                axt_binding: AxtBinding::new([9; 32]),
+                manifest_view_root: [10; 32],
+                expiry_slot: 20,
+                max_clock_skew_ms: Some(1),
+            },
+        ));
+        bounded_key_parity(&AxtHandleReplayKey::from_parts(
+            DataSpaceId::new(7),
+            incarnation,
+            [9; 32],
+            1,
+            2,
+            LaneId::new(4),
+        ));
+        bounded_key_parity(&AxtAnchoredSpendReplayKeyV1 {
+            issuer_context: context,
+            nonce: AxtSpendNonceV1::try_new([11; 32]).unwrap(),
+        });
+        bounded_key_parity(&AxtSourceTransferReplayKeyV1 {
+            network_id: network,
+            dataspace_id: DataSpaceId::new(7),
+            lane_id: LaneId::new(4),
+            block_header_hash: HashOf::from_untyped_unchecked(hash),
+            source_tx_index: 1,
+            transcript_index: 2,
+            delta_index: 3,
+        });
+    }
+    #[test]
     fn governance_hash_ids_are_canonical_json_storage_keys() {
         fn check<T>(key: &T)
         where
             T: JsonKeyCodec + core::fmt::Debug + PartialEq,
         {
+            bounded_key_parity(key);
             let mut encoded = String::new();
             key.encode_json_key(&mut encoded);
             let mut parser = Parser::new(&encoded);
@@ -525,6 +906,7 @@ mod tests {
     #[test]
     fn anonymous_ballot_scopes_are_canonical_json_storage_keys() {
         let scope = BallotScopeV1::new([0xef; 64]);
+        bounded_key_parity(&scope);
         let mut encoded = String::new();
         scope.encode_json_key(&mut encoded);
         let mut parser = Parser::new(&encoded);
@@ -670,6 +1052,7 @@ mod tests {
     fn account_id_json_key_codec_roundtrip() {
         let keypair = checked_random_keypair();
         let account = AccountId::new(keypair.public_key().clone());
+        bounded_key_parity(&account);
         let mut encoded = String::new();
         account.encode_json_key(&mut encoded);
         let mut parser = Parser::new(&encoded);
@@ -689,6 +1072,7 @@ mod tests {
             AccountId::new(keypair.public_key().clone()),
             MusubiInviteIdV1::new([0x42; 32]),
         );
+        bounded_key_parity(&key);
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);
         let mut parser = Parser::new(&encoded);
@@ -704,6 +1088,7 @@ mod tests {
             replication_order: ReplicationOrderId::new([0x42; 32]),
             provider_id: ProviderId::new([0x43; 32]),
         };
+        bounded_key_parity(&key);
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);
         let mut parser = Parser::new(&encoded);

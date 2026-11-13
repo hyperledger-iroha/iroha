@@ -4,9 +4,22 @@ use super::{
     AdaptiveScheduler, MAX_QUEUE_FANOUT, QueuePolicy, STATE_WIDTH, default_queue_column_threshold,
     lde_tile_stage_limit, parse_queue_fanout_override, parse_queue_threshold_override,
     poseidon_element_range, poseidon_recommended_states_per_batch, post_tile_stage_start,
-    queue_total_columns_hint, select_poseidon_batch, select_poseidon_batch_with_scheduler,
+    queue_total_columns_hint, require_optimized_build, select_poseidon_batch,
+    select_poseidon_batch_with_scheduler,
 };
 use crate::metal_config::{self, DeviceHints};
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "optimized-build guard")]
+fn debug_build_refuses_an_optimized_build_diagnostic() {
+    require_optimized_build("optimized-build guard");
+    panic!("the debug guard returned instead of refusing");
+}
+#[cfg(not(debug_assertions))]
+#[test]
+fn optimized_build_permits_an_optimized_build_diagnostic() {
+    require_optimized_build("optimized-build guard");
+}
 #[test]
 fn post_tile_stage_start_only_dispatches_when_needed() {
     assert_eq!(post_tile_stage_start(10, 4), Some(4));

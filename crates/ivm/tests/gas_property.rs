@@ -3,7 +3,7 @@
 //! These tests assert that summing the static gas costs for a sequence of instructions equals the
 //! gas consumed by the VM during execution for simple programs without branches or syscalls. This
 //! guards the contract that the canonical gas table in `ivm::gas::cost_of` matches
-//! the interpreter’s runtime accounting across scalar, memory, and vector-heavy programs.
+//! the interpreter’s runtime accounting across scalar and memory programs.
 fn cost_of(word: u32) -> u64 {
     ivm::cost_of(word).expect("valid opcode must have gas cost")
 }
@@ -15,7 +15,6 @@ fn gas_matches_sum_for_simple_arith_sequence() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -29,7 +28,7 @@ fn gas_matches_sum_for_simple_arith_sequence() {
     for w in [a1, a2, a3, a4, halt] {
         prog.extend_from_slice(&w.to_le_bytes());
     }
-    // Expected gas is the sum of static costs for the words (vector_len = 1)
+    // Expected gas is the sum of static costs for the words
     let expected: u64 = [a1, a2, a3, a4, halt].into_iter().map(cost_of).sum();
     let gas_limit = 10_000;
     let mut vm = ivm::IVM::new(gas_limit);
@@ -45,7 +44,6 @@ fn gas_matches_sum_for_mixed_scalar_sequence() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -86,39 +84,5 @@ fn gas_matches_sum_for_mixed_scalar_sequence() {
     assert_eq!(vm.registers.get(7), 125);
     assert_eq!(vm.registers.get(8), 625);
     assert_eq!(vm.registers.get(9), 125);
-}
-#[test]
-fn gas_scales_with_vector_length_for_vadd32() {
-    // Program: header (VECTOR enabled, logical VL=2) + 3x VADD32 + HALT
-    let meta = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: ivm::ivm_mode::VECTOR,
-        // Use VL=2 to match the interpreter's base lanes.
-        vector_length: 2,
-        max_cycles: 0,
-        abi_version: 1,
-    };
-    let mut prog = meta.encode();
-    // Encode three VADD32 words using the native 8‑bit primary opcode form.
-    let v1 = ivm::encoding::wide::encode_rr(ivm::instruction::wide::crypto::VADD32, 10, 11, 12);
-    let v2 = ivm::encoding::wide::encode_rr(ivm::instruction::wide::crypto::VADD32, 13, 14, 15);
-    let v3 = ivm::encoding::wide::encode_rr(ivm::instruction::wide::crypto::VADD32, 16, 17, 18);
-    let halt = HALT_WORD;
-    for w in [v1, v2, v3, halt] {
-        prog.extend_from_slice(&w.to_le_bytes());
-    }
-    // Compute expected gas using the canonical helper with vector_len=2.
-    let vl = 2usize;
-    let expected: u64 = [v1, v2, v3, halt]
-        .into_iter()
-        .map(|w| ivm::cost_of_with_vector_len(w, vl).expect("valid opcode must have gas cost"))
-        .sum();
-    let gas_limit = 10_000;
-    let mut vm = ivm::IVM::new(gas_limit);
-    vm.load_program(&prog).expect("load program");
-    vm.run().expect("execute");
-    let used = gas_limit - vm.gas_remaining;
-    assert_eq!(used, expected, "vector op gas must scale with VL");
 }
 const HALT_WORD: u32 = ivm::encoding::wide::encode_halt();

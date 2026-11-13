@@ -823,21 +823,20 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         insert_value!(discovery_json["warning"] = err.clone());
     }
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
-    let publication =
-        if let Some(registration_hash) = registration_hash.filter(|_| errors.is_empty()) {
-            deploy_publication::qualify(
-                &client,
-                &torii_base_url,
-                &client_config,
-                &mut artifacts,
-                registration_hash,
-                checkpoint,
-                &provider_urls,
-                &out_dir,
-            )
-        } else {
-            Err("registration submission failed".to_owned())
-        };
+    let publication = if let Some(registration_hash) =
+        registration_hash.filter(|_| errors.is_empty())
+    {
+        deploy_publication::qualify(
+            deploy_publication::PublicationSession::begin(&client, &torii_base_url, &client_config),
+            &mut artifacts,
+            registration_hash,
+            checkpoint,
+            &provider_urls,
+            &out_dir,
+        )
+    } else {
+        Err("registration submission failed".to_owned())
+    };
     let publication_verified = match publication {
         Ok(summary) => {
             insert_json!(receipt["provider_ingest"] = summary);

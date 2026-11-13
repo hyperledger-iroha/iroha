@@ -18,9 +18,9 @@ fn phase(word: u32, address: u64, outcome: MemoryOutcome) -> StorePhase {
         word,
         address,
         7,
-        [10, 11, 12, 13],
+        [10, 11, 12],
         (100, 0, 0, Memory::STACK_START + Memory::MIN_STACK_SIZE, 0),
-        (true, true, false),
+        (true, false),
         outcome,
     )
     .unwrap()
@@ -32,13 +32,6 @@ fn scalar(address: u64, source: u8) -> StorePhase {
         MemoryOutcome::Ready,
     )
 }
-fn vector(address: u64, low: u8, high: u8) -> StorePhase {
-    phase(
-        enc::encode_store128(wide::memory::STORE128, 3, low, high),
-        address,
-        MemoryOutcome::Ready,
-    )
-}
 fn registers(p: StorePhase) -> [u64; 256] {
     let mut values = [0; 256];
     values[1] = LOW;
@@ -46,12 +39,19 @@ fn registers(p: StorePhase) -> [u64; 256] {
     values[3] = p.base_value;
     values
 }
+/// Both halves of one physical cell, read back without a sixteen-byte access.
+fn cell(vm: &IVM, address: u64) -> [u8; 16] {
+    let mut out = [0; 16];
+    out[..8].copy_from_slice(&vm.memory.load_u64(address).unwrap().to_le_bytes());
+    out[8..].copy_from_slice(&vm.memory.load_u64(address + 8).unwrap().to_le_bytes());
+    out
+}
 
 #[derive(Clone)]
 struct Fixture {
     phase: StorePhase,
     row: [F; WIDTH],
-    reads: [[F; packet::WIDTH]; 3],
+    reads: [[F; packet::WIDTH]; 2],
     memory: [F; packet::WIDTH],
     log: [F; WRITE_LOG_WIDTH],
     control: [F; CONTROL_WIDTH],
@@ -68,12 +68,8 @@ impl Fixture {
         tags: [bool; 256],
         before: [u8; 16],
     ) -> Self {
-        let mut reads = [[F::ZERO; packet::WIDTH]; 3];
-        for (slot, read) in reads
-            .iter_mut()
-            .enumerate()
-            .take(if p.wide { 3 } else { 2 })
-        {
+        let mut reads = [[F::ZERO; packet::WIDTH]; 2];
+        for (slot, read) in reads.iter_mut().enumerate() {
             let index = p.registers[slot];
             *read = Event {
                 space: Space::Register,
@@ -88,29 +84,19 @@ impl Fixture {
             }
             .fields(p.clocks[slot] as usize);
         }
-        let low = tags[p.registers[1]];
-        let high = tags[p.registers[2]];
-        let private_error = (p.wide && low != high) || (low && !p.stack);
+        let private = tags[p.registers[1]];
+        let private_error = private && !p.stack;
         let committed = !private_error && p.outcome == MemoryOutcome::Ready;
         let row = witness(mask, committed);
         let mut memory = [F::ZERO; packet::WIDTH];
         let mut log = [F::ZERO; WRITE_LOG_WIDTH];
         if committed {
-            let start = if p.wide { 0 } else { (p.address & 8) as usize };
-            let length = if p.wide { 16 } else { 8 };
-            let mut payload = [0; 16];
-            payload[..8].copy_from_slice(&values[p.registers[1]].to_le_bytes());
-            if p.wide {
-                payload[8..].copy_from_slice(&values[p.registers[2]].to_le_bytes());
-            }
+            let start = (p.address & 8) as usize;
+            let payload = values[p.registers[1]].to_le_bytes();
             let mut after = before;
-            after[start..start + length].copy_from_slice(&payload[..length]);
-            let selected = u16::from_le_bytes(
-                u32::to_le_bytes(((1_u32 << length) - 1) << start)[..2]
-                    .try_into()
-                    .expect("low-byte width"),
-            );
-            let after_mask = (mask & !selected) | if low { selected } else { 0 };
+            after[start..start + 8].copy_from_slice(&payload);
+            let selected = 0xff_u16 << start;
+            let after_mask = (mask & !selected) | if private { selected } else { 0 };
             memory = Event {
                 space: Space::Memory,
                 vm: p.vm,
@@ -126,11 +112,11 @@ impl Fixture {
                 before_private: mask,
                 after_private: after_mask,
             }
-            .fields(p.clocks[3] as usize);
+            .fields(p.clocks[2] as usize);
             log[..4].copy_from_slice(&[
                 F(p.address & 0xffff_ffff),
                 F(p.address >> 32),
-                F(length as u64),
+                F(8),
                 F::ONE,
             ]);
             for (i, pair) in payload.as_chunks::<2>().0.iter().enumerate() {
@@ -177,7 +163,7 @@ impl Fixture {
             &mut out,
             self.phase,
             &self.row,
-            [&self.reads[0], &self.reads[1], &self.reads[2]],
+            [&self.reads[0], &self.reads[1]],
             &self.memory,
             &self.log,
             &self.control,
@@ -193,21 +179,18 @@ impl Fixture {
 #[test]
 fn store_truth_tables_preserve_half_masks_and_all_typed_effects() {
     for address in [Memory::HEAP_START, Memory::STACK_START] {
-        for p in [
-            scalar(address, 1),
-            scalar(address + 8, 1),
-            vector(address, 1, 2),
-        ] {
+        for p in [scalar(address, 1), scalar(address + 8, 1)] {
             for outcome in [
                 MemoryOutcome::Ready,
                 MemoryOutcome::AccessRefused,
                 MemoryOutcome::AllocationDeferred,
             ] {
                 let p = StorePhase { outcome, ..p };
-                for tag_bits in 0..4 {
+                for private in [false, true] {
                     let mut tags = [false; 256];
-                    tags[1] = tag_bits & 1 != 0;
-                    tags[2] = tag_bits & 2 != 0;
+                    tags[1] = private;
+                    // An unrelated private register never enters the truth table.
+                    tags[2] = true;
                     for mask in [0, 1, 0xff, 0xff00, 0xaaaa, 0xffff] {
                         let f = Fixture::new(p, mask, &registers(p), tags);
                         assert!(f.accepts());
@@ -217,6 +200,10 @@ fn store_truth_tables_preserve_half_masks_and_all_typed_effects() {
                                 .add(f.control[ACCESS_TRAP])
                                 .add(f.control[LOCAL_DEFER]),
                             F::ONE
+                        );
+                        assert_eq!(
+                            f.control[PRIVACY_TRAP],
+                            F(u64::from(private && address == Memory::HEAP_START))
                         );
                         if f.control[COMMIT] == F::ZERO {
                             assert_eq!(f.memory, [F::ZERO; packet::WIDTH]);
@@ -234,12 +221,10 @@ fn every_store_mask_effect_log_control_and_read_tuple_mutation_is_rejected() {
     for p in [
         scalar(Memory::STACK_START, 1),
         scalar(Memory::STACK_START + 8, 1),
-        vector(Memory::STACK_START, 1, 2),
     ] {
         for private in [false, true] {
             let mut tags = [false; 256];
             tags[1] = private;
-            tags[2] = private;
             let f = Fixture::new(p, 0xa55a, &registers(p), tags);
             assert!(f.accepts());
             for i in 0..WIDTH {
@@ -266,7 +251,7 @@ fn every_store_mask_effect_log_control_and_read_tuple_mutation_is_rejected() {
                 m.control[i] = m.control[i].add(F::ONE);
                 assert!(!m.accepts(), "control {i}");
             }
-            for slot in 0..3 {
+            for slot in 0..2 {
                 for i in 0..packet::WIDTH {
                     let mut m = f.clone();
                     m.reads[slot][i] = m.reads[slot][i].add(F::ONE);
@@ -284,74 +269,70 @@ fn rejected_stores_cannot_erase_operand_reads_or_commit_memory_register_pc_cycle
         MemoryOutcome::AccessRefused,
         MemoryOutcome::AllocationDeferred,
     ] {
-        for mixed in [false, true] {
-            let mut p = vector(Memory::HEAP_START, 1, 2);
-            p.outcome = outcome;
-            let mut tags = [false; 256];
-            tags[1] = true;
-            tags[2] = !mixed;
-            let f = Fixture::new(p, 0xffff, &registers(p), tags);
-            assert!(f.accepts());
-            assert_eq!(f.control[PRIVACY_TRAP], F::ONE);
-            assert_eq!(f.control[ACCESS_TRAP], F::ZERO);
-            assert_eq!(f.control[LOCAL_DEFER], F::ZERO);
-            for slot in 0..3 {
-                let mut m = f.clone();
-                m.reads[slot] = [F::ZERO; packet::WIDTH];
-                assert!(!m.accepts());
-            }
-            for i in 0..packet::WIDTH {
-                let mut m = f.clone();
-                m.memory[i] = F::ONE;
-                assert!(!m.accepts());
-            }
-            for i in [2, 4, 6, COMMIT, ACCESS_TRAP, LOCAL_DEFER] {
-                let mut m = f.clone();
-                m.control[i] = m.control[i].add(F::ONE);
-                assert!(!m.accepts());
-            }
+        let mut p = scalar(Memory::HEAP_START, 1);
+        p.outcome = outcome;
+        let mut tags = [false; 256];
+        tags[1] = true;
+        let f = Fixture::new(p, 0xffff, &registers(p), tags);
+        assert!(f.accepts());
+        assert_eq!(f.control[PRIVACY_TRAP], F::ONE);
+        assert_eq!(f.control[ACCESS_TRAP], F::ZERO);
+        assert_eq!(f.control[LOCAL_DEFER], F::ZERO);
+        for slot in 0..2 {
             let mut m = f.clone();
-            m.reads[1][packet::WRITE] = F::ONE;
+            m.reads[slot] = [F::ZERO; packet::WIDTH];
             assert!(!m.accepts());
         }
+        for i in 0..packet::WIDTH {
+            let mut m = f.clone();
+            m.memory[i] = F::ONE;
+            assert!(!m.accepts());
+        }
+        for i in [2, 4, 6, COMMIT, ACCESS_TRAP, LOCAL_DEFER] {
+            let mut m = f.clone();
+            m.control[i] = m.control[i].add(F::ONE);
+            assert!(!m.accepts());
+        }
+        let mut m = f.clone();
+        m.reads[1][packet::WRITE] = F::ONE;
+        assert!(!m.accepts());
     }
 }
 
 #[test]
 fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted() {
-    for low in 0..4 {
-        for high in 0..4 {
-            let p = vector(Memory::HEAP_START, low, high);
-            let f = Fixture::new(p, 0, &registers(p), [false; 256]);
-            assert!(f.accepts());
-            if low == high {
-                let mut m = f.clone();
-                m.reads[2][BEFORE] = m.reads[2][BEFORE].add(F::ONE);
-                m.reads[2][AFTER] = m.reads[2][BEFORE];
-                assert!(!m.accepts());
-            }
+    for source in 0..4 {
+        let p = scalar(Memory::HEAP_START, source);
+        let f = Fixture::new(p, 0, &registers(p), [false; 256]);
+        assert!(f.accepts());
+        // r0 reads zero, and a source equal to the base register reads the base.
+        if source == 0 || source == 3 {
+            let mut m = f.clone();
+            m.reads[1][BEFORE] = m.reads[1][BEFORE].add(F::ONE);
+            m.reads[1][AFTER] = m.reads[1][BEFORE];
+            assert!(!m.accepts());
         }
     }
     // Preserve the forged source's read-preservation tuple AND every derived
     // write/log byte. Only equality to the earlier same-register read may fail.
-    let p = vector(Memory::HEAP_START, 1, 1);
+    let p = scalar(Memory::HEAP_START, 3);
     let original = Fixture::new(p, 0, &registers(p), [false; 256]);
     assert!(original.accepts());
     let mut changed = original;
-    changed.reads[2][BEFORE] = changed.reads[2][BEFORE].add(F::ONE);
-    changed.reads[2][AFTER] = changed.reads[2][BEFORE];
-    changed.memory[AFTER + 4] = changed.reads[2][BEFORE];
-    changed.log[8] = changed.reads[2][BEFORE];
+    changed.reads[1][BEFORE] = changed.reads[1][BEFORE].add(F::ONE);
+    changed.reads[1][AFTER] = changed.reads[1][BEFORE];
+    changed.memory[AFTER] = changed.reads[1][BEFORE];
+    changed.log[4] = changed.reads[1][BEFORE];
     let failed = changed
         .residues()
         .iter()
         .enumerate()
         .filter_map(|(index, value)| (*value != F::ZERO).then_some(index))
         .collect::<Vec<_>>();
-    // Three read-port blocks and the five fixed-base equations precede the
-    // three nine-field alias links. This is limb0 of the third (low/high) link.
-    let alias_start = 3 * (8 + 26 + 4 + 9 + 1 + 9) + 5;
-    assert_eq!(failed, [alias_start + 2 * 9]);
+    // Two read-port blocks and the five fixed-base equations precede the one
+    // nine-field base/value alias link. This is its limb0.
+    let alias_start = 2 * (8 + 4 + 9 + 1 + 9) + 5;
+    assert_eq!(failed, [alias_start]);
     assert!(!changed.accepts());
     for immediate in i8::MIN..=i8::MAX {
         let word = enc::encode_store(wide::memory::STORE64, 3, 1, immediate);
@@ -368,10 +349,10 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
         m.reads[0][AFTER] = m.reads[0][BEFORE];
         assert!(!m.accepts());
     }
-    let word = enc::encode_store128(wide::memory::STORE128, 3, 1, 2);
-    let make = |address, gas, cycles, zk, vector, private, clocks, cursor| {
+    let word = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
+    let make = |instruction, address, gas, cycles, zk, private, clocks, cursor| {
         StorePhase::from_fixed_input(
-            word,
+            instruction,
             address,
             7,
             clocks,
@@ -382,101 +363,89 @@ fn source_aliases_r0_signed_immediates_and_fixed_boundary_cannot_be_substituted(
                 Memory::STACK_START + Memory::MIN_STACK_SIZE,
                 cursor,
             ),
-            (zk, vector, private),
+            (zk, private),
             MemoryOutcome::Ready,
         )
     };
-    for (a, g, c, z, v, p, t, o) in [
+    for address in [Memory::HEAP_START, Memory::HEAP_START + 8] {
+        assert!(make(word, address, 3, 0, true, false, [1, 2, 3], 0).is_some());
+    }
+    let load = enc::encode_load(wide::memory::LOAD64, 1, 3, 0);
+    for (w, a, g, c, z, p, t, o) in [
+        (load, Memory::HEAP_START, 100, 0, true, false, [1, 2, 3], 0),
         (
+            enc::encode_halt(),
+            Memory::HEAP_START,
+            100,
+            0,
+            true,
+            false,
+            [1, 2, 3],
+            0,
+        ),
+        (
+            word,
             Memory::HEAP_START + 1,
             100,
             0,
             true,
-            true,
             false,
-            [1, 2, 3, 4],
+            [1, 2, 3],
             0,
         ),
-        (Memory::HEAP_START, 4, 0, true, true, false, [1, 2, 3, 4], 0),
         (
+            word,
+            Memory::HEAP_START + 4,
+            100,
+            0,
+            true,
+            false,
+            [1, 2, 3],
+            0,
+        ),
+        (word, Memory::HEAP_START, 2, 0, true, false, [1, 2, 3], 0),
+        (
+            word,
             Memory::HEAP_START,
             100,
             u64::MAX,
             true,
-            true,
             false,
-            [1, 2, 3, 4],
+            [1, 2, 3],
             0,
         ),
+        (word, Memory::HEAP_START, 100, 0, false, false, [1, 2, 3], 0),
+        (word, Memory::HEAP_START, 100, 0, true, true, [1, 2, 3], 0),
+        (word, Memory::HEAP_START, 100, 0, true, false, [1, 2, 2], 0),
+        (word, 1 << 36, 100, 0, true, false, [1, 2, 3], 0),
         (
-            Memory::HEAP_START,
-            100,
-            0,
-            false,
-            true,
-            false,
-            [1, 2, 3, 4],
-            0,
-        ),
-        (
-            Memory::HEAP_START,
-            100,
-            0,
-            true,
-            false,
-            false,
-            [1, 2, 3, 4],
-            0,
-        ),
-        (
-            Memory::HEAP_START,
-            100,
-            0,
-            true,
-            true,
-            true,
-            [1, 2, 3, 4],
-            0,
-        ),
-        (
-            Memory::HEAP_START,
-            100,
-            0,
-            true,
-            true,
-            false,
-            [1, 2, 2, 4],
-            0,
-        ),
-        (1 << 36, 100, 0, true, true, false, [1, 2, 3, 4], 0),
-        (
+            word,
             Memory::OUTPUT_START,
             100,
             0,
             true,
-            true,
             false,
-            [1, 2, 3, 4],
-            16,
+            [1, 2, 3],
+            8,
         ),
         (
+            word,
             Memory::HEAP_START,
             100,
             0,
             true,
-            true,
             false,
-            [1, 2, 3, 4],
+            [1, 2, 3],
             Memory::OUTPUT_SIZE + 1,
         ),
     ] {
-        assert!(make(a, g, c, z, v, p, t, o).is_none());
+        assert!(make(w, a, g, c, z, p, t, o).is_none());
     }
 }
 
-fn native(words: &[u32], gas: u64, mode: u8) -> IVM {
+fn native(words: &[u32], gas: u64) -> IVM {
     let mut program = ProgramMetadata {
-        mode,
+        mode: ivm_mode::ZK,
         max_cycles: 2,
         ..ProgramMetadata::default()
     }
@@ -526,10 +495,8 @@ fn assert_native_write(vm: &IVM, f: &Fixture) {
                     .to_le_bytes()
             })
             .collect();
-        assert_eq!(
-            log[0].bytes(),
-            &payload[..if f.phase.wide { 16 } else { 8 }]
-        );
+        assert_eq!(log[0].bytes(), &payload[..8]);
+        assert_eq!(payload[8..], [0; 8]);
     } else {
         assert!(log.is_empty());
     }
@@ -538,49 +505,12 @@ fn assert_native_write(vm: &IVM, f: &Fixture) {
             .try_read_log_snapshot()
             .unwrap()
             .iter()
-            .any(|r| r.addr == f.phase.address && r.len == if f.phase.wide { 16 } else { 8 })
+            .any(|r| r.addr == f.phase.address && r.len == 8)
     );
 }
 
 #[test]
 fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_registers() {
-    for low in 0..4_u8 {
-        for high in 0..4_u8 {
-            let word = enc::encode_store128(wide::memory::STORE128, 3, low, high);
-            let p = vector(Memory::HEAP_START + 0x80, low, high);
-            let values = registers(p);
-            let f = Fixture::new(p, 0, &values, [false; 256]);
-            assert!(f.accepts());
-            let mut vm = native(
-                &[word, enc::encode_halt()],
-                100,
-                ivm_mode::ZK | ivm_mode::VECTOR,
-            );
-            vm.memory.store_bytes(p.address, &OLD).unwrap();
-            for (i, &value) in values.iter().enumerate().take(4) {
-                vm.set_register(i, value);
-            }
-            let registers_before: [(u64, bool); 256] =
-                std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
-            assert_eq!(registers_before[31], (vm.memory.stack_top(), false));
-            vm.memory.clear_tracking();
-            vm.run().unwrap();
-            assert_native_reads(&vm, &f);
-            assert_native_write(&vm, &f);
-            for (i, (value, tag)) in registers_before.into_iter().enumerate() {
-                assert_eq!(vm.registers.get(i), value, "unchanged register r{i}");
-                assert_eq!(vm.registers.tag(i), tag, "unchanged register tag r{i}");
-            }
-            assert_eq!(
-                vm.memory.load_u128(p.address).unwrap(),
-                u128::from(values[low as usize]) | (u128::from(values[high as usize]) << 64)
-            );
-            assert_eq!(
-                (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
-                (95, 8, 2)
-            );
-        }
-    }
     for half in [0_i8, 8] {
         for source in [0_u8, 1, 3] {
             let address = Memory::HEAP_START + 0x80;
@@ -593,15 +523,21 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
             let values = registers(p);
             let f = Fixture::new(p, 0, &values, [false; 256]);
             assert!(f.accepts());
-            let mut vm = native(&[word, enc::encode_halt()], 100, ivm_mode::ZK);
+            let mut vm = native(&[word, enc::encode_halt()], 100);
             vm.memory.store_bytes(address, &OLD).unwrap();
             for (i, &value) in values.iter().enumerate().take(4) {
                 vm.set_register(i, value);
             }
+            let registers_before: [(u64, bool); 256] =
+                std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
             vm.memory.clear_tracking();
             vm.run().unwrap();
             assert_native_reads(&vm, &f);
             assert_native_write(&vm, &f);
+            for (i, (value, tag)) in registers_before.into_iter().enumerate() {
+                assert_eq!(vm.registers.get(i), value, "unchanged register r{i}");
+                assert_eq!(vm.registers.tag(i), tag, "unchanged register tag r{i}");
+            }
             let expected: Vec<u8> = f.memory[AFTER..AFTER + 8]
                 .iter()
                 .flat_map(|v| {
@@ -609,14 +545,7 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
                         .to_le_bytes()
                 })
                 .collect();
-            assert_eq!(
-                vm.memory
-                    .load_u128(address)
-                    .unwrap()
-                    .to_le_bytes()
-                    .as_slice(),
-                expected.as_slice()
-            );
+            assert_eq!(cell(&vm, address).as_slice(), expected.as_slice());
             assert_eq!(
                 (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
                 (97, 8, 2)
@@ -628,20 +557,15 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
 #[test]
 fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects() {
     for address in [Memory::STACK_START, Memory::HEAP_START] {
-        for tag_bits in 0..4 {
-            let p = vector(address, 1, 2);
-            let word = enc::encode_store128(wide::memory::STORE128, 3, 1, 2);
+        for private in [false, true] {
+            let p = scalar(address, 1);
+            let word = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
             let mut tags = [false; 256];
-            tags[1] = tag_bits & 1 != 0;
-            tags[2] = tag_bits & 2 != 0;
+            tags[1] = private;
             let values = registers(p);
             let f = Fixture::new(p, 0, &values, tags);
             assert!(f.accepts());
-            let mut vm = native(
-                &[word, enc::encode_halt()],
-                100,
-                ivm_mode::ZK | ivm_mode::VECTOR,
-            );
+            let mut vm = native(&[word, enc::encode_halt()], 100);
             vm.memory.store_bytes(address, &OLD).unwrap();
             for (i, &value) in values.iter().enumerate().take(4) {
                 vm.set_register(i, value);
@@ -649,10 +573,10 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
             }
             let registers_before: [(u64, bool); 256] =
                 std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
-            assert_eq!(registers_before[31], (vm.memory.stack_top(), false));
             vm.memory.clear_tracking();
             let result = vm.run();
             let ok = f.control[COMMIT] == F::ONE;
+            assert_eq!(ok, !private || address == Memory::STACK_START);
             assert!(matches!(
                 (ok, result),
                 (true, Ok(())) | (false, Err(VMError::PrivacyViolation))
@@ -661,14 +585,14 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
             assert_native_write(&vm, &f);
             assert_eq!(
                 (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
-                (95, if ok { 8 } else { 0 }, if ok { 2 } else { 0 })
+                (97, if ok { 8 } else { 0 }, if ok { 2 } else { 0 })
             );
             for (i, (value, tag)) in registers_before.into_iter().enumerate() {
                 assert_eq!(vm.registers.get(i), value, "unchanged register r{i}");
                 assert_eq!(vm.registers.tag(i), tag, "unchanged register tag r{i}");
             }
             if !ok {
-                assert_eq!(vm.memory.load_u128(address).unwrap().to_le_bytes(), OLD);
+                assert_eq!(cell(&vm, address), OLD);
             }
         }
     }
@@ -678,7 +602,7 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
     let values = registers(p);
     let f = Fixture::new(p, 0, &values, [false; 256]);
     assert!(f.accepts());
-    let mut vm = native(&[word, enc::encode_halt()], 100, ivm_mode::ZK);
+    let mut vm = native(&[word, enc::encode_halt()], 100);
     let code_before = vm.memory.load_u64(0).unwrap();
     for (i, &value) in values.iter().enumerate().take(4) {
         vm.set_register(i, value);
@@ -716,7 +640,9 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
 fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_rewind_is_atomic() {
     for half in [0_i8, 8] {
         let words = [
-            enc::encode_store128(wide::memory::STORE128, 3, 1, 2),
+            enc::encode_store(wide::memory::STORE64, 3, 1, 0),
+            enc::encode_halt(),
+            enc::encode_store(wide::memory::STORE64, 3, 2, 8),
             enc::encode_halt(),
             enc::encode_store(wide::memory::STORE64, 3, 4, half),
             enc::encode_halt(),
@@ -725,41 +651,42 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
             enc::encode_load(wide::memory::LOAD64, 6, 3, 8),
             enc::encode_halt(),
         ];
-        let mut vm = native(&words, 1000, ivm_mode::ZK | ivm_mode::VECTOR);
+        let mut vm = native(&words, 1000);
         vm.set_register(1, LOW);
         vm.set_register(2, HIGH);
         vm.set_register(3, Memory::STACK_START);
         vm.set_register(4, 7);
         vm.registers.set_tag(1, true);
         vm.registers.set_tag(2, true);
+        // Two private eight-byte stores make the whole physical cell private.
+        vm.run().unwrap();
+        vm.set_program_counter(8).unwrap();
         vm.run().unwrap();
         let mut p = phase(
-            words[2],
+            words[4],
             Memory::STACK_START + i64::from(half).cast_unsigned(),
             MemoryOutcome::Ready,
         );
-        p.pc = 8;
+        p.pc = 16;
         p.cycles = 0;
         p.gas_after = vm.gas_remaining - 3;
         let values = core::array::from_fn(|i| vm.registers.get(i));
         let tags = core::array::from_fn(|i| vm.registers.tag(i));
-        let old_bytes = vm
-            .memory
-            .load_u128(Memory::STACK_START)
-            .unwrap()
-            .to_le_bytes();
+        let old_bytes = cell(&vm, Memory::STACK_START);
+        assert_eq!(old_bytes[..8], LOW.to_le_bytes());
+        assert_eq!(old_bytes[8..], HIGH.to_le_bytes());
         let f = Fixture::with_memory(p, u16::MAX, &values, tags, old_bytes);
         assert!(f.accepts());
         let expected_mask = if half == 0 { 0xff00 } else { 0xff };
         assert_eq!(f.memory[AFTER_TAG], F(expected_mask));
-        vm.set_program_counter(8).unwrap();
+        vm.set_program_counter(16).unwrap();
         vm.memory.clear_tracking();
         vm.run().unwrap();
         assert_native_reads(&vm, &f);
         assert_native_write(&vm, &f);
-        vm.set_program_counter(16).unwrap();
-        vm.run().unwrap();
         vm.set_program_counter(24).unwrap();
+        vm.run().unwrap();
+        vm.set_program_counter(32).unwrap();
         vm.run().unwrap();
         assert_eq!(vm.registers.get(5), if half == 0 { 7 } else { LOW });
         assert_eq!(vm.registers.get(6), if half == 8 { 7 } else { HIGH });
@@ -767,11 +694,7 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
         assert_eq!(vm.registers.tag(6), half != 8);
     }
     let word = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
-    let mut vm = native(
-        &[word, enc::encode_halt(), word, enc::encode_halt()],
-        100,
-        ivm_mode::ZK,
-    );
+    let mut vm = native(&[word, enc::encode_halt(), word, enc::encode_halt()], 100);
     vm.set_register(1, LOW);
     vm.set_register(3, Memory::OUTPUT_START + 16);
     let forward = phase(word, Memory::OUTPUT_START + 16, MemoryOutcome::Ready);
@@ -842,46 +765,48 @@ fn native_public_half_overwrite_clears_only_selected_private_bytes_and_output_re
 #[test]
 fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission() {
     assert_eq!(WIDTH, 16);
-    let ports = 4 * packet::WIDTH + WRITE_LOG_WIDTH + CONTROL_WIDTH;
+    assert_eq!(CONSTRAINTS, 176);
+    let ports = 3 * packet::WIDTH + WRITE_LOG_WIDTH + CONTROL_WIDTH;
     for p in [
-        vector(Memory::STACK_START, 1, 2),
-        vector(Memory::HEAP_START, 1, 2),
+        scalar(Memory::STACK_START, 1),
+        scalar(Memory::HEAP_START, 1),
+        scalar(Memory::HEAP_START + 8, 3),
     ] {
+        // The single value tag gates the off-stack effect once; no product of
+        // two operand tags remains.
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [u8::from(p.stack); 32],
                 [WIDTH + ports, 0, 0, 0, 0],
                 4,
-                3,
+                2,
                 |row, _, _, _, _| {
-                    let read_start = WIDTH;
-                    let low_start = read_start + packet::WIDTH;
-                    let high_start = low_start + packet::WIDTH;
-                    let output_start = high_start + packet::WIDTH;
-                    let write_log_start = output_start + packet::WIDTH;
+                    let base_start = WIDTH;
+                    let value_start = base_start + packet::WIDTH;
+                    let memory_start = value_start + packet::WIDTH;
+                    let write_log_start = memory_start + packet::WIDTH;
                     let control_start = write_log_start + WRITE_LOG_WIDTH;
                     let mut out = Vec::new();
                     append_residues(
                         &mut out,
                         p,
-                        row[..read_start].try_into().unwrap(),
+                        row[..base_start].try_into().unwrap(),
                         [
-                            row[read_start..low_start].try_into().unwrap(),
-                            row[low_start..high_start].try_into().unwrap(),
-                            row[high_start..output_start].try_into().unwrap(),
+                            row[base_start..value_start].try_into().unwrap(),
+                            row[value_start..memory_start].try_into().unwrap(),
                         ],
-                        row[output_start..write_log_start].try_into().unwrap(),
+                        row[memory_start..write_log_start].try_into().unwrap(),
                         row[write_log_start..control_start].try_into().unwrap(),
                         row[control_start..].try_into().unwrap(),
                     );
                     Ok::<_, core::convert::Infallible>(out)
                 }
             ),
-            3
+            2
         );
     }
     assert_eq!(WIDTH * (136 * 2 * 8 + 2 * 32), 35_840);
-    assert_eq!((WIDTH + ports) * (136 * 2 * 8 + 2 * 32), 322_560);
+    assert_eq!((WIDTH + ports) * (136 * 2 * 8 + 2 * 32), 264_320);
     assert!(
         (WIDTH + ports) * (136 * 2 * 8 + 2 * 32) > 41_152,
         "packet/log/control linkage is not free profile space"
@@ -903,41 +828,14 @@ fn store_bank_degree_and_geometry_are_explicit_without_complete_memory_admission
 }
 
 #[test]
-fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix() {
-    let scalar = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
-    let vector = enc::encode_store128(wide::memory::STORE128, 3, 1, 2);
+fn native_early_trap_priority_and_late_alignment_keep_exact_read_prefix() {
+    let word = enc::encode_store(wide::memory::STORE64, 3, 1, 0);
     let bad = Memory::HEAP_START + 1;
-    for (word, vector_on, base_private, value_private, expected, reads, cost) in [
+    let cost = 3;
+    for (base_private, value_private, expected, reads) in [
+        (true, true, VMError::PrivacyViolation, 0),
+        (false, true, VMError::PrivacyViolation, 2),
         (
-            vector,
-            false,
-            true,
-            true,
-            VMError::VectorExtensionDisabled,
-            0,
-            5,
-        ),
-        (vector, true, true, true, VMError::PrivacyViolation, 0, 5),
-        (
-            vector,
-            true,
-            false,
-            true,
-            VMError::MisalignedAccess {
-                addr: u32::from_le_bytes(
-                    u64::to_le_bytes(bad)[..4]
-                        .try_into()
-                        .expect("low-byte width"),
-                ),
-            },
-            1,
-            5,
-        ),
-        (scalar, true, true, true, VMError::PrivacyViolation, 0, 3),
-        (scalar, true, false, true, VMError::PrivacyViolation, 2, 3),
-        (
-            scalar,
-            true,
             false,
             false,
             VMError::MisalignedAccess {
@@ -948,16 +846,11 @@ fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix()
                 ),
             },
             2,
-            3,
         ),
     ] {
         for out_of_gas in [false, true] {
             let gas = if out_of_gas { cost - 1 } else { 100 };
-            let mut vm = native(
-                &[word, enc::encode_halt()],
-                gas,
-                ivm_mode::ZK | if vector_on { ivm_mode::VECTOR } else { 0 },
-            );
+            let mut vm = native(&[word, enc::encode_halt()], gas);
             vm.set_register(1, LOW);
             vm.set_register(2, HIGH);
             vm.set_register(3, bad);
@@ -969,8 +862,7 @@ fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix()
                 assert!(matches!(result, Err(VMError::OutOfGas)));
             } else {
                 assert!(match (result, &expected) {
-                    (Err(VMError::VectorExtensionDisabled), VMError::VectorExtensionDisabled)
-                    | (Err(VMError::PrivacyViolation), VMError::PrivacyViolation) => true,
+                    (Err(VMError::PrivacyViolation), VMError::PrivacyViolation) => true,
                     (
                         Err(VMError::MisalignedAccess { addr: actual }),
                         VMError::MisalignedAccess { addr: expected },
@@ -993,7 +885,7 @@ fn native_early_trap_priority_and_scalar_late_alignment_keep_exact_read_prefix()
             assert_eq!(vm.gas_remaining, if out_of_gas { gas } else { gas - cost });
             assert!(vm.memory.try_write_log_snapshot().unwrap().is_empty());
             assert_eq!(vm.memory.output_used_len(), 0);
-            assert_eq!(vm.memory.load_u128(Memory::HEAP_START).unwrap(), 0);
+            assert_eq!(cell(&vm, Memory::HEAP_START), [0; 16]);
         }
     }
 }

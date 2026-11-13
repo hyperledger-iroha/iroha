@@ -107,6 +107,13 @@ mod model {
         /// Original local allocation custody; never encoded or part of identity.
         #[norito(skip)]
         #[codec(skip)]
+        #[cfg_attr(
+            not(any(test, feature = "transparent_api")),
+            expect(
+                dead_code,
+                reason = "Owned for its destructor; only the transparent API attaches custody."
+            )
+        )]
         pub(crate) lifecycle_custody: super::super::LifecycleOutputCustody,
     }
 }
@@ -507,13 +514,14 @@ impl SignedBlock {
     pub fn output_proof(&self, index: u32) -> Option<MerkleProof<ExecutionOutputV1>> {
         self.result.as_ref()?.output_merkle.get_proof(index)
     }
-    /// Locate the explicit Network source join, never infer it from a result index.
+    /// Locate the explicit Network source join, never infer it from a result index. The
+    /// returned output index follows the block's leading governance block-start rows.
     pub fn network_output_at(&self, input_index: u32) -> Option<(u32, &NetworkExecutionOutputV1)> {
-        let output = self
-            .execution_outputs()
-            .get(usize::try_from(input_index).ok()?)?;
-        let row = output.network()?;
-        (row.input_index == input_index).then_some((input_index, row))
+        let outputs = self.execution_outputs();
+        let output_index = super::execution_output::governance_start_row_count_v1(outputs)
+            .checked_add(usize::try_from(input_index).ok()?)?;
+        let row = outputs.get(output_index)?.network()?;
+        (row.input_index == input_index).then_some((u32::try_from(output_index).ok()?, row))
     }
     /// Canonical full typed-output hashes, independently of the network-input tree.
     pub fn output_hashes(

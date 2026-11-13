@@ -32,9 +32,9 @@ call or permanently reject a call granted earlier in the same block.
 
 There is no compatibility grammar, source edition, implicit entrypoint,
 source-order dispatch, raw-call sugar, typeless parameter, wildcard import, or
-source `meta` block. ABI v1 is unconditional. Execution capabilities and vector
-metadata are derived by the compiler or supplied through trusted build
-configuration, never selected by seiyaku source.
+source `meta` block. ABI v1 is unconditional. The ZK execution capability, the
+only header mode bit, is derived by the compiler or supplied through trusted
+build configuration, never selected by seiyaku source.
 
 ## Compiler pipeline
 
@@ -146,9 +146,9 @@ canonical Norito record carries the exact nominal kind and complete numeric
 frame. Secret values can flow only into the full-width `crypto::valcom`
 commitment boundary; both operands must be secret. They cannot affect public
 returns, logs, error selection, control flow, state, ledger writes, host
-queries, or seiyaku calls. Scalar Poseidon proof gadgets reject private
-operands; the former truncated commitment, public-key, curve, and pairing
-opcode slots are invalid in ABI V1 and are not source-level capabilities.
+queries, or seiyaku calls. ABI V1 has no cryptographic or field-arithmetic
+opcode, so no register-truncated commitment, public-key, curve, pairing, or
+Poseidon operation is a source-level capability.
 
 `Secret<T>` and `GET_PRIVATE_INPUT` currently execute only in local compiler
 tests and explicitly provisioned prover/test hosts. Ordinary production

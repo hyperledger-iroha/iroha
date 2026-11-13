@@ -2294,6 +2294,12 @@ export class ToriiClient {
    * Observe exact staking signing inputs. This signs/submits no transaction and
    * authenticates no ledger state. The expected XOR definition is an explicit
    * operator pin; neither an alias nor the server response establishes that pin.
+   *
+   * A plan that committed state refuses rejects with a `ToriiHttpError` whose
+   * `status` is 409, `code` and `rejectCode` are `staking_preparation_refused`
+   * and `errorMessage` is the exact reason execution would reject with. Any
+   * other non-200 carrying Torii's canonical error envelope (Norito or JSON)
+   * exposes its code and message the same way.
    */
   async preparePublicLanePlan(request, xorAssetDefinitionId, options = {}) {
     const context = requireLocalDraftSigningContext(this._localSigningContext, "preparePublicLanePlan");
@@ -2311,7 +2317,8 @@ export class ToriiClient {
       throwIfAborted(signal);
       const xor = normalizeAssetDefinitionId(xorAssetDefinitionId, "staking preparation XOR pin");
       const { encodeValidatorStakingPreparationFrameV1: encode, decodeValidatorStakingPreparationFrameV1: decode,
-        validateValidatorStakingPreparationV1: validate } = await waitForPromiseWithSignal(loadToriiOptionalModule(), signal);
+        validateValidatorStakingPreparationV1: validate, decodeTypedToriiErrorEnvelope: decodeErrorEnvelope } =
+        await waitForPromiseWithSignal(loadToriiOptionalModule(), signal);
       const body = encode("PreparationRequest", request);
       const retainedRequest = decode("PreparationRequest", body);
       throwIfAborted(signal);
@@ -2319,7 +2326,11 @@ export class ToriiClient {
         headers: { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO },
         body, signal, disableRetries: true, redirect: "error",
       }), signal, "staking preparation");
-      await this._expectStatus(response, [200], { signal, maximumBodyBytes: 256 * 1024, responseLabel: "staking preparation" });
+      // A refusal's envelope arrives in the negotiated Norito encoding, which is
+      // not UTF-8 text; classify it before the generic error-body handling.
+      await this._expectStatus(response, [200], {
+        signal, maximumBodyBytes: 256 * 1024, responseLabel: "staking preparation", decodeErrorEnvelope,
+      });
       const type = this._getHeader(response, "content-type") ?? "";
       if (!/^[ \t]*application\/x-norito[ \t]*$/iu.test(type)) {
         cancelResponseBodyBestEffort(response, "staking preparation requires application/x-norito");
@@ -9963,12 +9974,16 @@ export class ToriiClient {
   }
 
   async _buildHttpError(response, expected, options = {}) {
-    const { bodyText, bodyJson } = await this._readErrorBody(response, options);
-    const fields = extractToriiErrorFields({
-      bodyText,
-      bodyJson,
-      rejectCodeHeader: this._getHeader(response, "x-iroha-reject-code"),
-    });
+    const { bodyText, bodyJson, envelope = null } = await this._readErrorBody(response, options);
+    const rejectCodeHeader = this._getHeader(response, "x-iroha-reject-code");
+    // A canonical envelope supplies its exact message rather than a trimmed
+    // summary; the reject-code header keeps its usual precedence as `code`.
+    const fields = envelope === null
+      ? extractToriiErrorFields({ bodyText, bodyJson, rejectCodeHeader })
+      : {
+        ...extractToriiErrorFields({ bodyJson: envelope, rejectCodeHeader }),
+        errorMessage: envelope.message,
+      };
     return new ToriiHttpError({
       status: responseStatusWithoutUserGetter(response),
       statusText: responseStatusTextWithoutUserGetter(response),
@@ -9980,7 +9995,7 @@ export class ToriiClient {
   }
 
   async _readErrorBody(response, options = {}) {
-    const { signal, maximumBodyBytes, responseLabel = "Torii" } = options;
+    const { signal, maximumBodyBytes, responseLabel = "Torii", decodeErrorEnvelope } = options;
     let contentType;
     try {
       contentType = this._getHeader(response, "content-type");
@@ -10027,6 +10042,15 @@ export class ToriiClient {
         throw error;
       }
       return { bodyText: null, bodyJson: null };
+    }
+    // A typed caller classifies the exact bounded bytes as Torii's canonical
+    // error envelope first; any other body keeps the generic handling below.
+    const decoded = decodeErrorEnvelope === undefined ? null : decodeErrorEnvelope(contentType, bytes);
+    if (decoded !== null) {
+      const envelope = { code: decoded.code, message: decoded.message };
+      return decoded.format === "json"
+        ? { bodyText: new TextDecoder("utf-8", { fatal: true }).decode(bytes), bodyJson: { ...envelope }, envelope }
+        : { bodyText: null, bodyJson: null, envelope };
     }
     let text;
     try {
@@ -17432,7 +17456,7 @@ function normalizeManifestPayload(manifest, context) {
         `${context}.features_bitmap`,
         { allowZero: true },
       );
-      if (bitmap > 3) {
+      if (bitmap > 1) {
         rejectType(`${context}.features_bitmap contains unsupported Kotodama V1 feature bits`);
       }
       normalized.features_bitmap = bitmap;

@@ -1595,6 +1595,14 @@ impl JsonSerializeTrait for Executor {
         json::write_json_string(&encoded, out);
         out.push('}');
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push_str("{\"norito\":")?;
+        executor_norito::write_json_frame_to(self, out)?;
+        out.push('}')
+    }
 }
 impl JsonDeserializeTrait for Executor {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -3831,12 +3839,13 @@ fn resolve_callable_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-fn resolve_raw_contract_entrypoint(
+fn resolve_raw_contract_entrypoint_for_policy(
     bytecode: &[u8],
     selector: &str,
     interface_required_message: &'static str,
+    policy: ivm::SyscallPolicy,
 ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+    let parsed = ivm::ProgramMetadata::parse_for_policy(bytecode, policy).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for contract call dispatch: {err}"
         ))
@@ -4008,7 +4017,7 @@ fn is_self_describing_contract(bytecode: &[u8]) -> bool {
 }
 #[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
-    Bytecode(&'a [u8]),
+    Bytecode(&'a [u8], ivm::SyscallPolicy),
     Prepared(&'a ivm::PreparedContract),
 }
 impl ContractDispatchSource<'_> {
@@ -4018,9 +4027,12 @@ impl ContractDispatchSource<'_> {
         interface_required_message: &'static str,
     ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
         match self {
-            Self::Bytecode(bytecode) => {
-                resolve_raw_contract_entrypoint(bytecode, selector, interface_required_message)
-            }
+            Self::Bytecode(bytecode, policy) => resolve_raw_contract_entrypoint_for_policy(
+                bytecode,
+                selector,
+                interface_required_message,
+                *policy,
+            ),
             Self::Prepared(contract) => {
                 resolve_prepared_raw_contract_entrypoint(contract, selector)
             }
@@ -4028,7 +4040,12 @@ impl ContractDispatchSource<'_> {
     }
     fn is_self_describing(&self) -> bool {
         match self {
-            Self::Bytecode(bytecode) => is_self_describing_contract(bytecode),
+            Self::Bytecode(bytecode, policy) => {
+                ivm::ProgramMetadata::parse_for_policy(bytecode, *policy)
+                    .ok()
+                    .and_then(|parsed| parsed.contract_interface)
+                    .is_some()
+            }
             Self::Prepared(_) => true,
         }
     }
@@ -4043,7 +4060,7 @@ pub(crate) fn parse_contract_call_execution_context(
 > {
     parse_contract_call_execution_context_from_source(
         metadata,
-        ContractDispatchSource::Bytecode(bytecode),
+        ContractDispatchSource::Bytecode(bytecode, ivm::SyscallPolicy::AbiV1),
         ContractArgumentSource::Metadata,
         u64::MAX,
     )
@@ -4438,9 +4455,21 @@ pub(crate) fn validate_trigger_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    validate_trigger_call_execution_context_for_policy(
+        metadata,
+        bytecode,
+        ivm::SyscallPolicy::AbiV1,
+    )
+}
+/// Validate a callback under the exact named profile selected by the registration root.
+pub(crate) fn validate_trigger_call_execution_context_for_policy(
+    metadata: &Metadata,
+    bytecode: &[u8],
+    policy: ivm::SyscallPolicy,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     parse_contract_call_execution_context_from_source(
         metadata,
-        ContractDispatchSource::Bytecode(bytecode),
+        ContractDispatchSource::Bytecode(bytecode, policy),
         ContractArgumentSource::SchemaOnly,
         u64::MAX,
     )?
@@ -7077,13 +7106,17 @@ impl Executor {
                 ))
             })?;
         let summary = if let Some(summary) = ivm_cache
-            .cached_program_summary(identity.code_hash)
+            .cached_program_summary_in_world(&state_transaction.world, identity.code_hash)
             .map_err(|error| ValidationFail::InternalError(error.to_string()))?
         {
             summary
         } else {
             ivm_cache
-                .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                .summarize_program_with_hash_in_world(
+                    &state_transaction.world,
+                    identity.code_hash,
+                    code_bytes.as_ref(),
+                )
                 .map_err(|error| ValidationFail::InternalError(error.to_string()))?
         };
         if summary.prepared_contract().artifact() != code_bytes.as_slice() {
@@ -7169,6 +7202,10 @@ impl Executor {
             contract_subject,
             summary,
         } = resolved;
+        crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+            state_transaction,
+            summary.prepared_contract().syscall_policy(),
+        )?;
         let effective_cycles =
             validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
         let effective_limit = effective_limit.min(
@@ -8371,7 +8408,7 @@ impl Executor {
         };
         let effective_limit = gas_limit_md.min(block_remaining);
         let admitted = ivm_cache
-            .summarize_executable(bytes.as_ref())
+            .summarize_executable_in_world(&state_transaction.world, bytes.as_ref())
             .map_err(|error| {
                 state_transaction.vm_error_to_validation_fail(
                     error,
@@ -8529,6 +8566,10 @@ impl Executor {
                 return Ok(());
             }
         };
+        crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
+            state_transaction,
+            summary.prepared_contract().syscall_policy(),
+        )?;
         let effective_cycles =
             validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
         crate::pipeline::overlay::validate_contract_binding(
@@ -8883,21 +8924,27 @@ impl Executor {
                 .unwrap_or_else(|| state_transaction.derived_trigger_lifecycle_origin())
         };
         state_transaction.with_trigger_lifecycle_origin(origin, |state_transaction| {
-            // A committed terminal effect of the obligation its authority holds completes that
-            // obligation (`specs/live_runtime_upgrades.md` §7.2). A contract's queued effects
-            // carry its subject account as their authority.
-            crate::runtime::obligations::registry::performing(
+            // Native custody selects its authoritative context before any permission check
+            // or caller-registered terminal effect. Registered consent must agree with it.
+            crate::runtime::execution::with_native_obligation(
                 state_transaction,
-                authority,
                 instruction,
                 |state_transaction| {
-                    self.execute_instruction_within_lifecycle_origin(
+                    // A contract's queued effects carry its subject account as authority.
+                    crate::runtime::obligations::registry::performing(
                         state_transaction,
                         authority,
                         instruction,
-                        profile,
-                        contract_runtime_context,
-                        attachment_invocation,
+                        |state_transaction| {
+                            self.execute_instruction_within_lifecycle_origin(
+                                state_transaction,
+                                authority,
+                                instruction,
+                                profile,
+                                contract_runtime_context,
+                                attachment_invocation,
+                            )
+                        },
                     )
                 },
             )
@@ -8947,6 +8994,13 @@ impl Executor {
             instruction,
             contract_runtime_context,
         )?;
+        if let Some(registration) = instruction.as_any().downcast_ref::<
+            iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1>()
+        {
+            return crate::runtime::obligations::registry::register_contract(
+                state_transaction, authority, registration, contract_runtime_context,
+            ).map_err(ValidationFail::InstructionFailed);
+        }
         if let Some(result) = crate::smartcontracts::isi::escrow::controlled::execute_instruction(
             instruction,
             authority,
@@ -10747,28 +10801,54 @@ pub mod executor_norito {
         };
         norito::to_bytes(&dto)
     }
+    // A reference delegates the existing payload without cloning raw code. The
+    // derive requires SerializePayload on its field type, which plain &T lacks.
+    struct BorrowedRawExecutor<'a>(&'a iroha_data_model::executor::Executor);
+    impl norito::core::SerializePayload for BorrowedRawExecutor<'_> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            norito::core::SerializePayload::serialize(self.0, writer)
+        }
+    }
+    #[derive(Encode)]
+    enum BorrowedExecutorDto<'a> {
+        Initial,
+        UserProvided(BorrowedRawExecutor<'a>),
+    }
+    impl norito::NoritoSchema for BorrowedExecutorDto<'_> {
+        fn nominal_name() -> String {
+            <ExecutorDto as norito::NoritoSchema>::nominal_name()
+        }
+        fn static_nominal_name() -> Option<&'static str> {
+            <ExecutorDto as norito::NoritoSchema>::static_nominal_name()
+        }
+        fn frame_name() -> String {
+            <ExecutorDto as norito::NoritoSchema>::frame_name()
+        }
+        fn static_frame_name() -> Option<&'static str> {
+            <ExecutorDto as norito::NoritoSchema>::static_frame_name()
+        }
+    }
+    pub(super) fn write_json_frame_to(
+        executor: &Executor,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let borrowed = match executor {
+            Executor::Initial => BorrowedExecutorDto::Initial,
+            Executor::UserProvided(loaded) => {
+                BorrowedExecutorDto::UserProvided(BorrowedRawExecutor(&loaded.raw_executor))
+            }
+        };
+        json::write_frame_base64_json_to(&borrowed, output)
+    }
     /// Encode the complete recoverable raw executor for the keyed State cell.
     /// Loaded VM instances, compiled artifacts and runtime-pool history are excluded.
     pub(crate) fn encode_state_authority(
         executor: &Executor,
         writer: &mut dyn std::io::Write,
     ) -> Result<(), norito::core::Error> {
-        // A reference delegates the existing payload without cloning raw code. The
-        // derive requires SerializePayload on its field type, which plain &T lacks.
-        struct BorrowedRawExecutor<'a>(&'a iroha_data_model::executor::Executor);
-        impl norito::core::SerializePayload for BorrowedRawExecutor<'_> {
-            fn serialize(
-                &self,
-                writer: &mut norito::core::Encoder<'_>,
-            ) -> Result<(), norito::core::Error> {
-                norito::core::SerializePayload::serialize(self.0, writer)
-            }
-        }
-        #[derive(Encode)]
-        enum BorrowedExecutorDto<'a> {
-            Initial,
-            UserProvided(BorrowedRawExecutor<'a>),
-        }
         let borrowed = match executor {
             Executor::Initial => BorrowedExecutorDto::Initial,
             Executor::UserProvided(loaded) => {
@@ -10898,6 +10978,17 @@ pub mod executor_norito {
                 Executor::Initial,
                 denying_executor_for_testing("recoverable raw executor"),
             ] {
+                let expected_json = json::to_json(&executor).unwrap();
+                assert_eq!(
+                    json::to_json_bounded(&executor, expected_json.len()).unwrap(),
+                    expected_json
+                );
+                assert_eq!(
+                    json::to_json_bounded(&executor, expected_json.len() - 1),
+                    Err(json::BoundedJsonError::BodyTooLarge)
+                );
+                let restored_json: Executor = json::from_json(&expected_json).unwrap();
+                assert_eq!(json::to_json(&restored_json).unwrap(), expected_json);
                 let mut actual = Vec::new();
                 encode_state_authority(&executor, &mut actual).unwrap();
                 let owned = match &executor {

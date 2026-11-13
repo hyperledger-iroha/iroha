@@ -2345,7 +2345,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
       codeHash: codeHashBytes,
       abiHash: abiHashBytes,
       compilerFingerprint: "rustc-1.79",
-      featuresBitmap: "3",
+      featuresBitmap: "1",
       accessSetHints: {
         readKeys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
         writeKeys: ["contract:foo"],
@@ -2405,7 +2405,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         code_hash: normalizedHashHex(codeHashBytes),
         abi_hash: normalizedHashHex(abiHashBytes),
         compiler_fingerprint: "rustc-1.79",
-        features_bitmap: 3,
+        features_bitmap: 1,
         access_set_hints: {
           read_keys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
           write_keys: ["contract:foo"],
@@ -2491,6 +2491,14 @@ baseTest("smart-contract manifests reject unknown V1 feature bits", () => {
     () =>
       buildRegisterSmartContractCodeInstruction(universalArtifactInput({
         manifest: { permissions: [], events: [], enum_types: [], features_bitmap: "4" },
+      })),
+    /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
+  );
+  // Bit 1 was the retired VECTOR capability; ZK (bit 0) is the only V1 feature bit.
+  assert.throws(
+    () =>
+      buildRegisterSmartContractCodeInstruction(universalArtifactInput({
+        manifest: { permissions: [], events: [], enum_types: [], featuresBitmap: 2 },
       })),
     /featuresBitmap contains unsupported Kotodama V1 feature bits/u,
   );

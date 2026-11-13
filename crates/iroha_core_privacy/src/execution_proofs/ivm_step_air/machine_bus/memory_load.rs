@@ -1,4 +1,4 @@
-//! Conditional post-read LOAD64/LOAD128 equations, with no request authority.
+//! Conditional post-read LOAD64 equations, with no request authority.
 //!
 //! These ports must be the same canonical typed tuples constrained by the
 //! machine bus. Its initializer/history constraints own their previous values
@@ -15,7 +15,7 @@ pub(super) use payload::payload_limb;
 /// Sixteen private-mask bits and two canonical zero-test inverses.
 /// The zero/full flags are derived polynomials, not extra witness columns.
 pub(super) const WIDTH: usize = 18;
-pub(super) const CONSTRAINTS: usize = 273;
+pub(super) const CONSTRAINTS: usize = 159;
 const ZERO_INVERSE: usize = 16;
 const FULL_INVERSE: usize = 17;
 /// Gas, PC and cycles as two u32 limbs each, followed by commit and privacy trap.
@@ -24,15 +24,19 @@ pub(super) const CONTROL_WIDTH: usize = 8;
 pub(super) const READ_LOG_WIDTH: usize = 4;
 const COMMIT: usize = 6;
 const PRIVACY_TRAP: usize = 7;
+/// Every admitted load reads one eight-byte half of a sixteen-byte cell.
+const LENGTH: u64 = 8;
+/// Native LOAD64 base tariff, debited before this read phase.
+const GAS: u64 = 3;
 
 /// Fixed qualification boundary, not an authenticated permission or request.
 #[derive(Clone, Copy)]
 pub(super) struct ReadPhase {
     vm: u8,
     address: u64,
-    clocks: [u32; 5],
-    destinations: [usize; 2],
-    wide: bool,
+    /// Memory read, then the destination's value write and its tag write.
+    clocks: [u32; 3],
+    destination: usize,
     stack: bool,
     gas_after: u64,
     pc: u64,
@@ -46,22 +50,18 @@ impl ReadPhase {
         instruction: u32,
         address: u64,
         vm: u8,
-        clocks: [u32; 5],
+        clocks: [u32; 3],
         (gas, pc, cycles, stack_top): (u64, u64, u64, u64),
-        (zk, vector, base_private): (bool, bool, bool),
+        (zk, base_private): (bool, bool),
     ) -> Option<Self> {
-        let wide = match wide::opcode(instruction) {
-            wide::memory::LOAD64 => false,
-            wide::memory::LOAD128 => true,
-            _ => return None,
-        };
-        let length = if wide { 16 } else { 8 };
-        let end = address.checked_add(length)?;
-        let gas_after = gas.checked_sub(if wide { 5 } else { 3 })?;
+        if wide::opcode(instruction) != wide::memory::LOAD64 {
+            return None;
+        }
+        let end = address.checked_add(LENGTH)?;
+        let gas_after = gas.checked_sub(GAS)?;
         if !zk
             || base_private
-            || (wide && !vector)
-            || !address.is_multiple_of(length)
+            || !address.is_multiple_of(LENGTH)
             || address >> 4 > u64::from(u32::MAX)
             || !clocks.windows(2).all(|pair| pair[0] < pair[1])
             || cycles == u64::MAX
@@ -72,8 +72,7 @@ impl ReadPhase {
             vm,
             address,
             clocks,
-            destinations: [wide::rd(instruction), wide::rs2(instruction)],
-            wide,
+            destination: wide::rd(instruction),
             stack: address >= ivm::Memory::STACK_START && end <= stack_top,
             gas_after,
             pc,
@@ -81,13 +80,10 @@ impl ReadPhase {
         })
     }
 
+    /// Private-mask bits of the addressed half of the sixteen-byte cell.
     fn selected_bits(self) -> core::ops::Range<usize> {
-        if self.wide {
-            0..16
-        } else {
-            let start = (self.address & 8) as usize;
-            start..start + 8
-        }
+        let start = (self.address & 8) as usize;
+        start..start + 8
     }
 }
 
@@ -104,7 +100,7 @@ pub(super) fn witness(private_mask: u16, phase: ReadPhase) -> [F; WIDTH] {
     row
 }
 
-/// Constrain the memory tuple and four native ordered value/tag register tuples.
+/// Constrain the memory tuple and the two native ordered value/tag register tuples.
 /// The read port also owns the physical read-log entry; architectural failure
 /// cannot suppress it. No packet is synthesized from an unconstrained callback.
 pub(super) fn append_residues(
@@ -112,7 +108,7 @@ pub(super) fn append_residues(
     phase: ReadPhase,
     row: &[F; WIDTH],
     read: &[F; packet::WIDTH],
-    writes: [&[F; packet::WIDTH]; 4],
+    writes: [&[F; packet::WIDTH]; 2],
     read_log: &[F; READ_LOG_WIDTH],
     control: &[F; CONTROL_WIDTH],
 ) {
@@ -151,15 +147,13 @@ pub(super) fn append_residues(
         out.push(read[AFTER + limb].sub(read[BEFORE + limb]));
     }
     out.push(read[AFTER_TAG].sub(read[BEFORE_TAG]));
-    // Native order is value-low, value-high, tag-low, tag-high. In
-    // particular a value write preserves its OLD tag. Atomic value/tag ports
-    // would change the observable RegEvent history when old and new tags differ.
+    // Native order is the value write, then the tag write. In particular the
+    // value write preserves its OLD tag. One atomic value/tag port would change
+    // the observable RegEvent history when old and new tags differ.
+    let enabled = commit.mul(F(u64::from(phase.destination != 0)));
+    // The same address bit that selects the private-mask half selects the payload.
+    let half = F((phase.address & 8) / 8);
     for (slot, write) in writes.iter().enumerate() {
-        let operand = slot % 2;
-        let destination = phase.destinations[operand];
-        let enabled = commit.mul(F(u64::from(
-            destination != 0 && (operand == 0 || phase.wide),
-        )));
         header(
             out,
             write,
@@ -167,7 +161,7 @@ pub(super) fn append_residues(
             phase,
             (
                 slot + 1,
-                u32::try_from(destination).expect("bounded circuit index"),
+                u32::try_from(phase.destination).expect("bounded circuit index"),
             ),
             enabled,
             enabled,
@@ -178,43 +172,32 @@ pub(super) fn append_residues(
         for limb in 4..8 {
             out.push(write[BEFORE + limb]);
         }
-        let half = if phase.wide {
-            operand
-        } else {
-            usize::try_from((phase.address & 8) / 8).expect("one address bit")
-        };
         for limb in 0..8 {
             let expected = if limb >= 4 {
                 F::ZERO
-            } else if slot < 2 {
-                payload_limb(read[BEFORE + limb], read[BEFORE + 4 + limb], F(half as u64))
+            } else if slot == 0 {
+                payload_limb(read[BEFORE + limb], read[BEFORE + 4 + limb], half)
             } else {
                 write[BEFORE + limb]
             };
             out.push(write[AFTER + limb].sub(enabled.mul(expected)));
         }
-        let tag = if slot < 2 { write[BEFORE_TAG] } else { private };
+        let tag = if slot == 0 {
+            write[BEFORE_TAG]
+        } else {
+            private
+        };
         out.push(write[AFTER_TAG].sub(enabled.mul(tag)));
         out.push(bit(write[BEFORE_TAG]));
     }
-    // Every subsequent write to the same register starts from the most recent
-    // earlier event, including the intermediate OLD tag after a value write.
+    // The tag write starts from the value write's result, including the
+    // intermediate OLD tag after that value write.
     // The initial before-value/tag is owned by the typed state bus, not here.
-    for slot in 1..4 {
-        let operand = slot % 2;
-        let previous = (0..slot).rev().find(|prior| {
-            phase.destinations[*prior % 2] == phase.destinations[operand]
-                && (*prior % 2 == 0 || phase.wide)
-        });
-        let enabled = commit.mul(F(u64::from(
-            phase.destinations[operand] != 0 && (operand == 0 || phase.wide) && previous.is_some(),
-        )));
-        let previous = previous.unwrap_or(0);
-        for limb in 0..8 {
-            out.push(enabled.mul(writes[slot][BEFORE + limb].sub(writes[previous][AFTER + limb])));
-        }
-        out.push(enabled.mul(writes[slot][BEFORE_TAG].sub(writes[previous][AFTER_TAG])));
+    let [value, tag] = writes;
+    for limb in 0..8 {
+        out.push(enabled.mul(tag[BEFORE + limb].sub(value[AFTER + limb])));
     }
+    out.push(enabled.mul(tag[BEFORE_TAG].sub(value[AFTER_TAG])));
     for (offset, before, after) in [
         (0, phase.gas_after, phase.gas_after),
         (2, phase.pc, phase.pc.wrapping_add(4)),
@@ -231,7 +214,7 @@ pub(super) fn append_residues(
     for (actual, expected) in read_log.iter().zip([
         F(phase.address & u64::from(u32::MAX)),
         F(phase.address >> 32),
-        F(if phase.wide { 16 } else { 8 }),
+        F(LENGTH),
         F::ONE,
     ]) {
         out.push(actual.sub(expected));

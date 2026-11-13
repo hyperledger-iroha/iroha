@@ -54,10 +54,7 @@ fn set_account_detail_rejects_tlv_with_bad_hash() {
     // SCALL SET_ACCOUNT_DETAIL; HALT
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).expect("syscall id fits in u8"),
-        )
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL)
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

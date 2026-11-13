@@ -943,7 +943,11 @@ fn initial_permission_delegation_allowed(
     if permission.name() == "CanReadStateRow"
         && crate::runtime::keyed_state::selected(state_transaction.world.runtime_selection())
     {
-        return Ok(authority_has_permission(&state_transaction.world, authority, &executor_permission::query::CanReadAllLedgerData.into())?);
+        return Ok(authority_has_permission(
+            &state_transaction.world,
+            authority,
+            &executor_permission::query::CanReadAllLedgerData.into(),
+        )?);
     }
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
@@ -1155,8 +1159,8 @@ fn selected_permission_mutation_allowed(
 
 /// On a root that selected the governed content-publishing permission
 /// (`crate::runtime::content_publish_permission`), only the parameter authority issues or
-/// withdraws it, and only in its exact unit form; holding it never authorizes delegation. While a
-/// `Disabled` restriction names it, nothing new is issued, so its grants only shrink.
+/// withdraws it, and only in its exact unit form; holding it never authorizes delegation. While
+/// any restriction names the definition, nothing new is issued, so its grants only shrink.
 fn content_publish_permission_issuer(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1171,12 +1175,13 @@ fn content_publish_permission_issuer(
         .into());
     }
     if !is_revoke
-        && !crate::runtime::content_publish_permission::recognized(
+        && !crate::runtime::content_publish_permission::active(
             state_transaction.world.runtime_selection(),
         )
     {
         return Err(ValidationFail::NotPermitted(
-            "content publishing is disabled; CanPublishContentBundle cannot be granted".to_owned(),
+            "content publishing is restricted; CanPublishContentBundle cannot be granted"
+                .to_owned(),
         )
         .into());
     }
@@ -1375,19 +1380,13 @@ fn validate_initial_permission_or_role_mutation(
                 return Ok(());
             }
             // A new native SNS owner must be able to remove its exact read capability from
-            // roles created by a previous owner, without first receiving those roles. Likewise
-            // the parameter authority removes the governed content-publishing permission from
-            // any role.
+            // roles created by a previous owner, without first receiving those roles.
             let owner_revoke = is_revoke
-                && ((normalized.name() == "CanReadRestrictedDataspace"
-                    && crate::runtime::restricted_dataspace_read::selected_for(
-                        state_transaction.world.runtime_selection(),
-                        instruction,
-                    ))
-                    || (normalized.name() == crate::runtime::content_publish_permission::NAME
-                        && crate::runtime::content_publish_permission::selected(
-                            state_transaction.world.runtime_selection(),
-                        )));
+                && normalized.name() == "CanReadRestrictedDataspace"
+                && crate::runtime::restricted_dataspace_read::selected_for(
+                    state_transaction.world.runtime_selection(),
+                    instruction,
+                );
             if !authority_has_role(&state_transaction.world, authority, role) && !owner_revoke {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot modify a role it does not hold".to_owned(),
@@ -2245,19 +2244,21 @@ fn validate_initial_native_instruction_authority(
             .downcast_ref::<iroha_data_model::isi::content::PublishContentBundle>()
             .is_some()
         {
-            if !crate::runtime::content_publish_permission::recognized(
+            if !crate::runtime::content_publish_permission::active(
                 state_transaction.world.runtime_selection(),
             ) {
-                return deny("content publishing is disabled on this root");
+                return deny("content publishing is restricted on this root");
             }
-            if authority_has_permission(
+            if authority_has_direct_permission(
                 &state_transaction.world,
                 authority,
                 &crate::runtime::content_publish_permission::token(),
             )? {
                 return Ok(());
             }
-            return deny("publishing a content bundle requires CanPublishContentBundle");
+            return deny(
+                "publishing a content bundle requires a direct CanPublishContentBundle grant",
+            );
         }
     }
     // The default executor does not admit these authority-free administrative
@@ -2982,13 +2983,17 @@ where
                     ))
                 })?;
             let summary = if let Some(summary) = ivm_cache
-                .cached_program_summary(identity.code_hash)
+                .cached_program_summary_in_world(state.world(), identity.code_hash)
                 .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             {
                 summary
             } else {
                 ivm_cache
-                    .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                    .summarize_program_with_hash_in_world(
+                        state.world(),
+                        identity.code_hash,
+                        code_bytes.as_ref(),
+                    )
                     .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             };
             if summary.prepared_contract().artifact() != code_bytes.as_slice() {
@@ -3291,6 +3296,17 @@ fn normalize_role_permission_for_initial_executor(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &Permission,
 ) -> Result<Permission, ValidationFail> {
+    // The governed content-publishing permission is a direct account permission wherever the
+    // root selected it; elsewhere its name stays unknown, as on the frozen baseline.
+    if permission.name() == crate::runtime::content_publish_permission::NAME
+        && crate::runtime::content_publish_permission::selected(
+            state_transaction.world.runtime_selection(),
+        )
+    {
+        return Err(ValidationFail::NotPermitted(
+            "CanPublishContentBundle is a direct account permission".to_owned(),
+        ));
+    }
     let known_permission = state_transaction
         .world
         .executor_data_model
@@ -3298,11 +3314,7 @@ fn normalize_role_permission_for_initial_executor(
         .permissions()
         .iter()
         .any(|known| known.as_str() == permission.name())
-        || is_builtin_initial_permission_name(permission.name())
-        || (permission.name() == crate::runtime::content_publish_permission::NAME
-            && crate::runtime::content_publish_permission::selected(
-                state_transaction.world.runtime_selection(),
-            ));
+        || is_builtin_initial_permission_name(permission.name());
     if !known_permission {
         return Err(ValidationFail::NotPermitted(format!(
             "{permission:?}: Unknown permission"

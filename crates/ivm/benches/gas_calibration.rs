@@ -28,7 +28,6 @@ fn assemble(code: &[u8]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     }
@@ -125,7 +124,7 @@ fn wrap_v1(value: &BigInt) -> BigInt {
 }
 fn bench_numeric_limb_work(c: &mut Criterion) {
     let mut group = c.benchmark_group("ivm-numeric-limb-cal");
-    let entry_instruction = encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_INT_NEG);
+    let entry_instruction = encoding::wide::encode_scall(ivm::syscalls::SYSCALL_INT_NEG);
     let mut entry_program = ProgramMetadata::default_for(1, 1, 1).encode();
     entry_program.extend_from_slice(&entry_instruction.to_le_bytes());
     entry_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -467,7 +466,7 @@ fn run_benchmarks(c: &mut Criterion) {
     // backend latency against the consensus factor of four gas per limb-work
     // unit. Run this on every release baseline; see kotodama_numeric_v1.md.
     bench_numeric_limb_work(c);
-    // You can extend with more: logic ops, shifts, branches, loads/stores, vector ops, crypto ops.
+    // You can extend with more: logic ops, shifts, branches, loads/stores.
 }
 /// Entry point for the benchmark binary.
 fn main() {

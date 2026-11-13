@@ -117,8 +117,7 @@ pub fn build_encoded_result_program(result_bytes: &[u8]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
-        max_cycles: DEFAULT_MAX_CYCLES,
+        max_cycles: 0,
         abi_version: 1,
     }
     .encode();

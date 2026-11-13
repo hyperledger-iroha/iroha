@@ -295,6 +295,63 @@ fn a_capture_survives_the_rebinding_it_predates() {
         !closure.contains(&after.fix),
         "the closure names what was bound at registration, not the later fix"
     );
+    let context = capture
+        .execution_selection(&after.selection, &after.catalog)
+        .expect("retained captured execution context");
+    assert_eq!(context.bindings, before.selection.bindings);
+    assert!(!context.active.contains(&after.fix));
+    assert_eq!(
+        capture
+            .broken_by(&before.selection, &context, &after.catalog)
+            .unwrap(),
+        None
+    );
+    assert_ne!(context.bindings, after.selection.bindings);
+}
+
+#[test]
+fn captured_execution_keeps_restrictions_and_requires_every_retained_dependency() {
+    let before = root(false);
+    let capture = CompletionCaptureV1::capture(
+        &before.selection,
+        &before.catalog,
+        &effects(&[TRANSFER]),
+        10,
+    )
+    .unwrap();
+    let after = root(true);
+    let mut restricted = after.selection.clone();
+    restricted.restrictions = vec![RestrictionEntryV1 {
+        definition: before.bundle,
+        restriction: RestrictionV1::CompletionOnly(20),
+    }];
+    let context = capture
+        .execution_selection(&restricted, &after.catalog)
+        .unwrap();
+    assert_eq!(context.restrictions, restricted.restrictions);
+    for kind in 0..5 {
+        let mut unavailable = after.selection.clone();
+        match kind {
+            0 => unavailable.active.retain(|id| *id != before.bundle),
+            1 => unavailable.installed_storage.clear(),
+            2 => unavailable.kernel = DefinitionId([0x71; 32]),
+            3 => unavailable.services_profile = DefinitionId([0x72; 32]),
+            _ => unavailable.commitment_profile = DefinitionId([0x73; 32]),
+        }
+        assert!(
+            capture
+                .execution_selection(&unavailable, &after.catalog)
+                .is_err(),
+            "{kind}"
+        );
+    }
+    let mut malformed = capture;
+    malformed.terminal.clear();
+    assert!(
+        malformed
+            .execution_selection(&after.selection, &after.catalog)
+            .is_err()
+    );
 }
 
 #[test]

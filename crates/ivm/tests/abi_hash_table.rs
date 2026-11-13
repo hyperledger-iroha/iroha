@@ -1,7 +1,8 @@
+//! Canonical hash rows distinguish named host profiles within ABI V1.
 #[test]
 fn abi_hash_markdown_matches_computed_values() {
     let table = ivm::syscalls::render_abi_hashes_markdown_table();
-    // Expect header + single row (ABI v1) in the first release
+    // Both immutable host profiles use ABI version 1 and have separate exact identities.
     let mut rows = Vec::new();
     for line in table.lines() {
         if line.starts_with("|---") {
@@ -15,7 +16,11 @@ fn abi_hash_markdown_matches_computed_values() {
         }
         rows.push(line.to_string());
     }
-    assert_eq!(rows.len(), 1, "expected one policy row (ABI v1)");
+    assert_eq!(
+        rows.len(),
+        2,
+        "expected baseline and named lifecycle profile rows"
+    );
     let mut parsed = Vec::new();
     for row in rows {
         let parts: Vec<_> = row.split('|').map(|s| s.trim()).collect();
@@ -32,4 +37,11 @@ fn abi_hash_markdown_matches_computed_values() {
         .expect("ABI v1 row present");
     let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     assert_eq!(v1.1, hex::encode(expected), "V1 hash mismatch");
+    let named = parsed
+        .iter()
+        .find(|(name, _)| name == ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE)
+        .expect("named runtime lifecycle profile row present");
+    let named_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+    assert_eq!(named.1, hex::encode(named_hash));
+    assert_ne!(named.1, v1.1);
 }

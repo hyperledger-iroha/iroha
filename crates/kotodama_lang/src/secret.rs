@@ -116,7 +116,7 @@ pub(crate) fn validate_builtin_call(
                 ),
             ))
         }
-        Builtin::Poseidon2 | Builtin::Poseidon6 | Builtin::Pubkgen => Err(error(
+        Builtin::Pubkgen => Err(error(
             "E_SECRET_FULL_WIDTH_CRYPTO_REQUIRED",
             format!(
                 "`{}` has only a scalar-register implementation and cannot consume Secret<T>; use `crypto::valcom` until a full-width proof representation is available",
@@ -560,9 +560,7 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
             match name.builtin() {
                 // Approved cryptographic calls explicitly declassify to their
                 // public result type.
-                Some(
-                    Builtin::Poseidon2 | Builtin::Poseidon6 | Builtin::Pubkgen | Builtin::Valcom,
-                ) => false,
+                Some(Builtin::Pubkgen | Builtin::Valcom) => false,
                 // Other builtins may not hide a secret dependency behind a
                 // public result (and are rejected as sinks separately).
                 Some(_) => args.iter().any(expression_contains_secret),
@@ -769,10 +767,10 @@ mod tests {
     #[test]
     fn user_helper_named_like_crypto_builtin_is_not_a_declassifier() {
         let source = r#"module SecretNames {
-            fn poseidon2(Secret<int> value) -> Secret<int> { value }
+            fn pubkgen(Secret<int> value) -> Secret<int> { value }
             fn leak() {
                 let Secret<int> value = crypto::private_input(0);
-                debug::info(poseidon2(value));
+                debug::info(pubkgen(value));
             }
         }"#;
         let error = analyze_error(source);
@@ -780,30 +778,28 @@ mod tests {
     }
     #[test]
     fn flat_crypto_spellings_are_rejected() {
-        for (call, code) in [
-            ("poseidon2(left: 1, right: 2)", "E_INTERNAL_BUILTIN"),
+        for (call, code, message) in [
+            (
+                "poseidon2(left: 1, right: 2)",
+                "K2002",
+                "unknown function or builtin `poseidon2`",
+            ),
             (
                 "poseidon6(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6)",
-                "E_INTERNAL_BUILTIN",
+                "K2002",
+                "unknown function or builtin `poseidon6`",
             ),
-            ("pubkgen(1)", "E_INTERNAL_BUILTIN"),
-            ("valcom(left: 1, right: 2)", "E_NON_CANONICAL_BUILTIN"),
+            ("pubkgen(1)", "E_INTERNAL_BUILTIN", "compiler-internal"),
+            (
+                "valcom(left: 1, right: 2)",
+                "E_NON_CANONICAL_BUILTIN",
+                "non-canonical builtin spelling `valcom` is not supported; use `crypto::valcom`",
+            ),
         ] {
             let source = format!("seiyaku Privacy {{ fn rejected() {{ let _value = {call}; }} }}");
             let error = analyze_error(&source);
             assert_eq!(error.code, code, "{call}");
-            if code == "E_INTERNAL_BUILTIN" {
-                assert!(
-                    error.message.contains("compiler-internal"),
-                    "{call}: {error:?}"
-                );
-            } else {
-                assert!(
-                    error.message.contains("non-canonical builtin spelling")
-                        && error.message.contains("crypto::"),
-                    "{call}: {error:?}"
-                );
-            }
+            assert!(error.message.contains(message), "{call}: {error:?}");
         }
     }
 }

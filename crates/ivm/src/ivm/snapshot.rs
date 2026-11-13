@@ -23,7 +23,6 @@ use crate::{
 };
 
 struct SnapshotTraceCopies {
-    constraints: zk::ConstraintLog,
     mem_log: zk::MemLog,
     reg_log: zk::RegLog,
     trace_log: DeltaTraceLog,
@@ -42,7 +41,6 @@ impl SnapshotTraceCopies {
     ) -> Result<Self, VMError> {
         let trace_storage = vm.try_clone_trace_storage(scope)?;
         let mut copied = Self {
-            constraints: vm.constraints.try_clone_allocation()?,
             mem_log: vm.mem_log.try_clone_allocation()?,
             reg_log: reg_log.try_clone_allocation(scope)?,
             trace_log: trace_storage.cycles,
@@ -67,15 +65,10 @@ impl SnapshotTraceCopies {
         Ok(copied)
     }
     fn allocated_bytes(&self) -> Result<usize, VMError> {
-        trace_allocation_bytes(
-            &self.constraints,
-            &self.mem_log,
-            self.contract_debug.as_ref(),
-        )
+        trace_allocation_bytes(&self.mem_log, self.contract_debug.as_ref())
     }
 }
 fn trace_allocation_bytes(
-    constraints: &zk::ConstraintLog,
     mem_log: &zk::MemLog,
     contract_debug: Option<&EmbeddedContractDebugInfoV1>,
 ) -> Result<usize, VMError> {
@@ -83,7 +76,6 @@ fn trace_allocation_bytes(
         || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
     let mut total = 0usize;
     for bytes in [
-        constraints.allocated_bytes()?,
         mem_log.allocated_bytes()?,
         contract_debug.map_or(Ok(0), contract_debug_allocation_bytes)?,
     ] {
@@ -245,11 +237,9 @@ impl IVM {
             argument_decode_prepaid_gas: None,
             captured_root_tables: None,
             cycles: self.cycles,
-            active_cycle_budget: self.active_cycle_budget.clone(),
             halted: self.halted,
             constraint_failed: self.constraint_failed,
             contract_abort_error: self.contract_abort_error.clone(),
-            constraints: traces.constraints,
             mem_log: traces.mem_log,
             reg_log: Some(reg_log),
             host_trace_log_detached: false,
@@ -260,11 +250,11 @@ impl IVM {
             trace_mode: self.trace_mode,
             pc_trace: traces.pc_trace,
             delta_trace: traces.delta_trace,
-            vector_enabled: self.vector_enabled,
             max_vector_lanes: self.max_vector_lanes,
-            vector_length: self.vector_length,
             max_cycles: self.max_cycles,
             metadata: self.metadata.clone(),
+            syscall_policy: self.syscall_policy,
+            program_image_valid: self.program_image_valid,
             code_hash: self.code_hash,
             contract_interface: self.contract_interface.clone(),
             call_layouts: self.call_layouts.clone(),
@@ -331,11 +321,7 @@ impl IVM {
         let empty = zk::RegLog::new(self.memory.allocation_budget());
         let reg_log = self.reg_log.as_ref().map(zk::SharedRegLog::lock);
         let reg_log_value = reg_log.as_deref().unwrap_or(&empty);
-        let trace_bytes = trace_allocation_bytes(
-            &self.constraints,
-            &self.mem_log,
-            self.contract_debug.as_ref(),
-        )?;
+        let trace_bytes = trace_allocation_bytes(&self.mem_log, self.contract_debug.as_ref())?;
         let reserved_bytes = trace_bytes;
         let mut reservation =
             crate::cache_memory::MemoryReservation::active_unmeasured(reserved_bytes);

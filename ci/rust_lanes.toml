@@ -58,6 +58,7 @@ packages = [
   "iroha_execution_stark",
   "iroha_executor_data_model",
   "iroha_executor_data_model_derive",
+  "iroha_fold",
   "iroha_kagemusha_proof",
   "iroha_parliament_ballot",
   "iroha_parliament_ballot_proof",

@@ -3,7 +3,7 @@
 //! Bounds come only from the admitted root initializer. Private effective
 //! addresses, selections, values and prior masks are polynomial inputs, never
 //! fixed permission premises. Public LOAD reads only initialized stack bytes;
-//! private/wide memory access and fault coverage remain open.
+//! private memory access and fault coverage remain open.
 
 use super::super::super::{
     bit, memory_initialization, memory_load, memory_store, packet, private_dispatch,
@@ -260,14 +260,8 @@ fn append(
     out.push(memory[BEFORE_TAG]);
     out.push(memory[AFTER_TAG]);
     for i in 0..8 {
-        let expected = memory_store::payload_limb(
-            memory[BEFORE + i],
-            source[BEFORE + i % 4],
-            F::ZERO,
-            half,
-            false,
-            i,
-        );
+        let expected =
+            memory_store::payload_limb(memory[BEFORE + i], source[BEFORE + i % 4], half, i);
         out.push(
             memory[AFTER + i]
                 .sub(store.mul(expected))
@@ -296,7 +290,7 @@ fn append(
     out.push(initialized[BEFORE_TAG]);
     out.push(initialized[AFTER_TAG]);
     let prior: &[F; 16] = row[MASK..].try_into().unwrap();
-    let (before, after) = memory_initialization::initialized_masks(prior, half, false);
+    let (before, after) = memory_initialization::initialized_masks(prior, half);
     out.push(initialized[BEFORE].sub(before));
     out.push(
         initialized[AFTER]

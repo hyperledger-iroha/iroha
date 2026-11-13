@@ -45,6 +45,20 @@ fn jalr_target_addition_wraps_before_alignment() {
     assert_eq!(vm.register(3), 4);
 }
 #[test]
+fn huge_program_counter_traps_without_overflow_panic() {
+    let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 0, 1, 0);
+    let mut prog = ProgramMetadata::default().encode();
+    prog.extend_from_slice(&jalr.to_le_bytes());
+    prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut vm = IVM::new(10_000);
+    vm.load_program(&prog).expect("load program");
+    vm.set_register(1, u64::MAX - 3);
+    let err = vm
+        .run()
+        .expect_err("huge aligned PC must trap instead of panicking");
+    assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
+}
+#[test]
 fn compressed_forms_are_rejected() {
     let mut prog = ProgramMetadata::default().encode();
     let li16 = encode_li16(CLASSIC_ARITH_IMM, 1, 7);

@@ -2,8 +2,6 @@
 
 #[path = "../common.rs"]
 mod common;
-#[path = "../vm_aes_wide.rs"]
-mod vm_aes_wide;
 #[path = "../vrf_verify_batch_syscall.rs"]
 mod vrf_verify_batch_syscall;
 #[path = "../vrf_verify_chain.rs"]
@@ -12,8 +10,6 @@ mod vrf_verify_chain;
 mod vrf_verify_envelope;
 #[path = "../vrf_verify_syscall.rs"]
 mod vrf_verify_syscall;
-#[path = "../wide_memory128.rs"]
-mod wide_memory128;
 #[path = "../wsv_host.rs"]
 mod wsv_host;
 #[path = "../wsv_host_account_admin.rs"]
@@ -56,7 +52,5 @@ mod wsv_host_unregister_tlv;
 mod wsv_host_zk_perm_and_events;
 #[path = "../wsv_state_overlay.rs"]
 mod wsv_state_overlay;
-#[path = "../zk_gating.rs"]
-mod zk_gating;
 #[path = "../zk_verify_limits.rs"]
 mod zk_verify_limits;

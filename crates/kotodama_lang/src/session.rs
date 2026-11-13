@@ -412,6 +412,11 @@ impl CompilerSession {
     pub fn new(options: CompilerOptions) -> Self {
         Self { options }
     }
+    /// Exact ABI V1 host profile selected for this session's deployable output.
+    #[must_use]
+    pub const fn host_policy(&self) -> crate::SyscallPolicy {
+        self.options.host_policy
+    }
     /// Enter the exact account-literal network selected by this session.
     ///
     /// Build drivers call this inside worker threads because thread-local
@@ -426,13 +431,21 @@ impl CompilerSession {
             crate::compiler::CompilerMode::Production => 0_u8,
             crate::compiler::CompilerMode::Test => 1_u8,
         };
-        iroha_crypto::Hash::new_from_chunks(&[
+        let baseline = iroha_crypto::Hash::new_from_chunks(&[
             b"kotodama-compiler-policy-v2\0",
             &[u8::from(self.options.force_zk)],
             &self.options.max_cycles.to_le_bytes(),
             &self.options.chain_discriminant.to_le_bytes(),
             &[mode],
-        ])
+        ]);
+        match self.options.host_policy {
+            crate::SyscallPolicy::AbiV1 => baseline,
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle => iroha_crypto::Hash::new_from_chunks(&[
+                b"kotodama-compiler-named-host-policy-v1\0",
+                baseline.as_ref(),
+                &crate::syscalls::compute_abi_hash(self.options.host_policy),
+            ]),
+        }
     }
     /// Derive typed-module linker capabilities from this compiler session.
     ///
@@ -3096,3 +3109,39 @@ mod tests {
 #[cfg(test)]
 #[path = "session/snapshot_clone_tests.rs"]
 mod snapshot_clone_tests;
+
+#[cfg(test)]
+mod named_host_session_tests {
+    use super::*;
+
+    #[test]
+    fn compiler_session_keeps_named_profile_output_and_fingerprint_distinct() {
+        let source = "seiyaku Session { view fn read() authorize(anyone) -> int { 1 } }";
+        let baseline = CompilerSession::default();
+        let named = CompilerSession::new(CompilerOptions {
+            host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ..Default::default()
+        });
+        assert_eq!(baseline.host_policy(), crate::SyscallPolicy::AbiV1);
+        assert_eq!(
+            named.host_policy(),
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        assert_ne!(baseline.policy_fingerprint(), named.policy_fingerprint());
+        for session in [baseline, named] {
+            let output = session
+                .build(CompileRequest {
+                    source,
+                    source_name: Some("profile.ko"),
+                })
+                .unwrap();
+            let admitted = ivm_artifact_admission::verify_contract_artifact_for_policy(
+                &output.artifact,
+                session.host_policy(),
+            )
+            .unwrap();
+            assert_eq!(admitted.manifest.abi_hash, output.manifest.abi_hash);
+            assert_eq!(admitted.syscall_policy, session.host_policy());
+        }
+    }
+}

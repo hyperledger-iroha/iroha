@@ -59,9 +59,14 @@ fn staking_preparation_error(
                 iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
             ))
         }
-        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => Error::Query(
-            iroha_data_model::ValidationFail::InternalError(error.to_string()),
-        ),
+        // A refusal is a deterministic answer about committed state, never a node fault:
+        // the caller needs its reason, which a sanitized server error would withhold.
+        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            Error::AppConflict {
+                code: iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE,
+                message: error.to_string(),
+            }
+        }
     }
 }
 #[cfg(test)]
@@ -198,10 +203,23 @@ mod tests {
             ..request
         };
         let terminal = prepare_public_lane_plan(&view, invalid).unwrap_err();
-        assert!(matches!(terminal, ExecutionAttemptError::Rejected(_)));
-        assert_ne!(
-            staking_preparation_error(terminal).into_response().status(),
-            StatusCode::TOO_MANY_REQUESTS
+        let ExecutionAttemptError::Rejected(reason) = &terminal else {
+            panic!("a malformed bound is a terminal refusal: {terminal:?}");
+        };
+        let reason = reason.to_string();
+        let refusal = staking_preparation_error(terminal);
+        let Error::AppConflict { code, message } = &refusal else {
+            panic!("a refused preparation is a typed conflict: {refusal:?}");
+        };
+        assert_eq!(*code, iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE);
+        assert_eq!(message, &reason);
+        assert!(crate::utils::is_valid_error_code(code));
+        assert!(crate::utils::is_valid_error_message(message));
+        let response = refusal.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.headers().get("x-iroha-reject-code").unwrap(),
+            iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE
         );
     }
 }

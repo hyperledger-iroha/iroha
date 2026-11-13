@@ -1,15 +1,12 @@
-//! Vector and cryptographic helper functions used by the VM.
+//! Host-side vector and SHA-256 helper functions.
 //!
-//! This module implements the primitives required by the specification,
-//! including lane-wise arithmetic, bitwise operations and the SHA‑256
-//! compression round used by the `SHA256BLOCK` instruction.
+//! Lane-wise arithmetic, bitwise operations and the SHA-256 compression round
+//! used by Merkle hashing and other host work. No opcode reaches these helpers:
+//! the instruction set has no vector or cryptographic instructions.
 //!
-//! The updated spec defines a **scalable vector extension** which adapts to the
-//! host CPU's SIMD width.  These helpers now detect the available SIMD features
-//! (SSE, AVX2, AVX‑512 or NEON) at runtime and operate on a lane count derived
-//! from that width.  When no SIMD support is available, a 32-bit scalar fallback
-//! is used.  Additional cryptographic primitives such as AESENC or BLAKE2s
-//! should also be implemented here with optional hardware acceleration.
+//! The helpers detect the available SIMD features (SSE, AVX2, AVX-512 or NEON)
+//! at runtime and operate on a lane count derived from that width. When no SIMD
+//! support is available a scalar fallback produces byte-identical results.
 #[cfg(any(test, all(target_os = "macos", feature = "metal")))]
 use crate::sha256_ref::sha256_compress_scalar_ref;
 #[cfg(all(target_os = "macos", feature = "metal"))]

@@ -1030,3 +1030,42 @@ fn unused_empty_artifacts_reject_in_root_package_and_dependency_inventories() {
         "local/library@1",
     );
 }
+
+#[test]
+fn compiled_contract_import_accepts_exact_named_profile_without_selecting_its_caller_profile() {
+    let mut artifact =
+        crate::compiler::Compiler::new_with_options(crate::compiler::CompilerOptions {
+            host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ..Default::default()
+        })
+        .compile_source("seiyaku Pool { view fn quote() authorize(anyone) -> int { 7 } }")
+        .unwrap();
+    let expected =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact).unwrap();
+    let mut request = project(
+        r#"seiyaku App { import seiyaku "./pool.to" as Pool; view fn value() authorize(anyone) -> int { 1 } }"#,
+        &[],
+    );
+    request.artifacts.push(SourceContractArtifact {
+        source_name: "pool.to".into(),
+        artifact: artifact.clone(),
+    });
+    let resolved = ModuleBuildGraph::default()
+        .resolve_sources(request.clone())
+        .unwrap();
+    assert_eq!(
+        resolved.root.contracts["Pool"].code_hash,
+        expected.code_hash
+    );
+    assert_eq!(
+        *resolved.root.contracts["Pool"].interface,
+        expected.contract_interface
+    );
+    artifact[crate::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
+    request.artifacts[0].artifact = artifact;
+    assert!(
+        codes(request)
+            .iter()
+            .any(|code| code == "E_CONTRACT_IMPORT_INVALID")
+    );
+}

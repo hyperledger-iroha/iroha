@@ -452,9 +452,9 @@ fn actual_numeric_zero_pairs_preserve_canonical_map_custody_metered_consumers_an
                 ivm::syscalls::SYSCALL_STATE_VALUE_DECODE,
             ] {
                 let word = if let Ok(number) = u8::try_from(number) {
-                    ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, number)
+                    ivm::encoding::wide::encode_scall(u32::from(number))
                 } else {
-                    ivm::encoding::wide::encode_syscallx(number)
+                    ivm::encoding::wide::encode_scall(number)
                 };
                 let calls = steps
                     .records()

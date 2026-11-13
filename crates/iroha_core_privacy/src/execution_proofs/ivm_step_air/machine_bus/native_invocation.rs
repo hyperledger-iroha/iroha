@@ -7,7 +7,7 @@
 //! arithmetic and bit operations, admitted scalar literals, public-root LOAD64/STORE64
 //! and root-return control through the dispatcher.
 //! Atomic destinations, initialized stack reads, STORE effects and all compact
-//! gaps use original clocks; private/wide memory and faults remain open.
+//! gaps use original clocks; private memory and faults remain open.
 //! The artifact-selected Unit/Bool return joins all original operands, both staged validation debits,
 //! its typed memory read and every initialization-scan cell. The successful
 //! terminal bank constrains optional padding and the complete unused suffix;

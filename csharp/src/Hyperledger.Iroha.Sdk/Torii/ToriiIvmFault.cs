@@ -3,10 +3,10 @@ using System.Text.Json.Serialization;
 
 namespace Hyperledger.Iroha.Torii;
 
-/// <summary>Deterministic VM failure category.</summary>
-public enum ToriiIvmFaultCode { OutOfGas, MemoryLimitExceeded, MemoryAccessViolation, MisalignedAccess, MemoryOutOfBounds, DecodeError, InvalidOpcode, UnknownSyscall, UnsupportedSyscall, GasCostOverflow, Numeric, PointerAbi, AssertionFailed, ExceededMaxCycles, InvalidMetadata, InvalidVectorLength, MissingHalt, VectorExtensionDisabled, ZkExtensionDisabled, NullifierAlreadyUsed, PermissionDenied, PrivacyViolation, RegisterOutOfBounds, NoritoInvalid, AbiTypeNotAllowed, HostOutputItemsExceeded, HostOutputBytesExceeded, AmxBudgetExceeded, ReentrantCall, CallDepthExceeded }
-/// <summary>Canonical numeric failure code.</summary>
-public enum ToriiIvmNumericFaultCode { MantissaOverflow, ScaleOverflow, DivisionByZero, RepeatingDecimal, ExactDivisionScaleOverflow, InvalidScale, InexactConversion, NegativeQuantity, QuantityUnderflow, InvalidRoundingMode, InvalidFailureMode, ReservedRegisterNonZero, NegativeSquareRoot }
+/// <summary>Deterministic VM failure category; declaration order is the dense <c>IvmFaultKindV1</c> codec index.</summary>
+public enum ToriiIvmFaultCode { OutOfGas, MemoryLimitExceeded, MemoryAccessViolation, MisalignedAccess, MemoryOutOfBounds, DecodeError, InvalidOpcode, UnknownSyscall, UnsupportedSyscall, GasCostOverflow, Numeric, PointerAbi, AssertionFailed, ExceededMaxCycles, InvalidMetadata, MissingHalt, NullifierAlreadyUsed, PermissionDenied, PrivacyViolation, RegisterOutOfBounds, NoritoInvalid, AbiTypeNotAllowed, HostOutputItemsExceeded, HostOutputBytesExceeded, AmxBudgetExceeded, ReentrantCall, CallDepthExceeded, ControlFlowViolation }
+/// <summary>Canonical numeric failure code, in <c>NumericFaultV1</c> ABI tag order (tags 1 through 14).</summary>
+public enum ToriiIvmNumericFaultCode { MantissaOverflow, ScaleOverflow, DivisionByZero, RepeatingDecimal, ExactDivisionScaleOverflow, InvalidScale, InexactConversion, NegativeQuantity, QuantityUnderflow, InvalidRoundingMode, InvalidFailureMode, ReservedRegisterNonZero, NegativeSquareRoot, RegisterIntegerOverflow }
 /// <summary>Canonical pointer-envelope failure code.</summary>
 public enum ToriiIvmPointerAbiFaultCode { InvalidAddress, UnknownType, TypeNotAllowed, WrongType, InvalidEnvelopeVersion, OversizedLength, TruncatedEnvelope, PayloadHashMismatch, MalformedFrame, SchemaMismatch, NonCanonical }
 /// <summary>Invocation selector under the authenticated artifact.</summary>

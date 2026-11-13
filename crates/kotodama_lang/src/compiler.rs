@@ -2,7 +2,7 @@
 //!
 //! This module implements a practical, growing compiler from Kotodama source into IVM bytecode
 //! (`.to`). It performs parsing, a lightweight semantic pass, IR lowering, simple register
-//! allocation, and final code generation with an IVM metadata header. ABI v1, vector metadata, and
+//! allocation, and final code generation with an IVM metadata header. ABI v1 and
 //! bounded-iteration policy are compiler-owned; callers may select only deployment policy such as
 //! ZK mode, cycle ceilings, safety profile, and production/test mode.
 //!
@@ -47,11 +47,10 @@ use super::{
 use crate::{
     encoding, instruction,
     metadata::{
-        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
-        EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-        EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata,
-        encode_literal_descriptor,
+        self, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor,
+        EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1,
+        EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor, EmbeddedStateType,
+        LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata, encode_literal_descriptor,
     },
     pointer_abi::PointerType,
     pointer_literals::{self, decode_hex_or_raw_bytes},
@@ -559,12 +558,7 @@ fn emit_get_private_input_arguments(
     Ok(())
 }
 fn push_syscall(code: &mut Vec<u8>, number: u32) {
-    let word = if let Ok(imm8) = u8::try_from(number) {
-        encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
-    } else {
-        encoding::wide::encode_syscallx(number)
-    };
-    push_word(code, word);
+    push_word(code, encoding::wide::encode_scall(number));
 }
 fn chunk_immediate(value: i64) -> i8 {
     if value > WIDE_IMM_MAX as i64 {
@@ -1724,8 +1718,11 @@ pub enum CompilerMode {
 /// Caller-selectable deployment policy.
 #[derive(Clone, Debug)]
 pub struct CompilerOptions {
-    /// Force ZK mode bit in header even if program does not use ZK opcodes.
+    /// Force ZK mode bit in header even if program does not use ZK operations.
     pub force_zk: bool,
+    /// Exact named ABI V1 host profile required by the generated artifact.
+    /// This compiler option grants no root permission; governance must select the same profile.
+    pub host_policy: crate::SyscallPolicy,
     /// Maximum execution cycles to encode in the artifact header.
     pub max_cycles: u64,
     /// Chain discriminant used to validate and lower canonical account literals.
@@ -1745,6 +1742,7 @@ impl Default for CompilerOptions {
     fn default() -> Self {
         Self {
             force_zk: false,
+            host_policy: crate::SyscallPolicy::AbiV1,
             max_cycles: DEFAULT_MAX_CYCLES,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             mode: CompilerMode::Production,
@@ -1961,7 +1959,7 @@ mod test_mode_tests {
                 .filter(|word| {
                     instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
                 })
-                .map(encoding::wide::decode_syscallx)
+                .map(encoding::wide::decode_scall)
                 .collect::<Vec<_>>();
             assert_eq!(
                 syscalls
@@ -2040,7 +2038,7 @@ mod test_mode_tests {
             ),
         ] {
             assert_eq!(builtin.syscall(), Some(syscall), "{builtin:?}");
-            let needle = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            let needle = encoding::wide::encode_scall(syscall).to_le_bytes();
             assert!(
                 code_region
                     .windows(needle.len())
@@ -2088,7 +2086,7 @@ mod test_mode_tests {
             syscalls::SYSCALL_DECIMAL_MUL,
             syscalls::SYSCALL_DECIMAL_DIV_EXACT,
         ] {
-            let encoded = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            let encoded = encoding::wide::encode_scall(syscall).to_le_bytes();
             assert!(
                 code.windows(encoded.len()).any(|window| window == encoded),
                 "missing extended decimal syscall {syscall:#x}"
@@ -2171,7 +2169,7 @@ mod test_mode_tests {
             );
         }
         assert_eq!(encoded_schemas.len(), 5);
-        let syscall = encoding::wide::encode_syscallx(syscalls::SYSCALL_CORE_QUERY_PAGE);
+        let syscall = encoding::wide::encode_scall(syscalls::SYSCALL_CORE_QUERY_PAGE);
         assert_eq!(
             artifact[parsed.code_offset..]
                 .as_chunks::<4>()
@@ -2241,7 +2239,7 @@ mod test_mode_tests {
         let code = Compiler::new()
             .compile_source(source)
             .expect("compile rounded quantity division");
-        let encoded = encoding::wide::encode_syscallx(syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND)
+        let encoded = encoding::wide::encode_scall(syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND)
             .to_le_bytes();
         assert_eq!(
             code.windows(encoded.len())
@@ -2686,7 +2684,7 @@ mod test_mode_tests {
         assert!(
             ordered.iter().any(|word| {
                 instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
-                    && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_LT
+                    && encoding::wide::decode_scall(*word) == syscalls::SYSCALL_INT_LT
             }),
             "adaptive int comparison must use the exact INT_LT syscall"
         );
@@ -3061,6 +3059,18 @@ impl Compiler {
         typed: TypedProgram,
         source_name: Option<&str>,
     ) -> Result<LoweredCompilation, DiagnosticBundle> {
+        if self.opts.mode == CompilerMode::Test
+            && self.opts.host_policy != crate::SyscallPolicy::AbiV1
+        {
+            return Err(native_diagnostic_bundle(
+                "K4001",
+                DiagnosticPhase::Artifact,
+                source_name,
+                None,
+                "the contract lifecycle host profile requires a deployable CNTR artifact"
+                    .to_owned(),
+            ));
+        }
         if self.opts.max_cycles == 0 {
             return Err(native_diagnostic_bundle(
                 "K4001",
@@ -3934,7 +3944,6 @@ impl Compiler {
         let mut code: Vec<u8> = Vec::new();
         push_word(&mut code, encoding::wide::encode_halt());
         let mut uses_zk_global = false;
-        let mut uses_vector_global = false;
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut deferred_transfers: Vec<DeferredTransfer> = Vec::new();
         // Each branch evaluates and stages its original descriptor/code first.
@@ -4080,26 +4089,14 @@ impl Compiler {
                     .get()
                     .and_then(|result| result.register(value, allocation_position.get()))
             };
-            let publish_tlv_word = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-            );
+            let publish_tlv_word =
+                encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV);
             let publish_tlv = publish_tlv_word.to_le_bytes();
-            let push_syscall_imm8 = |code: &mut Vec<u8>, number: u32| {
-                push_word(
-                    code,
-                    encoding::wide::encode_sys(instruction::wide::system::SCALL, number as u8),
-                );
-            };
-            let pointer_to_word = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_TO_NORITO as u8,
-            );
+
+            let pointer_to_word = encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_TO_NORITO);
             let pointer_to_bytes = pointer_to_word.to_le_bytes();
-            let pointer_from_word = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
-            );
+            let pointer_from_word =
+                encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO);
             let pointer_from_bytes = pointer_from_word.to_le_bytes();
             let emit_split_reloads = |position: usize,
                                       tuples: &HashMap<ir::Temp, Vec<ir::Temp>>,
@@ -4794,15 +4791,6 @@ impl Compiler {
                             )?;
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::Poseidon2 { dest, a, b } => {
-                            uses_zk = true;
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            let rs1 = src_reg(a, scratch1, &mut code)?;
-                            let rs2 = src_reg(b, scratch2, &mut code)?;
-                            let word = encoding::wide::encode_poseidon2(rd, rs1, rs2);
-                            push_word(&mut code, word);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
                         Instr::Pubkgen { .. } | Instr::Valcom { .. } => {
                             return Err(
                                 "retired scalar cryptography reached bytecode emission".to_owned()
@@ -4867,7 +4855,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             // Restore account pointer: x10 <- x13.
                             push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_MINT_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_MINT_ASSET);
                         }
                         Instr::BurnAsset {
                             account,
@@ -4903,7 +4891,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             // Restore account pointer: x10 <- x13.
                             push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_BURN_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_BURN_ASSET);
                         }
                         Instr::RegisterDomain { domain } => {
                             // Pointer-ABI: load DomainId TLV pointer into x10; or move from runtime pointer.
@@ -4916,7 +4904,7 @@ impl Compiler {
                             }
                             // Mirror TLV into INPUT to satisfy pointer‑ABI validation in hosts.
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_DOMAIN);
+                            push_syscall(&mut code, syscalls::SYSCALL_REGISTER_DOMAIN);
                         }
                         Instr::UnregisterDomain { domain } => {
                             if let Some(dom_str) = string_map.get(&(func_idx, *domain)) {
@@ -4927,7 +4915,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r_dom, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_UNREGISTER_DOMAIN);
+                            push_syscall(&mut code, syscalls::SYSCALL_UNREGISTER_DOMAIN);
                         }
                         Instr::UnregisterAccount { account } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
@@ -4938,7 +4926,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_UNREGISTER_ACCOUNT);
+                            push_syscall(&mut code, syscalls::SYSCALL_UNREGISTER_ACCOUNT);
                         }
                         Instr::RegisterAccount { account } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
@@ -4949,7 +4937,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_ACCOUNT);
+                            push_syscall(&mut code, syscalls::SYSCALL_REGISTER_ACCOUNT);
                         }
                         Instr::AddSignatory { account, signatory }
                         | Instr::RemoveSignatory { account, signatory } => {
@@ -4990,12 +4978,12 @@ impl Compiler {
                             let r_quorum = src_reg(quorum, scratch2, &mut code)?;
                             push_word(&mut code, encode_addi(11, r_quorum, 0)?);
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SET_ACCOUNT_QUORUM);
+                            push_syscall(&mut code, syscalls::SYSCALL_SET_ACCOUNT_QUORUM);
                         }
                         Instr::UnregisterAsset { asset } => {
                             load_pointer(asset, 10, scratch1, DataKind::AssetDef, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_UNREGISTER_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_UNREGISTER_ASSET);
                         }
                         Instr::TransferDomain { domain, to } => {
                             // Load domain into x10 and publish; keep a copy in x12
@@ -5023,28 +5011,28 @@ impl Compiler {
                             // Restore domain pointer: x10 <- x12
                             push_word(&mut code, encode_addi(10, 12, 0)?);
                             // SCALL transfer
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TRANSFER_DOMAIN);
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_DOMAIN);
                         }
                         Instr::RegisterPeer { json } => {
                             // r10 = &Json
                             load_pointer(json, 10, scratch1, DataKind::Json, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_PEER);
+                            push_syscall(&mut code, syscalls::SYSCALL_REGISTER_PEER);
                         }
                         Instr::UnregisterPeer { json } => {
                             load_pointer(json, 10, scratch1, DataKind::Json, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_UNREGISTER_PEER);
+                            push_syscall(&mut code, syscalls::SYSCALL_UNREGISTER_PEER);
                         }
                         Instr::CreateTrigger { json } => {
                             load_pointer(json, 10, scratch1, DataKind::Json, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_CREATE_TRIGGER);
+                            push_syscall(&mut code, syscalls::SYSCALL_CREATE_TRIGGER);
                         }
                         Instr::RemoveTrigger { name } => {
                             load_pointer(name, 10, scratch1, DataKind::Name, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REMOVE_TRIGGER);
+                            push_syscall(&mut code, syscalls::SYSCALL_REMOVE_TRIGGER);
                         }
                         Instr::SetTriggerEnabled { name, enabled } => {
                             load_pointer(name, 10, scratch1, DataKind::Name, &mut code)?;
@@ -5053,7 +5041,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, r_en, 0)?);
                             // Mirror name TLV
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SET_TRIGGER_ENABLED);
+                            push_syscall(&mut code, syscalls::SYSCALL_SET_TRIGGER_ENABLED);
                         }
                         Instr::CreateRole { name, json } => {
                             // r10 = &Name, r11 = &Json
@@ -5065,12 +5053,12 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 12, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_CREATE_ROLE);
+                            push_syscall(&mut code, syscalls::SYSCALL_CREATE_ROLE);
                         }
                         Instr::DeleteRole { name } => {
                             load_pointer(name, 10, scratch1, DataKind::Name, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_DELETE_ROLE);
+                            push_syscall(&mut code, syscalls::SYSCALL_DELETE_ROLE);
                         }
                         Instr::GrantRole { account, name }
                         | Instr::RevokeRole { account, name } => {
@@ -5087,7 +5075,7 @@ impl Compiler {
                                 Instr::GrantRole { .. } => syscalls::SYSCALL_GRANT_ROLE,
                                 _ => syscalls::SYSCALL_REVOKE_ROLE,
                             };
-                            push_syscall_imm8(&mut code, num);
+                            push_syscall(&mut code, num);
                         }
                         Instr::GrantPermission { account, token }
                         | Instr::RevokePermission { account, token } => {
@@ -5117,7 +5105,7 @@ impl Compiler {
                                 Instr::GrantPermission { .. } => syscalls::SYSCALL_GRANT_PERMISSION,
                                 _ => syscalls::SYSCALL_REVOKE_PERMISSION,
                             };
-                            push_syscall_imm8(&mut code, num);
+                            push_syscall(&mut code, num);
                         }
                         Instr::GrantContractPermission {
                             account,
@@ -5142,14 +5130,14 @@ impl Compiler {
                                 }
                                 _ => syscalls::SYSCALL_REVOKE_CONTRACT_PERMISSION,
                             };
-                            push_syscall_imm8(&mut code, number);
+                            push_syscall(&mut code, number);
                         }
                         Instr::ZkVerify { number, payload } => {
                             // Load/move payload pointer into x10
                             load_pointer(payload, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
                             // Mirror into INPUT to satisfy pointer‑ABI validation
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, *number);
+                            push_syscall(&mut code, *number);
                             uses_zk = true;
                         }
                         Instr::ExecutionSummary { dest } => {
@@ -5263,7 +5251,7 @@ impl Compiler {
                                     .expect("X509 operation tag fits i16"),
                                 )?,
                             );
-                            push_syscall_imm8(
+                            push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
                             );
@@ -5271,13 +5259,31 @@ impl Compiler {
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::VendorExecuteInstruction { payload, kind } => {
-                            load_pointer(payload, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
-                            // Mirror into INPUT to satisfy pointer‑ABI validation
+                            let kernel_call =
+                                !matches!(kind, ir::VendorInstructionKind::SubmitBallot);
+                            if kernel_call
+                                && self.opts.host_policy
+                                    != crate::SyscallPolicy::AbiV1RuntimeLifecycle
+                            {
+                                return Err("runtime obligation calls require iroha.ivm.runtime_lifecycle.v1".to_owned());
+                            }
+                            let carrier = if kernel_call {
+                                DataKind::Blob
+                            } else {
+                                DataKind::NoritoBytes
+                            };
+                            load_pointer(payload, 10, scratch1, carrier, &mut code)?;
+                            // Preserve bytes while giving the tagged bridge its required carrier.
                             code.extend_from_slice(&publish_tlv);
+                            if kernel_call {
+                                push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
+                            }
                             let operation_tag = match kind {
                                 ir::VendorInstructionKind::SubmitBallot => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT
                                 }
+                                ir::VendorInstructionKind::RegisterRuntimeObligation => syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+                                ir::VendorInstructionKind::CompleteRuntimeObligation => syscalls::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
                             };
                             push_word(
                                 &mut code,
@@ -5288,7 +5294,7 @@ impl Compiler {
                                         .expect("instruction operation tag fits i16"),
                                 )?,
                             );
-                            push_syscall_imm8(
+                            push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
                             );
@@ -5297,10 +5303,7 @@ impl Compiler {
                             load_pointer(payload, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
                             // Mirror into INPUT to satisfy pointer‑ABI validation
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(
-                                &mut code,
-                                syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
-                            );
+                            push_syscall(&mut code, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::QueryExecuteNorito { dest, payload } => {
@@ -5450,13 +5453,10 @@ impl Compiler {
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::SubscriptionBill => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SUBSCRIPTION_BILL);
+                            push_syscall(&mut code, syscalls::SYSCALL_SUBSCRIPTION_BILL);
                         }
                         Instr::SubscriptionRecordUsage => {
-                            push_syscall_imm8(
-                                &mut code,
-                                syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
-                            );
+                            push_syscall(&mut code, syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE);
                         }
                         Instr::BuildSubmitBallotInline {
                             dest,
@@ -5570,7 +5570,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, r_name, 0)?);
                             push_word(&mut code, encode_addi(12, r_spec, 0)?);
                             push_word(&mut code, encode_addi(13, r_mint, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_REGISTER_ASSET);
                         }
                         Instr::TransferAsset {
                             from,
@@ -5624,7 +5624,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(14, 10, 0)?);
                             // Restore `from` pointer into r10 before issuing the syscall
                             push_word(&mut code, encode_addi(10, 15, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TRANSFER_ASSET_SCOPED);
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_ASSET_SCOPED);
                         }
                         Instr::TransferBatchAsset {
                             from,
@@ -5658,7 +5658,7 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(13, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 14, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TRANSFER_V1);
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_V1);
                         }
                         Instr::EscrowOpenOffer {
                             escrow,
@@ -5696,7 +5696,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(13, 0, 0)?);
                             }
                             push_word(&mut code, encode_addi(10, 14, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ESCROW_OPEN_OFFER);
+                            push_syscall(&mut code, syscalls::SYSCALL_ESCROW_OPEN_OFFER);
                         }
                         Instr::EscrowAccept { escrow }
                         | Instr::EscrowMarkPaymentSent { escrow }
@@ -5731,7 +5731,7 @@ impl Compiler {
                             } else {
                                 push_word(&mut code, encode_addi(11, 0, 0)?);
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ESCROW_OPEN_DISPUTE);
+                            push_syscall(&mut code, syscalls::SYSCALL_ESCROW_OPEN_DISPUTE);
                         }
                         Instr::EscrowResolveDispute {
                             escrow,
@@ -5779,51 +5779,24 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(13, 0, 0)?);
                             }
                             push_word(&mut code, encode_addi(10, 14, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE);
+                            push_syscall(&mut code, syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE);
                         }
                         Instr::TransferBatchBegin => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN);
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN);
                         }
                         Instr::TransferBatchEnd => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_END);
+                            push_syscall(&mut code, syscalls::SYSCALL_TRANSFER_V1_BATCH_END);
                         }
                         Instr::CreateNftsForAllUsers => {
-                            push_syscall_imm8(
-                                &mut code,
-                                syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
-                            );
+                            push_syscall(&mut code, syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS);
                         }
                         Instr::SetExecutionDepth { value } => {
                             let r_val = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, r_val, 0)?);
-                            push_syscall_imm8(
+                            push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
                             );
-                        }
-                        Instr::SetVl { value } => {
-                            let raw = int_const_map.get(&(func_idx, *value)).copied().ok_or_else(
-                                || {
-                                    let err =
-                                        "setvl expects a literal int in range 0..=255".to_string();
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                },
-                            )?;
-                            if !(0..=u8::MAX as i64).contains(&raw) {
-                                let err =
-                                    format!("setvl value must be in range 0..=255, got {raw}");
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
-                            let word = encoding::wide::encode_rr(
-                                instruction::wide::crypto::SETVL,
-                                0,
-                                0,
-                                raw as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::SetAccountDetail {
                             account,
@@ -5857,7 +5830,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             // Restore account pointer into x10 before issuing the syscall
                             push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
+                            push_syscall(&mut code, syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
                         }
                         Instr::CreateNft { nft, owner } => {
                             load_pointer(nft, 10, scratch1, DataKind::NftId, &mut code)?;
@@ -5869,7 +5842,7 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 12, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_NFT_MINT_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_NFT_MINT_ASSET);
                         }
                         Instr::SetNftData { nft, key, json } => {
                             // Load literals or move regs
@@ -5912,14 +5885,14 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, scratch1, 0)?);
                             push_word(&mut code, encode_addi(11, scratch2, 0)?);
                             // SCALL
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_NFT_SET_METADATA);
+                            push_syscall(&mut code, syscalls::SYSCALL_NFT_SET_METADATA);
                         }
                         Instr::BurnNft { nft } => {
                             load_pointer(nft, 10, scratch1, DataKind::NftId, &mut code)?;
                             // Mirror into INPUT
                             code.extend_from_slice(&publish_tlv);
                             // SCALL
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_NFT_BURN_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_NFT_BURN_ASSET);
                         }
                         Instr::TransferNft { from, nft, to } => {
                             load_pointer(from, 10, scratch1, DataKind::Account, &mut code)?;
@@ -5935,14 +5908,14 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_NFT_TRANSFER_ASSET);
+                            push_syscall(&mut code, syscalls::SYSCALL_NFT_TRANSFER_ASSET);
                         }
                         Instr::DataRef { .. } => {
                             // No code emitted; data is accessed at use sites via fixups.
                         }
                         Instr::GetAuthority { dest } => {
                             // Request host to provide a pointer to the authority AccountId in x10
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_GET_AUTHORITY);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_AUTHORITY);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::SysvarAuthority { dest } => {
@@ -5950,7 +5923,7 @@ impl Compiler {
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::CurrentTimeMs { dest } => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_CURRENT_TIME_MS);
+                            push_syscall(&mut code, syscalls::SYSCALL_CURRENT_TIME_MS);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::BlockHeight { dest } => {
@@ -5976,7 +5949,7 @@ impl Compiler {
                         Instr::ResolveAccountAlias { dest, alias } => {
                             load_pointer(alias, 10, scratch1, DataKind::Blob, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS);
+                            push_syscall(&mut code, syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::GetTriggerEvent { dest } => {
@@ -5987,7 +5960,7 @@ impl Compiler {
                                 DataKey(DataKind::Name, TRIGGER_EVENT_PUBLIC_INPUT_KEY.to_string()),
                             );
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_GET_PUBLIC_INPUT);
+                            push_syscall(&mut code, syscalls::SYSCALL_GET_PUBLIC_INPUT);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::CallContract {
@@ -6243,26 +6216,6 @@ impl Compiler {
                                 spill_back(destination, rd, spilled, imm, &mut code)?;
                             }
                         }
-                        Instr::Poseidon6 { dest, args } => {
-                            uses_zk = true;
-                            // POSEIDON6 consumes one canonical six-register window.
-                            // Register allocation treats this instruction as an ABI
-                            // clobber, so every operand remains in a preserved home while
-                            // this fixed window is staged.
-                            let rs_base = regalloc::RET_REG as u8;
-                            for (offset, arg) in args.iter().enumerate() {
-                                let target = rs_base
-                                    + u8::try_from(offset)
-                                        .expect("POSEIDON6 register offset fits in u8");
-                                let source = src_reg(arg, scratch1, &mut code)?;
-                                if source != target {
-                                    push_word(&mut code, encode_addi(target, source, 0)?);
-                                }
-                            }
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            push_word(&mut code, encoding::wide::encode_poseidon6(rd, rs_base));
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
                         Instr::Sm3Hash { dest, message }
                         | Instr::Sha256Hash { dest, message }
                         | Instr::Sha3Hash { dest, message }
@@ -6280,7 +6233,7 @@ impl Compiler {
                                 Instr::IrohaHash { .. } => syscalls::SYSCALL_IROHA_HASH,
                                 _ => unreachable!(),
                             };
-                            push_syscall_imm8(&mut code, syscall);
+                            push_syscall(&mut code, syscall);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::Sm2Verify {
@@ -6317,10 +6270,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(13, 0, 0)?);
                             }
                             load_blob_into_x10(&mut code, &fixups, message)?;
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_SM2_VERIFY as u8,
-                            );
+                            let call = encoding::wide::encode_scall(syscalls::SYSCALL_SM2_VERIFY);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6354,10 +6304,8 @@ impl Compiler {
                             let rs = src_reg(scheme, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(13, rs, 0)?);
                             load_blob_into_x10(&mut code, &fixups, message)?;
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_VERIFY_SIGNATURE as u8,
-                            );
+                            let call =
+                                encoding::wide::encode_scall(syscalls::SYSCALL_VERIFY_SIGNATURE);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6382,10 +6330,7 @@ impl Compiler {
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
                             load_blob(key, None)?;
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_SM4_GCM_SEAL as u8,
-                            );
+                            let call = encoding::wide::encode_scall(syscalls::SYSCALL_SM4_GCM_SEAL);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6410,10 +6355,7 @@ impl Compiler {
                             load_blob(aad, Some(12))?;
                             load_blob(nonce, Some(11))?;
                             load_blob(key, None)?;
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_SM4_GCM_OPEN as u8,
-                            );
+                            let call = encoding::wide::encode_scall(syscalls::SYSCALL_SM4_GCM_OPEN);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6445,10 +6387,7 @@ impl Compiler {
                             } else {
                                 push_word(&mut code, encode_addi(14, 0, 0)?);
                             }
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_SM4_CCM_SEAL as u8,
-                            );
+                            let call = encoding::wide::encode_scall(syscalls::SYSCALL_SM4_CCM_SEAL);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6480,10 +6419,7 @@ impl Compiler {
                             } else {
                                 push_word(&mut code, encode_addi(14, 0, 0)?);
                             }
-                            let call = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_SM4_CCM_OPEN as u8,
-                            );
+                            let call = encoding::wide::encode_scall(syscalls::SYSCALL_SM4_CCM_OPEN);
                             code.extend_from_slice(&call.to_le_bytes());
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6493,14 +6429,14 @@ impl Compiler {
                             // Skip ABORT when the values are equal.
                             let skip_word = encode_branch_rv(0x0, rs1, rs2, 8)?;
                             push_word(&mut code, skip_word);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ABORT);
+                            push_syscall(&mut code, syscalls::SYSCALL_ABORT);
                         }
                         Instr::Assert { cond } => {
                             let rs = src_reg(cond, scratch1, &mut code)?;
                             // Skip ABORT when the condition is true (i.e., != 0).
                             let skip_word = encode_branch_rv(0x1, rs, 0, 8)?;
                             push_word(&mut code, skip_word);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ABORT);
+                            push_syscall(&mut code, syscalls::SYSCALL_ABORT);
                         }
                         Instr::AbortIf {
                             cond,
@@ -6529,7 +6465,7 @@ impl Compiler {
                             let r_msg = src_reg(msg, scratch1, &mut code)?;
                             // Move message to r10 and issue debug log syscall.
                             push_word(&mut code, encode_addi(10, r_msg, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_DEBUG_LOG);
+                            push_syscall(&mut code, syscalls::SYSCALL_DEBUG_LOG);
                         }
                         Instr::DebugPrint { value } => {
                             let r_value = src_reg(value, scratch1, &mut code)?;
@@ -6558,10 +6494,7 @@ impl Compiler {
                             // baseline is not aligned at 8-byte granularity.
                             emit_addi(&mut code, 10, 0, 24);
                             // SCALL ALLOC
-                            let sys = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_ALLOC as u8,
-                            );
+                            let sys = encoding::wide::encode_scall(syscalls::SYSCALL_ALLOC);
                             code.extend_from_slice(&sys.to_le_bytes());
                             // Align x10 to the next 8-byte boundary: x10 = (x10 + 7) & !7
                             emit_addi(&mut code, 10, 10, 7);
@@ -6658,7 +6591,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             load_ptr(right, 10, scratch2, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TLV_EQ);
+                            push_syscall(&mut code, syscalls::SYSCALL_TLV_EQ);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::MapGet { dest, map, key } => {
@@ -6879,7 +6812,7 @@ impl Compiler {
                             if state_operands::retain_publication() {
                                 code.extend_from_slice(&publish_tlv);
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_GET);
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_GET);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::StateSet { path, value } => {
@@ -6916,7 +6849,7 @@ impl Compiler {
                                 code.extend_from_slice(&publish_tlv);
                                 push_word(&mut code, encode_addi(11, 10, 0)?);
                                 push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
+                                push_syscall(&mut code, syscalls::SYSCALL_STATE_SET);
                                 continue;
                             }
                             let _ = state_path_literal_data_key(
@@ -6930,7 +6863,7 @@ impl Compiler {
                                 Some(&[DataKind::NoritoBytes, DataKind::NoritoBytes]),
                                 &mut code,
                             )?;
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_SET);
                         }
                         Instr::StateDel { path } => {
                             // r10=&NoritoBytes(StatePath); publish; SCALL.
@@ -6946,7 +6879,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_DEL);
+                            push_syscall(&mut code, syscalls::SYSCALL_STATE_DEL);
                         }
                         Instr::StateScan {
                             page,
@@ -7831,10 +7764,7 @@ impl Compiler {
                                 code.extend_from_slice(&publish_tlv);
                                 push_word(&mut code, encode_addi(11, 10, 0)?);
                                 push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                push_syscall_imm8(
-                                    &mut code,
-                                    syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
-                                );
+                                push_syscall(&mut code, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO);
                                 spill_syscall_result(dest, &mut code)?;
                                 continue;
                             }
@@ -7843,25 +7773,25 @@ impl Compiler {
                                 Some(&[DataKind::Name, DataKind::NoritoBytes]),
                                 &mut code,
                             )?;
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO);
+                            push_syscall(&mut code, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonEncode { dest, json } => {
                             // r10=&Json; publish; SCALL JSON_ENCODE; move r10
                             load_pointer(json, 10, scratch1, DataKind::Json, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_JSON_ENCODE);
+                            push_syscall(&mut code, syscalls::SYSCALL_JSON_ENCODE);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonDecode { dest, blob } => {
                             // r10=&NoritoBytes or &Blob; publish; SCALL JSON_DECODE; move
                             load_pointer(blob, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_JSON_DECODE);
+                            push_syscall(&mut code, syscalls::SYSCALL_JSON_DECODE);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonObject { dest } => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_JSON_OBJECT);
+                            push_syscall(&mut code, syscalls::SYSCALL_JSON_OBJECT);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonSetInt {
@@ -7885,7 +7815,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let value_reg = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(12, value_reg, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_JSON_SET_I64);
+                            push_syscall(&mut code, syscalls::SYSCALL_JSON_SET_I64);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonSetAccountId {
@@ -7929,7 +7859,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             load_ptr(value, 12, scratch1, &mut code)?;
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_JSON_SET_ACCOUNT_ID);
+                            push_syscall(&mut code, syscalls::SYSCALL_JSON_SET_ACCOUNT_ID);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::TlvLen { dest, value } => {
@@ -7937,7 +7867,7 @@ impl Compiler {
                             let r = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, r, 0)?);
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_TLV_LEN);
+                            push_syscall(&mut code, syscalls::SYSCALL_TLV_LEN);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::JsonGetNumeric {
@@ -8008,7 +7938,7 @@ impl Compiler {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
                             load_pointer(blob, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_NAME_DECODE);
+                            push_syscall(&mut code, syscalls::SYSCALL_NAME_DECODE);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::SchemaEncode { dest, schema, json } => {
@@ -8020,7 +7950,7 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, scratch1, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SCHEMA_ENCODE);
+                            push_syscall(&mut code, syscalls::SYSCALL_SCHEMA_ENCODE);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::SchemaDecode { dest, schema, blob } => {
@@ -8032,27 +7962,27 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, scratch1, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SCHEMA_DECODE);
+                            push_syscall(&mut code, syscalls::SYSCALL_SCHEMA_DECODE);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::SchemaInfo { dest, schema } => {
                             load_pointer(schema, 10, scratch1, DataKind::Name, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_SCHEMA_INFO);
+                            push_syscall(&mut code, syscalls::SYSCALL_SCHEMA_INFO);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::VrfVerify { dest, request } => {
                             load_pointer(request, 10, scratch1, DataKind::Blob, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
                             push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_VRF_VERIFY);
+                            push_syscall(&mut code, syscalls::SYSCALL_VRF_VERIFY);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::VrfVerifyBatch { dest, batch } => {
                             load_pointer(batch, 10, scratch1, DataKind::Blob, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
                             push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_VRF_VERIFY_BATCH);
+                            push_syscall(&mut code, syscalls::SYSCALL_VRF_VERIFY_BATCH);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::AxtBegin { descriptor } => {
@@ -8064,7 +7994,7 @@ impl Compiler {
                                 &mut code,
                             )?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_AXT_BEGIN);
+                            push_syscall(&mut code, syscalls::SYSCALL_AXT_BEGIN);
                         }
                         Instr::AxtTouch { dsid, manifest } => {
                             load_pointer(dsid, 10, scratch1, DataKind::DataSpaceId, &mut code)?;
@@ -8090,7 +8020,7 @@ impl Compiler {
                             } else {
                                 push_word(&mut code, encode_addi(11, 0, 0)?);
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_AXT_TOUCH);
+                            push_syscall(&mut code, syscalls::SYSCALL_AXT_TOUCH);
                         }
                         Instr::StageAnchoredSpend { spend } => {
                             load_pointer(
@@ -8101,10 +8031,7 @@ impl Compiler {
                                 &mut code,
                             )?;
                             code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(
-                                &mut code,
-                                syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND,
-                            );
+                            push_syscall(&mut code, syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND);
                         }
                         Instr::VerifyDsProof { dsid, proof } => {
                             load_pointer(dsid, 10, scratch1, DataKind::DataSpaceId, &mut code)?;
@@ -8115,10 +8042,10 @@ impl Compiler {
                             } else {
                                 push_word(&mut code, encode_addi(11, 0, 0)?);
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_VERIFY_DS_PROOF);
+                            push_syscall(&mut code, syscalls::SYSCALL_VERIFY_DS_PROOF);
                         }
                         Instr::AxtCommit => {
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_AXT_COMMIT);
+                            push_syscall(&mut code, syscalls::SYSCALL_AXT_COMMIT);
                         }
                     }
                     statement_sources.record(
@@ -8397,17 +8324,13 @@ impl Compiler {
             seed.start = code_offsets.entry(seed.start);
             seed.end = code_offsets.entry(seed.end);
         }
-        uses_vector_global |= detect_vector_usage(&code);
-        uses_zk_global |= detect_zk_usage(&code);
         // Build metadata and finalize program (with data appended).
         // Resolve mode bits from emitted operations and compiler-owned build policy.
-        let mut mode = 0u8;
-        if uses_zk_global || self.opts.force_zk {
-            mode |= metadata::mode::ZK;
-        }
-        if uses_vector_global {
-            mode |= metadata::mode::VECTOR;
-        }
+        let mode = if uses_zk_global || self.opts.force_zk {
+            metadata::mode::ZK
+        } else {
+            0
+        };
         let meta = ProgramMetadata {
             version_major: 1,
             // Every profile uses the sole current header. Test harnesses omit
@@ -8415,7 +8338,6 @@ impl Compiler {
             // production artifacts embed their admitted contract interface.
             version_minor: 1,
             mode,
-            vector_length: 0,
             max_cycles: self.opts.max_cycles,
             abi_version: KOTODAMA_ABI_VERSION,
         };
@@ -8810,18 +8732,16 @@ impl Compiler {
             include_hints,
         )?;
         let message_entries = build_message_entries(&typed.message_entries);
-        let mut feature_bits = 0u64;
-        if meta.mode & metadata::mode::ZK != 0 {
-            feature_bits |= CONTRACT_FEATURE_BIT_ZK;
-        }
-        if meta.mode & metadata::mode::VECTOR != 0 {
-            feature_bits |= CONTRACT_FEATURE_BIT_VECTOR;
-        }
+        let feature_bits = if meta.mode & metadata::mode::ZK != 0 {
+            CONTRACT_FEATURE_BIT_ZK
+        } else {
+            0
+        };
         let contract_interface = EmbeddedContractInterfaceV1 {
             callables,
             seiyaku_name: typed.unit.name.clone(),
             compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
-            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            abi_hash: crate::syscalls::compute_abi_hash(self.opts.host_policy),
             features_bitmap: feature_bits,
             access_set_hints: access_set_hints.clone(),
             permissions: typed.permissions.clone(),
@@ -8836,7 +8756,7 @@ impl Compiler {
         // Compute the indexed literal table and patch LDLIT/LDI64 words.
         // Production contracts use `[header | CNTR | LTLB? | code]`; local
         // test harnesses use the generic `[header | LTLB? | code]` profile.
-        let meta_bytes = meta.encode();
+        let meta_bytes = meta.encode_for_policy(self.opts.host_policy);
         let contract_section = match self.opts.mode {
             CompilerMode::Production => contract_interface.encode_section(),
             CompilerMode::Test => Vec::new(),
@@ -9025,8 +8945,9 @@ impl Compiler {
             compile_report,
             contract_interface: generated_contract_interface,
         } = artifacts;
-        let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
-            .map_err(|e| format!("manifest parse header: {e}"))?;
+        let parsed =
+            crate::metadata::ProgramMetadata::parse_for_policy(&bytes, self.opts.host_policy)
+                .map_err(|e| format!("manifest parse header: {e}"))?;
         let contract_interface = match (self.opts.mode, parsed.contract_interface) {
             (CompilerMode::Production, Some(embedded)) => {
                 if embedded != generated_contract_interface {
@@ -9055,7 +8976,7 @@ impl Compiler {
         let meta = parsed.metadata;
         // First release: emit manifests only for ABI v1
         let policy = match meta.abi_version {
-            1 => crate::SyscallPolicy::AbiV1,
+            1 => parsed.syscall_policy,
             v => return Err(format!("unsupported abi_version {v}; expected 1")),
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
@@ -11873,8 +11794,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::Mean { .. }
         | ir::Instr::Isqrt { .. }
         | ir::Instr::LoadVar { .. }
-        | ir::Instr::Poseidon2 { .. }
-        | ir::Instr::Poseidon6 { .. }
         | ir::Instr::Pubkgen { .. }
         | ir::Instr::Valcom { .. }
         | ir::Instr::AssertEq { .. }
@@ -11969,7 +11888,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
             access_class_for_builtin(Builtin::CreateNftsForAllUsers)
         }
         ir::Instr::SetExecutionDepth { .. } => access_class_for_builtin(Builtin::SetExecutionDepth),
-        ir::Instr::SetVl { .. } => access_class_for_builtin(Builtin::SetVl),
         ir::Instr::SetAccountDetail { .. } => access_class_for_builtin(Builtin::SetAccountMetadata),
         ir::Instr::CreateNft { .. } => access_class_for_builtin(Builtin::NftMintAsset),
         ir::Instr::SetNftData { .. } => access_class_for_builtin(Builtin::NftSetMetadata),
@@ -12061,6 +11979,12 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::PresentX509 { .. } => access_class_for_builtin(Builtin::PresentX509),
         ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
             ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
+            ir::VendorInstructionKind::RegisterRuntimeObligation => {
+                Builtin::RegisterRuntimeObligation
+            }
+            ir::VendorInstructionKind::CompleteRuntimeObligation => {
+                Builtin::CompleteRuntimeObligation
+            }
         }),
         ir::Instr::VendorExecuteQuery { .. } => access_class_for_builtin(Builtin::ExecuteQuery),
         ir::Instr::QueryExecuteNorito { .. } => {
@@ -12121,45 +12045,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
             access_class_for_builtin(Builtin::SoracloudReadCommittedState)
         }
     }
-}
-fn detect_vector_usage(code: &[u8]) -> bool {
-    const VECTOR_OPS: [u8; 14] = [
-        instruction::wide::crypto::VADD32,
-        instruction::wide::crypto::VADD64,
-        instruction::wide::crypto::VAND,
-        instruction::wide::crypto::VXOR,
-        instruction::wide::crypto::VOR,
-        instruction::wide::crypto::VROT32,
-        instruction::wide::crypto::SHA256BLOCK,
-        instruction::wide::crypto::AESENC,
-        instruction::wide::crypto::AESDEC,
-        instruction::wide::crypto::SETVL,
-        instruction::wide::crypto::PARBEGIN,
-        instruction::wide::crypto::PAREND,
-        instruction::wide::memory::LOAD128,
-        instruction::wide::memory::STORE128,
-    ];
-    code.as_chunks::<4>().0.iter().any(|chunk| {
-        let word = u32::from_le_bytes(*chunk);
-        let opcode = instruction::wide::opcode(word);
-        VECTOR_OPS.contains(&opcode)
-    })
-}
-fn detect_zk_usage(code: &[u8]) -> bool {
-    const ZK_OPS: [u8; 7] = [
-        instruction::wide::zk::ASSERT,
-        instruction::wide::zk::ASSERT_EQ,
-        instruction::wide::zk::FADD,
-        instruction::wide::zk::FSUB,
-        instruction::wide::zk::FMUL,
-        instruction::wide::zk::FINV,
-        instruction::wide::zk::ASSERT_RANGE,
-    ];
-    code.as_chunks::<4>().0.iter().any(|chunk| {
-        let word = u32::from_le_bytes(*chunk);
-        let opcode = instruction::wide::opcode(word);
-        ZK_OPS.contains(&opcode)
-    })
 }
 pub mod test_helpers {
     use super::*;

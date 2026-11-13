@@ -504,6 +504,20 @@ impl norito::json::JsonKeyCodec for RoleIdWithOwner {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.push('"')?;
+        norito::json::JsonObjectKey::visit_json_key_text_checked(&self.account, |chunk| {
+            norito::json::write_json_string_content_to(chunk, out)
+        })?;
+        out.push('|')?;
+        norito::json::visit_json_display_text(&self.id, |chunk| {
+            norito::json::write_json_string_content_to(chunk, out)
+        })?;
+        out.push('"')
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         let (account_raw, role_raw) = role_id_with_owner_components(encoded)
             .map_err(|error| norito::json::Error::Message(error.to_string()))?;

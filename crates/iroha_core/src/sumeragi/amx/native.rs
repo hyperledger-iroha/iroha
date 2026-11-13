@@ -604,6 +604,7 @@ pub fn execute_prepare_original(
     authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
+    crate::runtime::native_amx_capture::check_prepare_admission(state)?;
     let original = original(state, instruction.dataspace)?;
     let source = original.canonical().expect("checked participant");
     let leg = instruction
@@ -792,6 +793,15 @@ fn execute_prepare_with_transfer(
         .finish()
         .map_err(|error| graph_error(&error, state))?
         .authenticate();
+    let capture = if record.is_some() {
+        Some(crate::runtime::native_amx_capture::prepare_yes(
+            state,
+            next.canonical().expect("authenticated native candidate"),
+            tx,
+        )?)
+    } else {
+        None
+    };
     // Witness encoding precedes monetary movement, so a resource refusal never follows a debit.
     super::write(&prepared).map_err(|error| super::amx_error(&error, state))?;
     if record.is_some() {
@@ -818,6 +828,9 @@ fn execute_prepare_with_transfer(
         }
     }
     *state.world.sumeragi_amx_participant.get_mut() = next;
+    if let Some(capture) = capture {
+        capture.publish(&mut state.world);
+    }
     Ok(())
 }
 
@@ -840,6 +853,7 @@ pub fn execute_settle_original(
     _authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
+    crate::runtime::native_amx_capture::guard_participant_cohort(state)?;
     let original = original(state, instruction.dataspace)?;
     let source = original.canonical().expect("checked participant");
     let AmxRecordV1::Decision(decision) = instruction.decision.record else {
@@ -852,6 +866,17 @@ pub fn execute_settle_original(
         .binary_search_by_key(&decision.tx, |record| record.tx)
         .ok()
         .filter(|slot| source.escrows[*slot].settled.is_none());
+    let completion = if record_slot.is_some() {
+        Some(crate::runtime::native_amx_capture::prepare_completion(
+            state,
+            iroha_data_model::runtime::native_amx::NativeAmxKindV1::ParticipantSettlement(
+                instruction.dataspace,
+            ),
+            decision.tx,
+        )?)
+    } else {
+        None
+    };
     let budget = state.pipeline_ivm_prepared_cache.execution_budget().clone();
     let mut candidate = Candidate::copy(
         source,
@@ -904,6 +929,11 @@ pub fn execute_settle_original(
         }
     }
     *state.world.sumeragi_amx_participant.get_mut() = next;
+    if intent.invoked
+        && let Some(completion) = completion
+    {
+        completion.publish(&mut state.world);
+    }
     Ok(())
 }
 
@@ -913,6 +943,7 @@ impl Execute for RelayGlobalAmxHandoffV1 {
         _authority: &AccountId,
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        crate::runtime::native_amx_capture::guard_participant_cohort(state)?;
         let original = original(state, self.dataspace)?;
         let source = original.canonical().expect("checked participant");
         let global = &source.participant.global;

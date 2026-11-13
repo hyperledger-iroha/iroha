@@ -1,10 +1,11 @@
 //! IVM Syscall Table (ABI v1)
 
 This document lists IVM syscall numbers and their ABI for `abi_version = 1`.
-The host and VM enforce the fixed first-release ABI v1 policy: the set of
-available syscalls is fixed and unknown or disallowed numbers must be rejected
-with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`). The canonical
-policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
+The host and VM enforce the execution root's exact selected ABI V1 host profile.
+The baseline and the separately named `iroha.ivm.runtime_lifecycle.v1` profile use
+the same syscall numbers and pointer type IDs. Unknown or disallowed syscall
+numbers are rejected with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`).
+The number policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
 
 ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
@@ -18,17 +19,22 @@ ABI policy
   depth rules, and typed durable-state schema/record identities, enum tags, layouts, traversal rules,
   pointer mappings, caps, operation-specific state paths, and CNTR-bound read/write record validation.
   It also binds the generic-program discriminator, reserved transaction metadata,
-  and exact sorted list of syscalls unavailable without an authenticated contract identity.
+  and exact sorted list of syscalls unavailable without an authenticated contract identity,
+  the 48-byte program header layout, and the instruction-set section: the word layout, the
+  operand format of every admitted opcode, the 32-register file, the ZK privacy-tag join rule and
+  the instruction fault mapping (`Numeric(DivisionByZero)`, `Numeric(RegisterIntegerOverflow)`,
+  `CallDepthExceeded`, `ControlFlowViolation`).
   Display names and gas prices are not part of this digest.
   `ivm::gas::schedule_hash()` commits to the canonical gas schedule and every staged-metering phase
   name/tag independently.
 - Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
   generation rejects missing, duplicate, or extra rows instead of inventing an ABI signature from
   naming heuristics.
-- First release: ABI v1 is the only supported policy. `abi_version != 1` is rejected at admission,
-  and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI
-  surface. Tightening the unreleased V1 descriptor changes its hash, not its version; artifacts with
-  any older V1 hash fail closed at admission.
+- First release accepts only `abi_version = 1`. Each named host profile has an exact immutable
+  `abi_hash`; a root admits a contract only under a selected matching profile. The baseline
+  descriptor is unchanged by the separately published runtime lifecycle profile. Ordinary parser
+  entrypoints select the baseline; explicit policy-aware admission selects the named profile.
+  Unknown hashes fail closed without a fallback. A selected descriptor's semantics never change.
 
 Contract error presentation
 - `#[message("...")]` creates a sorted `ContractErrorMessage { error_type, code, message }`
@@ -77,7 +83,7 @@ Admission/host guardrails
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
 
-`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for ABI V1 calls outside the `SCALL` range. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
+`SCALL` carries a 24-bit syscall number in bits 23..0 of its instruction word; there is no other syscall encoding. The host receives the number as `u32`, and admission checks it before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
 
 Query syscall (Norito)
 - `0xA1` and extended `0x010000` expect `r10=&NoritoBytes(QueryRequest)` and return `r10=&NoritoBytes(QueryResponse)`. The authority is always the calling contract; embedded authorities are ignored.
@@ -86,7 +92,7 @@ Query syscall (Norito)
 - Gas is `base + per_item + per_byte`, with per-item cost multiplied when sorting is requested and an offset penalty applied for large pagination skips.
 
 Vendor syscall (Norito)
-- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory exact operation tag in `r11`: `1` for `SubmitBallot`, or `2` for `SubmitPrivacyZkX509CertificateV1`. Tag `0`, every other tag, and mismatched instruction types are rejected with `PermissionDenied`. The X509 request contains its public statement with zero request intent digest and an existing signed action attachment reference (slot zero), never copied proof bytes. The authoritative host derives the original signed intent and queues the request. Its `r10` result is a local `PendingAction` ordinal; verification and effects become authoritative only in the final transaction receipt. Hosts without original signed attachment custody refuse tag `2`. In particular a contract cannot execute `RecordSccpMessage` under any tag: an outbound SCCP record executes only from signed transactions, directly or through a multisig proposal that signed approvals execute (`specs/sccp.md` §4.4).
+- Under the baseline profile, `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory exact operation tag in `r11`: `1` for `SubmitBallot`, or `2` for `SubmitPrivacyZkX509CertificateV1`. Tag `0`, every other tag, and mismatched instruction types are rejected with `PermissionDenied`. The separately selected runtime lifecycle profile also defines tags `3` and `4` below. The X509 request contains its public statement with zero request intent digest and an existing signed action attachment reference (slot zero), never copied proof bytes. The authoritative host derives the original signed intent and queues the request. Its `r10` result is a local `PendingAction` ordinal; verification and effects become authoritative only in the final transaction receipt. Hosts without original signed attachment custody refuse tag `2`. In particular a contract cannot execute `RecordSccpMessage` under any tag: an outbound SCCP record executes only from signed transactions, directly or through a multisig proposal that signed approvals execute (`specs/sccp.md` §4.4).
 
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
@@ -453,7 +459,7 @@ Smart‑contract helpers (Norito)
   - Executes the callee in a child VM. The parent escrows the available syscall gas and is charged the fixed request/return overhead plus all gas consumed by child instructions and child syscalls; unused escrow is refunded.
   - Every public callee has an explicit authorization policy and an authenticated permission declaration table. For a `kotoage fn` or `view fn`, `authorize(anyone)` opens invocation and `authorize(Role)` resolves the declared role. An instance role requires an exact address-and-name grant on the calling contract subject. An explicitly imported chain role requires that exact chain token with canonical JSON `null` payload; a typed built-in permission payload cannot satisfy it. Lifecycle hooks require the separate runtime address-and-hook token. Missing permission rejects the syscall with `PermissionDenied`. Invocation authority never supplies the separate permissions needed for ledger effects.
 
-Extended query/sysvar surface (`SYSTEM` / SCALLX)
+Extended query/sysvar surface (numbers above `0xFF`)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
 - 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
 - 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<int>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
@@ -737,27 +743,68 @@ Notes
 - All calls execute via `CoreHost` and are subject to permission checks and invariants identical to built‑in ISIs.
 - Gas names reference entries in the generated gas table for the active bytecode header version.
 
+## Named runtime lifecycle host profile (ABI V1)
+
+`iroha.ivm.runtime_lifecycle.v1` is a separate immutable host definition, selected
+through `iroha.runtime.contract_lifecycle.v1` after kernel lifecycle storage is
+installed. It retains ABI version `1`, every baseline syscall number and pointer
+ID, and the same independently committed gas schedule. Its descriptor embeds the
+exact baseline descriptor and binds the additional operation tags, record schema
+identities, registration limits and authenticated kernel semantics. The baseline
+`0xA0` signature and generated table remain unchanged.
+
+| `0xA0/r11` | Canonical `r10` payload | Queued result |
+|---|---|---|
+| `3` | `&NoritoBytes(InstructionBox::RegisterContractRuntimeObligationV1)` | `r10=0` |
+| `4` | `&NoritoBytes(InstructionBox::CompleteRuntimeObligationV1)` | `r10=0` |
+
+Tag `3` takes `kind`, exact `terminal_effects` and `expires_ms`; it contains no
+caller-selected contract address or owner. The host authenticates the executing
+contract's active instance, subject and original entrypoint authorization. The
+kernel checks the same identity and exact manifest profile, rejects pending
+lifecycle hooks, and captures the terminal closure under canonical ordinary
+admission. Registered effects run once under the captured execution definitions;
+registration does not preserve an older deployed contract's code. Tag `4` accepts
+only the executing contract subject as `owner` and uses the existing completion
+handler. Original authorization is revalidated when queued effects apply.
+
+Both tags queue typed effects in the ordinary ordered atomic host pipeline. A
+zero return means queuing succeeded; it does not certify execution or settlement.
+They cannot borrow an enclosing completion exemption to create new work. Naked
+signed/native registration, a caller-selected subject, an inactive instance and
+an unknown or mismatched tag are refused. The frozen account-controlled
+registration instruction keeps its existing lifecycle-controller rules.
+
+Named-profile artifacts require deployable `CNTR` metadata. The header,
+`CNTR.abi_hash` and on-chain manifest must carry the same exact selected hash;
+generic programs and local test-harness artifacts cannot select this profile.
+The generated hash table in [`ivm_header.md`](../../../specs/ivm_header.md) lists
+the two distinct definitions. No ABI V2 or node-local policy toggle is introduced.
+
 ## ABI Stability (ABI v1)
 
-This is the first release, so the ABI surface is still allowed to change before
-release cut. The shipped runtime still has exactly one policy, ABI v1, and every
-node enforces that policy unconditionally.
+This is the first release and ABI V1 is the only version. A definition may change
+before any live selection contains it; once selected, its encoding and semantics
+are immutable. Governed upgrades publish distinct definitions and select the
+exact host profile each contract requires.
 
 - `ProgramMetadata.abi_version` must be `1`; other values are rejected at admission.
 - Runtime upgrade manifests must keep `abi_version = 1`; there is no V2 policy yet.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
-- A changed ABI hash is a `contract_redeployment` cutover
+- Replacing the unreleased baseline ABI hash is a `contract_redeployment` cutover
   ([`specs/first_release_history_cutover.md`](../../../specs/first_release_history_cutover.md)).
   Record the new hash under `declared_abi_cutover` in
   `specs/first_release_history_cutover.json` and regenerate, through its own
   generator, every artifact the `abi` surface lists as carrying it;
   `scripts/check_first_release_history.py` fails until the golden, the carriers
-  and the inventory agree. Admission keeps rejecting any other `abi_hash`.
-- Syscall `0xA0` defines two typed operation tags, `1=SubmitBallot` and
-  `2=SubmitPrivacyZkX509CertificateV1`; every
-  other tag is rejected. Contracts cannot record outbound SCCP messages: an
+  and the inventory agree. Publishing a distinct named profile keeps the baseline
+  hash and its artifacts intact; the root must explicitly select the new definition.
+- Under the baseline profile, syscall `0xA0` defines two typed operation tags,
+  `1=SubmitBallot` and `2=SubmitPrivacyZkX509CertificateV1`; every other tag is
+  rejected. The runtime lifecycle profile additionally admits exactly tags `3`
+  and `4` as specified above. Contracts cannot record outbound SCCP messages: an
   encoded `RecordSccpMessage` fails under every tag, and a contract-registered
   trigger or any other opaque execution output that derives `RecordSccpMessage`
   is refused (`specs/sccp.md` §4.4). The argument text of `spec/syscalls.toml`
@@ -788,8 +835,8 @@ node enforces that policy unconditionally.
   default exclusion list: an added, removed or renamed syscall fails the inventory tests until
   it is mapped, and an unfinished syscall relation keeps complete proof coverage open. See
   [`proof_coverage.md`](proof_coverage.md).
-- Any future post-release ABI break must be delivered through a new policy/version
-  with updated tests and docs.
+- Any new host semantics require a separately named immutable profile with updated
+  tests and docs. A different ABI version requires its own explicit protocol definition.
 
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |

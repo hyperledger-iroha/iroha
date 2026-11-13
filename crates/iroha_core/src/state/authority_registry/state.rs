@@ -37,6 +37,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Derived { sources: &["state.block_hashes", "state.native_execution_tip"], check: DerivationCheck::Rebuild("State publisher rebuilds immutable versions by replay and compares post-execution roots to their certified results") });
     native_world_cut: parking_lot::Mutex<Option<iroha_allocation::ChargedShared<world_projection::world_state_accumulator::world_state_cut::CutCapsule>>> => ("state.native_world_cut",
         Role::History { source: "Original pre-tail World root, count and native journal differences bound to the execution tip and publication generation", authentication: "Original completed executor captures R; frozen publication reconstructs that exact root and count from the complete native tail journal; restoration must replay original execution rather than decode a caller-supplied cut" });
+    runtime_checkpoint_capture: crate::snapshot::checkpoint_capture::CapturePublisher => ("state.runtime_checkpoint_capture",
+        Role::Local("Bounded local checkpoint writer handoff; original images never affect execution or commitments"));
     latest_block_header: PublicationRwLock<Option<BlockHeader>> => ("state.latest_block_header",
         Role::Derived { sources: &["state.block_hashes"], check: DerivationCheck::Rebuild("State::update_latest_block_header_cache from exact retained canonical tip") });
     transactions: TransactionsStorage => ("state.transactions",

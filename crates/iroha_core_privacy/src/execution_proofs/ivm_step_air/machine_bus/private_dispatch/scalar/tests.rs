@@ -115,7 +115,7 @@ impl ScalarFixture {
             );
         }
         for (slot, register, enabled, write) in [
-            (SCALAR_LEFT, left, reads_left(instruction), false),
+            (SCALAR_LEFT, left, true, false),
             (
                 SCALAR_RIGHT,
                 right,
@@ -153,11 +153,7 @@ impl ScalarFixture {
                 );
             }
         }
-        let left = if reads_left(instruction) {
-            record.before.registers[left]
-        } else {
-            0
-        };
+        let left = record.before.registers[left];
         let right = right_immediate(instruction).unwrap_or(if taken {
             record.before.registers[right]
         } else {
@@ -454,7 +450,6 @@ fn native_public_subset_rejects_shared_valid_private_scalars_and_unjoined_public
         (wide::arithmetic::CLZ, true),
         (wide::arithmetic::CTZ, true),
         (wide::arithmetic::CMOV, false),
-        (wide::system::GETGAS, false),
     ] {
         let word = enc::encode_rr(opcode, 4, 2, 3);
         let (program, fixture) = native(word, &[(2, u64::MAX, private), (3, 1, private)]);
@@ -642,7 +637,7 @@ fn scalar_fetch_signed_immediate_alias_zero_and_tag_substitution_reject() {
 }
 
 #[test]
-fn native_division_and_getgas_share_canonical_fetch_without_register_read_leakage() {
+fn native_division_shares_canonical_fetch_with_a_public_overwrite_of_a_private_register() {
     for opcode in [
         wide::arithmetic::DIV,
         wide::arithmetic::DIVU,
@@ -651,9 +646,12 @@ fn native_division_and_getgas_share_canonical_fetch_without_register_read_leakag
         wide::arithmetic::DIV_CEIL,
         wide::arithmetic::GCD,
     ] {
+        // The immediate write replaces private r5 with a public value, so the
+        // second division's trap-sensitive operands are public again.
+        let overwrite = enc::encode_ri(wide::arithmetic::ADDI, 5, 0, 29);
         let instructions = [
             enc::encode_rr(opcode, 4, 2, 3),
-            enc::encode_rr(wide::system::GETGAS, 5, 4, 5),
+            overwrite,
             enc::encode_rr(opcode, 4, 5, 3),
         ];
         let (program, recorder, _) = shifts::capture(
@@ -669,20 +667,14 @@ fn native_division_and_getgas_share_canonical_fetch_without_register_read_leakag
             assert!(fixture.accepts(&program));
             let packets = &fixture.0.packets.fields;
             assert_eq!(packets[SCALAR_DESTINATION][AFTER_TAG], F::ZERO);
-            if is_getgas(instruction) {
+            if instruction == overwrite {
                 assert_eq!(packets[SCALAR_DESTINATION][BEFORE_TAG], F::ONE);
-                for slot in [SCALAR_LEFT, SCALAR_RIGHT] {
-                    assert!(packets[slot].iter().all(|cell| *cell == F::ZERO));
-                }
-                assert!(
-                    fixture.0.row[SCALAR + SOURCES..SCALAR + ALU]
-                        .iter()
-                        .all(|cell| *cell == F::ZERO)
-                );
-                assert_eq!(
-                    packet::half(&packets[SCALAR_DESTINATION], AFTER, 0),
-                    record.after.gas_remaining
-                );
+                // The source is r0 and the encoded immediate is not a register read.
+                assert_eq!(packets[SCALAR_LEFT][ENABLED], F::ONE);
+                assert_eq!(packets[SCALAR_LEFT][INDEX], F::ZERO);
+                assert_eq!(packets[SCALAR_LEFT][BEFORE_TAG], F::ZERO);
+                assert!(packets[SCALAR_RIGHT].iter().all(|cell| *cell == F::ZERO));
+                assert_eq!(packet::half(&packets[SCALAR_DESTINATION], AFTER, 0), 29);
             } else {
                 for slot in [SCALAR_LEFT, SCALAR_RIGHT] {
                     assert_eq!(packets[slot][ENABLED], F::ONE);
@@ -704,7 +696,6 @@ fn composed_private_scalar_polynomials_have_degree_four() {
             enc::encode_rr(wide::arithmetic::DIVU, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::REM, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::REMU, 4, 2, 3),
-            enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255),
             enc::encode_rr(wide::arithmetic::MEAN, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::ISQRT, 4, 2, 255),
@@ -781,14 +772,15 @@ fn composed_private_scalar_polynomials_have_degree_four() {
 #[test]
 fn every_original_scalar_port_joins_all_private_history_stages() {
     use history::accepts;
-    let (_, gas) = native(
-        enc::encode_rr(wide::system::GETGAS, 4, 2, 3),
+    // The original gas debit joins the same history as the register ports.
+    let (_, debit) = native(
+        enc::encode_rr(wide::arithmetic::ADD, 4, 2, 3),
         &[(2, u64::MAX, true), (3, 23, true), (4, 19, true)],
     );
-    assert!(accepts(&gas, None));
+    assert!(accepts(&debit, None));
     for slot in [GAS_DEBIT, SCALAR_DESTINATION] {
-        assert!(!accepts(&gas, Some((slot, false))));
-        assert!(!accepts(&gas, Some((slot, true))));
+        assert!(!accepts(&debit, Some((slot, false))));
+        assert!(!accepts(&debit, Some((slot, true))));
     }
     for opcode in [
         wide::arithmetic::ADD,
@@ -1065,7 +1057,6 @@ mod conditional_moves;
 
 mod absolute;
 mod div_rem;
-mod getgas;
 
 mod history;
 mod jumps;

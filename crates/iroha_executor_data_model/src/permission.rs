@@ -762,10 +762,10 @@ pub mod content {
         /// Permission to publish content bundles after genesis under the Initial executor.
         ///
         /// A governed addition after the frozen baseline: it carries authority only on a root
-        /// whose runtime selection activates its permission definition, and only in its exact
-        /// unit form. There, only a holder of [`super::parameter::CanSetParameters`] may grant or
-        /// revoke it, directly or through a role; its holder cannot delegate it and may renounce
-        /// its own direct grant.
+        /// whose runtime selection activates its permission definition with no restriction, and
+        /// only as an exact unit grant held directly by an account; no role carries it there.
+        /// Only a holder of [`super::parameter::CanSetParameters`] may grant or revoke it; its
+        /// holder cannot delegate it and may renounce its own grant.
         #[derive(Copy)]
         pub struct CanPublishContentBundle;
     }

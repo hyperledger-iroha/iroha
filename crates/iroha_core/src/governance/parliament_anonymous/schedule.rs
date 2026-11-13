@@ -10,9 +10,9 @@
 //! ([`AnonymousParliamentAttemptStateV1::awaiting_slots`]) because they wait for a pulse,
 //! not for a time.
 //!
-//! TODO(E2, design §12.3 slice 3): the positioned pass in Core collects these items with
-//! the ballot openings and closures of the boards, the casting-clock prelude and the
-//! enactments, and drives them under the shared budget.
+//! The positioned pass (`world_pass::run_governance_pass`) collects these items with the
+//! ballot openings and closures of the boards and the casting-clock prelude, and drives them
+//! under the shared budget. Production enactments join G3 with slice 5.
 
 use core::cmp::Ordering;
 

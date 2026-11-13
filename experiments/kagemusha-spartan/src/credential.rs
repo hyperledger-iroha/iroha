@@ -77,6 +77,7 @@ struct CurveInput {
     modulus: BigUint,
     coefficient: u64,
     b: BigUint,
+    valid: Vec<usize>,
 }
 fn curve_input(
     c: &mut Cells,
@@ -103,8 +104,10 @@ fn curve_input(
     };
     let (x, y) = (integer(offset), integer(offset + 32));
     let (xi, yi) = (indices(offset), indices(offset + 32));
-    c.at_most(&xi, &x, &(&modulus - 1u32));
-    c.at_most(&yi, &y, &(&modulus - 1u32));
+    let mut valid = vec![
+        c.at_most_bit(&xi, &x, &(&modulus - 1u32)),
+        c.at_most_bit(&yi, &y, &(&modulus - 1u32)),
+    ];
     let xc = c.value(&x, &xi);
     let yc = c.value(&y, &yi);
     let x2 = &x * &x % &modulus;
@@ -112,12 +115,19 @@ fn curve_input(
         (&y * &y + &x * coefficient + &modulus * 2u32 - ((&x * &x2 + &b) % &modulus)) % &modulus;
     let mut auxiliary = |v: &BigUint| {
         let indices: Vec<_> = scalar_bytes(v).iter().rev().map(|b| c.byte(*b)).collect();
+        // Canonical auxiliary residues are mandatory even on a false branch;
+        // otherwise a malicious prover could use residue+p to manufacture false.
+        c.at_most(&indices, v, &(&modulus - 1u32));
         c.value(v, &indices)
     };
     let x2c = auxiliary(&x2);
     let rc = auxiliary(&residue);
     for cell in rc {
-        c.zero(own(cell, 1));
+        valid.push(crate::credential_policy::zero_predicate(
+            c,
+            own(cell, 1),
+            c.a.values[cell][0],
+        ));
     }
     CurveInput {
         cells: [xc, yc, x2c, rc],
@@ -125,6 +135,7 @@ fn curve_input(
         modulus,
         coefficient,
         b,
+        valid,
     }
 }
 
@@ -145,6 +156,180 @@ pub(crate) struct Prepared {
     pub certificate_local: usize,
     pub certificate_digest: usize,
     pub issuer_table: usize,
+}
+
+/// Exact byte opening and self-contained validity; authority is supplied by
+/// the root/issuer chain or by a previously verified credential digest.
+pub(crate) struct Contents {
+    pub local: usize,
+    pub digest_cell: usize,
+    pub certificate_cell: usize,
+    pub message: Fp,
+    pub signature: [BigUint; 2],
+    pub signature_limbs: [[usize; 3]; 2],
+    pub valid_cell: usize,
+}
+
+/// Add the same exact credential tape for Bootstrap authentication and
+/// transition continuity. No issuer/root trust is conferred by this parser.
+pub(crate) fn append_contents(
+    w: &mut Wiring<Fp>,
+    gfam: usize,
+    credential: &Credential,
+) -> Contents {
+    let contents = append_contents_total(w, gfam, credential);
+    w.arrays[contents.local].rows.push([
+        plus(&own(contents.valid_cell, 1), &constant(vec![-Fp::ONE])),
+        constant(vec![Fp::ONE]),
+        vec![],
+    ]);
+    contents
+}
+
+/// Exact raw tape and total semantic verdict. All computed helper values remain
+/// hard constrained, so even an invalid byte tape has one determined verdict.
+pub(crate) fn append_contents_total(
+    w: &mut Wiring<Fp>,
+    gfam: usize,
+    credential: &Credential,
+) -> Contents {
+    let m = message(credential);
+    let mb = m.to_repr();
+    let r = BigUint::from_bytes_be(&credential.signature[..32]);
+    let s = BigUint::from_bytes_be(&credential.signature[32..]);
+    let mut c = Cells::new(gfam);
+    for byte in credential
+        .body
+        .iter()
+        .chain(&credential.signature)
+        .chain(mb.as_ref())
+    {
+        c.byte(*byte);
+    }
+    let mut valid = vec![crate::credential_policy::validity(&mut c, &credential.body)];
+    for (k, v) in [(0, 1), (1, 0), (PAYMENT_KEY, 4)].into_iter().chain(
+        PROVIDER_BYTES
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (PROVIDER + i, *b)),
+    ) {
+        valid.push(crate::credential_policy::zero_predicate(
+            &mut c,
+            plus(&own(k, 1), &constant(vec![-Fp::from(v as u64)])),
+            Fp::from(credential.body[k] as u64) - Fp::from(v as u64),
+        ));
+    }
+    // Required identifier bindings are nonzero. Their identity preimages are
+    // issuer claims; the self-contained signed policy rules are checked above.
+    for start in [2, 34, 66, 98, 404, 448] {
+        let sum = (start..start + 32).fold(vec![], |a, k| plus(&a, &own(k, 1)));
+        let value = Fp::from(
+            credential.body[start..start + 32]
+                .iter()
+                .map(|b| *b as u64)
+                .sum::<u64>(),
+        );
+        let zero = crate::credential_policy::zero_predicate(&mut c, sum, value);
+        valid.push(crate::credential_policy::negate(&mut c, zero));
+    }
+    let key = curve_input(
+        &mut c,
+        &credential.body,
+        PAYMENT_KEY + 1,
+        false,
+        p256::p(),
+        3,
+        p256::b(),
+    );
+    let table = curve_input(
+        &mut c,
+        &credential.body,
+        TABLE,
+        true,
+        nonnative::fq_modulus(),
+        0,
+        BigUint::from(5u32),
+    );
+    let cert_bytes: Vec<_> = (ISSUER_CERTIFICATE..ISSUER_CERTIFICATE + 32).collect();
+    let cert_integer = BigUint::from_bytes_le(&credential.body[ISSUER_CERTIFICATE..]);
+    valid.push(c.at_most_bit(&cert_bytes, &cert_integer, &(field_modulus() - 1u32)));
+    let certcell = c.cell(fp(&cert_integer), 255);
+    c.eq(own(certcell, 1), c.bytes(&cert_bytes));
+    let cert_zero =
+        crate::credential_policy::zero_predicate(&mut c, own(certcell, 1), fp(&cert_integer));
+    valid.push(crate::credential_policy::negate(&mut c, cert_zero));
+    let rle: Vec<_> = (SIGNATURE..SIGNATURE + 32).rev().collect();
+    let sle: Vec<_> = (SIGNATURE + 32..SIGNATURE + 64).rev().collect();
+    valid.push(c.at_most_bit(&rle, &r, &(p256::n() - 1u32)));
+    valid.push(c.at_most_bit(&sle, &s, &(p256::n() >> 1)));
+    for indices in [&rle, &sle] {
+        let expression = indices.iter().fold(vec![], |a, k| plus(&a, &own(*k, 1)));
+        let value = indices.iter().map(|k| c.a.values[*k][0]).sum::<Fp>();
+        let zero = crate::credential_policy::zero_predicate(&mut c, expression, value);
+        valid.push(crate::credential_policy::negate(&mut c, zero));
+    }
+    let rlimbs = c.value(&r, &rle);
+    let slimbs = c.value(&s, &sle);
+    let mle: Vec<_> = (MESSAGE..MESSAGE + 32).collect();
+    c.at_most(
+        &mle,
+        &BigUint::from_bytes_le(mb.as_ref()),
+        &(field_modulus() - 1u32),
+    );
+    let mcell = c.cell(m, 255);
+    c.eq(own(mcell, 1), c.bytes(&mle));
+    let mstate = [c.cell(Fp::ZERO, 255), mcell, c.cell(Fp::ZERO, 255)];
+    let dg = digest(credential);
+    let dcell = c.cell(dg, 255);
+    let dstate = [c.cell(Fp::ZERO, 255), dcell, c.cell(Fp::ZERO, 255)];
+    let body_items: Vec<_> = std::iter::once((
+        Fp::from(BODY_BYTES as u64),
+        constant(vec![Fp::from(BODY_BYTES as u64)]),
+    ))
+    .chain(credential.body.chunks(31).enumerate().map(|(i, b)| {
+        (
+            fp(&BigUint::from_bytes_le(b)),
+            c.bytes(&(31 * i..31 * i + b.len()).collect::<Vec<_>>()),
+        )
+    }))
+    .collect();
+    let obj_items = vec![
+        (m, own(mcell, 1)),
+        (fp(&(&r % pow2(128))), c.bytes(&rle[..16])),
+        (fp(&(&r >> 128)), c.bytes(&rle[16..])),
+        (fp(&(&s % pow2(128))), c.bytes(&sle[..16])),
+        (fp(&(&s >> 128)), c.bytes(&sle[16..])),
+    ];
+    valid.extend(key.valid.iter().copied());
+    valid.extend(table.valid.iter().copied());
+    let valid_cell = crate::credential_policy::all(&mut c, &valid);
+    let local = w.push(c.a);
+    for p in [key, table] {
+        certificate::curve_relation(
+            w,
+            gfam,
+            local,
+            p.cells,
+            p.values.each_ref(),
+            &p.modulus,
+            p.coefficient,
+            &p.b,
+        );
+    }
+    let mut rng = SpikeRng::new(b"credential exact native sponge");
+    certificate::hash_relation(w, gfam, local, SIGN_DOMAIN, &body_items, mstate, &mut rng);
+    certificate::hash_relation(w, gfam, local, OBJECT_DOMAIN, &obj_items, dstate, &mut rng);
+    assert_eq!(w.arrays[local].values[mcell][0], m);
+    assert_eq!(w.arrays[local].values[dcell][0], dg);
+    Contents {
+        local,
+        digest_cell: dcell,
+        certificate_cell: certcell,
+        message: m,
+        signature: [r, s],
+        signature_limbs: [rlimbs, slimbs],
+        valid_cell,
+    }
 }
 
 /// Authenticate the exact future-generation issuer claims and their
@@ -188,151 +373,34 @@ pub(crate) fn prepare(
         instance: 0,
     };
     let mut w = prepared.wiring;
-    let mut c = Cells::new(gfam);
-    for byte in credential
-        .body
-        .iter()
-        .chain(&credential.signature)
-        .chain(mb.as_ref())
-    {
-        c.byte(*byte);
-    }
-    crate::credential_policy::constrain(&mut c, &credential.body);
-    for (k, v) in [(0, 1), (1, 0), (PAYMENT_KEY, 4)].into_iter().chain(
-        PROVIDER_BYTES
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (PROVIDER + i, *b)),
-    ) {
-        c.eq(own(k, 1), constant(vec![Fp::from(v as u64)]));
-    }
-    // The scheme is carried from the certificate's trusted public input,
-    // rather than fixed in the VK that participates in scheme identity.
+    let contents = append_contents(&mut w, gfam, credential);
+    let local = contents.local;
+    let dcell = contents.digest_cell;
+    // Root-authenticated scheme and exact delegated certificate are required
+    // here; transition continuity instead binds the complete object digest.
     for i in 0..32 {
-        c.eq(
-            own(2 + i, 1),
-            link(prepared.local, 2 + i, vec![Some(0)], Fp::ONE),
-        );
+        w.arrays[local].rows.push([
+            plus(
+                &own(2 + i, 1),
+                &link(prepared.local, 2 + i, vec![Some(0)], -Fp::ONE),
+            ),
+            constant(vec![Fp::ONE]),
+            vec![],
+        ]);
     }
-    // Required identifier bindings are nonzero. Their identity preimages are
-    // issuer claims; the self-contained signed policy rules are checked above.
-    for start in [34, 66, 98, 404, 448] {
-        let sum = (start..start + 32).fold(vec![], |a, k| plus(&a, &own(k, 1)));
-        let value = Fp::from(
-            credential.body[start..start + 32]
-                .iter()
-                .map(|b| *b as u64)
-                .sum::<u64>(),
-        );
-        let inverse = c.cell(Option::<Fp>::from(value.invert()).unwrap_or(Fp::ZERO), 255);
-        c.a.rows
-            .push([sum, own(inverse, 1), constant(vec![Fp::ONE])]);
-    }
-    let key = curve_input(
-        &mut c,
-        &credential.body,
-        PAYMENT_KEY + 1,
-        false,
-        p256::p(),
-        3,
-        p256::b(),
-    );
-    let table = curve_input(
-        &mut c,
-        &credential.body,
-        TABLE,
-        true,
-        nonnative::fq_modulus(),
-        0,
-        BigUint::from(5u32),
-    );
-    let cert_bytes: Vec<_> = (ISSUER_CERTIFICATE..ISSUER_CERTIFICATE + 32).collect();
-    let cert_integer = BigUint::from_bytes_le(&credential.body[ISSUER_CERTIFICATE..]);
-    c.at_most(&cert_bytes, &cert_integer, &(field_modulus() - 1u32));
-    let certcell = c.cell(fp(&cert_integer), 255);
-    c.eq(own(certcell, 1), c.bytes(&cert_bytes));
-    c.eq(
-        own(certcell, 1),
-        link(prepared.local, prepared.digest_cell, vec![Some(0)], Fp::ONE),
-    );
-    let cert_inverse = c.cell(
-        Option::<Fp>::from(fp(&cert_integer).invert()).unwrap_or(Fp::ZERO),
-        255,
-    );
-    c.a.rows.push([
-        own(certcell, 1),
-        own(cert_inverse, 1),
+    w.arrays[local].rows.push([
+        plus(
+            &own(contents.certificate_cell, 1),
+            &link(
+                prepared.local,
+                prepared.digest_cell,
+                vec![Some(0)],
+                -Fp::ONE,
+            ),
+        ),
         constant(vec![Fp::ONE]),
+        vec![],
     ]);
-    let rle: Vec<_> = (SIGNATURE..SIGNATURE + 32).rev().collect();
-    let sle: Vec<_> = (SIGNATURE + 32..SIGNATURE + 64).rev().collect();
-    c.at_most(&sle, &s, &(p256::n() >> 1));
-    let rlimbs = c.value(&r, &rle);
-    let slimbs = c.value(&s, &sle);
-    let mle: Vec<_> = (MESSAGE..MESSAGE + 32).collect();
-    c.at_most(
-        &mle,
-        &BigUint::from_bytes_le(mb.as_ref()),
-        &(field_modulus() - 1u32),
-    );
-    let mcell = c.cell(m, 255);
-    c.eq(own(mcell, 1), c.bytes(&mle));
-    let mstate = [c.cell(Fp::ZERO, 255), mcell, c.cell(Fp::ZERO, 255)];
-    let dg = digest(credential);
-    let dcell = c.cell(dg, 255);
-    let dstate = [c.cell(Fp::ZERO, 255), dcell, c.cell(Fp::ZERO, 255)];
-    let body_items: Vec<_> = std::iter::once((
-        Fp::from(BODY_BYTES as u64),
-        constant(vec![Fp::from(BODY_BYTES as u64)]),
-    ))
-    .chain(credential.body.chunks(31).enumerate().map(|(i, b)| {
-        (
-            fp(&BigUint::from_bytes_le(b)),
-            c.bytes(&(31 * i..31 * i + b.len()).collect::<Vec<_>>()),
-        )
-    }))
-    .collect();
-    let obj_items = vec![
-        (m, own(mcell, 1)),
-        (fp(&(&r % pow2(128))), c.bytes(&rle[..16])),
-        (fp(&(&r >> 128)), c.bytes(&rle[16..])),
-        (fp(&(&s % pow2(128))), c.bytes(&sle[..16])),
-        (fp(&(&s >> 128)), c.bytes(&sle[16..])),
-    ];
-    let local = w.push(c.a);
-    for p in [key, table] {
-        certificate::curve_relation(
-            &mut w,
-            gfam,
-            local,
-            p.cells,
-            p.values.each_ref(),
-            &p.modulus,
-            p.coefficient,
-            &p.b,
-        );
-    }
-    let mut rng = SpikeRng::new(b"credential exact native sponge");
-    certificate::hash_relation(
-        &mut w,
-        gfam,
-        local,
-        SIGN_DOMAIN,
-        &body_items,
-        mstate,
-        &mut rng,
-    );
-    certificate::hash_relation(
-        &mut w,
-        gfam,
-        local,
-        OBJECT_DOMAIN,
-        &obj_items,
-        dstate,
-        &mut rng,
-    );
-    assert_eq!(w.arrays[local].values[mcell][0], m);
-    assert_eq!(w.arrays[local].values[dcell][0], dg);
     let (_, comb) = certificate::add_signature(
         &mut w,
         gfam,
@@ -340,7 +408,7 @@ pub(crate) fn prepare(
         MESSAGE,
         m,
         (issuer.clone(), z, r, s),
-        [rlimbs, slimbs],
+        contents.signature_limbs,
         KeyTable::Witness { id: ISSUER_TABLE },
     );
     let derivation = w.arrays.len();

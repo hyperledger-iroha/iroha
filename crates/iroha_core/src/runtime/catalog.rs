@@ -26,8 +26,13 @@
 //! until a governed change set ([`ReleaseCatalog::activation`]) moves the root to them.
 
 pub(crate) mod additions;
+mod contract_lifecycle;
+mod deferred_consent;
 mod kernel_lifecycle;
 pub mod migrations;
+mod native_amx_capture;
+mod native_escrow_capture;
+mod native_game_capture;
 pub(crate) mod parameters;
 
 use std::{
@@ -129,6 +134,12 @@ pub struct ReleaseCatalog {
     /// The kernel lifecycle addition composed over each compiled predecessor family, by the
     /// family's services profile (`kernel_lifecycle`).
     pub(super) runtime_lifecycle_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
+    /// Deferred-consent services and native implementations compiled for each predecessor profile.
+    deferred_consent_compositions: BTreeMap<DefinitionId, deferred_consent::Composition>,
+    contract_lifecycle_compositions: BTreeMap<DefinitionId, contract_lifecycle::Composition>,
+    native_escrow_capture_compositions: BTreeMap<DefinitionId, native_escrow_capture::Composition>,
+    native_amx_capture_compositions: BTreeMap<DefinitionId, native_amx_capture::Composition>,
+    native_game_capture_compositions: BTreeMap<DefinitionId, native_game_capture::Composition>,
     /// The typed committed parameters this release adds after the baseline, by Parameter
     /// definition ([`parameters`]); a root recognizes one only while its selection activates it.
     parameter_additions: parameters::ParameterAdditions,
@@ -305,6 +316,61 @@ fn addition_digest(module: &str, subject: &[&[u8]]) -> [u8; 32] {
     chunks.extend_from_slice(subject);
     iroha_crypto::Hash::new_from_chunks(&chunks).into()
 }
+
+/// The original native export implementation requires the complete captured-transfer service
+/// before new activation. This is local release qualification, never a changed consensus rule
+/// under an already selected immutable definition.
+pub(crate) fn unqualified_native_activation(
+    previous: &RootSelectionV1,
+    selection: &RootSelectionV1,
+    definitions: &impl DefinitionLookup,
+) -> Option<DefinitionId> {
+    if native_game_capture::selected_capture(selection, definitions) {
+        return None;
+    }
+    let unfinished = ImplementationCodeV1::Native {
+        module: additions::GAME_PARTITIONS.module.into(),
+        reference_closure: addition_digest(additions::GAME_PARTITIONS.module, &[b"implementation"]),
+    };
+    selection
+        .active
+        .iter()
+        .filter(|id| previous.active.binary_search(id).is_err())
+        .chain(
+            selection
+                .installed_storage
+                .iter()
+                .filter(|id| previous.installed_storage.binary_search(id).is_err()),
+        )
+        .copied()
+        .find(|id| match definitions.definition(id) {
+            Some(DefinitionDescriptorV1::Implementation(implementation)) => {
+                implementation.code == unfinished
+            }
+            Some(DefinitionDescriptorV1::Interface(interface)) => {
+                additions::GAME_PARTITIONS
+                    .instructions
+                    .contains(&interface.wire_id.as_str())
+                    && interface.contract_statement
+                        == addition_digest(
+                            additions::GAME_PARTITIONS.module,
+                            &[b"interface", interface.wire_id.as_bytes()],
+                        )
+            }
+            Some(DefinitionDescriptorV1::Storage(storage)) => {
+                storage.namespace == "world.game_partitions"
+                    && storage.invariants
+                        == addition_digest(
+                            additions::GAME_PARTITIONS.module,
+                            &[b"storage", b"world.game_partitions"],
+                        )
+            }
+            _ => false,
+        })
+}
+
+/// Local release-qualification refusal for the unfinished game-export code identity.
+pub(crate) const UNQUALIFIED_NATIVE_REASON: &str = "game-partition activation requires the complete captured-transfer service and its exact native bindings";
 
 fn layout_suffix(layout: CanonicalLayout) -> String {
     format!("{}.{}.{}", layout.major, layout.minor, layout.flags)
@@ -502,6 +568,11 @@ impl ReleaseCatalog {
             migrations: BTreeMap::new(),
             restricted_read_compositions: BTreeMap::new(),
             runtime_lifecycle_compositions: BTreeMap::new(),
+            deferred_consent_compositions: BTreeMap::new(),
+            contract_lifecycle_compositions: BTreeMap::new(),
+            native_escrow_capture_compositions: BTreeMap::new(),
+            native_amx_capture_compositions: BTreeMap::new(),
+            native_game_capture_compositions: BTreeMap::new(),
             parameter_additions: BTreeMap::new(),
             ironwood: None,
         };
@@ -682,13 +753,49 @@ impl ReleaseCatalog {
         let mut interfaces_so_far = interfaces;
         for addition in additions {
             let independent_interfaces;
-            let (storage_dependencies, interface_dependencies) = if addition.module
-                == additions::SORAFS_REPAIR.module
+            let game_storage;
+            let game_interfaces;
+            let independent = addition.module == additions::SORAFS_REPAIR.module
                 || addition.module == additions::SORAFS_AUTHORITY.module
                 || addition.module == additions::RESTRICTED_DATASPACE_READ.module
                 || addition.module == additions::PARLIAMENT_ANONYMOUS.module
                 || addition.module == additions::RUNTIME_LIFECYCLE.module
+                || addition.module == additions::DEFERRED_CONSENT.module
+                || addition.module == additions::NATIVE_ESCROW_CAPTURE.module
+                || addition.module == additions::NATIVE_AMX_CAPTURE.module
+                || addition.module == additions::NATIVE_GAME_CAPTURE.module
+                || addition.module == additions::CONTRACT_LIFECYCLE.module;
+            let (storage_dependencies, interface_dependencies) = if addition.module
+                == additions::NATIVE_GAME_CAPTURE.module
             {
+                // The capture service is independent of later additions but explicitly owns
+                // completion through the already published game table and interfaces.
+                let game = catalog.additions.iter()
+                    .find(|prior| prior.module == additions::GAME_PARTITIONS.module)
+                    .ok_or_else(|| CatalogError::Addition { module: addition.module.into(), reason: "game partition definitions must be published before their capture service".into() })?;
+                game_storage = sorted(
+                    baseline_storage
+                        .iter()
+                        .copied()
+                        .chain(game.storage.values().copied())
+                        .collect(),
+                );
+                game_interfaces = catalog
+                    .baseline
+                    .bindings
+                    .iter()
+                    .map(|binding| {
+                        let wire = payloads
+                            .keys()
+                            .copied()
+                            .find(|wire| *wire == binding.wire_id)
+                            .expect("baseline binding has a registered wire ID");
+                        (wire, binding.interface)
+                    })
+                    .chain(game.interfaces.iter().map(|(wire, id)| (*wire, *id)))
+                    .collect();
+                (&game_storage, &game_interfaces)
+            } else if independent {
                 independent_interfaces = catalog
                     .baseline
                     .bindings
@@ -714,9 +821,11 @@ impl ReleaseCatalog {
                 storage_dependencies,
                 interface_dependencies,
             )?;
-            storage_so_far.extend(published.storage.values().copied());
-            storage_so_far.sort_unstable();
-            interfaces_so_far.extend(published.interfaces.iter().map(|(id, def)| (*id, *def)));
+            if !independent {
+                storage_so_far.extend(published.storage.values().copied());
+                storage_so_far.sort_unstable();
+                interfaces_so_far.extend(published.interfaces.iter().map(|(id, def)| (*id, *def)));
+            }
             catalog.additions.push(published);
         }
         catalog.publish_parameter_additions(parameters::PARAMETERS)?;
@@ -748,6 +857,17 @@ impl ReleaseCatalog {
         catalog.publish(super::keyed_state::descriptor())?;
         catalog.publish(super::state_row_permission::descriptor())?;
         catalog.publish(super::content_publish_permission::descriptor())?;
+        catalog.compile_deferred_consent()?;
+        catalog.compile_runtime_lifecycle_after_deferred()?;
+        catalog.compile_native_escrow_capture()?;
+        // Both service orders publish the same immutable combined family.
+        catalog.compile_deferred_consent()?;
+        catalog.compile_runtime_lifecycle_after_native_escrow()?;
+        catalog.compile_native_amx_capture()?;
+        catalog.compile_runtime_lifecycle_after_native_amx()?;
+        catalog.compile_native_game_capture()?;
+        catalog.compile_runtime_lifecycle_after_native_game()?;
+        catalog.compile_contract_lifecycle()?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -1155,6 +1275,51 @@ impl ReleaseCatalog {
         effective_height: u64,
         qualification: [u8; 32],
     ) -> Result<ChangeSetV1, CatalogError> {
+        if module == additions::NATIVE_GAME_CAPTURE.module {
+            return self.draft_native_game_capture(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::NATIVE_AMX_CAPTURE.module {
+            return self.draft_native_amx_capture(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::CONTRACT_LIFECYCLE.module {
+            return self.draft_contract_lifecycle(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::NATIVE_ESCROW_CAPTURE.module {
+            return self.draft_native_escrow_capture(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::DEFERRED_CONSENT.module {
+            return self.draft_deferred_consent(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
         if module == additions::SORAFS_AUTHORITY.module {
             return super::sorafs_authority::draft(
                 self,

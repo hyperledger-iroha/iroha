@@ -11,7 +11,7 @@
 //! The compact projection checks every ordinary word against explicitly supplied
 //! external inputs. Its caller must authenticate those sources. TODO: compose
 //! their actual encoding with the full monetary envelope before reporting a
-//! Payment size.
+//! Payment size. `payment_wire` composes the complete future Send envelope.
 
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
@@ -88,13 +88,41 @@ impl Layout {
 /// The measurement hook uses an in-memory run-specific fixture context, which
 /// is not a production authenticated parameter distribution mechanism.
 #[derive(Clone)]
-struct TrustedProfile {
+pub(crate) struct TrustedProfile {
     id: [u8; 32],
     p_shape: Shape,
     s_shape: Shape,
     p: Layout,
     s: Layout,
     lean: bool,
+}
+
+impl TrustedProfile {
+    pub(crate) fn id(&self) -> &[u8; 32] {
+        &self.id
+    }
+    /// Parameters must be authenticated independently. The ID identifies the
+    /// exact authorized scheme/VKs, not a choice supplied by a Payment.
+    pub(crate) fn from_parameters(
+        id: [u8; 32],
+        p_shape: Shape,
+        primary: &dyn Circuit<Fp>,
+        s_shape: Shape,
+        secondary: &dyn Circuit<Fq>,
+        lean: bool,
+    ) -> Result<Self, String> {
+        let profile = Self {
+            id,
+            p_shape,
+            s_shape,
+            p: Layout::new(&p_shape, primary, 64),
+            s: Layout::new(&s_shape, secondary, 62),
+            lean,
+        };
+        profile.p.check(&p_shape)?;
+        profile.s.check(&s_shape)?;
+        Ok(profile)
+    }
 }
 
 #[derive(
@@ -121,14 +149,14 @@ struct Wire {
     s_proof: Vec<u8>,
 }
 
-struct Decoded {
-    ip: Instance<Fp>,
-    is: Instance<Fq>,
-    pp: Proof<Eq>,
-    ps: Proof<Ep>,
-    r: [u8; 32],
-    d: [u8; 32],
-    rho: [u8; 32],
+pub(crate) struct Decoded {
+    pub(crate) ip: Instance<Fp>,
+    pub(crate) is: Instance<Fq>,
+    pub(crate) pp: Proof<Eq>,
+    pub(crate) ps: Proof<Ep>,
+    pub(crate) r: [u8; 32],
+    pub(crate) d: [u8; 32],
+    pub(crate) rho: [u8; 32],
 }
 
 /// Early inputs reconstructed from the separately authenticated monetary
@@ -141,18 +169,25 @@ pub struct ProjectedInputs {
 }
 
 impl ProjectedInputs {
+    pub(crate) fn primary(&self) -> &Instance<Fp> {
+        &self.primary
+    }
+    pub(crate) fn secondary(&self) -> &Instance<Fq> {
+        &self.secondary
+    }
     /// Reconstruct the agreed compact context ABI. The head and dynamic fields
     /// come from Ω public inputs; the asset and table commitment come from its
     /// verified credential; the kind comes from the selected operation.
     pub fn from_authenticated_fields(
         head: Fp,
+        statement_digest: Fp,
+        receipt_digest: Fp,
         context: [Fp; crate::bootstrap_context::FIELDS],
         lineage: [Fp; crate::bootstrap_context::LINEAGE_FIELDS],
         table: [Fp; 4],
         kind: usize,
     ) -> Result<Self, String> {
-        if kind > crate::full::BOOTSTRAP || crate::spartan::point_from_limbs::<Eq>(&table).is_none()
-        {
+        if kind > crate::full::LOAD || crate::spartan::point_from_limbs::<Eq>(&table).is_none() {
             return Err("invalid projected kind or table commitment".into());
         }
         let mut p = vec![Fp::ZERO; 64];
@@ -160,6 +195,8 @@ impl ProjectedInputs {
         p[0] = Fp::ONE;
         s[0] = Fq::ONE;
         p[crate::full::HEAD_IO] = head;
+        p[crate::full::STATEMENT_IO] = statement_digest;
+        p[crate::full::RECEIPT_IO] = receipt_digest;
         let start = crate::bootstrap_context::CONTEXT_IO;
         p[start..start + context.len()].copy_from_slice(&context);
         let start = crate::bootstrap_context::LINEAGE_IO;
@@ -221,7 +258,7 @@ fn decode(profile: &TrustedProfile, bytes: &[u8]) -> Result<Decoded, String> {
     decode_with_projection(profile, bytes, None)
 }
 
-fn decode_with_projection(
+pub(crate) fn decode_with_projection(
     profile: &TrustedProfile,
     bytes: &[u8],
     projection: Option<&ProjectedInputs>,
@@ -351,6 +388,205 @@ fn project_wire(wire: &Wire, inputs: &ProjectedInputs) -> Result<Wire, String> {
     out.p_io.clear();
     out.s_io.clear();
     Ok(out)
+}
+
+/// Encode all actual proof bytes, omitting ordinary IO only after exact equality
+/// with the independently reconstructed full monetary envelope.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_projected_pair(
+    profile: &TrustedProfile,
+    ip: &Instance<Fp>,
+    is: &Instance<Fq>,
+    pp: &Proof<Eq>,
+    ps: &Proof<Ep>,
+    r: [u8; 32],
+    inputs: &ProjectedInputs,
+) -> Result<Vec<u8>, String> {
+    // This comparison is mandatory even though the dedicated compact pair
+    // never serializes the ordinary IO words.
+    project_wire(&wire_of(profile, ip, is, pp, ps, r), inputs)?;
+    let (bytes, _) = canonical_projected_template(profile, &pp.to_bytes(), &ps.to_bytes(), r)?;
+    let decoded = decode_projected_pair(profile, &bytes, inputs)?;
+    if decoded.pp.to_bytes() != pp.to_bytes() || decoded.ps.to_bytes() != ps.to_bytes() {
+        return Err("projected proof roundtrip mismatch".into());
+    }
+    Ok(bytes)
+}
+
+const PROJECTED_MAGIC: &[u8; 8] = b"KGSPPR1\0";
+pub(crate) const PROJECTED_HEADER: usize = 74;
+
+/// Exact fixed offsets for the full raw-byte commitment relation. No search
+/// through potentially repeated proof bytes is used to discover these ranges.
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectedRanges {
+    pub(crate) r: std::ops::Range<usize>,
+    pub(crate) primary: std::ops::Range<usize>,
+    pub(crate) secondary: std::ops::Range<usize>,
+    pub(crate) total: usize,
+}
+
+fn projected_ranges(profile: &TrustedProfile) -> Result<ProjectedRanges, String> {
+    profile.p.check(&profile.p_shape)?;
+    profile.s.check(&profile.s_shape)?;
+    let count = |shape: &Shape, layout: &Layout| {
+        shape.proof_bytes() - 32 * (shape.rows() - layout.rows as usize) + 32 * layout.late as usize
+    };
+    let p_end = PROJECTED_HEADER + count(&profile.p_shape, &profile.p);
+    let total = p_end + count(&profile.s_shape, &profile.s);
+    if profile.p.io != 64 || profile.s.io != 62 || total > MAX_RESEARCH_BYTES {
+        return Err("invalid compact pair trusted layout".into());
+    }
+    Ok(ProjectedRanges {
+        r: 42..74,
+        primary: 74..p_end,
+        secondary: p_end..total,
+        total,
+    })
+}
+
+fn projected_prefix(profile: &TrustedProfile) -> Vec<u8> {
+    let mut bytes = PROJECTED_MAGIC.to_vec();
+    bytes.extend_from_slice(&[u8::from(profile.lean), 0]);
+    bytes.extend_from_slice(&profile.id);
+    bytes
+}
+
+/// Profile-bounded original bytes for the total in-circuit parser. This view
+/// authenticates no points, scalars, transcript or acceptance predicate.
+pub(crate) struct RawProjectedPair<'a> {
+    pub(crate) r: [u8; 32],
+    pub(crate) primary: &'a [u8],
+    pub(crate) secondary: &'a [u8],
+    pub(crate) ranges: ProjectedRanges,
+}
+
+pub(crate) fn frame_projected_pair<'a>(
+    profile: &TrustedProfile,
+    bytes: &'a [u8],
+) -> Result<RawProjectedPair<'a>, String> {
+    let ranges = projected_ranges(profile)?;
+    if bytes.len() != ranges.total || bytes[..42] != projected_prefix(profile) {
+        return Err("compact pair profile/header/length mismatch".into());
+    }
+    Ok(RawProjectedPair {
+        r: bytes[ranges.r.clone()].try_into().unwrap(),
+        primary: &bytes[ranges.primary.clone()],
+        secondary: &bytes[ranges.secondary.clone()],
+        ranges,
+    })
+}
+
+/// Canonical fixed-layout frame around exact raw proof bytes. Structural byte
+/// binding only: malformed points/scalars remain available to the total proof
+/// validity relation and are not silently replaced. The strict decoder below
+/// additionally requires canonical proof encodings.
+pub(crate) fn canonical_projected_template(
+    profile: &TrustedProfile,
+    proof_p: &[u8],
+    proof_s: &[u8],
+    r: [u8; 32],
+) -> Result<(Vec<u8>, ProjectedRanges), String> {
+    let ranges = projected_ranges(profile)?;
+    if proof_p.len() != ranges.primary.len() || proof_s.len() != ranges.secondary.len() {
+        return Err("compact pair proof lengths differ from trusted profile".into());
+    }
+    let mut bytes = projected_prefix(profile);
+    bytes.extend_from_slice(&r);
+    bytes.extend_from_slice(proof_p);
+    bytes.extend_from_slice(proof_s);
+    debug_assert_eq!(bytes.len(), ranges.total);
+    Ok((bytes, ranges))
+}
+
+/// The full future Payment admits only this fixed projected representation.
+/// Raw ordinary IO Norito remains a separate research measurement format.
+pub(crate) fn decode_projected_pair(
+    profile: &TrustedProfile,
+    bytes: &[u8],
+    inputs: &ProjectedInputs,
+) -> Result<Decoded, String> {
+    let raw = frame_projected_pair(profile, bytes)?;
+    let r = raw.r;
+    if Option::<Fq>::from(Fq::from_repr(r)).is_none() {
+        return Err("noncanonical link R".into());
+    }
+    let pp = Proof::<Eq>::from_bytes_rows(
+        &profile.p_shape,
+        profile.p.rows as usize,
+        profile.p.late as usize,
+        raw.primary,
+    )
+    .ok_or("compact primary proof encoding")?;
+    let ps = Proof::<Ep>::from_bytes_rows(
+        &profile.s_shape,
+        profile.s.rows as usize,
+        profile.s.late as usize,
+        raw.secondary,
+    )
+    .ok_or("compact secondary proof encoding")?;
+    if pp.to_bytes() != raw.primary || ps.to_bytes() != raw.secondary {
+        return Err("noncanonical compact proof encoding".into());
+    }
+    Ok(projected_transcripts(profile, inputs, pp, ps, r))
+}
+
+/// Construct witnesses for the total fixed-profile parser. Canonical raw
+/// proofs are retained even when their cryptographic verdict is false. If any
+/// encoded point/scalar/R is malformed, use the unique all-zero proof and R.
+/// No acceptance or parse-authority bit is returned: the circuit derives it
+/// independently from the original bytes, which the caller must retain.
+pub(crate) fn decode_projected_candidate(
+    profile: &TrustedProfile,
+    bytes: &[u8],
+    inputs: &ProjectedInputs,
+) -> Result<Decoded, String> {
+    let raw = frame_projected_pair(profile, bytes)?;
+    if let Ok(decoded) = decode_projected_pair(profile, bytes, inputs) {
+        return Ok(decoded);
+    }
+    let pp = Proof::<Eq>::from_bytes_rows(
+        &profile.p_shape,
+        profile.p.rows as usize,
+        profile.p.late as usize,
+        &vec![0; raw.primary.len()],
+    )
+    .expect("zero points/scalars are a canonical fixed-profile proof encoding");
+    let ps = Proof::<Ep>::from_bytes_rows(
+        &profile.s_shape,
+        profile.s.rows as usize,
+        profile.s.late as usize,
+        &vec![0; raw.secondary.len()],
+    )
+    .expect("zero points/scalars are a canonical fixed-profile proof encoding");
+    Ok(projected_transcripts(profile, inputs, pp, ps, [0; 32]))
+}
+
+fn projected_transcripts(
+    profile: &TrustedProfile,
+    inputs: &ProjectedInputs,
+    pp: Proof<Eq>,
+    ps: Proof<Ep>,
+    r: [u8; 32],
+) -> Decoded {
+    let ip = inputs.primary.clone();
+    let is = inputs.secondary.clone();
+    let mut tp = phase1(&profile.p_shape, &profile.p, &ip, &pp);
+    let _ = tp.challenge_full(b"pair/d");
+    let d = tp.last_word().to_repr();
+    let mut ts = phase1(&profile.s_shape, &profile.s, &is, &ps);
+    ts.word_limbs(b"pair/d", &d);
+    let _ = ts.challenge_full(b"pair/rho");
+    let rho = ts.last_word().to_repr();
+    Decoded {
+        ip,
+        is,
+        pp,
+        ps,
+        r,
+        d,
+        rho,
+    }
 }
 
 /// Roundtrip one actual proved pair and print all encoded components. No
@@ -503,6 +739,8 @@ mod tests {
     fn projection() -> ProjectedInputs {
         ProjectedInputs::from_authenticated_fields(
             Fp::from(101),
+            Fp::from(102),
+            Fp::from(103),
             [Fp::from(7); crate::bootstrap_context::FIELDS],
             [Fp::from(9); crate::bootstrap_context::LINEAGE_FIELDS],
             crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
@@ -562,6 +800,8 @@ mod tests {
         assert!(
             ProjectedInputs::from_authenticated_fields(
                 Fp::ONE,
+                Fp::ONE,
+                Fp::ONE,
                 [Fp::ZERO; crate::bootstrap_context::FIELDS],
                 [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
                 [Fp::ZERO; 4],
@@ -572,10 +812,12 @@ mod tests {
         assert!(
             ProjectedInputs::from_authenticated_fields(
                 Fp::ONE,
+                Fp::ONE,
+                Fp::ONE,
                 [Fp::ZERO; crate::bootstrap_context::FIELDS],
                 [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
                 crate::spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
-                3
+                4
             )
             .is_err()
         );

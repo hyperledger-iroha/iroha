@@ -12,7 +12,7 @@ const MAX: usize = 16 * 1024 * 1024;
 pub(super) fn bytes(text: &str, max: usize) -> Result<Vec<u8>, NativeValidationError> {
     if text.is_empty()
         || text.len() > max * 2
-        || text.len() % 2 != 0
+        || !text.len().is_multiple_of(2)
         || !text
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -132,6 +132,10 @@ fn keys(expected: &[u8]) -> Result<Vec<StateKeyV1>, NativeValidationError> {
 /// Verify presence or absence for every exact requested row, in the caller-selected order.
 #[pyfunction]
 #[pyo3(name = "verify_state_rows_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 pub(super) fn verify_state_rows_v1_py(
     py: Python<'_>,
     proof: &[u8],

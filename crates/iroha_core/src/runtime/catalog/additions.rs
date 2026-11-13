@@ -96,10 +96,65 @@ pub const ADDITIONS: &[Addition] = &[
     RESTRICTED_DATASPACE_READ,
     // Independent of every addition before it, like the three above.
     PARLIAMENT_ANONYMOUS,
-    // Independent of every addition before it, like the four above; it stays last so no
-    // ordered addition declares its tables.
+    // These independent additions are excluded from the ordered dependency chain.
+    // Later additions must explicitly compose with their selected services and tables.
     RUNTIME_LIFECYCLE,
+    DEFERRED_CONSENT,
+    NATIVE_ESCROW_CAPTURE,
+    NATIVE_AMX_CAPTURE,
+    NATIVE_GAME_CAPTURE,
+    CONTRACT_LIFECYCLE,
 ];
+
+/// Reserved native game transfers retain their original certified completion closure.
+pub const NATIVE_GAME_CAPTURE: Addition = Addition {
+    module: "iroha.runtime.native_game_capture.v1",
+    instructions: &[
+        "iroha.game_partition.request_export.v1",
+        "iroha.game_partition.reserve_import.v1",
+        "iroha.game_partition.export_reserved.v1",
+        "iroha.game_partition.import_reserved.v1",
+        "iroha.game_partition.acknowledge_import.v1",
+        "iroha.game_partition.cancel_export_request.v1",
+        "iroha.game_partition.cancel_import_reservation.v1",
+    ],
+    rebinds: &[
+        "iroha.game_partition.export.v1",
+        "iroha.game_partition.import.v1",
+    ],
+    storage: &[StorageAddition::Table("world.runtime_game_transfers")],
+};
+
+/// Native AMX original decision/settlement captures, including the fixed deadline finalizer.
+pub const NATIVE_AMX_CAPTURE: Addition = Addition {
+    module: "iroha.runtime.native_amx_capture.v1",
+    instructions: &[],
+    rebinds: &[
+        "iroha.sumeragi.amx.begin.v1",
+        "iroha.sumeragi.amx.prepare.v1",
+    ],
+    storage: &[StorageAddition::Table("world.runtime_amx_captures")],
+};
+
+/// Kernel-owned native escrow captures, installed independently after earlier custody drains.
+pub const NATIVE_ESCROW_CAPTURE: Addition = Addition {
+    module: "iroha.runtime.native_escrow_capture.v1",
+    instructions: &[],
+    rebinds: &["iroha.instruction.v1::escrow::OpenAssetEscrow"],
+    storage: &[StorageAddition::Table("world.runtime_escrow_captures")],
+};
+
+/// Deferred execution consent, independently installed through a new services profile.
+/// Existing proposal and trigger layouts stay unchanged; the kernel owns their captures.
+pub const DEFERRED_CONSENT: Addition = Addition {
+    module: "iroha.runtime.deferred_consent.v1",
+    instructions: &[
+        "iroha.runtime.consent.trigger.current.v1",
+        "iroha.runtime.consent.multisig.current.v1",
+    ],
+    rebinds: &[],
+    storage: &[StorageAddition::Table("world.runtime_deferred_consents")],
+};
 
 /// The kernel's lifecycle State (`specs/live_runtime_upgrades.md` §5.4, §7.2, §7.3, §13):
 ///
@@ -191,11 +246,9 @@ pub const ENDORSED_RUNTIME_UPGRADE_PROPOSAL: Addition = Addition {
 /// export and import, with the `world.game_partitions` table they keep. Until a change set
 /// activates it the instructions stay inactive and the table stays empty and out of snapshots.
 ///
-/// TODO(`specs/live_runtime_upgrades.md` §7): an export removes the unit at its source while the
-/// destination's import is still pending, but runtime obligations track only escrow and AMX
-/// State. Make an in-flight export a live obligation, so admission closure, completion-only
-/// restrictions and retirement cannot strand its import, before governance activates this
-/// addition on a live network.
+/// The original unreserved export does not capture destination completion. Local release
+/// qualification therefore refuses this addition on its own; `NATIVE_GAME_CAPTURE` installs
+/// these immutable dependencies atomically with its certified transfer and cancellation service.
 pub const GAME_PARTITIONS: Addition = Addition {
     module: "iroha.game_partition.v1",
     instructions: &[
@@ -232,13 +285,15 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
 };
 
 /// The anonymous Parliament family (`crate::governance::parliament_anonymous`,
-/// `specs/parliament_private_ballot_design.md` §12.3): `RegisterParliamentCredentialV1`
-/// accepts a binding seat together with its verified credential. Its tables are
-/// `world.parliament_anonymous_attempts`, the State of each attempt,
-/// `world.parliament_anonymous_registrations`, the credential of each accepted binding
-/// assignment, and `world.parliament_anonymous_boards`, the board of each sealed binding jury.
-/// Until a change set activates it the instruction stays inactive and the tables stay empty
-/// and out of snapshots. Its dependencies are exactly the frozen baseline.
+/// `specs/parliament_private_ballot_design.md` §8.1 and §12.3). Its interfaces are
+/// `CreateAnonymousParliamentAttemptV1`, which creates an attempt below the admission cap,
+/// `SubmitAnonymousParliamentTransitionV1`, which records an account-signed fact or intent of
+/// one, and `RegisterParliamentCredentialV1`, which accepts a binding seat together with its
+/// verified credential. Its tables are `world.parliament_anonymous_attempts`, the State of
+/// each attempt, `world.parliament_anonymous_registrations`, the credential of each accepted
+/// binding assignment, and `world.parliament_anonymous_boards`, the board of each sealed
+/// binding jury. Until a change set activates it the instructions stay inactive and the
+/// tables stay empty and out of snapshots. Its dependencies are exactly the frozen baseline.
 ///
 /// TODO(`specs/parliament_private_ballot_design.md` §12.3): the family is activatable only
 /// after its fourth slice (the positioned block-start pass and signerless ballots), and on a
@@ -246,7 +301,11 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
 /// Governance must not activate it on a network before then.
 pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
     module: "iroha.governance.parliament.anonymous.v1",
-    instructions: &["iroha.governance.parliament.credential.register.v1"],
+    instructions: &[
+        "iroha.governance.parliament.anonymous.attempt.create.v1",
+        "iroha.governance.parliament.anonymous.transition.submit.v1",
+        "iroha.governance.parliament.credential.register.v1",
+    ],
     rebinds: &[],
     storage: &[
         StorageAddition::Table("world.parliament_anonymous_attempts"),
@@ -324,3 +383,12 @@ pub mod test_additions {
         storage: &[],
     };
 }
+
+/// Authenticated executing-contract registration under a separately named ABI V1 host profile.
+/// The governed draft requires the existing kernel lifecycle storage; it adds no storage layout.
+pub const CONTRACT_LIFECYCLE: Addition = Addition {
+    module: "iroha.runtime.contract_lifecycle.v1",
+    instructions: &["iroha.runtime.obligation.contract.register.v1"],
+    rebinds: &[],
+    storage: &[],
+};

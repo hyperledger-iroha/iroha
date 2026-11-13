@@ -12,7 +12,7 @@ use super::{
     COMPLETE_RELATION, COMPONENTS, Citation, CompletionInputs, DEFAULT_SYSCALL_EXCLUSIONS,
     FAULT_CODE_COVERAGE, HOST_PRIVATE_SYSCALLS, INVENTORY_SCHEMA, INVOCATION_OBLIGATIONS,
     NUMERIC_FAULTS, NumericFaultEntry, OPCODES, OPEN_SEMANTICS, Obligation, POINTER_ABI_FAULTS,
-    PRIVACY_HELPERS, PRODUCTION_ADMISSION, PointerAbiFaultEntry, RESERVED_OPCODES, RUN_PHASES,
+    PRIVACY_HELPERS, PRODUCTION_ADMISSION, PointerAbiFaultEntry, RUN_PHASES,
     SYSCALL_PRIVACY_FUNCTIONS, SYSCALLS, SyscallRelation, TAG_ACCESSORS, TRAP_KINDS, TrapOrigin,
     VM_ERROR_PRODUCER_EXCLUSIONS, VM_ERROR_PRODUCER_SCOPE, VM_ERRORS, completion_blockers,
     components_for_opcode, components_for_trap, opcode_coverage, summary, trap_coverage,
@@ -212,20 +212,6 @@ fn opcode_rows() -> Vec<Value> {
                 ("opcode", Value::from(u64::from(entry.opcode))),
                 ("pc", Value::from(entry.pc.id())),
                 ("tag_surface", strings(entry.tag_surface.iter().copied())),
-            ])
-        })
-        .collect()
-}
-
-fn reserved_opcode_rows() -> Vec<Value> {
-    RESERVED_OPCODES
-        .iter()
-        .map(|entry| {
-            object([
-                ("hex", Value::from(format!("0x{:02X}", entry.opcode))),
-                ("name", Value::from(entry.name)),
-                ("opcode", Value::from(u64::from(entry.opcode))),
-                ("outcome", Value::from("InvalidOpcode")),
             ])
         })
         .collect()
@@ -504,7 +490,6 @@ pub fn render_inventory_json() -> String {
             Section::Scalar(privacy_tag_surface_value()),
         ),
         ("opcodes", Section::Rows(opcode_rows())),
-        ("reserved_opcodes", Section::Rows(reserved_opcode_rows())),
         ("syscall_relations", Section::Rows(relation_rows())),
         ("syscalls", Section::Rows(syscall_rows())),
         ("host_private_syscalls", Section::Rows(host_private_rows())),

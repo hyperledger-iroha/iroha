@@ -117,9 +117,11 @@ pub use self::{
     output::{
         CASTING_CLOCK_ROW_MAX_BYTES_V1, CastingClockEstablishedV1, CastingOpenedV1,
         GOVERNANCE_START_OUTPUT_BYTES_V1, GOVERNANCE_START_OUTPUT_ROWS_V1,
-        GOVERNANCE_START_ROW_MAX_BYTES_V1, GOVERNANCE_START_ROWS_PER_ITEM_V1,
-        GovernanceBlockStartEventV1, GovernanceBlockStartOutputErrorV1,
-        GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1, LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1,
+        GOVERNANCE_START_PRELUDE_ROWS_V1, GOVERNANCE_START_ROW_MAX_BYTES_V1,
+        GOVERNANCE_START_ROWS_PER_ITEM_V1, GovernanceBlockStartEventV1,
+        GovernanceBlockStartOutputErrorV1, GovernanceBlockStartOutputV1,
+        GovernanceLifecycleItemV1, GovernanceOutputAnchorV1, LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1,
+        LifecycleAppliedV1, LifecycleBoardDigestV1, NativeSlotAdvancedV1,
         SealedCredentialListPublishedV1,
     },
     policy::{

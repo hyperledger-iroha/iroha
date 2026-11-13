@@ -7,11 +7,11 @@ use crate::{encoding::wide as enc, instruction::wide};
 fn borrowed_scan_preserves_repeated_full_width_ids_and_sorted_first_selection() {
     let mut bytes = ProgramMetadata::default().encode();
     for word in [
-        enc::encode_syscallx(0x00ff_ffff),
+        enc::encode_scall(0x00ff_ffff),
         enc::encode_halt(),
-        enc::encode_sys(wide::system::SCALL, 17),
-        enc::encode_syscallx(256),
-        enc::encode_sys(wide::system::SCALL, 17),
+        enc::encode_scall(17),
+        enc::encode_scall(256),
+        enc::encode_scall(17),
     ] {
         bytes.extend_from_slice(&word.to_le_bytes());
     }

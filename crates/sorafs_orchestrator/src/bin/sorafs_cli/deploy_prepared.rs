@@ -28,7 +28,7 @@ const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(super) enum DeployPayload {
     Memory(Cursor<Vec<u8>>),
-    Prepared(NativePayloadReader),
+    Prepared(Box<NativePayloadReader>),
 }
 impl Read for DeployPayload {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
@@ -256,7 +256,7 @@ impl PreparedPackage {
         let root_cid_base32 = encode_content_cid_base32(&manifest.root_cid);
         Ok(DeployPackArtifacts {
             plan,
-            payload: DeployPayload::Prepared(payload),
+            payload: DeployPayload::Prepared(Box::new(payload)),
             manifest,
             manifest_digest_hex,
             root_cid_hex,

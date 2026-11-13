@@ -55,6 +55,7 @@ pub mod ram_lfe;
 pub mod repo;
 pub mod retail_daily_limit;
 pub mod runtime_boundary;
+pub mod runtime_deferred;
 pub mod runtime_obligation;
 pub mod rwa;
 /// SCCP v1 cross-chain core: state access, hooks, admission and instructions.
@@ -423,11 +424,18 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    // The anonymous Parliament family records facts, intents and credentials; it moves no
+    // asset. Core derives every authority its reducer needs (design §8.1).
+    dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // Registering or ending an obligation changes no balance: its terminal effects are ordinary
     // instructions the owner issues, each with its own asset checks.
+    dispatch_instruction::<iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::runtime_obligation::RegisterRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::runtime_deferred::RegisterCurrentBindingTriggerV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::runtime_deferred::ProposeCurrentBindingMultisigV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // A boundary of the root's history is a record every validator signed; it moves no asset.
     dispatch_instruction::<iroha_data_model::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::runtime_boundary::RaiseRuntimeStartupFloorV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -940,7 +948,27 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
     >;
     let restricted_read: InstructionHandler = dispatch_restricted_dataspace_read_successor;
+    let native_amx_begin: InstructionHandler =
+        dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1>;
+    let native_amx_prepare: InstructionHandler =
+        dispatch_original_amx::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1>;
+    let native_escrow_open: InstructionHandler =
+        dispatch_instruction::<iroha_data_model::isi::escrow::OpenAssetEscrow>;
     std::collections::BTreeMap::from([
+        (
+            crate::runtime::catalog::additions::NATIVE_AMX_CAPTURE.module,
+            std::collections::BTreeMap::from([
+                ("iroha.sumeragi.amx.begin.v1", native_amx_begin),
+                ("iroha.sumeragi.amx.prepare.v1", native_amx_prepare),
+            ]),
+        ),
+        (
+            crate::runtime::catalog::additions::NATIVE_ESCROW_CAPTURE.module,
+            std::collections::BTreeMap::from([(
+                "iroha.instruction.v1::escrow::OpenAssetEscrow",
+                native_escrow_open,
+            )]),
+        ),
         (
             crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
             std::collections::BTreeMap::from([(
@@ -1726,7 +1754,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 4,
             abi_version: 1,
         };

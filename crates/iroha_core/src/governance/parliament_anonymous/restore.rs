@@ -11,8 +11,8 @@ use iroha_data_model::{
     governance::{
         GovernanceAnchorV1,
         anonymous_ballot::{
-            AnonymousBodyResultV1, AnonymousClosePhaseEarlyV1, BallotClosureRecordV1,
-            MIN_SEALED_SEATS_V1,
+            AnonymousBodyResultV1, AnonymousClosePhaseEarlyV1, AnonymousParliamentBodyBindingV1,
+            BallotClosureRecordV1, MIN_SEALED_SEATS_V1,
         },
         types::{
             AssignmentId, BeaconSessionId, BodyElectionAttemptId, DeliberationPhaseV1,
@@ -68,6 +68,85 @@ fn no_roster_height(
 }
 
 impl AnonymousParliamentAttemptStateV1 {
+    /// Refuse realized lifecycle facts above a restored committed cut.
+    ///
+    /// Pending pulse slots and governance-clock deadlines may remain in the future. A
+    /// consumed pulse, pass anchor, result or execution has already happened and must be
+    /// at or below `height`. This complements [`Self::validate`], which checks the facts
+    /// against one another but does not know the ledger boundary.
+    ///
+    /// # Errors
+    /// [`Error::Restore`] when a persisted fact claims a future block.
+    pub(crate) fn validate_restored_height_v1(&self, height: u64) -> Result<(), Error> {
+        let future = |anchor: GovernanceAnchorV1| anchor.height > height;
+        let future_closure = |closure: &BallotClosureRecordV1| {
+            future(closure.opening_anchor)
+                || closure.casting_clock_height > height
+                || future(closure.closure_anchor)
+        };
+        let future_binding = |binding: &AnonymousParliamentBodyBindingV1| {
+            binding.sealed.sortition_request.request_height > height
+                || binding.sealed.sortition_request.pulse_height > height
+                || binding.result_height > height
+                || binding
+                    .ballot()
+                    .is_some_and(|ballot| future_closure(&ballot.closure))
+        };
+        let future_qualification = self.qualification.started.is_some_and(future)
+            || self.qualification.ended.is_some_and(future);
+        let future_generation = self.generations.iter().any(|generation| {
+            generation.request_height > height
+                || matches!(&generation.status, AnonymousGenerationStatusV1::Drawn(draw)
+                    if generation.slot > height || future(draw.at))
+                || generation.elections.iter().any(|election| {
+                    election.request.request_height > height
+                        || (matches!(generation.status, AnonymousGenerationStatusV1::Drawn(_))
+                            && election.request.pulse_height > height)
+                        || election.closed.is_some_and(|closed| future(closed.at))
+                })
+        });
+        let future_body = self.bodies.values().any(|body| {
+            future(body.sealed_at)
+                || body.sealed.sortition_request.request_height > height
+                || body.sealed.sortition_request.pulse_height > height
+                || body.phases.iter().any(|phase| future(phase.entered_at))
+                || body
+                    .finding
+                    .as_ref()
+                    .and_then(|finding| finding.concluded_at)
+                    .is_some_and(future)
+        });
+        let future_rejection = match &self.rejection {
+            Some(
+                AnonymousAttemptRejectionV1::Ballot(closure)
+                | AnonymousAttemptRejectionV1::ConfirmationCapacityUnavailable(closure),
+            ) => future_closure(closure),
+            Some(AnonymousAttemptRejectionV1::PublicFinding(failure)) => future(failure.at),
+            Some(AnonymousAttemptRejectionV1::SortitionExhausted(exhaustion)) => {
+                future(exhaustion.at)
+            }
+            None => false,
+        };
+        if future_qualification
+            || future_generation
+            || future_body
+            || self.results.values().any(future_binding)
+            || future_rejection
+            || self
+                .certificate
+                .as_ref()
+                .is_some_and(|certificate| certificate.body_bindings.iter().any(future_binding))
+            || self
+                .execution
+                .as_ref()
+                .is_some_and(|execution| future(execution.at))
+        {
+            Err(restore("height"))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Check the lifecycle records against each other and the frozen policy.
     pub(super) fn validate_lifecycle(&self, network_id: &NetworkId) -> Result<(), Error> {
         self.validate_restored_anchors()?;

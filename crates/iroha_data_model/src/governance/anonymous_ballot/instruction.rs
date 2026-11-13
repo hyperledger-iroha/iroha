@@ -25,9 +25,10 @@
 //! The payloads shared with the baseline are the baseline's own types. They are frozen
 //! with the baseline and therefore cannot change under this family either.
 //!
-//! **Nothing here is registered.** Until a governed change set activates the family, its
-//! wire identifiers resolve as inactive and these payloads travel only inside the ordinary
-//! opaque envelope.
+//! Both interfaces are registered as tolerant instructions of the
+//! `iroha.governance.parliament.anonymous.v1` addition. Until a governed change set activates
+//! the family they resolve as inactive, and a release without them keeps their envelopes
+//! opaque.
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -75,8 +76,19 @@ pub struct CreateAnonymousParliamentAttemptV1 {
     pub attempt_sequence: u32,
 }
 
+impl crate::seal::Instruction for CreateAnonymousParliamentAttemptV1 {}
+
+impl PartialOrd for CreateAnonymousParliamentAttemptV1 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        // ProposalKind has no field ordering; match the baseline attempt's
+        // canonical instruction ordering without changing its proposal types.
+        Some(self.encode().cmp(&other.encode()))
+    }
+}
+
 impl CreateAnonymousParliamentAttemptV1 {
-    /// Wire identifier of the interface; no registry or selection activates it yet.
+    /// Wire identifier of the interface, a tolerant registration of the anonymous family's
+    /// addition.
     pub const WIRE_ID: &'static str = "iroha.governance.parliament.anonymous.attempt.create.v1";
 
     /// The immutable proposal-content identifier.
@@ -301,8 +313,11 @@ pub struct SubmitAnonymousParliamentTransitionV1 {
     pub transition: AnonymousParliamentTransitionV1,
 }
 
+impl crate::seal::Instruction for SubmitAnonymousParliamentTransitionV1 {}
+
 impl SubmitAnonymousParliamentTransitionV1 {
-    /// Wire identifier of the interface; no registry or selection activates it yet.
+    /// Wire identifier of the interface, a tolerant registration of the anonymous family's
+    /// addition.
     pub const WIRE_ID: &'static str = "iroha.governance.parliament.anonymous.transition.submit.v1";
 
     /// Reject a malformed or cross-attempt transition before stateful execution.
@@ -386,17 +401,56 @@ mod tests {
         ]
     }
 
-    fn assert_opaque(wire_id: &'static str, payload: Vec<u8>) {
-        let envelope: InstructionBox = OpaqueInstructionV1::new(wire_id, payload)
+    /// The typed instruction travels under its wire ID and decodes back to itself; a frame the
+    /// decoder refuses stays an opaque envelope, as on a release without the instruction.
+    fn assert_registered<T>(instruction: T, wire_id: &'static str, payload: Vec<u8>)
+    where
+        T: Into<InstructionBox> + Clone + PartialEq + core::fmt::Debug + 'static,
+    {
+        let boxed: InstructionBox = instruction.clone().into();
+        assert_eq!(crate::isi::instruction_wire_id(&boxed), Some(wire_id));
+        let wire = norito::encode_canonical(&boxed).expect("encode registered instruction");
+        let decoded = norito::decode_canonical::<InstructionBox>(&wire).expect("decode");
+        assert_eq!(decoded.as_any().downcast_ref::<T>(), Some(&instruction));
+        assert_eq!(norito::encode_canonical(&decoded).expect("re-encode"), wire);
+
+        let mut trailing = payload;
+        trailing.push(0);
+        let envelope: InstructionBox = OpaqueInstructionV1::new(wire_id, trailing)
             .expect("bounded payload")
             .into();
         let wire = norito::encode_canonical(&envelope).expect("encode envelope");
         let decoded = norito::decode_canonical::<InstructionBox>(&wire).expect("decode envelope");
-        assert!(
-            decoded.as_opaque().is_some(),
-            "{wire_id} has no registry or dispatch activation"
-        );
+        assert!(decoded.as_opaque().is_some(), "{wire_id} refused frame");
         assert_eq!(norito::encode_canonical(&decoded).expect("re-encode"), wire);
+    }
+
+    #[test]
+    fn creation_comparison_distinguishes_retry_and_proposal_content() {
+        let original = CreateAnonymousParliamentAttemptV1 {
+            proposal: proposal(),
+            attempt_sequence: 0,
+        };
+        assert_eq!(
+            original.partial_cmp(&original.clone()),
+            Some(core::cmp::Ordering::Equal)
+        );
+        let retry = CreateAnonymousParliamentAttemptV1 {
+            attempt_sequence: 1,
+            ..original.clone()
+        };
+        let mut other_content = original.clone();
+        let ProposalKind::DeployContract(deployment) = &mut other_content.proposal else {
+            panic!("fixture must be a contract deployment");
+        };
+        deployment.code_hash = crate::governance::types::ContractCodeHash::new([0xcc; 32]);
+        for other in [retry, other_content] {
+            let order = original
+                .partial_cmp(&other)
+                .expect("instructions are comparable");
+            assert_ne!(order, core::cmp::Ordering::Equal);
+            assert_eq!(other.partial_cmp(&original), Some(order.reverse()));
+        }
     }
 
     #[test]
@@ -446,11 +500,15 @@ mod tests {
             norito::json::from_str::<CreateAnonymousParliamentAttemptV1>(&json).expect("from json"),
             instruction
         );
-        assert_opaque(CreateAnonymousParliamentAttemptV1::WIRE_ID, bytes);
+        assert_registered(
+            instruction,
+            CreateAnonymousParliamentAttemptV1::WIRE_ID,
+            bytes,
+        );
     }
 
     #[test]
-    fn every_transition_roundtrips_and_stays_opaque() {
+    fn every_transition_roundtrips_under_its_registered_wire_id() {
         let transitions = every_transition();
         assert_eq!(transitions.len(), 8, "one fixture per variant");
         for (index, transition) in transitions.into_iter().enumerate() {
@@ -475,7 +533,11 @@ mod tests {
                     .expect("from json"),
                 instruction
             );
-            assert_opaque(SubmitAnonymousParliamentTransitionV1::WIRE_ID, bytes);
+            assert_registered(
+                instruction,
+                SubmitAnonymousParliamentTransitionV1::WIRE_ID,
+                bytes,
+            );
         }
         assert_ne!(
             SubmitAnonymousParliamentTransitionV1::WIRE_ID,

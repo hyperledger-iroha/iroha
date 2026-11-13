@@ -13,7 +13,7 @@ import {
   buildFinalizeSmartContractCodeUploadInstruction,
   buildUploadSmartContractCodeChunkInstruction,
 } from "../src/instructionBuilders.js";
-import { computeIvmArtifactHashes } from "../src/ivmArtifact.js";
+import { computeIvmArtifactHashes, IVM_PROGRAM_HEADER_LENGTH } from "../src/ivmArtifact.js";
 import { NetworkId } from "../src/networkId.js";
 import {
   noritoDecodeInstruction,
@@ -150,7 +150,8 @@ test("artifact preparation verifies the authenticated CNTR envelope before uploa
   assert.equal(prepared.artifactBytes[0], 0x49);
 
   const malformed = deploymentFixture();
-  malformed.artifactBytes[49] ^= 1;
+  // Corrupt the CNTR marker that immediately follows the fixed program header.
+  malformed.artifactBytes[IVM_PROGRAM_HEADER_LENGTH] ^= 1;
   const malformedHash = computeIvmArtifactHashes(malformed.artifactBytes).codeHashHex;
   malformed.manifest.code_hash =
     buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({ codeHash: malformedHash }))

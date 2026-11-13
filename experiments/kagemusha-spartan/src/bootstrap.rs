@@ -51,6 +51,17 @@ pub struct Prepared {
     pub receipt_cell: usize,
     pub receipt_comb: usize,
 }
+
+/// Native validation before selecting and signing a Bootstrap. It contains no
+/// authenticated own receipt; root/issuer/credential checks remain mandatory.
+pub struct UnsignedPrepared {
+    pub wiring: Wiring<Fp>,
+    pub gfam: usize,
+    pub local: usize,
+    pub state_cell: usize,
+    pub statement_cell: usize,
+    pub receipt_body: [u8; RECEIPT_BYTES],
+}
 fn hash(domain: &[u8; 8], values: &[Fp]) -> Fp {
     poseidon::hash_with_domain(u64::from_le_bytes(*domain), values)
 }
@@ -165,6 +176,18 @@ fn public(
 /// Compose private authentication ports and bind the externally supplied scheme
 /// and relation to compact public context. No fixed issuer or scheme VK exists.
 pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static str> {
+    prepare_mode(context,input,true)
+}
+
+pub fn prepare_unsigned(context:&Context,input:&Inputs)->Result<UnsignedPrepared,&'static str>{
+    let mut unsigned=input.clone();
+    unsigned.receipt.signature=[0;64];
+    let prepared=prepare_mode(context,&unsigned,false)?;
+    Ok(UnsignedPrepared{wiring:prepared.wiring,gfam:prepared.gfam,local:prepared.local,
+        state_cell:prepared.state_cell,statement_cell:prepared.statement_cell,receipt_body:input.receipt.body})
+}
+
+fn prepare_mode(context:&Context,input:&Inputs,authenticate_own:bool)->Result<Prepared,&'static str>{
     if context.relation == [0; 32] {
         return Err("zero trusted relation");
     }
@@ -181,7 +204,7 @@ pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static s
     let z = BigUint::from_bytes_be(&p256::sha256_one_block(mb.as_ref()));
     let r = BigUint::from_bytes_be(&input.receipt.signature[..32]);
     let s = BigUint::from_bytes_be(&input.receipt.signature[32..]);
-    if !p256::verify(
+    if authenticate_own && !p256::verify(
         &q,
         &z,
         &p256::Signature {
@@ -414,7 +437,8 @@ pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static s
             &mut rng,
         );
     }
-    let (_, comb) = certificate::add_signature(
+    let comb = if authenticate_own {
+        let (_, comb) = certificate::add_signature(
         &mut w,
         gfam,
         local,
@@ -425,8 +449,19 @@ pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static s
         KeyTable::Witness {
             id: nonnative::WALLET_TABLE,
         },
-    );
-    w.wallet = Some((comb + nonnative::A_WTABLE, full::TABLE_IO));
+        );
+        w.wallet = Some((comb + nonnative::A_WTABLE, full::TABLE_IO));
+        comb
+    } else {
+        let row=w.push(crate::uniform::Array{name:"unsigned Bootstrap certified wallet table",family:gfam,
+            rho:9,r_count:512,fixed:false,lookups:Vec::new(),widths:vec![9,88,88,80,88,88,80],rows:Vec::new(),
+            values:nonnative::wallet_table_values(&q)});
+        w.tables.push((row,nonnative::WALLET_TABLE));
+        w.wallet=Some((row,full::TABLE_IO));
+        // This private intermediate is consumed only by prepare_unsigned,
+        // which deliberately has no authenticated comb/receipt field.
+        usize::MAX
+    };
     let table_values: Vec<_> = cred.body[195..259].chunks_exact(16).map(word).collect();
     let table_sources: Vec<_> = (0..4).map(|i| credbytes(195 + 16 * i, 16)).collect();
     public(
@@ -444,6 +479,22 @@ pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static s
         full::HEAD_IO,
         &[state],
         &[own(state_cells[1], 1)],
+    );
+    public(
+        &mut w,
+        gfam,
+        local,
+        full::STATEMENT_IO,
+        &[sd],
+        &[own(statement_cells[1], 1)],
+    );
+    public(
+        &mut w,
+        gfam,
+        local,
+        full::RECEIPT_IO,
+        &[rd],
+        &[own(rdstate[1], 1)],
     );
     let mut context_values = [Fp::ZERO; 13];
     context_values[..2].copy_from_slice(&id(&context.root.scheme));
@@ -495,7 +546,7 @@ pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static s
 /// Reconstruct the compact public inputs from the original expected context,
 /// credential and state. This does not authenticate them. The caller must first
 /// accept the Bootstrap proof against those expectations; no proof IO is read.
-pub(crate) fn projection(context: &Context, input: &Inputs) -> crate::carrier::ProjectedInputs {
+pub(crate) fn public_profile(context: &Context, input: &Inputs) -> [Fp; 64] {
     let body = &input.credential.body;
     let mut words = [Fp::ZERO; 13];
     words[..2].copy_from_slice(&id(&context.root.scheme));
@@ -506,23 +557,44 @@ pub(crate) fn projection(context: &Context, input: &Inputs) -> crate::carrier::P
     for (i, start) in [147, 131, 179, 163].into_iter().enumerate() {
         words[9 + i] = fp(&BigUint::from_bytes_be(&body[start..start + 16]));
     }
-    let table = std::array::from_fn(|i| word(&body[195 + 16 * i..211 + 16 * i]));
+    let table: [Fp; 4] = std::array::from_fn(|i| word(&body[195 + 16 * i..211 + 16 * i]));
     let head = hash(
         b"kgwcore1",
         &[input.core.as_slice(), &[hash(b"kgwrest1", &input.rest)]].concat(),
     );
+    let mut public = [Fp::ZERO; 64];
+    public[0] = Fp::ONE;
+    public[full::HEAD_IO] = head;
+    public[full::STATEMENT_IO] = hash(b"kgwstmt1", &input.statement);
+    public[full::RECEIPT_IO] = receipt_digest(&input.receipt);
+    public[16..29].copy_from_slice(&words);
+    public[32..38].copy_from_slice(&[
+        input.core[0],
+        input.core[27],
+        input.core[22],
+        input.core[10],
+        input.core[18],
+        empty_indexed_root(),
+    ]);
+    public[full::TABLE_IO..full::TABLE_IO + 4].copy_from_slice(&table);
+    let (a, b) = crate::deferral::kind_bits(full::BOOTSTRAP);
+    public[full::KIND_IO] = Fp::from(a);
+    public[full::KIND_IO + 1] = Fp::from(b);
+    public
+}
+
+/// Full-carrier projection of the exact expected Bootstrap public profile.
+pub(crate) fn projection(context: &Context, input: &Inputs) -> crate::carrier::ProjectedInputs {
+    let public = public_profile(context, input);
     crate::carrier::ProjectedInputs::from_authenticated_fields(
-        head,
-        words,
-        [
-            input.core[0],
-            input.core[27],
-            input.core[22],
-            input.core[10],
-            input.core[18],
-            empty_indexed_root(),
-        ],
-        table,
+        public[full::HEAD_IO],
+        public[full::STATEMENT_IO],
+        public[full::RECEIPT_IO],
+        public[16..29].try_into().unwrap(),
+        public[32..38].try_into().unwrap(),
+        public[full::TABLE_IO..full::TABLE_IO + 4]
+            .try_into()
+            .unwrap(),
         full::BOOTSTRAP,
     )
     .expect("valid expected Bootstrap output encodings")

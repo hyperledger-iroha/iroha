@@ -572,6 +572,9 @@ fn staged_genesis_execution_errors(
                 ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
                     format!("time output[{output_index}]")
                 }
+                ExecutionOutputV1::GovernanceBlockStart(_) => {
+                    format!("governance block-start output[{output_index}]")
+                }
             };
             Some(format!("{source}: {reason:?}"))
         })

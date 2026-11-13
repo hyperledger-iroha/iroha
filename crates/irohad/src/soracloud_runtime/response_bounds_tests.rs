@@ -233,7 +233,7 @@ fn soracloud_response_frame_gas_boundary_precedes_state_observation() -> Result<
         ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_payload.len(), response_bytes);
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_syscallx(SYSCALL_SORACLOUD_READ_COMMITTED_STATE).to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE).to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     for reserve in [response_gas - 1, response_gas] {

@@ -7,7 +7,7 @@ use iroha_core::smartcontracts::ivm::{
 };
 use ivm::{
     TraceMode,
-    encoding::wide::{encode_halt, encode_syscallx},
+    encoding::wide::{encode_halt, encode_scall},
     error::ExecutionDeferral,
 };
 
@@ -41,7 +41,7 @@ fn assert_debug_error(actual: &VMError, expected: &VMError) {
 
 fn vm() -> IVM {
     let mut vm = IVM::try_new(100).unwrap();
-    let words = [encode_syscallx(ivm::syscalls::SYSCALL_ABORT), encode_halt()];
+    let words = [encode_scall(ivm::syscalls::SYSCALL_ABORT), encode_halt()];
     let code: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
     vm.load_code(&code).unwrap();
     vm.set_zk_mode(false).unwrap();

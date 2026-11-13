@@ -69,7 +69,7 @@ pub struct MatPoly<F> {
 /// Kind `kind`'s selector corner `(c0, c1)`: Receive (0, 0), Send (1, 0),
 /// Bootstrap (0, 1). The corner (1, 1) is no kind's (the empty claim's).
 pub fn kind_bits(kind: usize) -> (u64, u64) {
-    assert!(kind < 3, "three kinds at most");
+    assert!(kind < 4, "four kinds at most");
     ((kind & 1) as u64, (kind >> 1) as u64)
 }
 
@@ -87,14 +87,14 @@ impl<F: PrimeField> MatPoly<F> {
     /// With at least `x_min` and `y_min` matrix variables (so that the
     /// accumulators of consecutive hops share one dimension).
     pub fn with_min<const K: usize>(kinds: [Kind<F>; K], x_min: usize, y_min: usize) -> Self {
-        assert!((2..=3).contains(&K), "two or three kinds");
+        Self::with_min_vec(kinds.into(), x_min, y_min)
+    }
+
+    pub fn with_min_vec(kinds: Vec<Kind<F>>, x_min: usize, y_min: usize) -> Self {
+        assert!((2..=4).contains(&kinds.len()), "two to four kinds");
         let x = kinds.iter().map(|k| k.sx).max().unwrap().max(x_min);
         let y = kinds.iter().map(|k| k.sz).max().unwrap().max(y_min);
-        MatPoly {
-            kinds: kinds.into(),
-            x,
-            y,
-        }
+        MatPoly { kinds, x, y }
     }
     /// The selector's bits: `c0`, and `c1` with three kinds.
     pub fn selector_bits(&self) -> usize {
@@ -154,8 +154,9 @@ impl<F: PrimeField> MatPoly<F> {
         let rho2 = rho.square();
         sel * pad * (rho * a + rho2 * b + rho2 * rho * cc)
     }
-    /// The empty claim: the selector corner `(1, 1)`, where no kind is
-    /// selected, so `P` there is zero (every other coordinate zero). A
+    /// The empty claim: selector `(1, 1)` with rho zero. With three kinds
+    /// the corner selects no kind; with four kinds rho zero still makes
+    /// every `rho A + rho^2 B + rho^3 C` exactly zero. A
     /// Bootstrap proof's accumulator: a chain starts with nothing deferred.
     pub fn empty_claim(&self) -> Claim<F> {
         let c1 = self
@@ -1028,6 +1029,178 @@ mod tests {
             "q is P along the curve"
         );
         assert_eq!(q, restrict_pointwise(&poly, &cl), "batched = pointwise");
+    }
+
+    fn four_kind_poly() -> MatPoly<Fp> {
+        // Deliberately different dimensions and matrix coefficients ensure a
+        // missing fourth selector cannot accidentally agree with another kind.
+        let kind = |index: usize| {
+            let sx = 5 + index;
+            let sz = 4 + index % 2;
+            Kind {
+                sx,
+                sz,
+                deg: (1, 1),
+                eval: Box::new(move |ch: &[Fp], rx: &[Fp], ry: &[Fp]| {
+                    let x = rx.iter().copied().sum::<Fp>();
+                    let y = ry.iter().copied().sum::<Fp>();
+                    let tag = Fp::from((index + 1) as u64);
+                    (
+                        tag + x + ch[0] * y,
+                        tag.double() + x * y,
+                        tag * tag + ch[1] * x + y,
+                    )
+                }),
+                eval_many: None,
+            }
+        };
+        MatPoly::new([kind(0), kind(1), kind(2), kind(3)])
+    }
+
+    #[test]
+    fn four_kinds_select_all_corners_and_empty_requires_zero_rho() {
+        let poly = four_kind_poly();
+        let mut rng = SpikeRng::new(b"four kind selector and empty regression");
+        let c1 = poly.c1_at().unwrap();
+        assert_eq!(poly.selector_bits(), 2);
+        let mut fresh = Vec::new();
+        for k in 0..4 {
+            let kk = &poly.kinds[k];
+            let rx: Vec<Fp> = (0..kk.sx).map(|_| rng.scalar()).collect();
+            let ry: Vec<Fp> = (0..kk.sz).map(|_| rng.scalar()).collect();
+            let ch = [rng.scalar(), rng.scalar()];
+            let rho: Fp = rng.scalar();
+            let point = poly.fresh_point(k, rho, &ch, &rx, &ry);
+            let (a, b, c) = (kk.eval)(&ch, &rx, &ry);
+            let value = rho * a + rho.square() * b + rho.square() * rho * c;
+            assert_eq!(poly.eval(&point), value, "kind{k} selects its exact matrix");
+            let (b0, b1) = kind_bits(k);
+            assert_eq!((point[0], point[c1]), (Fp::from(b0), Fp::from(b1)));
+            for (j, fixed) in poly.fixed_coords(k).into_iter().enumerate() {
+                if let Some(v) = fixed {
+                    assert_eq!(point[j], v, "kind{k} fixed coordinate{j}");
+                }
+            }
+            fresh.push(Claim { point, value });
+        }
+        let empty = poly.empty_claim();
+        assert_eq!(empty.point[1], Fp::ZERO);
+        assert_eq!((empty.point[0], empty.point[c1]), (Fp::ONE, Fp::ONE));
+        assert_eq!(poly.eval(&empty.point), Fp::ZERO);
+        // (1,1) now selects a real Load matrix. Reusing the old assertion that
+        // this corner is identically empty would waive all Load accumulation.
+        let mut formerly_empty = empty.point.clone();
+        formerly_empty[1] = Fp::ONE;
+        assert_eq!(poly.eval(&formerly_empty), Fp::from(28));
+        for _ in 0..8 {
+            let mut point: Vec<Fp> = (0..poly.n()).map(|_| rng.scalar()).collect();
+            point[1] = Fp::ZERO;
+            assert_eq!(
+                poly.eval(&point),
+                Fp::ZERO,
+                "rho0 remains empty even away from any selector corner"
+            );
+        }
+        let claims: [Claim<Fp>; 4] = fresh.try_into().unwrap();
+        let q = restrict(&poly, &claims);
+        assert_eq!(q, restrict_pointwise(&poly, &claims));
+        for _ in 0..4 {
+            let beta: Fp = rng.scalar();
+            assert_eq!(horner(&q, beta), poly.eval(&curve(&claims, beta)));
+        }
+        let mut with_bootstrap_empty = claims.clone();
+        with_bootstrap_empty[2] = empty;
+        let q = restrict(&poly, &with_bootstrap_empty);
+        let beta: Fp = rng.scalar();
+        let out = fold_output(&with_bootstrap_empty, &q, beta);
+        assert_eq!(
+            poly.eval(&out.point),
+            out.value,
+            "zero Bootstrap accumulator followed by real Load remains sound"
+        );
+    }
+
+    #[test]
+    fn four_kind_fold_actual_proof_matches_native_and_binds_load_selector() {
+        let poly = four_kind_poly();
+        let mut rng = SpikeRng::new(b"four kind actual folding proof");
+        let claims: [Claim<Fp>; 4] = std::array::from_fn(|k| {
+            let kk = &poly.kinds[k];
+            let rx: Vec<Fp> = (0..kk.sx).map(|_| rng.scalar()).collect();
+            let ry: Vec<Fp> = (0..kk.sz).map(|_| rng.scalar()).collect();
+            let ch = [rng.scalar(), rng.scalar()];
+            let point = poly.fresh_point(k, rng.scalar(), &ch, &rx, &ry);
+            Claim {
+                value: poly.eval(&point),
+                point,
+            }
+        });
+        let q = restrict(&poly, &claims);
+        let mut wiring = Wiring::default();
+        let family = wiring.family(0, 1);
+        let fold = fold_arrays(&mut wiring, family, &claims, &q);
+        for k in 0..4 {
+            fix_coords(&mut wiring, &fold, k, &poly.fixed_coords(k));
+        }
+        expose(&mut wiring, family, &fold, 32);
+        let (arrays, pi, counts, tables, copies) = wiring.finish();
+        let (c, inst, wit) = UniformCircuit::build_with_copies(
+            "four-kind-fold",
+            arrays,
+            pi,
+            counts,
+            tables,
+            copies,
+            10,
+            4,
+            b"four-kind-fold",
+        );
+        let ch = [rng.scalar(), rng.scalar()];
+        let mut filled = wit.w.clone();
+        let _ = c.instantiate(&c.shape, &ch, Some(&mut filled));
+        assert!(holds(&c, &inst, filled.clone(), &ch));
+        let output = read_output(&c, &fold, &filled);
+        assert_eq!(output, fold_output(&claims, &q, ch[1]));
+        assert_eq!(poly.eval(&output.point), output.value);
+        // Both selector bits matter for the fourth kind under this same VK.
+        for coordinate in [0, poly.c1_at().unwrap()] {
+            let mut changed = filled.clone();
+            changed[c.cell_index(fold.coords, C_P[3], coordinate)] = Fp::ZERO;
+            assert!(
+                !holds(&c, &inst, changed, &ch),
+                "Load selector bit{coordinate} cannot be discarded"
+            );
+        }
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut rng, &c);
+        crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).unwrap();
+        let accumulated = claim_of(&proof.late);
+        assert_eq!(poly.eval(&accumulated.point), accumulated.value);
+        let fixed = crate::spartan::fixed_commitments(&c.shape, &gens, &c);
+        let trace = crate::verifier::trace_circuit(
+            &c.shape,
+            &gens,
+            &inst,
+            &proof,
+            &[],
+            &crate::spartan::Link::None,
+            &c,
+            &fixed,
+        );
+        assert!(
+            trace.accepts,
+            "native verifier trace agrees with real four-kind fold proof"
+        );
+        for late in [1, poly.c1_at().unwrap(), poly.n()] {
+            let mut bytes = proof.to_bytes();
+            let at = 32 * (c.shape.rows() - c.fixed_rows(&c.shape) + late);
+            let value = Fp::from_repr(bytes[at..at + 32].try_into().unwrap()).unwrap() + Fp::ONE;
+            bytes[at..at + 32].copy_from_slice(&value.to_repr());
+            assert!(
+                crate::spartan::verify_circuit(&c.shape, &gens, &inst, &bytes, &c).is_err(),
+                "tampered rho/selector/value lateIO{late}"
+            );
+        }
     }
 
     /// A uniform kind's batched q: the fold circuit's own compiled program as

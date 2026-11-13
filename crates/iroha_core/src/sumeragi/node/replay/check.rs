@@ -11,8 +11,9 @@
 //! execution result this build produces with the stored certificate. It stops at the first block
 //! whose result differs and names the first differing commitment component
 //! ([`ResultComponent`]). A body the store no longer holds is missing history
-//! ([`ReplayCheckOutcome::MissingHistory`]), never a divergence. Blocks at or below a configured
-//! upgrade checkpoint are never re-executed. Nothing is written outside the temporary copy.
+//! ([`ReplayCheckOutcome::MissingHistory`]), never a divergence. Blocks at or below Kura's durable
+//! runtime boundary or the configured adoption checkpoint are never re-executed. The copy keeps
+//! that boundary even without adoption configuration. Nothing is written outside the copy.
 
 use std::{
     io,
@@ -272,15 +273,14 @@ pub enum ReplayCheckError {
     /// The copy does not open as a Strict store under the configured lane catalog.
     #[error("cannot open the replay copy: {0}")]
     Open(#[source] Box<crate::kura::Error>),
-    /// The State starts below the upgrade checkpoint, whose history this release never
-    /// re-executes.
+    /// The State starts below the highest runtime history boundary this store learned.
     #[error(
-        "replay would start at height {start}, below the upgrade checkpoint at height {checkpoint}: blocks up to the checkpoint are the previous release's history and are never re-executed"
+        "replay would start at height {start}, below runtime history boundary {checkpoint}: blocks at or below the boundary are never re-executed"
     )]
     BelowCheckpoint {
         /// Height of the State.
         start: u64,
-        /// Height of the upgrade checkpoint.
+        /// Height of the runtime history boundary, including configured adoption.
         checkpoint: u64,
     },
     /// Signed genesis or the restored State could not be prepared for replay.
@@ -450,7 +450,7 @@ pub fn check_replay(
         ));
     }
     let restored = startup::applied_height(&state);
-    if let Some(checkpoint) = kura.upgrade_checkpoint()
+    if let Some(checkpoint) = kura.history_boundary()
         && restored < checkpoint.height
     {
         return Err(ReplayCheckError::BelowCheckpoint {
@@ -587,15 +587,17 @@ pub fn check_replay(
             },
             components: vec![ResultComponent::WorldStateAccumulator],
         })),
-        Err(WorldStateVerificationError::KeyedMismatch { retained, captured }) => ReplayCheckOutcome::Diverged(Box::new(ReplayDivergence {
-            height: replayed_to,
-            first: ComponentDifference {
-                component: ResultComponent::WorldStateRoot,
-                expected: retained.to_string(),
-                actual: captured.to_string(),
-            },
-            components: vec![ResultComponent::WorldStateRoot],
-        })),
+        Err(WorldStateVerificationError::KeyedMismatch { retained, captured }) => {
+            ReplayCheckOutcome::Diverged(Box::new(ReplayDivergence {
+                height: replayed_to,
+                first: ComponentDifference {
+                    component: ResultComponent::WorldStateRoot,
+                    expected: retained.to_string(),
+                    actual: captured.to_string(),
+                },
+                components: vec![ResultComponent::WorldStateRoot],
+            }))
+        }
         Err(error) => return Err(ReplayCheckError::StateRoot(Box::new(error))),
     };
     Ok(ReplayCheckReport {

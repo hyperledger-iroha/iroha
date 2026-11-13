@@ -4380,14 +4380,11 @@
         "account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution",
         "account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime_resolution",
         "account_id_invalid_non_alias_literal_fails_compile_time_encoding",
-        "detect_vector_usage_includes_vector_gated_crypto_ops",
-        "detect_zk_usage_includes_zk_ops",
         "require_exports_nominal_error_type_and_uses_contract_abort_syscall",
         "assert_compiles_without_zk_mode_and_uses_abort_syscall",
         "assert_eq_compiles_without_zk_mode_and_uses_abort_syscall",
         "source_meta_cannot_override_build_configuration",
         "production_rejects_test_only_assertions",
-        "vector_length_is_compiler_owned",
         "manifest_access_set_hints_from_state_only_contract",
         "zero_arg_public_entrypoint_retains_scalar_state_hints",
         "whole_program_dce_excludes_dead_private_dynamic_access_hints",
@@ -4506,7 +4503,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "dfdb14b900901073460b5c0373dce4ec371c64d34bfab8463f7448e96a0c31a2"
+      "test_names_sha256": "d529ed69491856f28dff77aa98a7500f04205d81709358a204962ed7c6186483"
     },
     {
       "external_fixtures": [],
@@ -4680,7 +4677,6 @@
         "immutable_field_assignment_is_rejected",
         "info_accepts_int",
         "view_entrypoints_accept_diagnostic_logging",
-        "vector_length_control_is_not_a_source_builtin",
         "trigger_event_accepts_no_args",
         "public_entrypoints_reject_trigger_event",
         "trigger_callbacks_accept_trigger_event_payload_helpers",
@@ -4795,7 +4791,7 @@
         "user_lowering_names_do_not_bypass_effect_analysis",
         "lazy_error_helpers_do_not_definitely_initialize_state"
       ],
-      "test_names_sha256": "247155c551e38aea688b7c06b9fa454079d9e6752568e3ca4f68cf4ea7349a74"
+      "test_names_sha256": "a4a7e7db88932c4b78fa29f1495270276103e927c060c1e53ec181131155c0ab"
     },
     {
       "external_fixtures": [],
@@ -4871,7 +4867,6 @@
         "mixed_value_and_divergent_function_tails_have_no_reachable_unit_return",
         "lower_pointer_constructors_to_datarefs",
         "lower_bytes_literal_to_dataref",
-        "source_cannot_lower_setvl_builtin",
         "lower_trigger_event_builtin",
         "lower_resolve_account_alias_builtin",
         "lower_resolve_account_alias_builtin_uses_string_literal",
@@ -4920,8 +4915,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "1d3a1883ac6de1e768761a2573cc6b965ee533d83641582fb9ed14ac0b9e81be"
+      "test_names_sha256": "cb555c333d8754cf1079a9f7b9c0a2b5085c27876cd79e8241e94f3ba79c86bd"
     }
   ],
-  "test_inventory_sha256": "4d700b7fefcf057052f011e9941a3f513f77926c6007977c2f46c68adf7e6a3c"
+  "test_inventory_sha256": "03f9fff5d65f1ec5918ba3c2d45208e1f53452aed2288151a912c520c53c58ce"
 }

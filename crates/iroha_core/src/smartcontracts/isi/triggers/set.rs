@@ -1236,6 +1236,29 @@ impl Set {
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for Set {
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('{')?;
+        let mut first = true;
+        macro_rules! field { ($($name:ident),*) => {$(
+            if !first { out.push(',')?; }
+            first = false;
+            out.push_str(concat!("\"", stringify!($name), "\":"))?;
+            JsonSerializeTrait::json_serialize_to(&self.$name, out)?;
+        )*}; }
+        field!(
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            contracts
+        );
+        let _ = first;
+        out.push('}')
+    }
     fn write_json(&self, out: &mut String) {
         self.write_json_through_selection(&[], out);
     }
@@ -1331,6 +1354,29 @@ pub struct SetBlockFields<'set> {
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for SetBlock<'_> {
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('{')?;
+        let mut first = true;
+        macro_rules! field { ($($name:ident),*) => {$(
+            if !first { out.push(',')?; }
+            first = false;
+            out.push_str(concat!("\"", stringify!($name), "\":"))?;
+            JsonSerializeTrait::json_serialize_to(&self.$name, out)?;
+        )*}; }
+        field!(
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            contracts
+        );
+        let _ = first;
+        out.push('}')
+    }
     fn write_json(&self, out: &mut String) {
         out.push('{');
         let mut first = true;
@@ -3546,6 +3592,31 @@ impl core::fmt::Debug for ExecutableRef {
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for ExecutableRef {
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.push('{')?;
+        match self {
+            Self::Ivm(value) => {
+                out.push_str("\"Ivm\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Self::ContractCall(value) => {
+                out.push_str("\"ContractCall\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Self::Instructions(value) => {
+                out.push_str("\"Instructions\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Self::Batch(value) => {
+                out.push_str("\"Batch\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')
+    }
     fn write_json(&self, out: &mut String) {
         out.push('{');
         match self {
@@ -3745,6 +3816,14 @@ mod tests {
     fn executable_ref_json_roundtrip_ivm() {
         let original = ExecutableRef::Ivm(sample_hash());
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Ivm");
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len()).unwrap(),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Ivm");
         match reparsed {
@@ -3758,6 +3837,14 @@ mod tests {
         let instructions = ConstVec::from(vec![instruction]);
         let original = ExecutableRef::Instructions(instructions.clone());
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Instructions");
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len()).unwrap(),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Instructions");
         match reparsed {
@@ -3791,6 +3878,14 @@ mod tests {
         ]);
         let original = ExecutableRef::Batch(items.clone());
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Batch");
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len()).unwrap(),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&original, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Batch");
         match reparsed {
@@ -5153,6 +5248,21 @@ mod dto_tests {
             .expect("restore dto");
         assert_eq!(active_trigger_ids(&dto_restored), vec![active_id.clone()]);
         let json_repr = json::to_json(&set).expect("serialize set json");
+        assert_eq!(
+            json::to_json_bounded(&set, json_repr.len()).unwrap(),
+            json_repr
+        );
+        let block = set.block();
+        let block_json = json::to_json(&block).unwrap();
+        assert_eq!(
+            json::to_json_bounded(&block, block_json.len()).unwrap(),
+            block_json
+        );
+        assert_eq!(
+            json::to_json_bounded(&block, block_json.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+        drop(block);
         let json_restored: Set = json::from_json(&json_repr).expect("restore set json");
         assert_eq!(active_trigger_ids(&json_restored), vec![active_id]);
     }

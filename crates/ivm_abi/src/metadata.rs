@@ -4,8 +4,8 @@
 //! enabled features and optional cycle limit.  This module defines a
 //! [`ProgramMetadata`] structure and helpers for encoding and decoding this header.
 //!
-//! The metadata header encodes the VM version, the ABI-v1 `ZK` and `VECTOR`
-//! mode flags, an optional logical vector length, and a cycle limit.
+//! The 48-byte metadata header encodes the VM version, the ABI-v1 `ZK` mode flag,
+//! the execution budget, the ABI version and the authenticated ABI descriptor hash.
 mod literal_table;
 mod manifest_projection;
 #[cfg(test)]
@@ -29,13 +29,17 @@ use norito::{
     },
 };
 use std::io::Write;
-/// Maximum accepted logical vector length for admission.
-pub const VECTOR_LENGTH_MAX: u8 = 64;
 /// Magic prefix identifying IVM bytecode.
 pub const MAGIC: &[u8; 4] = b"IVM\0";
-/// Fixed IVM V1 header size: 17 bytes of execution metadata followed by the
+/// Fixed IVM V1 header size: 16 bytes of execution metadata followed by the
 /// authenticated 32-byte ABI descriptor hash.
-pub const HEADER_SIZE: usize = 49;
+pub const HEADER_SIZE: usize = 48;
+/// Header offset of the little-endian `u64` execution budget.
+pub const HEADER_BUDGET_OFFSET: usize = 7;
+/// Header offset of the ABI version byte.
+pub const HEADER_ABI_VERSION_OFFSET: usize = 15;
+/// Header offset of the authenticated 32-byte ABI descriptor hash.
+pub const HEADER_ABI_HASH_OFFSET: usize = 16;
 /// Maximum bytes after the fixed header in one first-release IVM image.
 pub const MAX_PROGRAM_IMAGE_BYTES_V1: usize = 0x0010_0000;
 /// Maximum cumulative native allocation while decoding a `CNTR` section.
@@ -109,10 +113,8 @@ pub const EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedSta
 pub const CONTRACT_DEBUG_SECTION_MAGIC: [u8; 4] = *b"DBG1";
 /// Embedded contract execution-capability bit: zero-knowledge mode.
 pub const CONTRACT_FEATURE_BIT_ZK: u64 = 1 << 0;
-/// Embedded contract execution-capability bit: deterministic IVM vector mode.
-pub const CONTRACT_FEATURE_BIT_VECTOR: u64 = 1 << 1;
 /// Bitmask of all currently supported embedded execution-capability bits.
-pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_FEATURE_BIT_VECTOR;
+pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK;
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
 const CONTRACT_DEBUG_SECTION_HEADER_SIZE: usize = 8;
 /// Artifact-local entrypoint metadata carried inside the required `CNTR` section.
@@ -1366,7 +1368,7 @@ pub struct EmbeddedContractInterfaceV1 {
     /// silently reinterpreted under changed syscall, pointer, gas, or state
     /// semantics while retaining `abi_version = 1`.
     pub abi_hash: [u8; 32],
-    /// Compiler-derived ZK/VECTOR capability bits mirrored from the execution header.
+    /// Compiler-derived ZK capability bit mirrored from the execution header.
     ///
     /// The complete `CNTR` section is covered by the artifact hash. These bits
     /// are unrelated to optional host hardware acceleration.
@@ -1468,16 +1470,12 @@ impl EmbeddedContractInterfaceV1 {
 pub mod mode {
     /// Zero-knowledge proof mode enabled.
     pub const ZK: u8 = 0x01;
-    /// Vector extension (SIMD/crypto ops) enabled.
-    pub const VECTOR: u8 = 0x02;
 }
 #[derive(Clone, Debug)]
 pub struct ProgramMetadata {
     pub version_major: u8,
     pub version_minor: u8,
     pub mode: u8,
-    /// Logical vector length in lanes. `0` selects the runtime default.
-    pub vector_length: u8,
     pub max_cycles: u64,
     /// ABI version for syscall table and pointer-ABI schema.
     pub abi_version: u8,
@@ -1489,6 +1487,8 @@ pub use program_header::ParsedProgramHeader;
 #[derive(Clone, Debug)]
 pub struct ParsedProgramMetadata {
     pub metadata: ProgramMetadata,
+    /// Exact named policy authenticated by the original fixed header.
+    pub syscall_policy: crate::SyscallPolicy,
     /// Number of bytes occupied by the metadata header.
     pub header_len: usize,
     /// Absolute offset within the artifact where executable code begins.
@@ -1529,23 +1529,43 @@ impl ProgramMetadata {
     /// the fixed-position marker only to select the canonical admission owner, not as approval.
     /// Header policy and error precedence are identical to [`Self::parse`].
     pub fn parse_header(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
-        program_header::parse(bytes)
+        program_header::parse(bytes, crate::SyscallPolicy::AbiV1)
     }
 
+    /// Validate the fixed header against one explicitly selected named host policy.
+    /// Callers with a committed root must obtain this policy from that root's selection.
+    pub fn parse_header_for_policy(
+        bytes: &[u8],
+        policy: crate::SyscallPolicy,
+    ) -> Result<ParsedProgramHeader<'_>, VMError> {
+        program_header::parse(bytes, policy)
+    }
     pub fn parse(bytes: &[u8]) -> Result<ParsedProgramMetadata, VMError> {
         Self::parse_header(bytes)?.parse_sections()
     }
+    /// Parse the unchanged header and ordered sections for an explicit named host policy.
+    /// The default parser retains the frozen baseline profile and rejection ordering.
+    pub fn parse_for_policy(
+        bytes: &[u8],
+        policy: crate::SyscallPolicy,
+    ) -> Result<ParsedProgramMetadata, VMError> {
+        Self::parse_header_for_policy(bytes, policy)?.parse_sections()
+    }
     pub fn encode(&self) -> Vec<u8> {
+        self.encode_for_policy(crate::SyscallPolicy::AbiV1)
+    }
+    /// Encode the same ABI V1 header with an explicit named host profile.
+    /// Admission still rejects an unsupported ABI version or malformed metadata.
+    pub fn encode_for_policy(&self, policy: crate::SyscallPolicy) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(MAGIC);
         v.push(self.version_major);
         v.push(self.version_minor);
         v.push(self.mode);
-        v.push(self.vector_length);
         v.extend_from_slice(&self.max_cycles.to_le_bytes());
         v.push(self.abi_version);
         let abi_hash = match self.abi_version {
-            1 => crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            1 => crate::syscalls::compute_abi_hash(policy),
             _ => [0; 32],
         };
         v.extend_from_slice(&abi_hash);
@@ -1558,7 +1578,6 @@ impl ProgramMetadata {
             version_major,
             version_minor,
             mode: 0,
-            vector_length: 0,
             max_cycles: 0,
             abi_version,
         }
@@ -1567,10 +1586,9 @@ impl ProgramMetadata {
 fn parse_program_sections(
     bytes: &[u8],
     metadata: ProgramMetadata,
+    syscall_policy: crate::SyscallPolicy,
 ) -> Result<ParsedProgramMetadata, VMError> {
     let header_len = HEADER_SIZE;
-    // Note: vector_length may be non-zero even if VECTOR flag is off; the
-    // host/runtime may ignore it depending on policy.
     let mut code_offset = header_len;
     let mut contract_interface = None;
     let mut contract_debug = None;
@@ -1617,8 +1635,15 @@ fn parse_program_sections(
             idx += 1;
         }
     }
+    // Runtime lifecycle calls require an admitted contract identity. No generic artifact
+    // or generic test harness claims this named profile through a header alone.
+    if syscall_policy == crate::SyscallPolicy::AbiV1RuntimeLifecycle && contract_interface.is_none()
+    {
+        return Err(VMError::InvalidMetadata);
+    }
     Ok(ParsedProgramMetadata {
         metadata,
+        syscall_policy,
         header_len,
         code_offset,
         contract_interface,
@@ -1633,7 +1658,6 @@ impl Default for ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 0,
             abi_version: 1,
         }
@@ -1764,33 +1788,29 @@ mod tests {
         .encode();
         bytes[4] = 2;
         bytes[6] = 0x80;
-        bytes[7] = VECTOR_LENGTH_MAX + 1;
-        bytes[16] = 3;
-        assert!(
-            matches!((&(ProgramMetadata::parse(&bytes).expect_err("version must win")), &(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })), (VMError::UnsupportedProgramVersion { major: __actual_major, minor: __actual_minor }, VMError::UnsupportedProgramVersion { major: __expected_major, minor: __expected_minor }) if __actual_major == __expected_major && __actual_minor == __expected_minor)
-        );
+        bytes[HEADER_ABI_VERSION_OFFSET] = 3;
+        assert!(matches!(
+            ProgramMetadata::parse(&bytes).expect_err("version must win"),
+            VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
+        ));
         bytes[4] = 1;
         bytes[5] = 2;
-        assert!(
-            matches!((&(ProgramMetadata::parse(&bytes).expect_err("minor version must be explicit")), &(VMError::UnsupportedProgramVersion { major: 1, minor: 2 })), (VMError::UnsupportedProgramVersion { major: __actual_major, minor: __actual_minor }, VMError::UnsupportedProgramVersion { major: __expected_major, minor: __expected_minor }) if __actual_major == __expected_major && __actual_minor == __expected_minor)
-        );
+        assert!(matches!(
+            ProgramMetadata::parse(&bytes).expect_err("minor version must be explicit"),
+            VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
+        ));
         bytes[5] = 1;
-        assert!(
-            matches!((&(ProgramMetadata::parse(&bytes).expect_err("feature bits must precede ABI")), &(VMError::UnsupportedProgramFeatureBits { bits: 0x80 })), (VMError::UnsupportedProgramFeatureBits { bits: __actual_bits }, VMError::UnsupportedProgramFeatureBits { bits: __expected_bits }) if __actual_bits == __expected_bits)
-        );
+        assert!(matches!(
+            ProgramMetadata::parse(&bytes).expect_err("feature bits must precede ABI"),
+            VMError::UnsupportedProgramFeatureBits { bits: 0x80 }
+        ));
         bytes[6] = 0;
-        assert!(
-            matches!((&(ProgramMetadata::parse(&bytes).expect_err("ABI must precede vector width")), &(VMError::UnsupportedProgramAbiVersion { version: 3 })), (VMError::UnsupportedProgramAbiVersion { version: __actual_version }, VMError::UnsupportedProgramAbiVersion { version: __expected_version }) if __actual_version == __expected_version)
-        );
-        bytes[16] = 1;
-        assert!(
-            matches!((&(ProgramMetadata::parse(&bytes).expect_err("vector width must precede ABI hash")), &(VMError::ProgramVectorLengthTooLarge {
-                vector_length: VECTOR_LENGTH_MAX + 1,
-                max_allowed: VECTOR_LENGTH_MAX,
-            })), (VMError::ProgramVectorLengthTooLarge { vector_length: __actual_vector_length, max_allowed: __actual_max_allowed }, VMError::ProgramVectorLengthTooLarge { vector_length: __expected_vector_length, max_allowed: __expected_max_allowed }) if __actual_vector_length == __expected_vector_length && __actual_max_allowed == __expected_max_allowed)
-        );
-        bytes[7] = 0;
-        bytes[17] ^= 1;
+        assert!(matches!(
+            ProgramMetadata::parse(&bytes).expect_err("ABI version must precede ABI hash"),
+            VMError::UnsupportedProgramAbiVersion { version: 3 }
+        ));
+        bytes[HEADER_ABI_VERSION_OFFSET] = 1;
+        bytes[HEADER_ABI_HASH_OFFSET] ^= 1;
         assert!(matches!(
             ProgramMetadata::parse(&bytes),
             Err(VMError::ArtifactAbiHashMismatch { .. })

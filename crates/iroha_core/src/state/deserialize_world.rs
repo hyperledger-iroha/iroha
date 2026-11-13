@@ -6659,6 +6659,20 @@ fn validate_tle_ovn_snapshot_network_v1(
     Ok(())
 }
 
+/// Render a restore refusal with its complete source chain. An instruction error's own
+/// display names only its category ("Invalid instruction parameter"); the persistence
+/// defect is in its source.
+fn restore_error_with_sources(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 fn validate_parliament_attempt_encoded_size_bounds_v1(world: &World) -> Result<(), json::Error> {
     let parliament_attempts_view = world.parliament_attempts.view();
     for (attempt_id, attempt) in parliament_attempts_view.iter() {
@@ -7661,7 +7675,7 @@ mod validation_fee_registry_restore_tests {
                 &error,
                 StateRestoreError::Serialization(json::Error::InvalidField { field, message })
                     if field == "parliament_attempts"
-                        && message.contains("missing exact governance proposal")
+                        && message.contains("Parliament proposal is missing")
             ),
             "the complete restore boundary rejects the same missing proposal before publication: {error}"
         );
@@ -7799,11 +7813,12 @@ mod validation_fee_registry_restore_tests {
             &lineage,
         ));
         let kura = Arc::clone(history.kura());
+        // The decoded World's storage already belongs to its original pool; a fresh
+        // pool would be refused as a foreign scope before the fee-network check.
+        let execution_budget = world.sccp_committee_generations.allocation_budget().clone();
         let error = build_state(
             BuildStateInputs {
-                execution_budget: iroha_allocation::AllocationBudget::new(
-                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-                ),
+                execution_budget,
                 lane_manifests: Arc::new(LaneManifestRegistry::empty()),
                 canonical_runtime,
                 native_execution_tip: None,
@@ -9097,6 +9112,22 @@ fn decode_world_fields(
         iroha_data_model::runtime::obligation::ObligationId,
         iroha_data_model::runtime::obligation::ObligationRecordV1,
     > = take_required(&mut map, "runtime_obligations")?;
+    let runtime_deferred_consents: Storage<
+        iroha_data_model::runtime::deferred::DeferredConsentKeyV1,
+        iroha_data_model::runtime::deferred::DeferredConsentRecordV1,
+    > = take_required(&mut map, "runtime_deferred_consents")?;
+    let runtime_amx_captures: Storage<
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
+    > = take_required(&mut map, "runtime_amx_captures")?;
+    let runtime_game_transfers: Storage<
+        iroha_crypto::Hash,
+        iroha_data_model::runtime::native_game::NativeGameTransferV1,
+    > = take_required(&mut map, "runtime_game_transfers")?;
+    let runtime_escrow_captures: Storage<
+        iroha_data_model::escrow::EscrowId,
+        iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1,
+    > = take_required(&mut map, "runtime_escrow_captures")?;
     let runtime_migrations: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
         iroha_data_model::runtime::obligation::MigrationRecordV1,
@@ -9217,6 +9248,10 @@ fn decode_world_fields(
         account_signing_keys,
         account_signing_key_reservations,
         runtime_obligations,
+        runtime_deferred_consents,
+        runtime_amx_captures,
+        runtime_game_transfers,
+        runtime_escrow_captures,
         runtime_migrations,
         runtime_boundaries,
         sorafs_authority_proposals,
@@ -9535,6 +9570,12 @@ fn parse_world(
     proof_tag_index::rebuild(&mut world)?;
     verifying_key_index::validate_verifying_key_index(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
+    crate::runtime::native_amx_capture::validate_persistence(&world.view())
+        .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+    crate::runtime::native_game_capture::validate_persistence(&world.view())
+        .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+    crate::runtime::native_escrow_capture::validate_persistence(&world.view())
+        .map_err(|error| norito::json::Error::Message(error.to_string()))?;
     crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(
         |error| json::Error::InvalidField {
             field: "world.smart_contract_state.asset_lock_control_v1".to_owned(),
@@ -9607,13 +9648,13 @@ fn parse_world(
                 )
                 .map_err(|error| json::Error::InvalidField {
                     field: "parliament_attempts".into(),
-                    message: error.to_string(),
+                    message: restore_error_with_sources(&error),
                 })?;
             proposal
                 .validate_bindings(attempt)
                 .map_err(|error| json::Error::InvalidField {
                     field: "parliament_attempts".into(),
-                    message: error.to_string(),
+                    message: restore_error_with_sources(&error),
                 })?;
             parliament_attempts_by_proposal
                 .entry(attempt.proposal_content_id())
@@ -11002,6 +11043,7 @@ fn build_state(
         // Decoded claims cannot recreate original pre-tail journal custody.
         native_world_cut: parking_lot::Mutex::new(None),
         keyed_versions: parking_lot::Mutex::default(),
+        runtime_checkpoint_capture: Default::default(),
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
         native_evidence_admission: parking_lot::Mutex::new(

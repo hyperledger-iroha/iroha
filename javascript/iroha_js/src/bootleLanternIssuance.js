@@ -30,14 +30,12 @@ const BLIND_REQUEST_MAGIC_V1 = "ILQ1";
 const RESPONSE_MAGIC_V1 = "ILR1";
 const WWW_AUTHENTICATE_VALUE_V1 =
   'Bearer realm="iroha-bootle-lantern-issuance"';
-const ERROR_ENVELOPE_TYPE_NAME_V1 = "iroha_torii_shared::ErrorEnvelope";
 const ISSUANCE_CONTEXT_V1 = "Bootle/Lantern issuance";
 const CREDENTIAL_CONTEXT_V1 = `${ISSUANCE_CONTEXT_V1} credential`;
 const CANONICAL_CREDENTIAL_ERROR_V1 =
   `${CREDENTIAL_CONTEXT_V1} must be canonical unpadded base64url`;
 const REQUEST_HEADER_GUARD_ERROR_V1 =
   "transport cannot enforce canonical request headers";
-const NONCANONICAL_JSON_ERROR_V1 = "non-canonical JSON error envelope";
 const INVALID_RESPONSE_ERROR_V1 = "response is invalid";
 const CONTENT_TYPE_HEADER_V1 = "Content-Type";
 const WWW_AUTHENTICATE_HEADER_V1 = "WWW-Authenticate";
@@ -385,91 +383,6 @@ async function readResponseBody(response, byteLimit, operation, exact) {
   }
 }
 
-function readCompactLength(payload, state) {
-  let value = 0n;
-  let shift = 0n;
-  let count = 0;
-  for (;;) {
-    if (state.offset >= payload.length || count >= 10) {
-      throw new Error("invalid compact length");
-    }
-    const byte = payload[state.offset];
-    state.offset += 1;
-    count += 1;
-    value |= BigInt(byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      if ((count > 1 && byte === 0) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new Error("non-canonical compact length");
-      }
-      return Number(value);
-    }
-    shift += 7n;
-  }
-}
-
-function readNoritoField(payload, state, decodeString = false) {
-  const length = readCompactLength(payload, state);
-  const end = state.offset + length;
-  if (end > payload.length) {
-    throw new Error("truncated error-envelope field");
-  }
-  const field = payload.subarray(state.offset, end);
-  state.offset = end;
-  if (!decodeString) {
-    return field;
-  }
-  const fieldState = { offset: 0 };
-  const stringLength = readCompactLength(field, fieldState);
-  const stringEnd = fieldState.offset + stringLength;
-  if (stringEnd > field.length) {
-    throw new Error("truncated string");
-  }
-  if (stringEnd !== field.length) {
-    throw new Error("trailing bytes in error-envelope string field");
-  }
-  return new TextDecoder("utf-8", { fatal: true }).decode(
-    field.subarray(fieldState.offset, stringEnd),
-  );
-}
-
-function decodeCanonicalNoritoErrorEnvelope(body) {
-  const frame = validateNoritoFrame(body, {
-    context: `${ISSUANCE_CONTEXT_V1} error envelope`,
-    expectedTypeName: ERROR_ENVELOPE_TYPE_NAME_V1,
-    expectedPaddingLength: 0,
-    requireNonEmptyPayload: true,
-  });
-  if (frame.flags !== 0x02) {
-    throw new Error("non-canonical error envelope flags");
-  }
-  const state = { offset: 0 };
-  const code = readNoritoField(frame.payload, state, true);
-  const message = readNoritoField(frame.payload, state, true);
-  const details = readNoritoField(frame.payload, state);
-  if (details.length !== 1 || details[0] !== 0) {
-    throw new Error("error details must be absent");
-  }
-  if (state.offset !== frame.payload.length) {
-    throw new Error("trailing error-envelope payload");
-  }
-  return { code, message };
-}
-
-function decodeCanonicalJsonErrorEnvelope(body, expectedCode) {
-  const expected = new TextEncoder().encode(
-    `{"code":"${expectedCode}","message":"${expectedCode}"}`,
-  );
-  if (body.length !== expected.length) {
-    throw new Error(NONCANONICAL_JSON_ERROR_V1);
-  }
-  for (let index = 0; index < expected.length; index += 1) {
-    if (body[index] !== expected[index]) {
-      throw new Error(NONCANONICAL_JSON_ERROR_V1);
-    }
-  }
-  return { code: expectedCode, message: expectedCode };
-}
-
 async function decodeErrorResponse(response, operation) {
   const code = ERROR_CODE_BY_STATUS_V1[response.status];
   if (!code) {
@@ -483,9 +396,11 @@ async function decodeErrorResponse(response, operation) {
   );
   try {
     validateResponseHeaders(response, operation, body.length, true);
+    // A canonical envelope must still name exactly this status's code as both
+    // its code and message; any other envelope is an invalid response.
     const envelope = response.status === 406
-      ? decodeCanonicalJsonErrorEnvelope(body, code)
-      : decodeCanonicalNoritoErrorEnvelope(body);
+      ? decodeCanonicalJsonErrorEnvelope(body)
+      : decodeCanonicalNoritoErrorEnvelope(body, `${ISSUANCE_CONTEXT_V1} error envelope`);
     if (
       envelope.code !== code ||
       envelope.message !== code ||
@@ -657,4 +572,7 @@ export class BootleLanternIssuanceClientV1 {
 }
 import { Buffer } from "buffer";
 
-import { validateNoritoFrame } from "./norito.js";
+import {
+  decodeCanonicalJsonErrorEnvelope,
+  decodeCanonicalNoritoErrorEnvelope,
+} from "./toriiErrorEnvelope.js";

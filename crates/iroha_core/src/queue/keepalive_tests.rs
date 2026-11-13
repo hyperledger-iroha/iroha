@@ -231,7 +231,7 @@ fn obsolete_local_time_keepalive_preserves_fee_exemption_and_foreign_custody() {
     clock.advance(Duration::from_millis(2));
     assert_eq!(
         keepalive::due(state.view().world(), Some(1_000), 2, 2_001),
-        Err(keepalive::DueWorkUnavailable)
+        Ok(false)
     );
     assert_eq!(
         keepalive::due(state.view().world(), Some(1_000), 2, 2_003),

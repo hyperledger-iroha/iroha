@@ -20,8 +20,6 @@ mod api;
 mod arithmetic;
 #[path = "../arithmetic_checked_boundaries.rs"]
 mod arithmetic_checked_boundaries;
-#[path = "../assert.rs"]
-mod assert;
 #[path = "../axt_descriptor_builder.rs"]
 mod axt_descriptor_builder;
 #[path = "../axt_host_flow.rs"]
@@ -40,8 +38,6 @@ mod bn254_vec;
 mod branch_cycles;
 #[path = "../byte_merkle_tree.rs"]
 mod byte_merkle_tree;
-#[path = "../classic_opcode_rejected.rs"]
-mod classic_opcode_rejected;
 #[path = "../code_hash.rs"]
 mod code_hash;
 #[path = "../commit_output.rs"]
@@ -56,3 +52,5 @@ mod compact_bundle_norito;
 mod comparison;
 #[path = "../contract_artifact.rs"]
 mod contract_artifact;
+#[path = "../unassigned_opcode_rejected.rs"]
+mod unassigned_opcode_rejected;

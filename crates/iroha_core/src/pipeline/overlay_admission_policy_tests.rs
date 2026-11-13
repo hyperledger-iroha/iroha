@@ -130,7 +130,6 @@ fn header_policy_rejects_retired_minor_before_other_policy_errors() {
     let retired = ivm::ProgramMetadata {
         version_minor: 0,
         mode: 0xff,
-        vector_length: 255,
         max_cycles: 0,
         abi_version: 2,
         ..ivm::ProgramMetadata::default()

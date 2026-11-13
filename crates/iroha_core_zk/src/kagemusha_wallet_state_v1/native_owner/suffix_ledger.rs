@@ -549,21 +549,21 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if let Some(held) = self.retained_suffix_attempt(stage, &entrypoint, wire)? {
             return Ok(held);
         }
-        let mut attempts =
-            self.retained_suffix_stage_attempts(stage)?
-                .unwrap_or_else(|| SuffixStageAttemptsV1 {
-                    version: 1,
-                    discriminator: 17,
-                    scheme_id: self.scheme_id,
-                    wallet_id: self.wallet_id,
-                    request_id: stage.request.request_id,
-                    authority: stage.selection.authority,
-                    instruction_ordinal: stage.ordinal,
-                    instruction_original: stage.instruction_digest,
-                    attempts: IndexRoot::default(),
-                    attempt_count: 0,
-                    accepted_entrypoint: None,
-                });
+        let mut attempts = self
+            .retained_suffix_stage_attempts(stage)?
+            .unwrap_or_else(|| SuffixStageAttemptsV1 {
+                version: 1,
+                discriminator: 17,
+                scheme_id: self.scheme_id,
+                wallet_id: self.wallet_id,
+                request_id: stage.request.request_id,
+                authority: stage.selection.authority,
+                instruction_ordinal: stage.ordinal,
+                instruction_original: stage.instruction_digest,
+                attempts: IndexRoot::default(),
+                attempt_count: 0,
+                accepted_entrypoint: None,
+            });
         let next = attempts
             .attempt_count
             .checked_add(1)

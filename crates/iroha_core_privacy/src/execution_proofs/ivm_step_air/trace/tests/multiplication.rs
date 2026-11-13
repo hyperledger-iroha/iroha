@@ -330,11 +330,7 @@ fn common_source_view_preserves_every_old_family_and_all_profile_columns() {
     words.extend(BRANCH_OPS.map(|opcode| enc::encode_branch(opcode, 6, 7, 1)));
     words.extend(COUNT_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 255)));
     words.extend(MULTIPLY_OPS.map(|opcode| enc::encode_rr(opcode, 8, 6, 7)));
-    for opcode in [
-        wide::arithmetic::NEG,
-        wide::arithmetic::NOT,
-        wide::system::GETGAS,
-    ] {
+    for opcode in [wide::arithmetic::NEG, wide::arithmetic::NOT] {
         words.push(enc::encode_rr(opcode, 8, 6, 255));
     }
     for condition in [0, 7] {

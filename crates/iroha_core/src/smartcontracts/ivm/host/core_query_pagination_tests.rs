@@ -428,10 +428,7 @@ fn dispatched_failed_query_consumes_its_fail_closed_reserve() {
     let mut host = CoreHostImpl::new(fixture_account("alice"));
     host.set_query_state(&view);
     let code = [
-        ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY).expect("syscall fits"),
-        )
+        ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)
         .to_le_bytes(),
         ivm::encoding::wide::encode_halt().to_le_bytes(),
     ]

@@ -315,10 +315,7 @@ fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
             Ok(0)
         }
     }
-    let instruction = ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_DEBUG_PRINT).expect("syscall fits byte"),
-    );
+    let instruction = ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_DEBUG_PRINT);
     let mut vm = IVM::new(10_000);
     vm.load_program(&build_authenticated_test_contract_program(
         &instruction.to_le_bytes(),

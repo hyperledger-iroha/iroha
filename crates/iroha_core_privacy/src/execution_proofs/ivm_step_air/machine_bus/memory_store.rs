@@ -1,7 +1,7 @@
-//! Conditional aligned STORE64/STORE128 transitions, without memory authority.
+//! Conditional aligned STORE64 transitions, without memory authority.
 //!
-//! The fixed boundary has passed gas, vector, public-base and alignment checks.
-//! Three ordered register reads survive subsequent privacy/access/local failures.
+//! The fixed boundary has passed the gas and public-base checks at an aligned
+//! address. Two ordered register reads survive subsequent privacy/access/local failures.
 //! Exact memory, byte-log and output-cursor effects occur only on successful store.
 // TODO: Connect this unregistered bank to authenticated fetch/address/frame,
 // permissions, initialization, private-range allocation and memory-log custody.
@@ -11,8 +11,9 @@ use super::{F, bit, packet, wide};
 
 /// Previous private-byte mask, shared by neither an unbound callback nor a flag.
 pub(super) const WIDTH: usize = 16;
-pub(super) const CONSTRAINTS: usize = 303;
-/// Address limbs, length, enable, then eight u16 payload limbs (unused half zero).
+pub(super) const CONSTRAINTS: usize = 176;
+/// Address limbs, length, enable, four u16 payload limbs, then four zero limbs.
+/// The integrated store effect bank shares this twelve-field physical layout.
 pub(super) const WRITE_LOG_WIDTH: usize = 12;
 /// Gas/PC/cycles/output cursor limbs; commit/privacy/access/local-defer flags.
 pub(super) const CONTROL_WIDTH: usize = 12;
@@ -20,6 +21,10 @@ const COMMIT: usize = 8;
 const PRIVACY_TRAP: usize = 9;
 const ACCESS_TRAP: usize = 10;
 const LOCAL_DEFER: usize = 11;
+/// Every admitted store writes one eight-byte half of a sixteen-byte cell.
+const LENGTH: u64 = 8;
+/// Native STORE64 base tariff, debited before the operand reads.
+const GAS: u64 = 3;
 
 /// A fixed external premise, not an AIR-derived permission or allocation result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,9 +43,10 @@ pub(super) struct StorePhase {
     vm: u8,
     address: u64,
     base_value: u64,
-    clocks: [u32; 4],
-    registers: [usize; 3],
-    wide: bool,
+    /// Base read, value read, then the memory write.
+    clocks: [u32; 3],
+    /// Base register, then value register.
+    registers: [usize; 2],
     stack: bool,
     gas_after: u64,
     pc: u64,
@@ -52,29 +58,25 @@ pub(super) struct StorePhase {
 
 impl StorePhase {
     /// The caller must eventually prove every premise through the whole machine.
-    /// Unaligned scalar stores are excluded: their privacy preflight precedes
-    /// Memory's alignment error, unlike the wide instruction's early check.
+    /// Unaligned stores are excluded: their privacy preflight precedes Memory's
+    /// alignment error, which this successful-or-refused boundary does not model.
     pub(super) fn from_fixed_input(
         instruction: u32,
         address: u64,
         vm: u8,
-        clocks: [u32; 4],
+        clocks: [u32; 3],
         (gas, pc, cycles, stack_top, output_before): (u64, u64, u64, u64, u64),
-        (zk, vector, base_private): (bool, bool, bool),
+        (zk, base_private): (bool, bool),
         outcome: MemoryOutcome,
     ) -> Option<Self> {
-        let wide = match wide::opcode(instruction) {
-            wide::memory::STORE64 => false,
-            wide::memory::STORE128 => true,
-            _ => return None,
-        };
-        let length = if wide { 16 } else { 8 };
-        let end = address.checked_add(length)?;
-        let gas_after = gas.checked_sub(if wide { 5 } else { 3 })?;
+        if wide::opcode(instruction) != wide::memory::STORE64 {
+            return None;
+        }
+        let end = address.checked_add(LENGTH)?;
+        let gas_after = gas.checked_sub(GAS)?;
         if !zk
             || base_private
-            || (wide && !vector)
-            || !address.is_multiple_of(length)
+            || !address.is_multiple_of(LENGTH)
             || address >> 4 > u64::from(u32::MAX)
             || !clocks.windows(2).all(|pair| pair[0] < pair[1])
             || cycles == u64::MAX
@@ -89,25 +91,17 @@ impl StorePhase {
             if outcome == MemoryOutcome::Ready && offset < output_before {
                 return None;
             }
-            output_before.max(offset + length)
+            output_before.max(offset + LENGTH)
         } else {
             output_before
         };
         Some(Self {
             vm,
             address,
-            base_value: if wide {
-                address
-            } else {
-                address.wrapping_sub(i64::cast_unsigned(i64::from(wide::imm8(instruction))))
-            },
+            base_value: address
+                .wrapping_sub(i64::cast_unsigned(i64::from(wide::imm8(instruction)))),
             clocks,
-            registers: [
-                wide::rd(instruction),
-                wide::rs1(instruction),
-                wide::rs2(instruction),
-            ],
-            wide,
+            registers: [wide::rd(instruction), wide::rs1(instruction)],
             stack: address >= ivm::Memory::STACK_START && end <= stack_top,
             gas_after,
             pc,
@@ -118,13 +112,10 @@ impl StorePhase {
         })
     }
 
+    /// Private-mask bits of the addressed half of the sixteen-byte cell.
     fn selected_bits(self) -> core::ops::Range<usize> {
-        if self.wide {
-            0..16
-        } else {
-            let first = (self.address & 8) as usize;
-            first..first + 8
-        }
+        let first = (self.address & 8) as usize;
+        first..first + 8
     }
 }
 
@@ -141,15 +132,15 @@ pub(super) fn append_residues(
     out: &mut Vec<F>,
     phase: StorePhase,
     row: &[F; WIDTH],
-    reads: [&[F; packet::WIDTH]; 3],
+    reads: [&[F; packet::WIDTH]; 2],
     memory: &[F; packet::WIDTH],
     write_log: &[F; WRITE_LOG_WIDTH],
     control: &[F; CONTROL_WIDTH],
 ) {
     use packet::*;
     let start = out.len();
+    // Both operand reads are unconditional once this boundary is reached.
     for (slot, read) in reads.iter().enumerate() {
-        let enabled = F(u64::from(slot < 2 || phase.wide));
         header(
             out,
             read,
@@ -157,14 +148,11 @@ pub(super) fn append_residues(
             phase,
             (
                 slot,
-                u32::try_from(phase.registers[slot]).expect("validated player or port count"),
+                u32::try_from(phase.registers[slot]).expect("bounded circuit index"),
             ),
-            enabled,
+            F::ONE,
             F::ZERO,
         );
-        for value in *read {
-            out.push(F::ONE.sub(enabled).mul(*value));
-        }
         for limb in 4..8 {
             out.push(read[BEFORE + limb]);
         }
@@ -181,32 +169,18 @@ pub(super) fn append_residues(
         out.push(reads[0][BEFORE + limb].sub(F((phase.base_value >> (16 * limb)) & 0xffff)));
     }
     out.push(reads[0][BEFORE_TAG]);
-    // Native alias reads all see the same unchanged register, in original order.
-    for (a, b) in [(0, 1), (0, 2), (1, 2)] {
-        let linked = F(u64::from(
-            (b < 2 || phase.wide) && phase.registers[a] == phase.registers[b],
-        ));
-        for column in (BEFORE..BEFORE + 8).chain([BEFORE_TAG]) {
-            out.push(linked.mul(reads[a][column].sub(reads[b][column])));
-        }
+    // Native alias reads both see the same unchanged register, in original order.
+    let linked = F(u64::from(phase.registers[0] == phase.registers[1]));
+    for column in (BEFORE..BEFORE + 8).chain([BEFORE_TAG]) {
+        out.push(linked.mul(reads[0][column].sub(reads[1][column])));
     }
-    let low_tag = reads[1][BEFORE_TAG];
-    let high_tag = reads[2][BEFORE_TAG];
-    // Exact Boolean truth tables: stack stores require equal tags; outside the
-    // stack both wide inputs must be public. There is no witness-chosen enable.
-    let privacy_ok = if phase.wide {
-        if phase.stack {
-            F::ONE
-                .sub(low_tag)
-                .sub(high_tag)
-                .add(F(2).mul(low_tag).mul(high_tag))
-        } else {
-            F::ONE.sub(low_tag).mul(F::ONE.sub(high_tag))
-        }
-    } else if phase.stack {
+    let value_tag = reads[1][BEFORE_TAG];
+    // Exact Boolean truth table: a stack store accepts either tag; outside the
+    // stack the stored value must be public. There is no witness-chosen enable.
+    let privacy_ok = if phase.stack {
         F::ONE
     } else {
-        F::ONE.sub(low_tag)
+        F::ONE.sub(value_tag)
     };
     let committed = privacy_ok.mul(F(u64::from(phase.outcome == MemoryOutcome::Ready)));
     for value in row {
@@ -223,7 +197,7 @@ pub(super) fn append_residues(
         Space::Memory,
         phase,
         (
-            3,
+            2,
             u32::from_le_bytes(
                 u64::to_le_bytes(phase.address >> 4)[..4]
                     .try_into()
@@ -242,30 +216,34 @@ pub(super) fn append_residues(
         let expected = payload_limb(
             memory[BEFORE + limb],
             reads[1][BEFORE + limb % 4],
-            reads[2][BEFORE + limb % 4],
             F(u64::from(phase.address & 8 != 0)),
-            phase.wide,
             limb,
         );
         out.push(memory[AFTER + limb].sub(committed.mul(expected)));
     }
+    // The addressed half takes the stored value's tag; the other half keeps its bits.
     let after_mask = row.iter().enumerate().fold(F::ZERO, |sum, (i, old)| {
-        sum.add((if selected.contains(&i) { low_tag } else { *old }).mul(F(1 << i)))
+        let private = if selected.contains(&i) {
+            value_tag
+        } else {
+            *old
+        };
+        sum.add(private.mul(F(1 << i)))
     });
     out.push(memory[AFTER_TAG].sub(committed.mul(after_mask)));
     // A STORE never records a guest memory read; this log owns only the exact
-    // written range and source bytes, with a zero unused high half for STORE64.
+    // written range and source bytes, followed by its four zero limbs.
     for (actual, expected) in write_log[..4].iter().zip([
         F(phase.address & u64::from(u32::MAX)),
         F(phase.address >> 32),
-        F(if phase.wide { 16 } else { 8 }),
+        F(LENGTH),
         F::ONE,
     ]) {
         out.push(actual.sub(committed.mul(expected)));
     }
     for limb in 0..8 {
-        let expected = if limb < 4 || phase.wide {
-            reads[1 + limb / 4][BEFORE + limb % 4]
+        let expected = if limb < 4 {
+            reads[1][BEFORE + limb]
         } else {
             F::ZERO
         };
@@ -302,19 +280,17 @@ pub(super) fn append_residues(
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }
 
-/// The shared payload selection arithmetic. The caller constrains selection,
-/// address, permission and the original source packets; this supplies no owner.
-pub(super) fn payload_limb(before: F, low: F, high: F, high_half: F, wide: bool, limb: usize) -> F {
-    if wide {
-        if limb < 4 { low } else { high }
+/// The shared payload selection arithmetic: the addressed half of the cell takes
+/// the stored value limb and the other half keeps its prior limb. The caller
+/// constrains selection, address, permission and the original source packets;
+/// this supplies no owner.
+pub(super) fn payload_limb(before: F, value: F, high_half: F, limb: usize) -> F {
+    let selected = if limb < 4 {
+        F::ONE.sub(high_half)
     } else {
-        let selected = if limb < 4 {
-            F::ONE.sub(high_half)
-        } else {
-            high_half
-        };
-        before.add(selected.mul(low.sub(before)))
-    }
+        high_half
+    };
+    before.add(selected.mul(value.sub(before)))
 }
 
 fn header(

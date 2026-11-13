@@ -608,6 +608,34 @@ impl TransactionsReadOnly for TransactionsBlockField<'_> {
 }
 
 impl JsonSerializeTrait for TransactionsBlockField<'_> {
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        assert!(!self.slot.released);
+        match &self.slot.phase {
+            MembershipCapturePhase::Captured(original) => {
+                let baseline = self
+                    .original_history
+                    .read_predecessor(
+                        original
+                            .history
+                            .baseline
+                            .as_ref()
+                            .expect("original membership cut"),
+                    )
+                    .ok_or(json::BoundedJsonError::Unsupported)?;
+                serialization::write_transactions_cut_json_to(
+                    Some(&original.current),
+                    original.predecessor.as_deref(),
+                    &baseline,
+                    original.revert,
+                    out,
+                )
+            }
+            _ => self.slot.executing().json_serialize_to(out),
+        }
+    }
     fn json_serialize(&self, out: &mut String) {
         assert!(!self.slot.released);
         match &self.slot.phase {

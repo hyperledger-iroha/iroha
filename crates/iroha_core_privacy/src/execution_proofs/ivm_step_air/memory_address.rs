@@ -4,8 +4,6 @@
 //! address. Two additional signed carries prove the low/high 32-bit additions.
 //! This unregistered component does not authenticate its instruction, source
 //! register, privacy tag, enable/phase owner, access permission or memory effect.
-//! The 128-bit opcodes preserve the entire base address and use no immediate;
-//! the final operand byte names the high data register instead.
 // TODO: Link the instruction and both words to the unified fetch/register/request
 // schedule, including exact native trap priority, before any proof admission.
 
@@ -27,7 +25,6 @@ impl Operation {
             wide::memory::LOAD64 | wide::memory::STORE64 => Some(Self {
                 immediate: wide::imm8(instruction),
             }),
-            wide::memory::LOAD128 | wide::memory::STORE128 => Some(Self { immediate: 0 }),
             _ => None,
         }
     }
@@ -155,11 +152,6 @@ mod tests {
                         }
                     }
                 }
-                for opcode in [wide::memory::LOAD128, wide::memory::STORE128] {
-                    let op = operation(opcode, i8::cast_unsigned(immediate));
-                    assert!(accepts(&word::witness(base, base), &witness(base, op), op));
-                    assert_eq!(witness(base, op), [F::ZERO; WIDTH]);
-                }
             }
         }
     }
@@ -199,23 +191,32 @@ mod tests {
     }
 
     #[test]
-    fn memory_opcode_selects_imm8_but_wide_high_register_is_not_an_immediate() {
-        assert!(Operation::from_word(enc::encode_rr(wide::arithmetic::ADD, 1, 3, 127)).is_none());
+    fn only_the_two_scalar_memory_opcodes_select_an_imm8_that_cannot_be_dropped() {
+        // Every other opcode byte, assigned or not, has no address operation.
+        for opcode in 0..=u8::MAX {
+            assert_eq!(
+                Operation::from_word(enc::encode_rr(opcode, 1, 3, 127)).is_some(),
+                matches!(opcode, wide::memory::LOAD64 | wide::memory::STORE64),
+                "opcode {opcode:#x}"
+            );
+        }
         let base = RADIX + 256;
         for last in 1..=u8::MAX {
-            let scalar = operation(wide::memory::LOAD64, last);
-            let wide = operation(wide::memory::LOAD128, last);
-            let shifted = base.wrapping_add_signed(i64::from(u8::cast_signed(last)));
-            assert!(!accepts(
-                &word::witness(base, shifted),
-                &witness(base, wide),
-                wide
-            ));
-            assert!(!accepts(
-                &word::witness(base, base),
-                &witness(base, scalar),
-                scalar
-            ));
+            for opcode in [wide::memory::LOAD64, wide::memory::STORE64] {
+                let scalar = operation(opcode, last);
+                let shifted = base.wrapping_add_signed(i64::from(u8::cast_signed(last)));
+                assert!(accepts(
+                    &word::witness(base, shifted),
+                    &witness(base, scalar),
+                    scalar
+                ));
+                // A nonzero final operand byte is always the signed offset.
+                assert!(!accepts(
+                    &word::witness(base, base),
+                    &witness(base, scalar),
+                    scalar
+                ));
+            }
         }
     }
 
@@ -246,7 +247,7 @@ mod tests {
 
     fn native(words: &[u32]) -> IVM {
         let mut bytes = ProgramMetadata {
-            mode: ivm_mode::ZK | ivm_mode::VECTOR,
+            mode: ivm_mode::ZK,
             max_cycles: 2,
             ..ProgramMetadata::default()
         }
@@ -260,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn address_equations_match_native_signed_offsets_wrap_and_full_wide_values() {
+    fn address_equations_match_native_signed_offsets_and_wrap() {
         let address = Memory::HEAP_START + 256;
         let value = 0xfedc_ba98_7654_3210_u64;
         for immediate in [-128_i8, -127, -1, 0, 1, 63, 126, 127] {
@@ -304,60 +305,13 @@ mod tests {
             vm.run().unwrap();
             assert_eq!(vm.registers.get(1), code);
         }
-        let full = 0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128;
-        for high in [2, 127, 128, 255] {
-            for store in [false, true] {
-                let word = if store {
-                    enc::encode_store128(wide::memory::STORE128, 3, 1, high)
-                } else {
-                    enc::encode_load128(wide::memory::LOAD128, 1, 3, high)
-                };
-                let op = Operation::from_word(word).unwrap();
-                assert!(accepts(
-                    &word::witness(address, address),
-                    &witness(address, op),
-                    op
-                ));
-                let mut vm = native(&[word, enc::encode_halt()]);
-                vm.set_register(3, address);
-                if store {
-                    vm.set_register(
-                        1,
-                        u64::from_le_bytes(
-                            u128::to_le_bytes(full)[..8]
-                                .try_into()
-                                .expect("low-byte width"),
-                        ),
-                    );
-                    vm.set_register(usize::from(high), (full >> 64) as u64);
-                } else {
-                    vm.memory.store_u128(address, full).unwrap();
-                }
-                vm.run().unwrap();
-                assert_eq!(vm.memory.load_u128(address).unwrap(), full);
-                assert_eq!(
-                    (u128::from(vm.registers.get(usize::from(high))) << 64)
-                        | u128::from(vm.registers.get(1)),
-                    full
-                );
-                assert_eq!(
-                    (vm.pc(), vm.get_cycle_count(), vm.gas_remaining),
-                    (8, 2, 95)
-                );
-            }
-        }
     }
 
     #[test]
     fn address_bank_uses_two_fields_and_has_exact_degree_three() {
         assert_eq!(WIDTH, 2);
         assert_eq!(CONSTRAINTS, 132);
-        for opcode in [
-            wide::memory::LOAD64,
-            wide::memory::STORE64,
-            wide::memory::LOAD128,
-            wide::memory::STORE128,
-        ] {
+        for opcode in [wide::memory::LOAD64, wide::memory::STORE64] {
             let op = operation(opcode, 128);
             assert_eq!(
                 measured_maximum_affine_degree_v1(

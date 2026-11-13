@@ -37,170 +37,25 @@ fn registers(vm: &IVM) -> ([u64; 256], [bool; 256]) {
 }
 
 #[test]
-fn load128_reads_before_alias_writes_and_high_destination_wins_except_r0() {
-    for mode in [ivm_mode::VECTOR, ivm_mode::VECTOR | ivm_mode::ZK] {
-        for lo in 0..4_u8 {
-            for hi in 0..4_u8 {
-                let word = encode::encode_load128(wide::memory::LOAD128, lo, 3, hi);
-                let mut vm = machine(&[word, encode::encode_halt()], mode, 100);
-                let address = Memory::HEAP_START + 0x80;
-                vm.memory
-                    .store_u128(address, u128::from(LOW) | (u128::from(HIGH) << 64))
-                    .unwrap();
-                vm.set_register(1, 0x55);
-                vm.set_register(2, 0xaa);
-                vm.set_register(3, address);
-                let (mut expected, tags) = registers(&vm);
-                if lo != 0 {
-                    expected[usize::from(lo)] = LOW;
-                }
-                if hi != 0 {
-                    expected[usize::from(hi)] = HIGH;
-                }
-                vm.run().unwrap();
-                assert_eq!(
-                    registers(&vm),
-                    (expected, tags),
-                    "mode={mode}, lo={lo}, hi={hi}"
-                );
-                assert_eq!(
-                    vm.memory.load_u128(address).unwrap(),
-                    u128::from(LOW) | (u128::from(HIGH) << 64)
-                );
-                assert_eq!(vm.gas_remaining, 95);
-                assert_eq!((vm.pc(), vm.get_cycle_count()), (8, 2));
-            }
-        }
-    }
-}
-
-#[test]
-fn store128_captures_all_sources_before_any_memory_effect_including_base_aliases() {
-    for lo in 0..4_u8 {
-        for hi in 0..4_u8 {
-            let word = encode::encode_store128(wide::memory::STORE128, 3, lo, hi);
-            let mut vm = machine(
-                &[word, encode::encode_halt()],
-                ivm_mode::VECTOR | ivm_mode::ZK,
-                100,
-            );
-            let address = Memory::HEAP_START + 0x80;
-            vm.memory.store_u128(address - 16, u128::MAX).unwrap();
-            vm.memory.store_u128(address + 16, u128::MAX).unwrap();
-            vm.set_register(1, LOW);
-            vm.set_register(2, HIGH);
-            vm.set_register(3, address);
-            let before = registers(&vm);
-            let expected = u128::from(before.0[usize::from(lo)])
-                | (u128::from(before.0[usize::from(hi)]) << 64);
-            vm.run().unwrap();
-            assert_eq!(registers(&vm), before);
-            assert_eq!(
-                vm.memory.load_u128(address).unwrap(),
-                expected,
-                "lo={lo}, hi={hi}"
-            );
-            assert_eq!(vm.memory.load_u128(address - 16).unwrap(), u128::MAX);
-            assert_eq!(vm.memory.load_u128(address + 16).unwrap(), u128::MAX);
-            assert_eq!(vm.gas_remaining, 95);
-            assert_eq!((vm.pc(), vm.get_cycle_count()), (8, 2));
-        }
-    }
-}
-
-#[test]
 fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
     let s64 = encode::encode_store(wide::memory::STORE64, 3, 1, 0);
     let l64 = encode::encode_load(wide::memory::LOAD64, 1, 3, 0);
-    let s128 = encode::encode_store128(wide::memory::STORE128, 3, 1, 2);
-    let l128 = encode::encode_load128(wide::memory::LOAD128, 1, 3, 2);
-    let misaligned = Memory::HEAP_START + 1;
     let cases = [
-        (
-            s128,
-            false,
-            true,
-            false,
-            misaligned,
-            VMError::VectorExtensionDisabled,
-            5,
-        ),
-        (
-            l128,
-            false,
-            true,
-            false,
-            misaligned,
-            VMError::VectorExtensionDisabled,
-            5,
-        ),
-        (
-            s128,
-            true,
-            true,
-            false,
-            misaligned,
-            VMError::PrivacyViolation,
-            5,
-        ),
-        (
-            l128,
-            true,
-            true,
-            false,
-            misaligned,
-            VMError::PrivacyViolation,
-            5,
-        ),
-        (
-            s128,
-            true,
-            false,
-            true,
-            misaligned,
-            VMError::MisalignedAccess {
-                addr: misaligned as u32,
-            },
-            5,
-        ),
-        (
-            s64,
-            true,
-            false,
-            false,
-            u64::MAX,
-            VMError::PrivacyViolation,
-            3,
-        ),
+        (s64, u64::MAX, VMError::PrivacyViolation, 3),
         (
             l64,
-            true,
-            false,
-            false,
             u64::MAX,
             VMError::MisalignedAccess { addr: u32::MAX },
             3,
         ),
-        (
-            s128,
-            true,
-            false,
-            true,
-            Memory::STACK_START,
-            VMError::PrivacyViolation,
-            5,
-        ),
     ];
-    for (word, vector, base_private, mixed_values, address, expected_error, cost) in cases {
+    for (word, address, expected_error, cost) in cases {
         for insufficient_gas in [false, true] {
             let gas = if insufficient_gas { cost - 1 } else { 100 };
-            let mode = ivm_mode::ZK | if vector { ivm_mode::VECTOR } else { 0 };
-            let mut vm = machine(&[word, encode::encode_halt()], mode, gas);
+            let mut vm = machine(&[word, encode::encode_halt()], ivm_mode::ZK, gas);
             vm.set_register(1, LOW);
             vm.set_register(2, HIGH);
             vm.set_register(3, address);
-            vm.registers.set_tag(3, base_private);
-            vm.registers.set_tag(1, mixed_values);
             let before = registers(&vm);
             let result = vm.run();
             let error = result.expect_err("the invalid request must fail before publication");
@@ -208,8 +63,7 @@ fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
                 assert!(matches!(error, VMError::OutOfGas));
             } else {
                 match (&error, &expected_error) {
-                    (VMError::VectorExtensionDisabled, VMError::VectorExtensionDisabled)
-                    | (VMError::PrivacyViolation, VMError::PrivacyViolation) => {}
+                    (VMError::PrivacyViolation, VMError::PrivacyViolation) => {}
                     (
                         VMError::MisalignedAccess { addr },
                         VMError::MisalignedAccess { addr: expected },
@@ -230,10 +84,12 @@ fn memory_trap_priority_preserves_architecture_after_exact_gas_debit() {
 }
 
 #[test]
-fn public_half_store_preserves_other_half_private_tag_and_mixed_wide_load_rejects() {
+fn public_half_store_preserves_other_half_private_tag() {
     for half in [0_i8, 8] {
         let words = [
-            encode::encode_store128(wide::memory::STORE128, 3, 1, 2),
+            encode::encode_store(wide::memory::STORE64, 3, 1, 0),
+            encode::encode_halt(),
+            encode::encode_store(wide::memory::STORE64, 3, 2, 8),
             encode::encode_halt(),
             encode::encode_store(wide::memory::STORE64, 3, 4, half),
             encode::encode_halt(),
@@ -241,10 +97,8 @@ fn public_half_store_preserves_other_half_private_tag_and_mixed_wide_load_reject
             encode::encode_halt(),
             encode::encode_load(wide::memory::LOAD64, 6, 3, 8),
             encode::encode_halt(),
-            encode::encode_load128(wide::memory::LOAD128, 5, 3, 6),
-            encode::encode_halt(),
         ];
-        let mut vm = machine(&words, ivm_mode::VECTOR | ivm_mode::ZK, 1_000);
+        let mut vm = machine(&words, ivm_mode::ZK, 1_000);
         vm.set_register(1, LOW);
         vm.set_register(2, HIGH);
         vm.set_register(3, Memory::STACK_START);
@@ -252,25 +106,14 @@ fn public_half_store_preserves_other_half_private_tag_and_mixed_wide_load_reject
         vm.registers.set_tag(1, true);
         vm.registers.set_tag(2, true);
         vm.run().unwrap();
-        vm.set_program_counter(8).unwrap();
-        vm.run().unwrap();
-        vm.set_program_counter(16).unwrap();
-        vm.run().unwrap();
-        vm.set_program_counter(24).unwrap();
-        vm.run().unwrap();
+        for segment in [8, 16, 24, 32] {
+            vm.set_program_counter(segment).unwrap();
+            vm.run().unwrap();
+        }
         assert_eq!(vm.registers.get(5), if half == 0 { 7 } else { LOW });
         assert_eq!(vm.registers.get(6), if half == 8 { 7 } else { HIGH });
         assert_eq!(vm.registers.tag(5), half != 0);
         assert_eq!(vm.registers.tag(6), half != 8);
-        let before = registers(&vm);
-        let bytes = vm.memory.load_u128(Memory::STACK_START).unwrap();
-        vm.set_program_counter(32).unwrap();
-        let gas = vm.gas_remaining;
-        assert!(matches!(vm.run(), Err(VMError::PrivacyViolation)));
-        assert_eq!(registers(&vm), before);
-        assert_eq!(vm.memory.load_u128(Memory::STACK_START).unwrap(), bytes);
-        assert_eq!(vm.gas_remaining, gas - 5);
-        assert_eq!(vm.pc(), 32);
     }
 }
 

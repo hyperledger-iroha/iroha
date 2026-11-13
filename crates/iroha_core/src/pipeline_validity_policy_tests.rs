@@ -768,7 +768,7 @@ fn amx_program(syscalls: usize, loads: usize) -> Vec<u8> {
     use ivm::{encoding::wide as encode, instruction::wide};
     let mut program = ivm::ProgramMetadata::default_for(1, 1, 1).encode();
     for _ in 0..syscalls {
-        program.extend_from_slice(&encode::encode_sys(wide::system::SCALL, 0).to_le_bytes());
+        program.extend_from_slice(&encode::encode_scall(0).to_le_bytes());
     }
     for _ in 0..loads {
         program

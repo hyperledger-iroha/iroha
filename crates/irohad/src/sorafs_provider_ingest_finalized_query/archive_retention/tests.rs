@@ -696,7 +696,9 @@ fn all_three_readers_share_nonexpiring_anchor_leases() {
     ] {
         *reader.scan_pin.lock().unwrap() = Some(ArchiveScanPinV1 {
             height: 1,
-            read_at: Instant::now() - SCAN_PIN_LIFETIME - Duration::from_secs(1),
+            read_at: Instant::now()
+                .checked_sub(SCAN_PIN_LIFETIME + Duration::from_secs(1))
+                .expect("the monotonic clock is older than one expired scan pin"),
         });
         leases.push(
             reader

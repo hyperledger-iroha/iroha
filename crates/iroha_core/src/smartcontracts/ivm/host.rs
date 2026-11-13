@@ -1824,6 +1824,24 @@ pub trait QueryStateRefOps {
         )>,
         ivm::VMError,
     >;
+    /// Enforce the named profile's effective restrictions at this original invocation boundary.
+    /// State-free readers have no authority to opt into a named profile.
+    fn ensure_host_profile(&self, policy: ivm::SyscallPolicy) -> Result<(), ivm::VMError> {
+        if policy == ivm::SyscallPolicy::AbiV1 {
+            Ok(())
+        } else {
+            Err(ivm::VMError::PermissionDenied)
+        }
+    }
+    /// Resolve a warm prepared contract under this query source's original execution root.
+    /// State-free readers retain the baseline-only contract.
+    fn prepare_contract_cache_hit(
+        &self,
+        cache: &PreparedContractCache,
+        code_hash: Hash,
+    ) -> Result<Option<ivm::PreparedContract>, ivm::VMError> {
+        Ok(cache.get(code_hash))
+    }
     /// Prepare a content-addressed cache miss while borrowing deployed bytecode in place.
     ///
     /// # Errors
@@ -2707,6 +2725,38 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
         }
     }
+    fn ensure_host_profile(&self, policy: ivm::SyscallPolicy) -> Result<(), ivm::VMError> {
+        use crate::smartcontracts::ivm::host_profile::{ensure_at_height, ensure_in_transaction};
+        let result = match *self {
+            QueryStateRef::View(view) => {
+                ensure_at_height(view.world(), policy, view.height() as u64)
+            }
+            QueryStateRef::QueryView(view) => {
+                ensure_at_height(view.world(), policy, view.height() as u64)
+            }
+            QueryStateRef::Block(block) => {
+                ensure_at_height(block.world(), policy, block._curr_block.height().get())
+            }
+            QueryStateRef::Transaction(tx) => ensure_in_transaction(tx, policy),
+        };
+        result.map_err(|_| ivm::VMError::PermissionDenied)
+    }
+    fn prepare_contract_cache_hit(
+        &self,
+        cache: &PreparedContractCache,
+        code_hash: Hash,
+    ) -> Result<Option<ivm::PreparedContract>, ivm::VMError> {
+        let prepared = match *self {
+            QueryStateRef::View(view) => cache.get_in_world(view.world(), code_hash),
+            QueryStateRef::QueryView(view) => cache.get_in_world(view.world(), code_hash),
+            QueryStateRef::Block(block) => cache.get_in_world(block.world(), code_hash),
+            QueryStateRef::Transaction(tx) => cache.get_in_world(tx.world(), code_hash),
+        }?;
+        if let Some(contract) = prepared.as_ref() {
+            self.ensure_host_profile(contract.syscall_policy())?;
+        }
+        Ok(prepared)
+    }
     fn prepare_contract_cache_miss(
         &self,
         cache: &PreparedContractCache,
@@ -2715,28 +2765,30 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         let prepared = match *self {
             QueryStateRef::View(view) => {
                 crate::smartcontracts::code::with_code_bytes(view, &artifact, |bytes| {
-                    cache.get_or_prepare(artifact.code_hash, bytes)
+                    cache.get_or_prepare_in_world(view.world(), artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::QueryView(view) => {
                 crate::smartcontracts::code::with_code_bytes(view, &artifact, |bytes| {
-                    cache.get_or_prepare(artifact.code_hash, bytes)
+                    cache.get_or_prepare_in_world(view.world(), artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::Block(block) => {
                 crate::smartcontracts::code::with_code_bytes(block, &artifact, |bytes| {
-                    cache.get_or_prepare(artifact.code_hash, bytes)
+                    cache.get_or_prepare_in_world(block.world(), artifact.code_hash, bytes)
                 })
             }
             QueryStateRef::Transaction(tx) => {
                 crate::smartcontracts::code::with_code_bytes(tx, &artifact, |bytes| {
-                    cache.get_or_prepare(artifact.code_hash, bytes)
+                    cache.get_or_prepare_in_world(tx.world(), artifact.code_hash, bytes)
                 })
             }
         };
-        prepared
+        let contract = prepared
             .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
-            .ok_or(ivm::VMError::PermissionDenied)?
+            .ok_or(ivm::VMError::PermissionDenied)??;
+        self.ensure_host_profile(contract.syscall_policy())?;
+        Ok(contract)
     }
     fn subscription_context_for_trigger(
         &self,
@@ -4134,6 +4186,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         ),
         crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
     > {
+        crate::smartcontracts::ivm::host_profile::ensure_at_height(
+            state.world(),
+            contract.syscall_policy(),
+            state.height() as u64,
+        )?;
         let identity =
             crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)?
                 .ok_or_else(|| {
@@ -4867,8 +4924,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             NotImplemented { .. } => "not_implemented",
             UnknownSyscall(_) => "unknown_syscall",
             PrivacyViolation => "privacy_violation",
-            VectorExtensionDisabled => "vector_disabled",
-            ZkExtensionDisabled => "zk_disabled",
             _ => "other",
         }
     }
@@ -7615,10 +7670,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         &self,
         identity: &crate::smartcontracts::code::BoundContractIdentity,
     ) -> Result<ivm::PreparedContract, ivm::VMError> {
-        if let Some(prepared) = self.prepared_contract_cache.get(identity.code_hash) {
-            return Ok(prepared);
-        }
         if let Some(state_ref) = self.query_state.get() {
+            if let Some(prepared) = state_ref
+                .prepare_contract_cache_hit(&self.prepared_contract_cache, identity.code_hash)?
+            {
+                return Ok(prepared);
+            }
             return state_ref.prepare_contract_cache_miss(
                 &self.prepared_contract_cache,
                 iroha_data_model::smart_contract::ContractArtifactId::new(
@@ -9127,6 +9184,41 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction,
         )
         .map_err(|_| ivm::VMError::PermissionDenied)
+    }
+    /// Queue the exact kernel operation under the original authenticated contract frame.
+    /// Effect application retains its ordinary gas/output ownership and immutable authorization.
+    fn queue_runtime_obligation(
+        &mut self,
+        vm: &mut IVM,
+        operation_tag: u64,
+    ) -> Result<u64, ivm::VMError> {
+        use iroha_data_model::isi::runtime_obligation::{
+            CompleteRuntimeObligationV1, RegisterContractRuntimeObligationV1,
+        };
+        let instruction = self.decode_opaque_instruction(vm)?;
+        let context = self
+            .current_contract_runtime_context
+            .as_ref()
+            .ok_or(ivm::VMError::PermissionDenied)?;
+        if self.current_entrypoint_authorization.is_none() {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let permitted = match operation_tag {
+            ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION => instruction
+                .as_any()
+                .is::<RegisterContractRuntimeObligationV1>(),
+            ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION => instruction
+                .as_any()
+                .downcast_ref::<CompleteRuntimeObligationV1>()
+                .is_some_and(|complete| complete.owner == context.contract_subject),
+            _ => false,
+        };
+        if !permitted {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let gas = self.queue_instruction_after_preflight(vm, instruction)?;
+        vm.set_register(10, 0);
+        Ok(gas)
     }
     fn decode_opaque_instruction(&self, vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
         let pointer = vm.register(10);
@@ -11026,6 +11118,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 // Accept one of the operation-tagged instruction bridges used by Kotodama.
                 ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
                     let operation_tag = vm.register(11);
+                    // Only this explicit named profile gives the new tags any meaning. The
+                    // frozen baseline keeps its original decode and rejection precedence.
+                    if vm.syscall_policy() == ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+                        && matches!(operation_tag,
+                            ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION
+                            | ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION)
+                    {
+                        return self.queue_runtime_obligation(vm, operation_tag);
+                    }
                     if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509 {
                         return self.queue_x509_attachment(vm);
                     }
@@ -12756,7 +12857,6 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 1,
             abi_version: 1,
         };
@@ -15593,12 +15693,8 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         vm.set_register(12, ivm::Memory::INPUT_START + off);
         // Build a tiny program invoking the syscall and run it; expect a failure
         let code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_NFT_SET_METADATA)
-                    .expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
+            ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_NFT_SET_METADATA)
+                .to_le_bytes(),
             ivm::encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat();

@@ -15,10 +15,9 @@ use iroha_crypto::Hash;
 
 use crate::{IVM, ProgramMetadata, VMError, encoding::wide as enc, instruction::wide as op};
 
-/// Hard per-invocation gas ceiling, including the halt instruction.
+/// Hard per-invocation gas ceiling, including the halt instruction. Gas is the only
+/// execution budget; the artifact is not a ZK program and declares no cycle bound.
 pub const GAS_LIMIT: u64 = 128;
-/// Hard per-invocation instruction-cycle ceiling.
-pub const CYCLE_LIMIT: u64 = 16;
 
 /// Typed subset of a native unit record consumed by this prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,11 +59,7 @@ fn instructions() -> [u32; 8] {
 fn artifact() -> &'static [u8] {
     static ARTIFACT: OnceLock<Vec<u8>> = OnceLock::new();
     ARTIFACT.get_or_init(|| {
-        let mut bytes = ProgramMetadata {
-            max_cycles: CYCLE_LIMIT,
-            ..ProgramMetadata::default()
-        }
-        .encode();
+        let mut bytes = ProgramMetadata::default().encode();
         for word in instructions() {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
@@ -112,6 +107,8 @@ pub fn step_unit(input: UnitStepInput) -> Result<UnitStepOutput, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The fixed artifact has eight instructions and no backward branch.
+    const MAX_PATH_CYCLES: u64 = 8;
 
     fn oracle(input: UnitStepInput) -> (u32, i32) {
         (
@@ -132,7 +129,7 @@ mod tests {
                 let output = step_unit(input).expect("fixed artifact executes");
                 assert_eq!((output.hp, output.x), oracle(input));
                 assert!(output.gas > 0 && output.gas <= GAS_LIMIT);
-                assert!(output.cycles > 0 && output.cycles <= CYCLE_LIMIT);
+                assert!(output.cycles > 0 && output.cycles <= MAX_PATH_CYCLES);
             }
         }
     }

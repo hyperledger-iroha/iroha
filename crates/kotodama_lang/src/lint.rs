@@ -829,6 +829,8 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::RegisterPeer.source_name(),
     Builtin::UnregisterPeer.source_name(),
     Builtin::ScExecuteSubmitBallot.source_name(),
+    Builtin::RegisterRuntimeObligation.source_name(),
+    Builtin::CompleteRuntimeObligation.source_name(),
     Builtin::ResolveAccountAlias.source_name(),
     Builtin::AxtBegin.source_name(),
     Builtin::AxtTouch.source_name(),

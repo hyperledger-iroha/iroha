@@ -37,7 +37,7 @@ fn typed_uid_quote_compiles_as_one_native_read() {
             .map(|chunk| u32::from_le_bytes(*chunk))
             .filter(|word| {
                 instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
-                    && encoding::wide::decode_syscallx(*word)
+                    && encoding::wide::decode_scall(*word)
                         == syscalls::SYSCALL_ASSET_UID_HOLDING_QUOTE
             })
             .count();

@@ -522,6 +522,71 @@ pub fn serialize_block_envelope(world: &WorldBlock<'_>, out: &mut String) {
     serialize_sccp_fields!(world, out, serialize_block);
 }
 
+/// Append the SCCP envelope through the bounded checkpoint destination.
+pub(crate) fn serialize_block_bounded(
+    world: &WorldBlock<'_>,
+    out: &mut crate::snapshot::checkpoint_capture::encoding::Writer,
+) -> Result<(), json::BoundedJsonError> {
+    use json::JsonWriteSink as _;
+    macro_rules! entry {
+        (cell $field:ident) => {
+            out.value(&world.$field)?;
+        };
+        (store $field:ident) => {
+            snapshot_storage::serialize_block_bounded(&world.$field, out)?;
+        };
+    }
+    macro_rules! fields { ($($kind:ident $field:ident,)*) => {{
+        let mut first = true;
+        $(
+            if !first { out.push(',')?; }
+            first = false;
+            out.value(&stringify!($field))?;
+            out.push(':')?;
+            entry!($kind $field);
+        )*
+        let _ = first;
+    }}; }
+    out.push_str(",\"sccp\":{")?;
+    fields!(
+            cell sccp_parameters,
+            cell sccp_reset_nonce,
+            store sccp_committee_generations,
+            cell sccp_committee_current,
+            store sccp_forgery_offences,
+            cell sccp_forgery_max_generation,
+            cell sccp_liability_clock,
+            cell sccp_degraded_run,
+            cell sccp_anchor_open,
+            store sccp_anchor_chunks,
+            store sccp_block_leaves,
+            store sccp_block_commitments,
+            cell sccp_history,
+            store sccp_history_leaves,
+            store sccp_outbound_messages,
+            store sccp_outbound_by_nonce,
+            store sccp_control_messages,
+            store sccp_fast_pauses,
+            store sccp_fast_pause_suspended_until_ms,
+            store sccp_fast_pause_rounds,
+            cell sccp_pause_panel,
+            store sccp_routes,
+            store sccp_destination_words,
+            store sccp_governance_revisions,
+            store sccp_inbound_messages,
+            store sccp_pending_counts,
+            store sccp_reconciliations,
+            store sccp_reconciliation_proven,
+            store sccp_pending_refund_amount,
+            store sccp_light_clients,
+            store sccp_light_client_sets,
+            store sccp_light_client_checkpoints,
+            store sccp_light_client_stride_index,
+            store sccp_light_client_profiles,
+    );
+    out.push('}')
+}
+
 fn invalid(field: &str, message: impl Into<String>) -> json::Error {
     json::Error::InvalidField {
         field: format!("state.{SCCP_SNAPSHOT_MEMBER}.{field}"),

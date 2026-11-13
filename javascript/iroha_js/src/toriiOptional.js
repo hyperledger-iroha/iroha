@@ -14,6 +14,9 @@ export {
   retailFeeAssessmentMarkerMessage,
 } from "./norito.js";
 
+// Typed refusals from these optional surfaces carry Torii's canonical envelope.
+export { decodeTypedToriiErrorEnvelope } from "./toriiErrorEnvelope.js";
+
 export {
   _inspectOrdinaryCanonicalTransactionPayloadBindings as inspectCanonicalTransactionPayloadBindings,
 } from "./transactionCodec.js";

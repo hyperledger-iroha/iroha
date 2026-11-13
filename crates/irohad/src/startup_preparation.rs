@@ -18,7 +18,7 @@ pub struct PreparedNative {
     pub(super) frozen_startup_lane_manifests: LaneManifestRegistryHandle,
     pub(super) frozen_startup_lane_compliance: Option<Arc<LaneComplianceEngine>>,
     pub(super) expected_network_id: NetworkId,
-    pub(super) snapshot_writer_key: Option<KeyPair>,
+    pub(super) snapshot_maker: Option<SnapshotMaker>,
     pub(super) snapshot_read_buffer_budget: iroha_allocation::AllocationBudget,
     pub(super) events_sender: broadcast::Sender<iroha_data_model::events::EventBox>,
     pub(super) startup_trace_started_at: Instant,
@@ -254,6 +254,7 @@ impl PreparedStartup {
             kura.set_upgrade_checkpoint(checkpoint)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
+        let history_boundary = kura.history_boundary();
         let mut loaded_state_from_snapshot = false;
         let snapshot_read_buffer_budget =
             iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
@@ -297,15 +298,15 @@ impl PreparedStartup {
                 state
             }
             Err(error)
-                if upgrade_checkpoint.as_ref().is_some_and(|checkpoint| {
+                if history_boundary.as_ref().is_some_and(|checkpoint| {
                     u64::try_from(block_count.0).is_ok_and(|count| count >= checkpoint.height)
                 }) =>
             {
-                let height = upgrade_checkpoint
+                let height = history_boundary
                     .as_ref()
                     .map_or(0, |checkpoint| checkpoint.height);
                 return Err(Report::new(error).change_context(StartError::InitKura).attach(format!(
-                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs a snapshot of this release above the checkpoint"
+                    "blocks up to the runtime history boundary at height {height} are never re-executed; restore needs an authenticated snapshot at or above the boundary"
                 )));
             }
             Err(error) if snapshot_failure_allows_empty_state_fallback(&error, emergency_fast) => {
@@ -387,8 +388,8 @@ impl PreparedStartup {
         {
             // The adoption anchor a network ratified is the checkpoint its nodes were configured
             // to adopt the foundation at, so a configured checkpoint must name the same block.
-            // A State that carries a boundary gives it to Kura when the configuration names none,
-            // so this run re-executes no block at or below it.
+            // Node preparation advances the durable store boundary only after the
+            // complete restored State matches its certified successor.
             let world = state.world_view();
             if let (Some(anchor), Some(configured)) = (
                 iroha_core::runtime::checkpoint::committed_anchor(&world),
@@ -403,15 +404,6 @@ impl PreparedStartup {
                         configured.height, anchor.record.height
                     )));
                 }
-            }
-            if upgrade_checkpoint.is_none()
-                && let Some(boundary) = iroha_core::runtime::checkpoint::history_boundary(
-                    &world,
-                    state.latest_block_creation_time_ms_fast().unwrap_or(0),
-                )
-            {
-                kura.set_upgrade_checkpoint(&boundary)
-                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
             }
         }
         if !loaded_state_from_snapshot {
@@ -547,6 +539,21 @@ impl PreparedStartup {
         let (events_sender, _) = broadcast::channel(events_buffer_capacity);
         let state: Arc<State> = Arc::from(state);
         lifetime.state = Some(Arc::clone(&state));
+        // The same configured writer preserves mandatory checkpoint cuts during certified
+        // replay and remains owned through provider admission into the live maintenance child.
+        // Emergency Fast startup neither signs nor writes checkpoint artifacts.
+        let mut snapshot_maker = if emergency_fast {
+            None
+        } else {
+            snapshot_writer_key.and_then(|key| {
+                SnapshotMaker::from_config(
+                    &config.snapshot,
+                    Arc::clone(&state),
+                    key,
+                    snapshot_read_buffer_budget.clone(),
+                )
+            })
+        };
         // Sumeragi rebuilds the state: it applies (fresh chain) or re-executes (restart) the
         // signed genesis, or resumes the authenticated snapshot State, and replays every block
         // Kura holds above it against its commit certificate.
@@ -554,18 +561,23 @@ impl PreparedStartup {
             None
         } else {
             log_startup_trace("irohad.sumeragi.prepare", startup_trace_started_at);
-            let prepared =
-                iroha_core::sumeragi::node::prepare(iroha_core::sumeragi::node::PrepareInputs {
-                    state: Arc::clone(&state),
-                    events: events_sender.clone(),
-                    genesis: genesis.as_ref().map(|genesis| genesis.0.clone()),
-                    genesis_account: AccountId::new(effective_genesis_public_key.clone()),
-                    consensus_mode: signed_consensus_mode,
-                })
-                .map_err(|error| {
-                    Report::new(StartError::InitKura)
-                        .attach(format!("Sumeragi could not rebuild the state: {error}"))
-                })?;
+            let inputs = iroha_core::sumeragi::node::PrepareInputs {
+                state: Arc::clone(&state),
+                events: events_sender.clone(),
+                genesis: genesis.as_ref().map(|genesis| genesis.0.clone()),
+                genesis_account: AccountId::new(effective_genesis_public_key.clone()),
+                consensus_mode: signed_consensus_mode,
+            };
+            let prepared = match snapshot_maker.as_mut() {
+                Some(writer) => {
+                    iroha_core::sumeragi::node::prepare_with_checkpoint_writer(inputs, writer)
+                }
+                None => iroha_core::sumeragi::node::prepare(inputs),
+            }
+            .map_err(|error| {
+                Report::new(StartError::InitKura)
+                    .attach(format!("Sumeragi could not rebuild the state: {error}"))
+            })?;
             iroha_logger::info!(
                 height = state.committed_height(),
                 instance = ?prepared.instance(),
@@ -608,7 +620,7 @@ impl PreparedStartup {
             frozen_startup_lane_manifests,
             frozen_startup_lane_compliance,
             expected_network_id,
-            snapshot_writer_key,
+            snapshot_maker,
             snapshot_read_buffer_budget,
             events_sender,
             startup_trace_started_at,

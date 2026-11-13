@@ -23,7 +23,6 @@ fn assemble(code: &[u8]) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -34,7 +33,7 @@ fn assemble(code: &[u8]) -> Vec<u8> {
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = wide::system::SCALL;
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&encoding::wide::encode_sys(scall, num as u8).to_le_bytes());
+    bytes.extend_from_slice(&encoding::wide::encode_scall(num as u32).to_le_bytes());
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     assemble(&bytes)
 }

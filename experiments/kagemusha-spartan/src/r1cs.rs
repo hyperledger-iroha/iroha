@@ -111,6 +111,11 @@ pub struct Witness<F> {
     /// `rows * cols`, row major, zero tail columns.
     pub w: Vec<F>,
 }
+impl<F: zeroize::Zeroize> zeroize::Zeroize for Witness<F> {
+    fn zeroize(&mut self) {
+        self.w.iter_mut().for_each(zeroize::Zeroize::zeroize);
+    }
+}
 
 /// The relation a proof is about (the toy uniform R1CS, or a sparse circuit).
 /// `z = (w || io)` padded to `2^sz`.
@@ -142,6 +147,10 @@ impl<F: Scalar> Rel<F> for Toy {
 /// and constraints depend on challenges drawn after the first phase's rows
 /// are committed (the LogUp argument).
 pub trait Circuit<F: Scalar>: Sync {
+    /// Refresh only explicitly designated independent product gates before any
+    /// commitment. Replaying the same proof RNG reproduces the same first phase.
+    fn randomize_masks(&self, _w: &mut [F], _rng: &mut SpikeRng) {}
+
     fn phase1_rows(&self, shape: &Shape) -> usize {
         shape.rows()
     }

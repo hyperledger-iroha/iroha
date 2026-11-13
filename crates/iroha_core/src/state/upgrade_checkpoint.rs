@@ -4,8 +4,10 @@
 //! Blocks at or below the checkpoint are the predecessor's final history. This release never
 //! re-executes or replays them: a node restores a snapshot of this release above the checkpoint
 //! and executes forward, and only the archived predecessor release verifies the blocks up to it.
-//! The configuration (`snapshot.upgrade_checkpoint`) names the checkpoint, and Kura checks it
-//! against the block it stores at that height.
+//! The configuration (`snapshot.upgrade_checkpoint`) names the adoption checkpoint, and Kura
+//! checks it against the block it stores at that height. Kura also persists the highest learned
+//! history boundary separately: removing the configuration or selecting an older snapshot cannot
+//! lower it, and a committed startup floor may advance it beyond the adoption checkpoint.
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;

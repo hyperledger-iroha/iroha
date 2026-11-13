@@ -299,6 +299,8 @@ impl State {
                 gas_limit_per_block: gas_limit_per_block.take().expect("prepared State input"),
                 frozen_execution_output_capacity: None,
                 execution_output_plan: None,
+                governance_start_outputs: None,
+                governance_due_applied: false,
                 sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep::Off,
                 sumeragi_lanes_step: crate::sumeragi::lanes::step::LaneStep::Off,
                 #[cfg(feature = "telemetry")]

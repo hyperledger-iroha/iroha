@@ -555,6 +555,12 @@ pub mod isi {
         if trigger_ids.is_empty() {
             return;
         }
+        for id in trigger_ids {
+            crate::runtime::deferred_consent::remove(
+                state_transaction,
+                iroha_data_model::runtime::deferred::DeferredConsentKeyV1::Trigger(id.clone()),
+            );
+        }
         let account_ids: Vec<AccountId> = state_transaction
             .world
             .account_permissions
@@ -624,13 +630,33 @@ pub mod isi {
             }
         }
     }
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn register_trigger_internal(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         trigger: Trigger,
         preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
+        register_trigger_internal_with_consent(
+            authority,
+            state_transaction,
+            trigger,
+            preauthorized_manifest_contract_subject,
+            false,
+        )
+    }
+
+    /// Register one fresh incarnation with the mode carried by its signed instruction.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn register_trigger_internal_with_consent(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        trigger: Trigger,
+        preauthorized_manifest_contract_subject: Option<&AccountId>,
+        current_bindings: bool,
+    ) -> Result<(), Error> {
+        if current_bindings {
+            crate::runtime::deferred_consent::require_enabled(state_transaction)?;
+        }
         let mut new_trigger = trigger;
         crate::runtime::ironwood::admission::executable(
             new_trigger.action().executable(),
@@ -867,6 +893,11 @@ pub mod isi {
                 }
             }
         }
+        let consent = crate::runtime::deferred_consent::prepare_trigger(
+            state_transaction,
+            &new_trigger,
+            current_bindings,
+        )?;
         let triggers = &mut state_transaction.world.triggers;
         let trigger_id = new_trigger.id().clone();
         let success = match new_trigger.action().filter() {
@@ -901,6 +932,14 @@ pub mod isi {
                 id: trigger_id.into(),
             }
             .into());
+        }
+        if let Some(consent) = consent {
+            state_transaction.world.runtime_deferred_consents.insert(
+                iroha_data_model::runtime::deferred::DeferredConsentKeyV1::Trigger(
+                    trigger_id.clone(),
+                ),
+                consent,
+            );
         }
         state_transaction
             .world

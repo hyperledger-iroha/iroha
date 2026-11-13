@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     ProgramMetadata,
     encoding::wide::{encode_halt, encode_ri, encode_rr},
-    instruction::wide::{arithmetic as a, crypto as v},
+    instruction::wide::arithmetic as a,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -31,8 +31,8 @@ pub(super) struct GuestState {
     pc: u64,
     gas: u64,
     cycles: u64,
-    registers: [u64; 256],
-    tags: [bool; 256],
+    registers: [u64; crate::parallel::REGISTER_COUNT],
+    tags: [bool; crate::parallel::REGISTER_COUNT],
     heap: u64,
     input: u64,
     halted: bool,
@@ -135,37 +135,6 @@ fn tail_refusal_and_unwind_cancel_only_unobserved_credit_and_keep_original_error
 }
 
 #[test]
-fn previous_instruction_span_covers_wide_changes_before_a_narrow_next_opcode() {
-    let original = AllocationBudget::new(LIMIT);
-    let mut vm = loaded(&original, TraceMode::DeltaRegisters, true);
-    vm.vector_length = 64;
-    let invocation = vm.begin_trace_invocation().unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
-    vm.prepare_trace_instruction(&invocation, encode_rr(v::VADD32, 2, 0, 1), |_| Ok(()))
-        .unwrap();
-    // Mimic only the public destination window here; the classifier's separate
-    // tests compare the bound with actual ordinary interpreter transitions.
-    for register in 160..224 {
-        vm.registers.set(register, 41);
-        vm.registers.set_tag(register, true);
-    }
-    vm.pc += 4;
-    vm.cycles += 1;
-    let mut last = 0;
-    vm.publish_trace_cycles(&invocation, &mut last).unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
-    assert_eq!(vm.delta_trace.entry(1).unwrap().changes.len(), 64);
-    vm.prepare_trace_instruction(&invocation, encode_ri(a::ADDI, 0, 0, 0), |_| Ok(()))
-        .unwrap();
-    vm.pc += 4;
-    vm.cycles += 1;
-    vm.publish_trace_cycles(&invocation, &mut last).unwrap();
-    vm.record_trace_prefetch(&invocation).unwrap();
-    assert!(vm.delta_trace.entry(2).unwrap().changes.is_empty());
-    vm.finish_trace_invocation(invocation);
-}
-
-#[test]
 fn completed_cycle_batch_records_changes_once_then_padding_uses_no_change_span() {
     for (opcode, cycles) in [(a::GCD, 12), (a::DIV_CEIL, 12), (a::ISQRT, 6), (a::MEAN, 3)] {
         let original = AllocationBudget::new(LIMIT);
@@ -260,7 +229,7 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
         .unwrap();
     assert_eq!(original.reserved_bytes(), before + demand);
     original.set_limit_bytes(0);
-    copies.cycles.record_reserved(vm.pc, [9; 256], [true; 256]);
+    copies.cycles.record_reserved(vm.pc, [9; crate::parallel::REGISTER_COUNT], [true; 256]);
     let mut copied_registers = vm.registers.snapshot();
     copied_registers[7] = 23;
     copies

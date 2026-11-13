@@ -355,6 +355,12 @@ impl norito::json::JsonSerialize for UaidDataspaceBindings {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_canonical_base64_json_to(self, out)
+    }
 }
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for UaidDataspaceBindings {
@@ -378,6 +384,12 @@ impl norito::json::JsonSerialize for AccountScopeDirectoryEntry {
             .expect("AccountScopeDirectoryEntry Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_canonical_base64_json_to(self, out)
     }
 }
 #[cfg(feature = "json")]
@@ -599,6 +611,14 @@ mod tests {
         let (account_id, _) = gen_account_in("wonderland");
         bindings.bind_account(DataSpaceId::new(9), account_id);
         let encoded = json::to_json(&bindings).expect("bindings should serialize to JSON");
+        assert_eq!(
+            json::to_json_bounded(&bindings, encoded.len()).unwrap(),
+            encoded
+        );
+        assert_eq!(
+            json::to_json_bounded(&bindings, encoded.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
         let decoded: UaidDataspaceBindings =
             json::from_str(&encoded).expect("bindings should deserialize from JSON");
         assert_eq!(decoded, bindings);
@@ -639,6 +659,14 @@ mod tests {
         entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
         entry.ensure_dataspace(DataSpaceId::new(12));
         let encoded = json::to_json(&entry).expect("scope entry should serialize to JSON");
+        assert_eq!(
+            json::to_json_bounded(&entry, encoded.len()).unwrap(),
+            encoded
+        );
+        assert_eq!(
+            json::to_json_bounded(&entry, encoded.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
         let decoded: AccountScopeDirectoryEntry =
             json::from_str(&encoded).expect("scope entry should deserialize from JSON");
         assert_eq!(decoded, entry);

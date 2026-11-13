@@ -2149,20 +2149,26 @@ fn authority_schema_family_verifies_original_certified_cuts_for_each_supported_p
     use iroha_data_model::sumeragi_finality::{
         FinalityValidator, SumeragiFinalityVerifier, WorldStateSchemaPolicyV1 as _,
     };
-    // The existing component fixture stages an approved record and signs every validator's
-    // support. Real block execution performs activation and certifies the World root. This
-    // regression tests proof interpretation, not Parliament approval or release qualification.
+    // This component fixture assembles catalog candidates directly, stages an approved record
+    // and signs every validator's support. Real block execution performs activation and
+    // certifies the World root. Local operator qualification refuses unfinished candidates;
+    // this regression tests proof interpretation, not release readiness or Parliament approval.
     let schedule = |chain: &CertifiedTestChain, module: &str, time_ms: u64| {
         let change = {
             let view = chain.state().view();
-            crate::runtime::draft_addition(
-                view.world(),
-                chain.network_id(),
-                module,
-                chain.height() + 2,
-                [0x71; 32],
-            )
-            .unwrap()
+            crate::runtime::release_catalog()
+                .unwrap()
+                .activation(
+                    module,
+                    view.world().runtime_selection(),
+                    &crate::runtime::change_set::PublishedDefinitions(
+                        &view.world().runtime_definitions,
+                    ),
+                    chain.network_id(),
+                    chain.height() + 2,
+                    [0x71; 32],
+                )
+                .unwrap()
         };
         crate::runtime::ironwood::test_activation::schedule_change(chain, time_ms, change)
     };

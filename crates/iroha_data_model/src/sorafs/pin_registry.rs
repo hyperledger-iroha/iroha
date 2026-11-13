@@ -301,6 +301,12 @@ impl JsonKeyCodec for ManifestDigest {
     fn encode_json_key(&self, out: &mut String) {
         self.as_bytes().encode_json_key(out);
     }
+    fn encode_json_key_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        self.as_bytes().encode_json_key_to(out)
+    }
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }

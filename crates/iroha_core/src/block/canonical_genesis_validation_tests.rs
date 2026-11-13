@@ -306,7 +306,8 @@ fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts(
             }
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
-            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            | ExecutionOutputV1::TimeWithLifecycle(_)
+            | ExecutionOutputV1::GovernanceBlockStart(_) => {
                 unreachable!("genesis_internal_outputs constructs only V1 internal fixtures")
             }
             ExecutionOutputV1::Network(_) => unreachable!(),

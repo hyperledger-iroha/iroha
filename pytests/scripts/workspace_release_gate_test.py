@@ -66,7 +66,7 @@ RELEASE_GATE_BUILD = "cargo build --locked --offline --workspace"
 # Complete workspace test routes compile Torii fixtures and the `dev-tools` executables
 # whose unit tests live in the binary (release publisher, Python delivery helper).
 WORKSPACE_TEST_FEATURES = (
-    "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
+    "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools"
 )
 RELEASE_GATE_BUILD_STEP = "- name: Build the full workspace"
 DIAGNOSTIC_CONDITION = (

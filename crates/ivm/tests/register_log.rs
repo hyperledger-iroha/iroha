@@ -97,7 +97,7 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
 
     let syscall = ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
     let mut vm = IVM::new(u64::MAX);
@@ -189,7 +189,7 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
     let mut code = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 0, 1)
         .to_le_bytes()
         .to_vec();
-    code.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
     let mut vm = IVM::new(u64::MAX);
@@ -244,7 +244,6 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             assert!(!common::diagnostic_snapshot(vm).states().is_empty());
             assert!(!vm.step_log().is_empty());
-            assert!(!vm.constraints().is_empty());
             assert!(!vm.delta_register_trace().is_empty());
 
             match self.mutation {
@@ -271,10 +270,7 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
     let mut code = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 0, 1)
         .to_le_bytes()
         .to_vec();
-    code.extend_from_slice(
-        &encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 0, 0).to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
 
@@ -341,7 +337,6 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
         fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
             if matches!(self.0, PanicPhase::Prepare) {
                 assert!(!vm.step_log().is_empty());
-                assert!(!vm.constraints().is_empty());
                 panic!("intentional prepare panic");
             }
             Ok(0)
@@ -349,7 +344,6 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
 
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             assert!(!vm.step_log().is_empty());
-            assert!(!vm.constraints().is_empty());
             panic!("intentional syscall panic");
         }
 
@@ -362,10 +356,7 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
     let mut code = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 0, 1)
         .to_le_bytes()
         .to_vec();
-    code.extend_from_slice(
-        &encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 0, 0).to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
 
@@ -454,7 +445,7 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
     let mut code = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 0, 1)
         .to_le_bytes()
         .to_vec();
-    code.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
     let mut vm = IVM::new(u64::MAX);

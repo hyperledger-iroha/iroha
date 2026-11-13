@@ -45,7 +45,7 @@ impl ContractReturnStack {
     /// Complete any backing allocation before call gas or frame authority changes.
     pub(crate) fn preflight_one(&mut self) -> Result<(), VMError> {
         if self.len() >= MAX_CONTRACT_CALL_DEPTH {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::CallDepthExceeded);
         }
         match &mut self.0 {
             Storage::Local(values) => values
@@ -253,7 +253,7 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 stack.try_push(u64::MAX),
-                Err(VMError::AssertionFailed)
+                Err(VMError::CallDepthExceeded)
             ));
             assert_eq!(stack.len(), MAX_CONTRACT_CALL_DEPTH);
             assert_eq!(budget.reserved_bytes(), BACKING_BYTES);

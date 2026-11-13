@@ -122,6 +122,120 @@ impl ImportGameUnitV1 {
     pub const WIRE_ID: &'static str = "iroha.game_partition.import.v1";
 }
 
+isi! {
+ /// Owner-authorized source request locking one unit before remote destination admission.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::RequestGameUnitExportV1")]
+ #[derive(Copy)]
+ pub struct RequestGameUnitExportV1 {
+  /// Registered local application world.
+  pub world_id: iroha_crypto::Hash,
+  /// Original active source unit to lock.
+  pub unit_id: iroha_crypto::Hash,
+  /// Registered sole destination for this transfer.
+  pub destination: [u8;32],
+  /// Fresh owner-chosen identity; canceled requests remain permanently distinct.
+  pub nonce: u64,
+ }
+}
+impl crate::seal::Instruction for RequestGameUnitExportV1 {}
+impl RequestGameUnitExportV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.request_export.v1";
+}
+isi! {
+ /// Destination reservation authorized by a certified source request and unit lock.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::ReserveGameUnitImportV1")]
+ pub struct ReserveGameUnitImportV1 {
+  /// Authentic source request, binding its locked original unit and sole destination.
+  pub proof: crate::runtime::native_game::GameUnitExportIntentProofV1,
+ }
+}
+impl crate::seal::Instruction for ReserveGameUnitImportV1 {}
+impl ReserveGameUnitImportV1 {
+    /// Stable wire identity, activated only by the independent native game capture addition.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.reserve_import.v1";
+}
+isi! {
+ /// Irreversible source export after authentic destination acceptance.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::ExportReservedGameUnitV1")]
+ pub struct ExportReservedGameUnitV1 {
+  /// Destination's exact certified reservation and original completion guarantee.
+  pub proof: crate::runtime::native_game::GameUnitReservationProofV1,
+ }
+}
+impl crate::seal::Instruction for ExportReservedGameUnitV1 {}
+impl ExportReservedGameUnitV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.export_reserved.v1";
+}
+isi! {
+ /// Complete reserved destination custody using authentic source removal.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::ImportReservedGameUnitV1")]
+ pub struct ImportReservedGameUnitV1 {
+  /// Exact source export bound to this root's retained reservation.
+  pub proof: crate::runtime::native_game::ReservedGameUnitExportProofV1,
+ }
+}
+impl crate::seal::Instruction for ImportReservedGameUnitV1 {}
+impl ImportReservedGameUnitV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.import_reserved.v1";
+}
+isi! {
+ /// Final source ACK of certified destination import; never recreates a unit.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::AcknowledgeGameUnitImportV1")]
+ pub struct AcknowledgeGameUnitImportV1 {
+  /// Exact destination import evidence; source tombstones remain permanent.
+  pub proof: crate::runtime::native_game::GameUnitImportAckProofV1,
+ }
+}
+impl crate::seal::Instruction for AcknowledgeGameUnitImportV1 {}
+impl AcknowledgeGameUnitImportV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.acknowledge_import.v1";
+}
+isi! {
+ /// Owner cancellation before the source has exported its original locked unit.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::CancelGameUnitExportRequestV1")]
+ #[derive(Copy)]
+ pub struct CancelGameUnitExportRequestV1 {
+  /// Original admitted request that has not exported.
+  pub transfer_id: iroha_crypto::Hash,
+ }
+}
+impl crate::seal::Instruction for CancelGameUnitExportRequestV1 {}
+impl CancelGameUnitExportRequestV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.cancel_export_request.v1";
+}
+isi! {
+ /// Release destination reservation only after certified permanent source cancellation.
+ #[derive(crate::DeriveJsonSerialize,crate::DeriveJsonDeserialize)]
+ #[norito(deny_unknown_fields)]
+ #[norito_schema(name="iroha_data_model::isi::game_partition::CancelReservedGameUnitImportV1")]
+ pub struct CancelReservedGameUnitImportV1 {
+  /// Authentic source proof that this request was never exported and cannot export later.
+  pub proof: crate::runtime::native_game::GameUnitExportCancelProofV1,
+ }
+}
+impl crate::seal::Instruction for CancelReservedGameUnitImportV1 {}
+impl CancelReservedGameUnitImportV1 {
+    /// Stable selected-protocol wire identity.
+    pub const WIRE_ID: &'static str = "iroha.game_partition.cancel_import_reservation.v1";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

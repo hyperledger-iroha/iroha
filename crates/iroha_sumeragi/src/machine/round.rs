@@ -181,6 +181,7 @@ impl Core {
         self.t_prop = None;
         self.t_body = None;
         self.asked = false;
+        self.manifest_hint = false;
         self.stage = self.hint;
         self.t_ready = None;
         self.t_pqc = None;

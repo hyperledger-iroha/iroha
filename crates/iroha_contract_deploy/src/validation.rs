@@ -83,7 +83,8 @@ fn validate_contents(
     if hex::encode(&artifact) != record.artifact_hex {
         return Err(eyre!("retained artifact is not canonical hex"));
     }
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
     if verified.code_hash != context.code_hash || verified.abi_hash != context.abi_hash {
         return Err(eyre!(
             "retained code or ABI hash differs from the verified artifact"

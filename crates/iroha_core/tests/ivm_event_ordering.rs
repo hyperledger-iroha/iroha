@@ -32,7 +32,7 @@ fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = ivm::instruction::wide::system::SCALL;
     let syscall = u8::try_from(num).expect("syscall number must fit in wide encoding");
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_sys(scall, syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_scall(u32::from(syscall)).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
@@ -83,10 +83,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("syscall number must fit in wide encoding"),
-        )])
+        .chain([encoding::wide::encode_scall(syscall)])
         .collect()
 }
 /// Statelessly admit `program` as a generic IVM transaction signed by `key`.

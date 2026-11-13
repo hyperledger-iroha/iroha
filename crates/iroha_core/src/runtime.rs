@@ -13,13 +13,17 @@ pub mod checkpoint;
 pub mod committed_policy;
 pub(crate) mod containment;
 pub mod content_publish_permission;
+pub(crate) mod deferred_consent;
 pub(crate) mod envelope;
+pub(crate) mod execution;
 pub mod ironwood;
 pub mod keyed_state;
 pub mod lifecycle_activation;
 pub mod lifecycle_preflight;
 pub(crate) mod lifecycle_support;
 pub mod migration;
+pub(crate) mod native_amx_capture;
+pub(crate) mod native_escrow_capture;
 pub(crate) mod obligations;
 pub(crate) mod restricted_dataspace_read;
 pub(crate) mod sorafs_authority;
@@ -89,6 +93,10 @@ pub fn activate_additions_for_testing(
         || through == catalog::additions::RESTRICTED_DATASPACE_READ.module
         || through == catalog::additions::PARLIAMENT_ANONYMOUS.module
         || through == catalog::additions::RUNTIME_LIFECYCLE.module
+        || through == catalog::additions::DEFERRED_CONSENT.module
+        || through == catalog::additions::NATIVE_ESCROW_CAPTURE.module
+        || through == catalog::additions::NATIVE_AMX_CAPTURE.module
+        || through == catalog::additions::CONTRACT_LIFECYCLE.module
     {
         &catalog.additions[last..=last]
     } else {
@@ -255,9 +263,9 @@ pub(crate) fn uninstalled_world_members(
     Ok(uninstalled)
 }
 
-/// Every module [`draft_addition`] drafts for: the additions of this release in activation order,
+/// Candidate modules for [`draft_addition`]: the additions of this release in activation order,
 /// then the keyed State profile, the typed committed parameters and the content-publishing
-/// permission.
+/// permission. Drafting still refuses a candidate whose execution custody is incomplete.
 ///
 /// # Errors
 /// The catalog cannot be built (a build defect).
@@ -280,7 +288,8 @@ pub fn draftable_modules() -> Result<Vec<&'static str>, CatalogError> {
 ///
 /// # Errors
 /// `module` is not an addition of this release, or the change set does not apply to the
-/// committed selection (an earlier addition is not active yet, or this one already is).
+/// committed selection (an earlier addition is not active yet, or this one already is), or
+/// the candidate would introduce an unfinished native export lifecycle.
 pub fn draft_addition(
     world: &impl crate::state::WorldReadOnly,
     network: iroha_data_model::NetworkId,
@@ -320,14 +329,34 @@ pub fn draft_addition(
             qualification,
         );
     }
-    release_catalog()?.activation(
+    let catalog = release_catalog()?;
+    let change = catalog.activation(
         module,
         world.runtime_selection(),
         &published,
         network,
         effective_height,
         qualification,
+    )?;
+    let successor = change
+        .apply(world.runtime_selection(), &published)
+        .map_err(|error| CatalogError::Addition {
+            module: module.into(),
+            reason: error.to_string(),
+        })?;
+    if catalog::unqualified_native_activation(
+        world.runtime_selection(),
+        &successor.selection,
+        &catalog.definitions,
     )
+    .is_some()
+    {
+        return Err(CatalogError::Addition {
+            module: module.into(),
+            reason: catalog::UNQUALIFIED_NATIVE_REASON.into(),
+        });
+    }
+    Ok(change)
 }
 
 /// Resolve `instruction` against the selection its root executes at `height` (§5.2).
@@ -409,12 +438,15 @@ pub(crate) fn resolve_executing(
     state_transaction: &crate::state::StateTransaction<'_, '_>,
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> Result<Option<DefinitionId>, iroha_data_model::isi::error::InstructionExecutionError> {
+    deferred_consent::check_call(state_transaction, instruction)?;
     envelope::resolve_envelope(
         state_transaction.world.runtime_selection.get(),
         state_transaction._curr_block.height().get(),
         instruction,
         || {
-            if state_transaction.completing_obligation {
+            if let Some(step) = execution::native_step(state_transaction, instruction) {
+                Some(step)
+            } else if obligations::registry::captures_executing(state_transaction, instruction) {
                 Some(obligations::Step::Complete)
             } else {
                 obligations::step(instruction, &state_transaction.world)
@@ -650,6 +682,20 @@ fn blocking_restriction(
         | RestrictionV1::CompletionOnly(from)
         | RestrictionV1::Disabled(from) => (from <= height).then_some(restriction),
     }
+}
+
+/// Whether the root's selection installs the anonymous Parliament family
+/// (`iroha.governance.parliament.anonymous.v1`): its attempt table is installed storage.
+/// Only such a root runs the family's block-start items and reserves their output partition
+/// (`specs/parliament_private_ballot_design.md` §12.3).
+///
+/// # Errors
+/// As [`uninstalled_world_members`]: the release catalog cannot be built, or the selection
+/// installs storage this release does not implement.
+pub(crate) fn parliament_anonymous_installed(selection: &RootSelectionV1) -> Result<bool, String> {
+    Ok(!uninstalled_world_members(selection)?
+        .members
+        .contains(&"parliament_anonymous_attempts"))
 }
 
 /// Whether the root selected this release's exact nondelegable SoraFS services.

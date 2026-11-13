@@ -39,10 +39,7 @@ fn sorted_indexes_borrow_original_names_and_reset_private_reachability() {
     let decoded = decoded(&[
         enc::encode_branch(wide::control::BEQ, 2, 3, 2),
         enc::encode_offset24(wide::control::JMP, -1),
-        enc::encode_sys(
-            wide::system::SCALL,
-            crate::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
-        ),
+        enc::encode_scall(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT),
         enc::encode_halt(),
     ]);
     let graph = PreparedControlFlow::from_decoded(&decoded, None).unwrap();
@@ -76,7 +73,7 @@ fn duplicate_successors_cycles_and_indirect_edges_do_not_grow_the_queue() {
         enc::encode_branch(wide::control::BEQ, 2, 3, 1),
         enc::encode_offset24(wide::control::JMP, -1),
         enc::encode_rr(wide::control::JALR, 0, 1, 0),
-        enc::encode_syscallx(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT),
+        enc::encode_scall(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT),
         enc::encode_halt(),
     ]);
     let graph = PreparedControlFlow::from_decoded(&decoded, None).unwrap();

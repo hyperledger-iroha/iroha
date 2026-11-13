@@ -11,6 +11,7 @@ use super::{
 use crate::{
     VMError,
     execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
+    parallel::REGISTER_COUNT,
 };
 use iroha_allocation::{AllocationBudget, AllocationScope};
 use iroha_crypto::zeroize_value_for_confidential_discard as erase;
@@ -78,7 +79,7 @@ impl DeltaTraceLog {
     }
     /// Reserve an entire public observation batch before its semantic effects.
     ///
-    /// The first observation always needs all 256 registers. Subsequent bounds
+    /// The first observation always needs all 32 registers. Subsequent bounds
     /// come from the preceding instruction's public destination geometry. A
     /// repeated cycle/padding batch uses zero after that instruction's first
     /// state has been recorded. Overlapping batches cannot manufacture credit.
@@ -90,13 +91,13 @@ impl DeltaTraceLog {
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
         self.validate_scope(scope)?;
-        if self.pending.is_some() || rows == 0 || first_changes > 256 || repeated_changes > 256 {
+        if self.pending.is_some() || rows == 0 || first_changes > REGISTER_COUNT || repeated_changes > REGISTER_COUNT {
             return Err(VMError::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
             ));
         }
         let first = if self.last.is_none() {
-            256
+            REGISTER_COUNT
         } else {
             first_changes
         };
@@ -172,20 +173,25 @@ impl DeltaTraceLog {
         Ok(())
     }
     /// Record from the ordinary state without allocating or changing span demand.
-    pub(crate) fn record_reserved(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
+    pub(crate) fn record_reserved(
+        &mut self,
+        pc: u64,
+        gpr: [u64; REGISTER_COUNT],
+        tags: [bool; REGISTER_COUNT],
+    ) {
         let pending = self.pending.expect("admitted delta observation batch");
         let changed = |index: usize| {
             self.last
                 .as_ref()
                 .is_none_or(|last| last.gpr[index] != gpr[index] || last.tags[index] != tags[index])
         };
-        let count = (0..256).filter(|&index| changed(index)).count();
+        let count = (0..REGISTER_COUNT).filter(|&index| changed(index)).count();
         assert!(
             count <= pending.next,
             "public delta destination bound underestimated"
         );
         let start = self.changes.as_slice().len();
-        for index in 0..256 {
+        for index in 0..REGISTER_COUNT {
             if self
                 .last
                 .as_ref()

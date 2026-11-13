@@ -9,14 +9,27 @@ publish = false
 
 [dependencies]
 iroha_pasta = { path = "../../crates/iroha_pasta" }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["bls"] }
+# The canonical finality verifier uses the Arkworks 0.5 BLS implementation.
+w3f-bls = { version = "=0.3.0", default-features = false, features = ["std"] }
 ff = "0.14.0"
 group = "0.14.0"
 rayon = "1.11.0"
-blake3 = "1.8.2"
+blake3 = { version = "1.8.2", features = ["zeroize"] }
+blake2 = "0.11.0"
+getrandom = "0.4.3"
+zeroize = "1.8.2"
 num-bigint = "0.4.8"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
 norito = { path = "../../crates/norito", default-features = false, features = ["base-codec"] }
+
+[patch.crates-io]
+# Match the canonical workspace's fallible native-digit Quantity implementation.
+num-bigint = { path = "../../vendor/num-bigint-0.5.1" }
+ark-ff = { path = "../../vendor/ark-ff-0.5.0" }
+ark-bls12-381 = { path = "../../vendor/ark-bls12-381-0.5.0" }
+halo2curves = { path = "../../vendor/halo2curves-0.10.0" }
 
 [profile.release]
 debug = 1

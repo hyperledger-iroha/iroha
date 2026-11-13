@@ -32,8 +32,8 @@ matching implementation transparently.
 4. **Poseidon Integration**
    - Modify `src/poseidon.rs` so all internal field operations call through the
      `field_impl()` function. This ensures Poseidon permutations automatically
-     use the selected SIMD backend without changing the API used by the rest of
-     the VM or by Halo2 integrations.
+     use the selected SIMD backend without changing the API used by host-side
+     callers or by Halo2 integrations. No opcode reaches these helpers.
 
 5. **Thread-Safe Initialization and Testing**
    - Use `std::sync::Once` or `OnceLock` to initialize the dispatch exactly once

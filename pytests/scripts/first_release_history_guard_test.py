@@ -886,11 +886,13 @@ def test_current_inventory_pins_the_future_checkpoint_rule() -> None:
     assert [anchor["path"] for anchor in rule["anchors"]] == [
         "crates/iroha_core/src/sumeragi/node.rs",
         "crates/iroha_core/src/state/deserialize_core.rs",
+        "crates/iroha_core/src/state/keyed_state/recovery.rs",
         "crates/iroha_core/src/state/native_execution_tip.rs",
         "crates/iroha_core/src/state/world_projection.rs",
         "crates/iroha_core/src/state/native_execution_tip/finalized_world.rs",
     ]
-    assert any("authenticate_restored_world" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("NativeExecutionReplayRequired" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("claim.certified" in anchor["contains"] for anchor in rule["anchors"])
     assert any("GenesisReplayRequired" in anchor["contains"] for anchor in rule["anchors"])
     assert any("TODO(S9)" in anchor["contains"] for anchor in rule["anchors"])
     assert any("World-only receipt" in anchor["contains"] for anchor in rule["anchors"])

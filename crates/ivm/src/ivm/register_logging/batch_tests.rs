@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
     argument_record::prepare_argument_record_with_gas_limit,
-    encoding::wide::{encode_halt, encode_ri, encode_sys, encode_syscallx},
+    encoding::wide::{encode_halt, encode_ri, encode_sys, encode_scall},
     execution_memory::ExecutionMemoryLease,
     execution_packets::{INSTRUCTION_WINDOWS, NativeInvocation, instruction_clocks},
     host::{DefaultHost, IVMHost},
@@ -223,7 +223,7 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
 // register-row/shell boundary, using its canonical public layout exactly.
 fn initial_cycle_delta_bytes() -> usize {
     let mut deltas = zk::DeltaTraceLog::new(None);
-    deltas.prepare_batch(1, 256, 0, None).unwrap();
+    deltas.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None).unwrap();
     deltas.allocated_bytes().unwrap()
 }
 
@@ -383,10 +383,7 @@ fn actual_reserved_syscalls_prepay_restore_and_all_255_host_net_writes() {
         original.set_limit_bytes(LIMIT);
         // Exercise the actual syscall as a nested subtree of its public opcode batch.
         let _instruction = vm
-            .prepare_instruction_register_events(encode_sys(
-                system::SCALL,
-                syscalls::SYSCALL_ABORT as u8,
-            ))
+            .prepare_instruction_register_events(encode_scall(syscalls::SYSCALL_ABORT))
             .unwrap();
         let result = vm.execute_syscall(&mut host, syscalls::SYSCALL_ABORT);
         if reject_prepare {
@@ -484,7 +481,7 @@ fn native_delayed_finish_uses_original_batch_and_preserves_every_original_packet
         let offset = contract.header_len().checked_add(pc).unwrap();
         assert!(offset >= contract.code_offset());
         let word = u32::from_le_bytes(contract.artifact()[offset..offset + 4].try_into().unwrap());
-        expected += event_counts::instruction(word, 1, true, true).unwrap();
+        expected += event_counts::instruction(word, true, true).unwrap();
     }
     assert_eq!(count, Some(expected));
     let panic = std::panic::catch_unwind(|| {
@@ -566,8 +563,8 @@ fn syscall_shell_refusal_precedes_reserved_output_and_staged_entry_effects() {
 #[test]
 fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycle_allowance() {
     for word in [
-        encode_sys(system::SCALL, syscalls::SYSCALL_ABORT as u8),
-        encode_syscallx(syscalls::SYSCALL_ABORT),
+        encode_scall(syscalls::SYSCALL_ABORT),
+        encode_scall(syscalls::SYSCALL_ABORT),
     ] {
         let original = AllocationBudget::new(LIMIT);
         let mut vm = generic(&original, &[word, encode_halt()], 2);
@@ -582,7 +579,7 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycle_allowance() {
         );
         let baseline = original.reserved_bytes();
         let shell = zk::SharedRegLog::allocation_layout().size();
-        let rows = event_counts::instruction(word, 1, false, false).unwrap() * ROW;
+        let rows = event_counts::instruction(word, false, false).unwrap() * ROW;
         let steps = 4 * size_of::<zk::StepEntry>();
         let deltas = initial_cycle_delta_bytes();
         original.set_limit_bytes(baseline + shell + steps + deltas + rows + shell - 1);

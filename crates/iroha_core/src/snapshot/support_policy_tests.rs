@@ -238,11 +238,20 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
     assert_eq!(artifact_names, expected);
 }
 fn native_snapshot_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
+    let mut world = crate::state::World::new();
+    crate::runtime::keyed_state::install_for_test(&mut world);
     crate::sumeragi::test_chain::CertifiedTestChain::start(
-        crate::sumeragi::test_chain::TestChainConfig::new(crate::state::World::new(), 1_000),
+        crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000),
     )
     .expect("original signed native genesis")
 }
+
+fn authenticate_native_snapshot(source: &State, restored: &mut State) {
+    restored.set_gov(source.gov.clone());
+    restored.set_pipeline(iroha_config::parameters::actual::Pipeline::default());
+    assert!(restored.authenticate_restored_keyed_state().unwrap());
+}
+
 fn assert_snapshot_bundle_absent(store_dir: &Path) {
     assert!(
         !store_dir.join(SNAPSHOT_CURRENT_FILE_NAME).exists(),

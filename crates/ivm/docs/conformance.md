@@ -4,7 +4,7 @@ This checklist pins required golden tests/vectors and their locations to keep im
 
 - Decoder/Encoder
   - Canonical IVM 32-bit words roundtrip; compact and mixed-width streams are rejected.
-  - Deployable-artifact admission rejects undefined and noncanonical opcode forms before control-flow analysis. `max_decoded_ops` is a local cache-retention limit: streams at or below the limit are cacheable, while larger valid streams decode without being cached and remain subject to the consensus instruction limit at admission.
+  - Deployable-artifact admission rejects unassigned opcode bytes (`InvalidOpcode`, any byte outside the 59 admitted opcodes) and noncanonical opcode forms before control-flow analysis. `max_decoded_ops` is a local cache-retention limit: streams at or below the limit are cacheable, while larger valid streams decode without being cached and remain subject to the consensus instruction limit at admission.
   - Files: `crates/ivm/tests/decoder_roundtrip.rs`, `crates/ivm/tests/contract_artifact.rs`, `crates/ivm/tests/predecode_max_ops.rs`
 
 - Opcode Semantics
@@ -31,11 +31,11 @@ This checklist pins required golden tests/vectors and their locations to keep im
   - Output: `crates/ivm/tests/fixtures/predecoder/mixed/` (`code.bin`, `decoded.json`, `index.json`, `artifacts/*.to`); every decoded instruction is four bytes.
 
 - Cross‑Backend Vectors
-  - Vector/crypto helpers produce identical outputs across scalar/SIMD/GPU.
+  - Host-side vector/crypto helpers produce identical outputs across scalar/SIMD/GPU.
   - Files: `crates/ivm/tests/crypto_vectors.rs`
 
 - ZK Mode
-  - Trace commitment and padding semantics; ASSERT behavior in ZK vs non‑ZK.
+  - Trace commitment and padding semantics, with and without the diagnostic trace.
   - Files: `crates/ivm/tests/zk_trace.rs`
 
 Maintainers: update this file when adding new opcodes, syscalls, or encoding changes. Tie each change to explicit tests.

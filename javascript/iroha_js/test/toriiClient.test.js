@@ -19327,6 +19327,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
       delete payload.manifest.seiyaku_name;
     }],
     ["unsupported feature bit", (payload) => { payload.manifest.features_bitmap = 4; }],
+    ["retired vector feature bit", (payload) => { payload.manifest.features_bitmap = 2; }],
     ["camelCase access-hint alias", (payload) => {
       payload.manifest.access_set_hints.readKeys = [];
       delete payload.manifest.access_set_hints.read_keys;

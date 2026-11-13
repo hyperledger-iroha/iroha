@@ -35,7 +35,6 @@ mod tests {
         for replay in [
             TryReadSnapshotError::NativeExecutionReplayRequired,
             TryReadSnapshotError::SuccessorRequired { snapshot_height: 7 },
-            TryReadSnapshotError::WorldAuthentication("restored World differs".to_owned()),
         ] {
             assert!(snapshot_failure_allows_empty_state_fallback(&replay, false));
             assert!(!snapshot_failure_allows_empty_state_fallback(&replay, true));

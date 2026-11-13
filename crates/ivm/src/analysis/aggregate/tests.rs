@@ -24,9 +24,9 @@ fn exact_funded_histogram_preserves_register_memory_and_extended_syscall_analysi
         enc::encode_rr(wide::arithmetic::ADD, 4, 2, 3),
         enc::encode_load(wide::memory::LOAD64, 5, 6, 0),
         enc::encode_store(wide::memory::STORE64, 7, 5, 0),
-        enc::encode_sys(wide::system::SCALL, 17),
-        enc::encode_syscallx(0x00ff_ffff),
-        enc::encode_sys(wide::system::SCALL, 17),
+        enc::encode_scall(17),
+        enc::encode_scall(0x00ff_ffff),
+        enc::encode_scall(17),
         enc::encode_halt(),
     ]);
     let budget = AllocationBudget::new(4096);
@@ -72,7 +72,7 @@ fn exact_funded_histogram_preserves_register_memory_and_extended_syscall_analysi
 
 #[test]
 fn original_pool_refuses_before_second_pass_and_reclaims_on_visit_unwind() {
-    let ops = decoded(&[enc::encode_syscallx(300), enc::encode_halt()]);
+    let ops = decoded(&[enc::encode_scall(300), enc::encode_halt()]);
     let budget = AllocationBudget::new(0);
     let passes = Cell::new(0);
     let result = analyze(

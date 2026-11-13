@@ -169,6 +169,16 @@ impl NativeReplaySeed {
         deadline: Instant,
     ) -> Result<IsolatedNativeReplay, IsolatedReplayError> {
         check_replay_deadline(deadline)?;
+        // This engine reconstructs from genesis. A store's learned boundary
+        // applies to isolated replay too; copying into a fresh Kura cannot erase it.
+        // TODO(live_runtime_upgrades.md §7.3): seed isolated replay from an
+        // authenticated checkpoint at or above the source's boundary.
+        if let Some(boundary) = self.source.history_boundary() {
+            return Err(IsolatedReplayError::BelowHistoryBoundary {
+                next: GENESIS_HEIGHT,
+                boundary: boundary.height,
+            });
+        }
         let exact_target = ReplayTarget::from_native(target);
         let target = target.committed();
         if target.height() == 0 || target.commitment().schedule.current.network_id != self.network {
@@ -232,6 +242,7 @@ impl NativeReplaySeed {
         Ok(IsolatedNativeReplay {
             prepared,
             source,
+            source_history: Arc::clone(&self.source),
             pending: None,
             next: GENESIS_HEIGHT + 1,
             scope,
@@ -315,6 +326,16 @@ pub enum IsolatedReplayError {
     Deadline,
     #[error("isolated replay source: {0}")]
     Identity(&'static str),
+    /// This reconstruction would execute retired history instead of a certified checkpoint.
+    #[error(
+        "isolated replay at height {next} would execute at or below runtime history boundary {boundary}"
+    )]
+    BelowHistoryBoundary {
+        /// Next block this isolated reconstruction would execute.
+        next: u64,
+        /// Highest boundary the original source store already learned.
+        boundary: u64,
+    },
     #[error(transparent)]
     View(#[from] crate::state::StateViewError),
     #[error(transparent)]
@@ -392,6 +413,7 @@ impl ReplayedNativeTransport {
 pub struct IsolatedNativeReplay {
     prepared: Prepared,
     source: KuraBlockStore,
+    source_history: Arc<Kura>,
     pending: Option<(AvailableBody, Qc)>,
     next: u64,
     target: ReplayTarget,
@@ -410,6 +432,14 @@ impl IsolatedNativeReplay {
         deadline: Instant,
         maximum_steps: usize,
     ) -> Result<Option<ReplayedNativeTransport>, IsolatedReplayError> {
+        if let Some(boundary) = self.source_history.history_boundary()
+            && self.next <= boundary.height
+        {
+            return Err(IsolatedReplayError::BelowHistoryBoundary {
+                next: self.next,
+                boundary: boundary.height,
+            });
+        }
         if ReplayTarget::from_native(target) != self.target {
             return Err(IsolatedReplayError::Identity(
                 "replay target changed during continuation",
@@ -429,6 +459,14 @@ impl IsolatedNativeReplay {
             ));
         }
         for _ in 0..maximum_steps {
+            if let Some(boundary) = self.source_history.history_boundary()
+                && self.next <= boundary.height
+            {
+                return Err(IsolatedReplayError::BelowHistoryBoundary {
+                    next: self.next,
+                    boundary: boundary.height,
+                });
+            }
             if Instant::now() >= deadline {
                 return Err(IsolatedReplayError::Deadline);
             }

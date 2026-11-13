@@ -15,12 +15,23 @@ pub(crate) mod state_rows;
 const MAX: usize = 16 * 1024 * 1024;
 use crate::state_rows::{bytes, finality_page, fixed, invalid};
 
+/// Caller-pinned chain, pool, asset, payer and compiled profile of one Ironwood read.
+///
+/// The certified State context and the payment effect echo exactly these original values.
+#[derive(Clone, Copy)]
+struct IronwoodSelection<'a> {
+    chain_discriminant: u16,
+    pool_id_hex: &'a str,
+    asset_definition_id: &'a str,
+    payer_account_id: &'a str,
+    expected_profile_digest_hex: &'a str,
+}
+
 fn verified_context_json(
     page: &VerifiedFinalityPage,
-    pool_id_hex: &str,
+    selection: IronwoodSelection<'_>,
     asset: &iroha_data_model::asset::AssetDefinitionId,
     payer: &AccountId,
-    expected_profile_digest_hex: &str,
     state: &iroha_core_privacy::privacy_state::PrivacyOrchardPoolStateV1,
     payer_balance: &Option<iroha_data_model::asset::AssetValue>,
     reserve_balance: &Option<iroha_data_model::asset::AssetValue>,
@@ -38,7 +49,7 @@ fn verified_context_json(
         },
     )
     .map_err(|_| invalid())?;
-    if fixed(expected_profile_digest_hex)? != digest {
+    if fixed(selection.expected_profile_digest_hex)? != digest {
         return Err(invalid());
     }
     let amount = |value: &Option<iroha_data_model::asset::AssetValue>| {
@@ -49,7 +60,7 @@ fn verified_context_json(
     norito::json::to_json(&norito::json!({
         "height": (page.tip().height()), "block_hash_hex": (hex::encode(page.tip().header().hash().as_ref())),
         "core_hash_hex": (hex::encode(page.tip().core_hash().0)), "context_id_hex": (hex::encode(page.tip().context_id().as_ref())),
-        "pool_id_hex": pool_id_hex, "profile_digest_hex": (hex::encode(digest)), "parameter_id_hex": (hex::encode(profile.parameter_id.as_bytes())),
+        "pool_id_hex": (selection.pool_id_hex), "profile_digest_hex": (hex::encode(digest)), "parameter_id_hex": (hex::encode(profile.parameter_id.as_bytes())),
         "asset_definition_id": (asset.to_string()), "payer_account_id": (payer.to_string()), "reserve_account_id": (state.reserve_account().to_string()),
         "public_balance_scope": "global", "anchor_hex": (hex::encode(state.root().as_bytes())), "anchor_epoch": (state.epoch()),
         "payer_balance_decimal": (amount(payer_balance)), "reserve_balance_decimal": (amount(reserve_balance)),
@@ -62,13 +73,16 @@ fn verify_payment_from_context(
     payment_proof_frames_hex: Vec<String>,
     signed_transaction_versioned: &[u8],
     network_id_hex: &str,
-    chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
+    selection: IronwoodSelection<'_>,
     expected_amount_decimal: &str,
 ) -> Result<String, NativeValidationError> {
+    let IronwoodSelection {
+        chain_discriminant,
+        pool_id_hex,
+        asset_definition_id,
+        payer_account_id,
+        expected_profile_digest_hex,
+    } = selection;
     let invalid =
         || NativeValidationError::Value("Ironwood payment effect authentication failed".into());
     let cut: norito::json::Value = norito::json::from_str(cut_json).map_err(|_| invalid())?;

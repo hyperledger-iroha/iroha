@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { validateEmbeddedStates } from "../src/kotodamaCompiler/embeddedStateSchema.js";
 import { readCompactField } from "../src/kotodamaCompiler/embeddedNorito.js";
+import { IVM_PROGRAM_HEADER_LENGTH } from "../src/ivmArtifact.js";
 
 const join = (...parts) => Buffer.concat(parts);
 function u64(value) {
@@ -29,9 +30,10 @@ const expectedStates = [{ name: "counter", type_name: "int" }];
 // Extract only the state field from an authentic compiler fixture. The complete
 // frame, hash, and declaration boundary is tested by currentRustContractArtifact.
 function fixtureStates(artifact) {
-  assert.equal(artifact.subarray(49, 53).toString(), "CNTR");
-  const frameLength = artifact.readUInt32LE(53);
-  const frame = artifact.subarray(57, 57 + frameLength);
+  const cntr = IVM_PROGRAM_HEADER_LENGTH;
+  assert.equal(artifact.subarray(cntr, cntr + 4).toString(), "CNTR");
+  const frameLength = artifact.readUInt32LE(cntr + 4);
+  const frame = artifact.subarray(cntr + 8, cntr + 8 + frameLength);
   const payload = frame.subarray(frame.length - Number(frame.readBigUInt64LE(23)));
   const state = { offset: 0 };
   const fields = Array.from({ length: 14 }, () => readCompactField(payload, state, "CNTR"));

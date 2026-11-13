@@ -158,10 +158,7 @@ pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
     program.extend(std::iter::repeat_n(0, padding));
     for instruction in [
         wide::encode_literal(opcode::memory::LDLIT, 10, 0),
-        wide::encode_sys(
-            opcode::system::SCALL,
-            u8::try_from(ivm::syscalls::SYSCALL_CREATE_TRIGGER).unwrap(),
-        ),
+        wide::encode_scall(ivm::syscalls::SYSCALL_CREATE_TRIGGER),
         wide::encode_halt(),
     ] {
         program.extend_from_slice(&instruction.to_le_bytes());

@@ -23,7 +23,28 @@ pub(crate) fn selected_output_support(
     if super::trigger_lifecycle_enabled(selection).map_err(|error| error.to_string())? {
         lifecycle_output_support(policy, source)?;
     }
+    if super::parliament_anonymous_installed(selection)? {
+        governance_start_output_support(policy)?;
+    }
     Ok(())
+}
+
+/// Check that the committed output policy leaves the executed wire room for the
+/// governance-start partition of the anonymous Parliament family beside every execution row
+/// it allows. The partition counts towards no execution-row limit, so the unchanged
+/// candidate capacity stays valid; only the complete wire bounds both.
+///
+/// # Errors
+/// A diagnostic when the policy is invalid or its wire ceiling cannot hold the partition.
+pub(crate) fn governance_start_output_support(
+    policy: ExecutionOutputPolicyV1,
+) -> Result<(), String> {
+    policy.validate()?;
+    // SPEC: §13.4 HC806 — the family is supported only where the wire holds its partition.
+    if cfg!(all(test, sumeragi_core_mutation = "HC806")) {
+        return Ok(());
+    }
+    policy.limits().validate_governance_start_room()
 }
 
 /// Check that the lifecycle successor's terminal capacity covers the source candidate capacity.
@@ -55,7 +76,26 @@ mod tests {
         parameter::{ExecutionOutputPolicyV1, FastpqSourcePolicyV1},
     };
 
-    use super::lifecycle_output_support;
+    use super::{governance_start_output_support, lifecycle_output_support};
+
+    #[test]
+    fn the_anonymous_family_needs_wire_room_for_its_governance_start_partition() {
+        use iroha_data_model::governance::anonymous_ballot::GOVERNANCE_START_OUTPUT_BYTES_V1;
+
+        let policy = ExecutionOutputPolicyV1::bootstrap();
+        governance_start_output_support(policy).unwrap();
+        let mut exact = policy;
+        exact.max_executed_wire_bytes =
+            exact.max_total_output_bytes + GOVERNANCE_START_OUTPUT_BYTES_V1;
+        governance_start_output_support(exact).unwrap();
+        let mut tight = exact;
+        tight.max_executed_wire_bytes -= 1;
+        tight.validate().unwrap();
+        assert!(
+            governance_start_output_support(tight).is_err(),
+            "the anonymous family needs wire room for its governance-start partition"
+        );
+    }
 
     #[test]
     fn refuses_v1_only_row_or_aggregate_capacity() {

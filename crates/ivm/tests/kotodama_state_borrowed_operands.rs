@@ -103,10 +103,7 @@ fn borrowed_state_operands_keep_quantity_conservation_and_owned_results_on_both_
             parsed.contract_interface.as_ref().unwrap().callables.len(),
             3
         );
-        let publish = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        );
+        let publish = encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV);
         assert!(
             !program[parsed.code_offset..]
                 .as_chunks::<4>()
@@ -142,8 +139,8 @@ fn borrowed_state_operands_keep_quantity_conservation_and_owned_results_on_both_
             syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
         ] {
             let word = u8::try_from(number).map_or_else(
-                |_| encoding::wide::encode_syscallx(number),
-                |number| encoding::wide::encode_sys(instruction::wide::system::SCALL, number),
+                |_| encoding::wide::encode_scall(number),
+                |number| encoding::wide::encode_scall(u32::from(number)),
             );
             let calls = steps
                 .records()

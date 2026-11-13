@@ -12,7 +12,15 @@ This document describes the first-release implementation. ABI version 1 is the o
 - Program loading validates metadata, instruction boundaries, opcodes, indexed literals, syscall
   policy, and the terminating HALT before execution.
 - Compact 16-bit and mixed-width instruction streams are rejected.
-- The only mode bits are ZK and VECTOR. Unknown bits are invalid metadata.
+- The only mode bit is ZK. Unknown bits are invalid metadata. The header's `max_cycles` field is the
+  ZK trace bound: nonzero exactly when the ZK bit is set. Gas, supplied by the caller, is the only
+  execution budget.
+- 32 registers; five-bit register fields; signed 14-bit immediates, displacements and branch offsets;
+  signed 19-bit `JAL` and 24-bit `JMP`/`JALS` word offsets; one 24-bit `SCALL`; reserved operand bits
+  must be zero.
+- ABI v1 admits 58 opcodes (scalar arithmetic, 64-bit memory, typed literals, control flow and
+  host calls). Hashing and signature verification are syscalls; no opcode performs a
+  cryptographic or field primitive.
 - Prepared programs cache validated decode results. The execution loop consumes the canonical
   prepared representation directly; there is no compatibility decoder or alternate interpreter.
 
@@ -87,9 +95,11 @@ funding, configuration-reload pool custody and notification-safe cache release.
 The contract interpreter is a single sequential fetch-decode-execute loop. This keeps trap
 precedence, gas exhaustion, privacy checks, and proof traces in exact program order.
 
-Each opcode has one ABI-v1 gas rule. Vector costs scale with the declared logical vector length,
-not the host SIMD width. Cryptographic and staged syscall work is charged before bounded parsing or
-expensive host work. Hardware selection and block scheduling are never consensus-metered.
+Each opcode has one fixed ABI-v1 gas price, and only the terminating HALT is free. Cryptographic
+and staged syscall work is charged before bounded parsing or expensive host work. Hardware
+selection and block scheduling are never consensus-metered. A host derives an invocation's gas
+limit from its cycle limit with the fixed conversion `gas::GAS_PER_CYCLE`, which is bound into the
+gas-schedule hash and does not depend on the opcode price table.
 
 max_cycles bounds execution and determines ZK trace padding when enabled. Branches always charge
 their fixed instruction and cycle costs; execution history and predictor state cannot affect the
@@ -105,12 +115,12 @@ invocation requires the complete native STARK relation and State-owned finalized
 full-state commitments. Those
 release gates remain open in the [completion record](../../../specs/kotodama_ivm_completion.md).
 
-## Vector and cryptographic acceleration
+## Hardware acceleration
 
-The VECTOR mode enables logical vector opcodes. The logical lane count is part of program
-metadata and is capped by ABI policy. Scalar, SIMD, Metal, and CUDA helpers must return byte-for-byte
-identical outputs. Runtime feature detection selects only a throughput implementation; a
-deterministic scalar fallback remains authoritative.
+The instruction set has no vector or cryptographic opcodes. Scalar, SIMD, Metal and CUDA
+implementations exist only behind host-side helpers (Merkle hashing, syscall primitives, proof
+tooling) and must return byte-for-byte identical outputs. Runtime feature detection selects only a
+throughput implementation; a deterministic scalar fallback remains authoritative.
 
 Optional acceleration can fail closed or fall back without changing opcodes, gas, traps, register
 values, memory, or proofs. Qualification tests compare available accelerated paths with the scalar

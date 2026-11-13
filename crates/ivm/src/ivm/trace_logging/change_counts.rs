@@ -1,24 +1,20 @@
 //! Public upper bounds on distinct changed registers in a completed instruction.
 //!
 //! Values, privacy tags, taken conditions and acceleration backends never choose
-//! a span. Each row contains at most 255 changed architectural registers after
-//! the initial complete 256-register image; r0 is immutable. Invalid register
+//! a span. Each row contains at most 31 changed architectural registers after
+//! the initial complete 32-register image; r0 is immutable. Invalid register
 //! geometry remains the ordinary interpreter's error, not a new trace fault.
 
 use crate::{VMError, instruction::wide};
 
 fn single(register: usize) -> usize {
-    usize::from(register != 0 && register < 256)
-}
-fn pair(left: usize, right: usize) -> usize {
-    single(left) + usize::from(right != left) * single(right)
+    usize::from(register != 0 && register < crate::parallel::REGISTER_COUNT)
 }
 
 /// Count the public maximum, independently of source and destination values.
-pub(super) fn instruction(word: u32, vector_length: usize) -> Result<usize, VMError> {
-    use wide::{arithmetic as a, control as c, crypto as v, memory as m, system as s, zk as z};
+pub(super) fn instruction(word: u32) -> Result<usize, VMError> {
+    use wide::{arithmetic as a, control as c, memory as m, system as s};
     let rd = wide::rd(word);
-    let lanes = vector_length.max(1);
     Ok(match wide::opcode(word) {
         a::ADD
         | a::SUB
@@ -62,46 +58,15 @@ pub(super) fn instruction(word: u32, vector_length: usize) -> Result<usize, VMEr
         | a::ISQRT
         | a::ABS
         | a::CMOVI
-        | z::FADD
-        | z::FSUB
-        | z::FMUL
-        | z::FINV
         | m::LOAD64
         | m::LDLIT
         | m::LDI64
-        | s::GETGAS
         | c::JAL
-        | c::JALR
-        | v::POSEIDON2
-        | v::POSEIDON6
-        | v::ED25519VERIFY
-        | v::ECDSAVERIFY
-        | v::DILITHIUMVERIFY => single(rd),
-        m::LOAD128 | v::ED25519BATCHVERIFY => pair(rd, wide::rs2(word)),
-        v::AESENC | v::AESDEC | v::BLAKE2S => pair(rd, rd + 1),
+        | c::JALR => single(rd),
         c::JALS => 1,
-        v::VADD32 | v::VADD64 | v::VAND | v::VXOR | v::VOR | v::VROT32 => lanes.min(255),
-        v::SHA256BLOCK => 2 * lanes.min(4),
-        s::SCALL | s::SYSTEM => 255,
-        m::STORE64
-        | m::STORE128
-        | c::BEQ
-        | c::BNE
-        | c::BLT
-        | c::BGE
-        | c::BLTU
-        | c::BGEU
-        | c::JR
-        | c::HALT
-        | c::JMP
-        | v::SETVL
-        | v::PARBEGIN
-        | v::PAREND
-        | v::SHA3BLOCK
-        | z::ASSERT
-        | z::ASSERT_EQ
-        | z::ASSERT_RANGE => 0,
-        _ => return Err(VMError::InvalidOpcode((word & 0xffff) as u16)),
+        s::SCALL => crate::parallel::REGISTER_COUNT - 1,
+        m::STORE64 | c::BEQ | c::BNE | c::BLT | c::BGE | c::BLTU | c::BGEU | c::HALT | c::JMP => 0,
+        opcode => return Err(VMError::InvalidOpcode(opcode)),
     })
 }
 

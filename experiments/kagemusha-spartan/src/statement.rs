@@ -27,7 +27,7 @@ pub enum Kind {
     Retiring,
 }
 impl Kind {
-    fn tag(self) -> u64 {
+    pub(crate) fn tag(self) -> u64 {
         match self {
             Self::Bootstrap => 1,
             Self::Load => 2,

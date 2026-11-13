@@ -144,8 +144,6 @@ pub struct ContractViewSyscallDto {
 pub struct ContractViewMemoryDto {
     pub load64: u64,
     pub store64: u64,
-    pub load128: u64,
-    pub store128: u64,
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::contract_sources::ContractViewAnalysisDto")]
@@ -458,14 +456,66 @@ fn hash_hex(hash: &Hash) -> String {
     hex::encode(hash.as_ref())
 }
 fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
-    let parsed = ivm::ProgramMetadata::parse(code_bytes)
-        .map_err(|err| conversion_error(format!("invalid contract artifact header: {err}")))?;
-    if parsed.header_len > code_bytes.len() {
-        return Err(conversion_error(
-            "contract artifact header length exceeds code length",
-        ));
+    ivm::verify_contract_artifact_with_declared_profile(code_bytes)
+        .map(|verified| verified.code_hash)
+        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))
+}
+
+/// Exact source-reproduction policy from immutable deployed code or its bound manifest.
+/// This is inspection authority only; it neither selects a runtime profile nor authorizes a call.
+pub(crate) fn verified_source_host_policy(
+    world: &impl WorldReadOnly,
+    artifact_id: ContractArtifactId,
+) -> Result<ivm::SyscallPolicy, Error> {
+    let manifest = world.contract_manifests().get(&artifact_id);
+    if let Some(bytes) = world.contract_code().get(&artifact_id) {
+        let verified =
+            ivm::verify_contract_artifact_with_declared_profile(bytes).map_err(|error| {
+                conversion_error(format!("invalid retained contract artifact: {error}"))
+            })?;
+        if verified.code_hash != artifact_id.code_hash
+            || manifest.is_some_and(|manifest| {
+                manifest.code_hash != Some(artifact_id.code_hash)
+                    || manifest.abi_hash != Some(verified.abi_hash)
+            })
+        {
+            return Err(conversion_error(
+                "retained source artifact or manifest identity disagrees",
+            ));
+        }
+        return Ok(verified.syscall_policy);
     }
-    Ok(ivm::contract_code_hash(code_bytes))
+    if let Some(manifest) = manifest {
+        if manifest.code_hash != Some(artifact_id.code_hash) {
+            return Err(conversion_error(
+                "retained source manifest has a different code identity",
+            ));
+        }
+        return manifest
+            .abi_hash
+            .as_ref()
+            .and_then(|hash| ivm::syscalls::policy_for_abi_hash(hash.as_ref()))
+            .ok_or_else(|| {
+                conversion_error("retained source manifest names no implemented host profile")
+            });
+    }
+    // Existing submissions before upload explicitly compile the baseline. A named profile needs
+    // its immutable artifact or exact bound manifest first; the requested code hash selects none.
+    Ok(ivm::SyscallPolicy::AbiV1)
+}
+
+fn recorded_source_host_policy(
+    record: &StoredVerifiedSourceRecord,
+) -> Result<ivm::SyscallPolicy, Error> {
+    let mut hash = [0; 32];
+    let encoded = record
+        .abi_hash
+        .as_deref()
+        .ok_or_else(|| storage_error("stored source ABI identity is absent"))?;
+    hex::decode_to_slice(encoded, &mut hash)
+        .map_err(|_| storage_error("stored source ABI identity is malformed"))?;
+    ivm::syscalls::policy_for_abi_hash(&hash)
+        .ok_or_else(|| storage_error("stored source ABI identity is not implemented"))
 }
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
     if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
@@ -1588,7 +1638,8 @@ fn validate_verified_source_record(
 ) -> Result<(), Error> {
     let expected_code_hash = hash_hex(&artifact_id.code_hash);
     validate_verified_source_record_schema(record, network_id, artifact_id)?;
-    let compiled = compile_verified_source(
+    let compiled = compile_verified_source_for_policy(
+        recorded_source_host_policy(record)?,
         record.source_name.as_deref(),
         &record.source_text,
         &record.sources,
@@ -1605,9 +1656,10 @@ fn validate_verified_source_record(
             "stored verified-source record does not compile to its canonical code hash",
         ));
     }
-    let verified = ivm::verify_contract_artifact(&compiled.artifact).map_err(|_| {
-        storage_error("stored verified-source record does not produce a valid IVM artifact")
-    })?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&compiled.artifact)
+        .map_err(|_| {
+            storage_error("stored verified-source record does not produce a valid IVM artifact")
+        })?;
     let expected_abi_hash = hash_hex(&verified.abi_hash);
     if record.abi_hash.as_deref() != Some(expected_abi_hash.as_str())
         || record.compiler_fingerprint != verified.manifest.compiler_fingerprint
@@ -1910,12 +1962,8 @@ fn render_pseudo_source(
     }
     if let Some(analysis) = analysis {
         lines.push(format!(
-            "  // static analysis: {} instructions; memory(load64={}, store64={}, load128={}, store128={})",
-            analysis.instruction_count,
-            analysis.memory.load64,
-            analysis.memory.store64,
-            analysis.memory.load128,
-            analysis.memory.store128
+            "  // static analysis: {} instructions; memory(load64={}, store64={})",
+            analysis.instruction_count, analysis.memory.load64, analysis.memory.store64
         ));
         lines.push(format!(
             "  // static syscalls: {}",
@@ -2058,8 +2106,6 @@ fn to_analysis_dto(analysis: &ProgramAnalysis) -> ContractViewAnalysisDto {
         memory: ContractViewMemoryDto {
             load64: analysis.memory.load64,
             store64: analysis.memory.store64,
-            load128: analysis.memory.load128,
-            store128: analysis.memory.store128,
         },
         syscalls: analysis
             .syscalls
@@ -2563,6 +2609,7 @@ fn source_package_dto(
         imports: package.imports.into_iter().map(source_import_dto).collect(),
     }
 }
+#[cfg(test)]
 fn compile_verified_source(
     source_name: Option<&str>,
     source_text: &str,
@@ -2571,7 +2618,30 @@ fn compile_verified_source(
     packages: &[ContractSourcePackageDto],
     artifacts: &[ContractSourceArtifactDto],
 ) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
-    let session = kotodama_lang::session::CompilerSession::default();
+    compile_verified_source_for_policy(
+        ivm::SyscallPolicy::AbiV1,
+        source_name,
+        source_text,
+        sources,
+        imports,
+        packages,
+        artifacts,
+    )
+}
+fn compile_verified_source_for_policy(
+    host_policy: ivm::SyscallPolicy,
+    source_name: Option<&str>,
+    source_text: &str,
+    sources: &[ContractSourceFileDto],
+    imports: &[ContractSourceImportDto],
+    packages: &[ContractSourcePackageDto],
+    artifacts: &[ContractSourceArtifactDto],
+) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
+    let session =
+        kotodama_lang::session::CompilerSession::new(kotodama_lang::compiler::CompilerOptions {
+            host_policy,
+            ..Default::default()
+        });
     if sources.is_empty() && artifacts.is_empty() && imports.is_empty() && packages.is_empty() {
         return session.build(kotodama_lang::session::CompileRequest {
             source: source_text,
@@ -2775,6 +2845,7 @@ pub fn handle_post_verified_source_job(
     artifact_id: ContractArtifactId,
     request: SubmitVerifiedContractSourceDto,
     _sorafs_node: sorafs_node::NodeHandle,
+    host_policy: ivm::SyscallPolicy,
 ) -> Result<(StatusCode, JsonBody<ContractVerifiedSourceJobResponseDto>), Error> {
     let requested_hash = artifact_id.code_hash;
     let code_hash_hex = hash_hex(&requested_hash);
@@ -2897,7 +2968,8 @@ pub fn handle_post_verified_source_job(
     };
     let compile_result = canonical_error.map_or_else(
         || {
-            compile_verified_source(
+            compile_verified_source_for_policy(
+                host_policy,
                 source_name.as_deref(),
                 &source_text,
                 &sources,
@@ -2918,11 +2990,12 @@ pub fn handle_post_verified_source_job(
             } = output;
             drop((contract_interface, manifest, report));
             let actual_hash = canonical_code_hash(&code_bytes)?;
-            let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
-                conversion_error(format!(
-                    "compiled source did not produce a valid contract artifact: {err}"
-                ))
-            })?;
+            let verified = ivm::verify_contract_artifact_with_declared_profile(&code_bytes)
+                .map_err(|err| {
+                    conversion_error(format!(
+                        "compiled source did not produce a valid contract artifact: {err}"
+                    ))
+                })?;
             let actual_code_hash = hash_hex(&actual_hash);
             if actual_hash == requested_hash {
                 let mutation_lock = verified_source_mutation_lock(network_id, artifact_id);
@@ -3390,7 +3463,7 @@ mod tests {
                 source_name: Some(source_name),
             })
             .expect("compile verified-source record fixture");
-        let verified = ivm::verify_contract_artifact(&compiled.artifact)
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&compiled.artifact)
             .expect("verify source record fixture");
         StoredVerifiedSourceRecord {
             artifacts: Vec::new(),
@@ -4029,7 +4102,7 @@ seiyaku Display {
                 source_name: Some(source_name),
             })
             .expect("compile verified-source fixture");
-        let verified = ivm::verify_contract_artifact(&compiled.artifact)
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&compiled.artifact)
             .expect("verify compiled source fixture");
         let network_id = *state.network_id_ref();
         let contract_address = dm::ContractAddress::derive(
@@ -4148,6 +4221,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
             source_artifact(&code_hash_hex),
             request,
             node,
+            ivm::SyscallPolicy::AbiV1,
         )
         .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -4181,6 +4255,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: "seiyaku Demo {}".to_owned(),
             },
             node,
+            ivm::SyscallPolicy::AbiV1,
         )
         .expect("reject language alias");
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -4222,6 +4297,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: source.to_owned(),
             },
             node,
+            ivm::SyscallPolicy::AbiV1,
         )
         .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -4257,6 +4333,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: source.to_owned(),
             },
             node,
+            ivm::SyscallPolicy::AbiV1,
         )
         .expect("submit mismatch");
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -4270,5 +4347,112 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
         .expect("load job")
         .expect("job exists");
         assert_eq!(stored.status, "mismatch");
+    }
+}
+
+#[cfg(test)]
+mod named_source_profile_tests {
+    use super::*;
+    use iroha_core::state::World;
+
+    #[test]
+    fn source_reproduction_uses_exact_retained_artifact_or_manifest_profile() {
+        let source = "seiyaku NamedSource { view fn read() authorize(anyone) -> int { 1 } }";
+        let policy = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
+        let compiled = compile_verified_source_for_policy(
+            policy,
+            Some("named.ko"),
+            source,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let verified =
+            ivm::verify_contract_artifact_with_declared_profile(&compiled.artifact).unwrap();
+        let id = ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            verified.code_hash,
+        );
+        let world = World::default();
+        let mut block = world.block();
+        assert_eq!(
+            verified_source_host_policy(&block, id).unwrap(),
+            ivm::SyscallPolicy::AbiV1
+        );
+        block
+            .contract_manifests
+            .insert(id, verified.manifest.clone());
+        assert_eq!(verified_source_host_policy(&block, id).unwrap(), policy);
+        block.contract_code.insert(id, compiled.artifact.clone());
+        assert_eq!(verified_source_host_policy(&block, id).unwrap(), policy);
+        let replay = compile_verified_source_for_policy(
+            policy,
+            Some("named.ko"),
+            source,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(canonical_code_hash(&replay.artifact).unwrap(), id.code_hash);
+        block.contract_manifests.get_mut(&id).unwrap().abi_hash = Some(Hash::prehashed(
+            ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        ));
+        assert!(verified_source_host_policy(&block, id).is_err());
+        block.contract_code.remove(id);
+        block.contract_manifests.get_mut(&id).unwrap().abi_hash = Some(Hash::prehashed([7; 32]));
+        assert!(verified_source_host_policy(&block, id).is_err());
+    }
+    #[test]
+    fn named_source_job_records_and_restores_its_original_profile_without_a_wire_change() {
+        let guard = crate::test_utils::TestDataDirGuard::new();
+        let source = "seiyaku NamedSource { view fn read() authorize(anyone) -> int { 1 } }";
+        let policy = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
+        let compiled = compile_verified_source_for_policy(
+            policy,
+            Some("named.ko"),
+            source,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let id = ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            canonical_code_hash(&compiled.artifact).unwrap(),
+        );
+        let network = crate::test_utils::signed_query_network_id();
+        let node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .data_dir(guard.path().join("sorafs"))
+                .build(),
+        );
+        let (status, _) = handle_post_verified_source_job(
+            network,
+            id,
+            SubmitVerifiedContractSourceDto {
+                language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.into(),
+                source_name: Some("named.ko".into()),
+                source_text: source.into(),
+                sources: Vec::new(),
+                artifacts: Vec::new(),
+                imports: Vec::new(),
+                packages: Vec::new(),
+            },
+            node,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let mut record = load_verified_source_record(network, id).unwrap().unwrap();
+        assert_eq!(recorded_source_host_policy(&record).unwrap(), policy);
+        record.abi_hash = Some(hex::encode(ivm::syscalls::compute_abi_hash(
+            ivm::SyscallPolicy::AbiV1,
+        )));
+        assert!(validate_verified_source_record(&record, network, id).is_err());
     }
 }

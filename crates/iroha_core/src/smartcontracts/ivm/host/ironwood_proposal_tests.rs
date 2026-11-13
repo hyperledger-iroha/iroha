@@ -86,8 +86,24 @@ fn ironwood_host_proposal_publication_preserves_old_and_opaque_rows() {
         PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
     ) {
         for replacement in [Some(bytes), Some(vec![0xff]), None] {
+            let original = vec![7];
             let mut tx = block.transaction();
+            tx.world
+                .smart_contract_state
+                .insert(path.clone(), original.clone());
             bind_artifact_test_signed_root(&mut tx, &authority);
+            let overlay = BTreeMap::from([(path.clone(), replacement.clone())]);
+            // The inactive-Ironwood proposal grammar admits predecessor and opaque rows and
+            // deletions, so it never masks the native-state rule below with its own refusal.
+            assert!(
+                crate::runtime::ironwood::admission::durable_state_overlay(
+                    &overlay,
+                    tx.world.runtime_selection(),
+                )
+                .is_ok()
+            );
+            // Native multisig proposals change only through their own instructions; a
+            // contract durable-state artifact can neither replace nor delete them.
             let artifacts = HostExecutionArtifacts {
                 x509_queue_backing: None,
                 queued: Vec::new(),
@@ -95,13 +111,17 @@ fn ironwood_host_proposal_publication_preserves_old_and_opaque_rows() {
                 confidential_gas_delta: 0,
                 completed_axt: Vec::new(),
                 durable_state_authorizations: BTreeMap::from([(path.clone(), None)]),
-                durable_state_overlay: BTreeMap::from([(path.clone(), replacement.clone())]),
+                durable_state_overlay: overlay,
             };
-            artifacts.apply_to_transaction(&mut tx, &authority).unwrap();
-            assert_eq!(
-                tx.world.smart_contract_state.get(&path),
-                replacement.as_ref()
+            let error = artifacts
+                .apply_to_transaction(&mut tx, &authority)
+                .unwrap_err();
+            assert!(
+                matches!(&error, ValidationFail::NotPermitted(message) if message.contains("native multisig state")),
+                "{error:?}"
             );
+            assert_eq!(tx.world.smart_contract_state.get(&path), Some(&original));
+            assert_eq!(tx.confidential_gas_used_in_tx, 0);
             tx.finish_execution_effect_budget().unwrap();
         }
     }

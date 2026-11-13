@@ -625,7 +625,7 @@ fn compile_register_domain_emits_syscall_0x10() {
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
     // Expected sys encoding for SCALL with imm8=0x10 (SYSCALL_REGISTER_DOMAIN)
-    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x10);
+    let word = encoding::wide::encode_scall(0x10);
     let needle = word.to_le_bytes();
     assert!(
         bytes.windows(4).any(|w| w == needle),
@@ -640,7 +640,7 @@ fn compile_zk_verify_batch_emits_syscall_0x64() {
         .expect("fixture sentinel newline");
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
-    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x64);
+    let word = encoding::wide::encode_scall(0x64);
     let needle = word.to_le_bytes();
     assert!(
         bytes.windows(4).any(|w| w == needle),
@@ -671,7 +671,7 @@ fn compile_emits_get_authority_syscall() {
         i += 4;
     }
     let scall = instruction::wide::system::SCALL;
-    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_GET_AUTHORITY as u8);
+    let want = encoding::wide::encode_scall(syscalls::SYSCALL_GET_AUTHORITY);
     assert!(words.contains(&want), "GET_AUTHORITY syscall not found");
 }
 #[test]
@@ -686,7 +686,7 @@ fn compile_emits_current_time_syscall() {
         i += 4;
     }
     let scall = instruction::wide::system::SCALL;
-    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_CURRENT_TIME_MS as u8);
+    let want = encoding::wide::encode_scall(syscalls::SYSCALL_CURRENT_TIME_MS);
     assert!(words.contains(&want), "CURRENT_TIME_MS syscall not found");
 }
 #[test]
@@ -695,7 +695,7 @@ fn compile_emits_block_height_syscall() {
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
-    let want = encoding::wide::encode_syscallx(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT).to_le_bytes();
+    let want = encoding::wide::encode_scall(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT).to_le_bytes();
     assert!(
         code_region.windows(want.len()).any(|window| window == want),
         "SYSVAR_BLOCK_HEIGHT syscall not found"
@@ -718,7 +718,7 @@ fn compile_emits_extended_sysvar_helpers() {
         ),
         ("SYSVAR_ENTRYPOINT", syscalls::SYSCALL_SYSVAR_ENTRYPOINT),
     ] {
-        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        let want = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code_region.windows(want.len()).any(|window| window == want),
             "{name} syscall not found"
@@ -751,7 +751,7 @@ fn compile_emits_core_query_get_helpers() {
             syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
         ),
     ] {
-        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        let want = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code_region.windows(want.len()).any(|window| window == want),
             "{name} syscall not found"
@@ -825,7 +825,7 @@ fn compile_emits_zk_vrf_read_helpers() {
         ("ZK_VOTE_GET_TALLY", syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
         ("VRF_EPOCH_SEED", syscalls::SYSCALL_VRF_EPOCH_SEED),
     ] {
-        let want = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall as u8)
+        let want = encoding::wide::encode_scall(syscall as u32)
             .to_le_bytes();
         assert!(
             code_region.windows(want.len()).any(|window| window == want),
@@ -903,7 +903,7 @@ fn compile_emits_state_introspection_helpers() {
         ("STATE_LEN", syscalls::SYSCALL_STATE_LEN),
         ("STATE_COUNT", syscalls::SYSCALL_STATE_COUNT),
     ] {
-        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+        let want = encoding::wide::encode_scall(syscall).to_le_bytes();
         assert!(
             code_region.windows(want.len()).any(|window| window == want),
             "{name} syscall not found"
@@ -929,7 +929,7 @@ fn compile_emits_extended_hash_syscalls() {
         ("KECCAK256_HASH", syscalls::SYSCALL_KECCAK256_HASH),
         ("IROHA_HASH", syscalls::SYSCALL_IROHA_HASH),
     ] {
-        let want = encoding::wide::encode_sys(scall, syscall as u8);
+        let want = encoding::wide::encode_scall(syscall as u32);
         assert!(words.contains(&want), "{name} syscall not found");
     }
 }
@@ -945,7 +945,7 @@ fn compile_emits_resolve_account_alias_syscall() {
         i += 4;
     }
     let scall = instruction::wide::system::SCALL;
-    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8);
+    let want = encoding::wide::encode_scall(syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS);
     assert!(
         words.contains(&want),
         "RESOLVE_ACCOUNT_ALIAS syscall not found"
@@ -1002,8 +1002,8 @@ fn compile_builtin_create_nfts_and_set_detail() {
     // Expect SCALL encodings for our helper syscalls present
     let scall = instruction::wide::system::SCALL;
     let _want = [
-        encoding::wide::encode_sys(scall, syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8),
-        encoding::wide::encode_sys(scall, syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
+        encoding::wide::encode_scall(syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS),
+        encoding::wide::encode_scall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
     ];
     let imm_create = syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8;
     let imm_detail = syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8;
@@ -1027,7 +1027,7 @@ fn non_json_pointer_constructors_accept_string_variables() {
     let has = |imm: u8| {
         bytes
             .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
+            .any(|w| w == encoding::wide::encode_scall(u32::from(imm)).to_le_bytes())
     };
     assert!(
         has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8)
@@ -1353,8 +1353,7 @@ fn build_options_control_header_and_source_meta_is_unavailable() {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 1234);
-    assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
-    assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
+    assert_eq!(meta.mode, 0);
 }
 #[test]
 fn removed_in_memory_map_indexing_is_rejected() {
@@ -1871,7 +1870,7 @@ fn typed_vrf_syscalls_are_present() {
     let has = |imm: u8| {
         bytes
             .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
+            .any(|w| w == encoding::wide::encode_scall(u32::from(imm)).to_le_bytes())
     };
     assert!(has(syscalls::SYSCALL_VRF_VERIFY as u8));
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));

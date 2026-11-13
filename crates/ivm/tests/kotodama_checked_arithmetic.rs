@@ -138,7 +138,7 @@ enum FoldedSyscallExpectation {
 }
 fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
     let metadata = ProgramMetadata::parse(program).expect("parse numeric differential artifact");
-    let expected = encoding::wide::encode_syscallx(syscall);
+    let expected = encoding::wide::encode_scall(syscall);
     program[metadata.code_offset..]
         .as_chunks::<4>()
         .0
@@ -364,7 +364,7 @@ fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
     );
     let metadata = ProgramMetadata::parse(&runtime).expect("parse explicit-conversion artifact");
     let conversion =
-        encoding::wide::encode_syscallx(syscalls::SYSCALL_DECIMAL_FROM_INT).to_le_bytes();
+        encoding::wide::encode_scall(syscalls::SYSCALL_DECIMAL_FROM_INT).to_le_bytes();
     assert!(
         runtime[metadata.code_offset..]
             .windows(conversion.len())
@@ -1271,10 +1271,7 @@ fn borrowed_numeric_operands_keep_values_faults_and_real_typed_call_tables() {
         2,
         "both original call boundaries retain typed descriptors"
     );
-    let publish = encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-    );
+    let publish = encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV);
     assert!(
         !program[parsed.code_offset..]
             .as_chunks::<4>()
@@ -1316,7 +1313,7 @@ fn borrowed_numeric_operands_keep_values_faults_and_real_typed_call_tables() {
                             syscalls::SYSCALL_INT_MUL,
                             syscalls::SYSCALL_INT_LT,
                         ]
-                        .contains(&encoding::wide::decode_syscallx(word))
+                        .contains(&encoding::wide::decode_scall(word))
                 })
             })
             .collect::<Vec<_>>();

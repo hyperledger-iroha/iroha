@@ -108,7 +108,7 @@ impl PreparedControlFlow {
                     }
                     node.push_successor(next)?;
                 }
-                wide::control::JALR | wide::control::JR => {
+                wide::control::JALR => {
                     node.has_indirect_successor = true;
                 }
                 _ => {
@@ -139,8 +139,8 @@ fn direct_target(op: &DecodedOp) -> Option<u64> {
         | wide::control::BLT
         | wide::control::BGE
         | wide::control::BLTU
-        | wide::control::BGEU => i64::from(wide::imm8(op.inst)),
-        wide::control::JAL => i64::from(wide::imm16(op.inst)),
+        | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
+        wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
         wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
         _ => return None,
     };

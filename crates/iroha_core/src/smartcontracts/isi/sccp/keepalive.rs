@@ -1,7 +1,8 @@
 //! Shared progress carriers for committed scheduled Time outputs and SCCP due work.
 //!
-//! Heartbeat eligibility always borrows the original parent. Parliament due-work is an
-//! explicit unavailable dependency until its owner provides the G1–G3 iterator and receipt.
+//! Heartbeat eligibility always borrows the original parent. Parliament's terms come from
+//! their owner: its due predicate on a committed World (`parliament_iface::governance_due`),
+//! or `governance_due_applied` of the pass a block actually ran.
 
 use super::eligibility::{Current, EligibilityRead};
 use crate::state::{StateTransaction, WorldReadOnly};
@@ -13,7 +14,8 @@ use iroha_data_model::{
     transaction::{Executable, TransactionEntrypoint, TransactionPayload},
 };
 
-/// The external Parliament due-work observation has not been supplied.
+/// The Parliament due-work observation could not be made: the root selection or the
+/// Parliament tables cannot be read as a due set. Never an empty due set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("Parliament G1–G3 due-work observation is unavailable")]
 pub struct DueWorkUnavailable;
@@ -102,12 +104,15 @@ pub(crate) fn heartbeat_due(source: &(impl EligibilityRead + ?Sized), time_ms: u
             .is_some_and(|due| time_ms >= due || cfg!(all(test, sumeragi_core_mutation = "HC312")))
 }
 
-/// Observe the shared due predicate against an original parent.
+/// Observe the shared due predicate against an original parent. `governance` supplies
+/// Parliament's terms and is asked only when no SCCP or scheduled term holds: the due
+/// predicate of a committed World, or `governance_due_applied` of the block's own pass (K2).
 pub(crate) fn due_from(
     source: &(impl EligibilityRead + ?Sized),
     committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
+    governance: impl FnOnce() -> Result<bool, DueWorkUnavailable>,
 ) -> Result<bool, DueWorkUnavailable> {
     if (source.fast_pause_due() && !cfg!(all(test, sumeragi_core_mutation = "HC313")))
         || heartbeat_due(source, time_ms)
@@ -120,19 +125,25 @@ pub(crate) fn due_from(
     {
         return Ok(true);
     }
-    super::parliament_iface::governance_due(next_height, time_ms)
+    governance()
 }
 
 /// Read shared admission/proposer due work from one committed World observation.
 /// # Errors
 /// Preserves unavailable Parliament work instead of treating it as an empty due set.
 pub fn due(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
 ) -> Result<bool, DueWorkUnavailable> {
-    due_from(&Current(world), committed_time_ms, next_height, time_ms)
+    due_from(
+        &Current(world),
+        committed_time_ms,
+        next_height,
+        time_ms,
+        || super::parliament_iface::governance_due(world, committed_time_ms, next_height, time_ms),
+    )
 }
 
 /// Original current SCCP heartbeat deadline, when repeated degraded heights permit it.
@@ -164,7 +175,8 @@ pub fn next_scheduled_at_ms(
 }
 
 /// Earliest independently known progress deadline, even after degraded heartbeats stop.
-/// Parliament work remains unavailable until its authoritative iterator is supplied.
+/// TODO(design §9): Parliament's next due time (`next_governance_progress_at_ms`) is not a
+/// term here; the keeper learns Parliament work from [`due`] at each tip.
 #[must_use]
 pub fn next_progress_at_ms(
     world: &(impl WorldReadOnly + ?Sized),
@@ -187,7 +199,7 @@ pub fn next_progress_at_ms(
     reason = "SCCP refusal retains the original execution or validation owner without allocating during rejection"
 )]
 pub fn admit(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     payload: &TransactionPayload,
     committed_time_ms: Option<u64>,
     next_height: u64,
@@ -242,7 +254,7 @@ pub(crate) fn check_count(count: usize) -> Result<(), &'static str> {
 /// # Errors
 /// Returns the original unavailable dependency if stale work cannot yet be classified.
 pub fn stale_due_work(
-    world: &(impl WorldReadOnly + ?Sized),
+    world: &impl WorldReadOnly,
     committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
@@ -264,7 +276,7 @@ pub(crate) struct ProgressClock {
 
 impl ProgressClock {
     pub(crate) fn capture(
-        world: &(impl WorldReadOnly + ?Sized),
+        world: &impl WorldReadOnly,
         committed_time_ms: Option<u64>,
         next_height: u64,
         time_ms: u64,

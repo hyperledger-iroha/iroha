@@ -266,7 +266,7 @@ pub(crate) fn prepare_default_call_arguments(
         .map_err(|_| VMError::DecodeError)?;
     let name_payload = canonical_norito_frame(&name).map_err(|_| VMError::DecodeError)?;
     let syscall = crate::syscalls::SYSCALL_GET_PUBLIC_INPUT;
-    let instruction = crate::encoding::wide::encode_syscallx(syscall);
+    let instruction = crate::encoding::wide::encode_scall(syscall);
     vm.debit_gas(crate::gas::cost_of(instruction).ok_or(VMError::DecodeError)?)?;
     let name_pointer = vm.alloc_host_tlv(&encode_tlv(PointerType::Name, &name_payload)?)?;
     vm.set_register(10, name_pointer);
@@ -3816,7 +3816,7 @@ mod tests {
         let control_next = vm.alloc_input_tlv(&sentinel).expect("control allocation");
         let mut program = crate::metadata::ProgramMetadata::default().encode();
         program.extend_from_slice(
-            &crate::encoding::wide::encode_syscallx(
+            &crate::encoding::wide::encode_scall(
                 ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
             )
             .to_le_bytes(),
@@ -3866,7 +3866,7 @@ mod tests {
             .expect("bounded envelope shapes receive a conservative quote");
         let mut program = crate::metadata::ProgramMetadata::default().encode();
         program.extend_from_slice(
-            &crate::encoding::wide::encode_syscallx(
+            &crate::encoding::wide::encode_scall(
                 ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
             )
             .to_le_bytes(),

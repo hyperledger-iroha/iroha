@@ -858,11 +858,7 @@ fn typed_dispatch_setup_gas() -> u64 {
                     .unwrap()
             })
             .sum::<u64>()
-        + ivm::gas::cost_of(wide::encode_sys(
-            system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_CALL_CONTRACT).expect("fixture value fits u8"),
-        ))
-        .unwrap()
+        + ivm::gas::cost_of(wide::encode_scall(ivm_sys::SYSCALL_CALL_CONTRACT)).unwrap()
 }
 
 fn captured_nested_result(
@@ -982,13 +978,7 @@ fn install_nested_dispatch_fixture(state: &State, authority: &AccountId, caller:
             &wide::encode_ri(arithmetic::ADDI, 10 + index, 18 + index, 0).to_le_bytes(),
         );
     }
-    code.extend_from_slice(
-        &wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_CALL_CONTRACT).expect("fixture value fits u8"),
-        )
-        .to_le_bytes(),
-    );
+    code.extend_from_slice(&wide::encode_scall(ivm_sys::SYSCALL_CALL_CONTRACT).to_le_bytes());
     let program = build_authenticated_test_contract_program(&code, 0, false);
     rebind_test_contract_program(state, authority, caller, program);
 }
@@ -2504,12 +2494,12 @@ fn unaffordable_proof_instruction_preserves_queue_and_verification_latch() {
         nullifier: [0x22; 32],
     });
     let payload = norito::to_bytes(&instruction).expect("encode proof instruction");
-    let code = [ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION).expect("syscall fits"),
-    )
-    .to_le_bytes()]
-    .concat();
+    let code =
+        [
+            ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
+                .to_le_bytes(),
+        ]
+        .concat();
     let mut vm = IVM::new(10_000);
     vm.load_program(&build_authenticated_test_contract_program(&code, 0, true))
         .expect("load proof instruction program");
@@ -2700,7 +2690,6 @@ fn execute_instruction_syscall_accepts_code_literal_ballot_instruction() {
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1_000_000,
         mode: ivm::ivm_mode::ZK,
-        vector_length: 4,
         ..Default::default()
     }
     .encode();
@@ -2740,12 +2729,8 @@ fn execute_instruction_syscall_accepts_code_literal_ballot_instruction() {
         .to_le_bytes(),
     );
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-                .expect("fixture value fits u8"),
-        )
-        .to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
+            .to_le_bytes(),
     );
     program.extend_from_slice(&crate::ivm_test_support::unit_return());
     let mut vm = ivm::IVM::new(50_000_000);
@@ -2775,7 +2760,6 @@ fn execute_instruction_syscall_rejects_unindexed_literal_data_without_host_effec
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1_000_000,
         mode: ivm::ivm_mode::ZK,
-        vector_length: 4,
         ..Default::default()
     }
     .encode();
@@ -2856,12 +2840,8 @@ fn create_nfts_for_all_preflights_exact_gas_before_queue_mutation() {
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS)
-                .expect("syscall id fits in u8"),
-        )
-        .to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS)
+            .to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(u64::MAX);
@@ -3145,10 +3125,7 @@ fn transfer_asset_scoped_vm_completes_below_generic_response_quote() {
     let instructions = [
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 13, 17, 0),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 14, 18, 0),
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall fits"),
-        ),
+        encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
     ];
     let code: Vec<u8> = instructions
         .into_iter()
@@ -3228,10 +3205,7 @@ fn transfer_asset_scoped_vm_debits_exact_gas_before_queue_mutation() {
     let instructions = [
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 13, 17, 0),
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 14, 18, 0),
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall fits"),
-        ),
+        encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
     ];
     let gas_before_syscall = authenticated_test_probe_setup_gas()
         + instructions
@@ -4746,10 +4720,7 @@ fn typed_contract_call_rejects_private_witness_callee_before_execution() {
         "seiyaku PrivateCallee { kotoage fn main() authorize(anyone) {} }",
         1,
     );
-    let syscall = ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_GET_PRIVATE_INPUT).expect("fixture value fits u8"),
-    );
+    let syscall = ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT);
     let program = build_authenticated_test_contract_program(&syscall.to_le_bytes(), 0, true);
     assert_eq!(
         ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
@@ -9451,12 +9422,8 @@ fn state_get_preflights_gas_before_world_state_output() {
     host.set_local_contract_debug_execution();
     let mut vm = IVM::new(u64::MAX);
     let path_ptr = store_state_path_tlv(&mut vm, &path);
-    let code = [ivm::encoding::wide::encode_sys(
-        ivm::instruction::wide::system::SCALL,
-        u8::try_from(ivm_sys::SYSCALL_STATE_GET).expect("fixture value fits u8"),
-    )
-    .to_le_bytes()]
-    .concat();
+    let code =
+        [ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_STATE_GET).to_le_bytes()].concat();
     vm.load_program(&build_authenticated_test_contract_program_with_states(
         &code,
         0,
@@ -10951,11 +10918,7 @@ fn input_publish_tlv_is_forwarded_to_default_host() {
         Arc::new(vec![owner.clone()]),
     ));
     let code = [
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall id fits in u8"),
-        )
-        .to_le_bytes(),
+        encoding::wide::encode_scall(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
         encoding::wide::encode_halt().to_le_bytes(),
     ]
     .concat();
@@ -11286,11 +11249,7 @@ fn get_public_input_preflights_exact_gas_before_guest_output() {
     let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).expect("syscall id fits in u8"),
-        )
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     vm.load_program(&build_program(&code, 0))
@@ -11309,3 +11268,148 @@ fn get_public_input_preflights_exact_gas_before_guest_output() {
 // Keep pointer-ABI boundary checks together so host runtime code remains auditable.
 include!("host/pointer_abi_validation_tests.rs");
 include!("host/pointer_abi_and_sm_tests.rs");
+
+fn runtime_obligation_profile_vm(gas: u64) -> IVM {
+    let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
+            host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ..Default::default()
+        },
+    );
+    let bytes = compiler
+        .compile_source("seiyaku KernelProfile { kotoage fn call() authorize(anyone) {} }")
+        .unwrap();
+    let mut vm = IVM::new(gas);
+    vm.load_program_for_policy(&bytes, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
+        .unwrap();
+    vm
+}
+fn runtime_registration_request() -> InstructionBox {
+    iroha_data_model::isi::runtime_obligation::RegisterContractRuntimeObligationV1 {
+        kind: iroha_data_model::runtime::lifecycle::ObligationKindV1::Escrow,
+        terminal_effects: vec![Log::new(iroha_logger::Level::INFO, "terminal".to_owned()).into()],
+        expires_ms: 1_000,
+    }
+    .into()
+}
+#[test]
+fn runtime_obligation_host_named_tags_preserve_exact_queued_invocation_authority() {
+    let mut host = CoreHost::new(ALICE_ID.clone());
+    bind_test_contract_runtime(&mut host, 870);
+    let original = host.current_entrypoint_authorization.clone();
+    let subject = host
+        .current_contract_runtime_context
+        .as_ref()
+        .unwrap()
+        .contract_subject
+        .clone();
+    let mut vm = runtime_obligation_profile_vm(1_000_000);
+    let request = runtime_registration_request();
+    let pointer = store_tlv(
+        &mut vm,
+        PointerType::NoritoBytes,
+        &norito::to_bytes(&request).unwrap(),
+    );
+    vm.set_register(10, pointer);
+    vm.set_register(
+        11,
+        ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+    );
+    host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+        .unwrap();
+    assert_eq!(vm.register(10), 0);
+    assert_eq!(host.queued.len(), 1);
+    assert_eq!(host.queued[0].authority, subject);
+    assert_eq!(host.queued[0].entrypoint_authorization, original);
+    assert_eq!(host.queued[0].instruction(), Some(&request));
+    let complete: InstructionBox =
+        iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1 { owner: subject }
+            .into();
+    let pointer = store_tlv(
+        &mut vm,
+        PointerType::NoritoBytes,
+        &norito::to_bytes(&complete).unwrap(),
+    );
+    vm.set_register(10, pointer);
+    vm.set_register(
+        11,
+        ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
+    );
+    host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+        .unwrap();
+    assert_eq!(host.queued.len(), 2);
+    assert_eq!(host.queued[1].entrypoint_authorization, original);
+}
+#[test]
+fn runtime_obligation_host_refuses_baseline_missing_authority_and_other_subject() {
+    for case in 0..4 {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        bind_test_contract_runtime(&mut host, 871);
+        let mut vm = if case == 0 {
+            IVM::new(1_000_000)
+        } else {
+            runtime_obligation_profile_vm(1_000_000)
+        };
+        if case == 1 {
+            host.current_entrypoint_authorization = None;
+        }
+        let (request, tag) = if case == 2 {
+            (
+                iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1 {
+                    owner: ALICE_ID.clone(),
+                }
+                .into(),
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
+            )
+        } else if case == 3 {
+            (
+                InstructionBox::from(Log::new(
+                    iroha_logger::Level::INFO,
+                    "not registration".to_owned(),
+                )),
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+            )
+        } else {
+            (
+                runtime_registration_request(),
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+            )
+        };
+        let pointer = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&request).unwrap(),
+        );
+        vm.set_register(10, pointer);
+        vm.set_register(11, tag);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        ));
+        assert!(host.queued.is_empty());
+        assert_eq!(vm.register(10), pointer);
+    }
+}
+#[test]
+fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
+    let mut host = CoreHost::new(ALICE_ID.clone());
+    bind_test_contract_runtime(&mut host, 872);
+    let mut vm = runtime_obligation_profile_vm(0);
+    let request = runtime_registration_request();
+    let pointer = store_tlv(
+        &mut vm,
+        PointerType::NoritoBytes,
+        &norito::to_bytes(&request).unwrap(),
+    );
+    vm.set_register(10, pointer);
+    vm.set_register(
+        11,
+        ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+    );
+    assert!(matches!(
+        host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+        Err(ivm::VMError::OutOfGas)
+    ));
+    assert_eq!(vm.register(10), pointer);
+    assert!(host.queued.is_empty());
+}

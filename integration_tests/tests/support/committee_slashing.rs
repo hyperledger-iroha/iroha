@@ -202,18 +202,21 @@ pub async fn assert_no_reward_entitlement(admin: &Client, recipient: &AccountId)
                     sleep(delay).await;
                     continue;
                 }
-                // The node reports a refused preparation as an HTTP failure whose body
-                // carries the deterministic reason; the status alone names no cause.
-                const REFUSAL: &[u8] = b"no funded reward entitlement is available to claim";
-                let iroha::Error::Http { body, .. } = &error else {
+                // The node answers a refused preparation with its typed conflict, which the
+                // client keeps: the stable refusal code and the deterministic reason
+                // execution would reject with. A node fault carries neither and never
+                // qualifies as a refusal.
+                const REASON: &str = "no funded reward entitlement is available to claim";
+                let Some(refusal) = error.api_error() else {
                     return Err(eyre!(
                         "reward claim preparation failed without a node refusal: {error:#}"
                     ));
                 };
                 ensure!(
-                    body.windows(REFUSAL.len()).any(|window| window == REFUSAL),
-                    "reward claim preparation was refused for a different reason: {error:#}: {}",
-                    String::from_utf8_lossy(body)
+                    refusal.status() == 409
+                        && refusal.code() == iroha_torii_shared::STAKING_PREPARATION_REFUSED_CODE
+                        && refusal.message().ends_with(REASON),
+                    "reward claim preparation was refused for a different reason: {error:#}"
                 );
                 return Ok(());
             }

@@ -12154,7 +12154,8 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
            !isExactContractManifestString(compilerFingerprint) {
             return "compiler_fingerprint must be an exact non-empty string"
         }
-        if let featuresBitmap, (featuresBitmap & ~UInt64(3)) != 0 {
+        // ZK (bit 0) is the only Kotodama V1 capability bit.
+        if let featuresBitmap, (featuresBitmap & ~UInt64(1)) != 0 {
             return "features_bitmap contains unsupported Kotodama V1 bits"
         }
         let permissionNames = permissions.map(\.name)

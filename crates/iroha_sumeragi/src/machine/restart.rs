@@ -219,6 +219,7 @@ impl Core {
             t_body: None,
             late_entry: false,
             asked: false,
+            manifest_hint: false,
             me: None,
             safety: None,
             timeout_view: None,

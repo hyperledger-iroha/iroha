@@ -381,9 +381,9 @@ fn check_replay_with_matched(
     ) {
         Ok(state) => (state, true),
         Err(error) => {
-            if let Some(checkpoint) = &checkpoint {
+            if let Some(checkpoint) = copy.history_boundary() {
                 return Err(Report::new(error).change_context(MainError::CheckReplay).attach(format!(
-                        "blocks up to the upgrade checkpoint at height {} are the previous release's history and are never re-executed; replay needs a snapshot of this release above the checkpoint",
+                        "blocks up to the runtime history boundary at height {} are never re-executed; replay needs an authenticated snapshot at or above the boundary",
                         checkpoint.height
                     )));
             }

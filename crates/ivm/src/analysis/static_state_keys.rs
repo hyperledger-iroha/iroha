@@ -357,11 +357,10 @@ impl KeyScratch {
     }
 }
 fn state_syscall(op: &DecodedOp) -> Option<u32> {
-    let number = match wide::opcode(op.inst) {
-        wide::system::SCALL => u32::from(wide::imm8(op.inst) as u8),
-        wide::system::SYSTEM => crate::encoding::wide::decode_syscallx(op.inst),
-        _ => return None,
-    };
+    if wide::opcode(op.inst) != wide::system::SCALL {
+        return None;
+    }
+    let number = wide::syscall_number(op.inst);
     matches!(
         crate::syscalls::syscall_access(number),
         crate::syscalls::SyscallAccess::StateRead | crate::syscalls::SyscallAccess::StateWrite

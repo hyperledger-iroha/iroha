@@ -938,10 +938,12 @@ fn resolve_contract_call_private_key<C: RunContext>(
     ))
 }
 fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtifact> {
-    ivm::verify_contract_artifact(bytes).map_err(|err| eyre!(err.to_string()))
+    ivm::verify_contract_artifact_with_declared_profile(bytes).map_err(|err| eyre!(err.to_string()))
 }
 fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
-    let summary = ProgramSummary::from_artifact(bytes)
+    let verified = verify_contract_from_bytes(bytes)?;
+    let summary = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+        .summarize_program_for_policy(bytes, verified.syscall_policy)
         .map_err(|err| eyre!("failed to prepare IVM program summary: {err}"))?;
     match summary.metadata.abi_version {
         1 => {}
@@ -1013,7 +1015,7 @@ struct LocalContractDebugVmDiagnostic {
     stack_bytes_used: u64,
     entrypoint_pc: Option<u64>,
     current_function: Option<String>,
-    opcode: Option<u16>,
+    opcode: Option<u8>,
     syscall: Option<u32>,
     predecoded_loaded: bool,
     predecoded_hit: Option<bool>,
@@ -1208,7 +1210,7 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let mut tracing_host = TracingHost::new(host);
     let mut vm = ivm::IVM::try_new(args.gas_limit)
         .map_err(|err| eyre!("failed to allocate contract debug view VM: {err}"))?;
-    vm.load_program(&code)
+    vm.load_prepared(summary.prepared_contract())
         .map_err(|err| eyre!("failed to load contract debug view bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
     vm.set_register(1, vm.memory.code_len());
@@ -1379,7 +1381,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let mut tracing_host = TracingHost::new(host);
     let mut vm = ivm::IVM::try_new(args.gas_limit)
         .map_err(|err| eyre!("failed to allocate contract debug call VM: {err}"))?;
-    vm.load_program(&code)
+    vm.load_prepared(summary.prepared_contract())
         .map_err(|err| eyre!("failed to load contract debug call bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
     vm.set_register(1, vm.memory.code_len());
@@ -1870,9 +1872,8 @@ fn resolve_local_contract_entrypoint_pc(
     code_bytes: &[u8],
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
 ) -> Result<u64> {
-    let parsed = ivm::ProgramMetadata::parse(code_bytes)
-        .map_err(|err| eyre!("invalid contract artifact: {err}"))?;
-    Ok(parsed.prefix_len() as u64 + descriptor.entry_pc)
+    let verified = verify_contract_from_bytes(code_bytes)?;
+    Ok(verified.code_offset as u64 + descriptor.entry_pc)
 }
 fn normalize_local_contract_payload(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
@@ -2103,6 +2104,36 @@ mod tests {
         drop(frame);
         drop(expected_payload);
         drop(expected_frame);
+    }
+
+    #[test]
+    fn named_profile_inspection_and_debug_preparation_keep_exact_artifact_policy() {
+        let artifact = kotodama_lang::compiler::Compiler::new_with_options(
+            kotodama_lang::compiler::CompilerOptions {
+                host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+                ..Default::default()
+            },
+        )
+        .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")
+        .unwrap();
+        let verified = verify_contract_from_bytes(&artifact).unwrap();
+        let summary = program_summary_from_bytes(&artifact).unwrap();
+        assert_eq!(
+            summary.prepared_contract().syscall_policy(),
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        let entrypoint = &verified.contract_interface.entrypoints[0];
+        assert_eq!(
+            resolve_local_contract_entrypoint_pc(&artifact, entrypoint).unwrap(),
+            verified.code_offset as u64 + entrypoint.entry_pc
+        );
+        let mut vm = ivm::IVM::new(1_000_000);
+        vm.load_prepared(summary.prepared_contract()).unwrap();
+        assert_eq!(
+            vm.syscall_policy(),
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+        );
+        assert!(ivm::verify_contract_artifact(&artifact).is_err());
     }
 
     #[test]

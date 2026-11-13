@@ -19,11 +19,8 @@ fn debug_create_nfts_and_set_detail_words() {
     // Print the set of SCALL words we’re looking for
     let scall = wide::system::SCALL;
     let want = [
-        encoding::wide::encode_sys(
-            scall,
-            ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8,
-        ),
-        encoding::wide::encode_sys(scall, ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
+        encoding::wide::encode_scall(ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS),
+        encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
     ];
     eprintln!("words count={} contains: ", words.len());
     for (idx, w) in want.iter().enumerate() {

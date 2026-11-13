@@ -247,7 +247,7 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
 }
 fn syscall_prog(syscall: u8) -> Vec<u8> {
     assemble_words(&[
-        encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall),
+        encoding::wide::encode_scall(u32::from(syscall)),
         HALT_WORD,
     ])
 }
@@ -290,13 +290,10 @@ pub fn syscall_memory_compact_bundle(
         root,
     }
 }
-pub const MODE_VECTOR: u8 = 0x02;
 pub const MODE_ZK: u8 = ivm::ivm_mode::ZK;
 pub fn assemble_with_mode(code: &[u8], mode: u8) -> Vec<u8> {
-    let vector_length = if (mode & MODE_VECTOR) != 0 { 4 } else { 0 };
     let meta = ProgramMetadata {
         mode,
-        vector_length,
         max_cycles: 0,
         abi_version: 1,
         ..ProgramMetadata::default()
@@ -346,8 +343,8 @@ where
     for &num in syscalls {
         let num = num.into();
         let word = u8::try_from(num).map_or_else(
-            |_| encoding::wide::encode_syscallx(num),
-            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+            |_| encoding::wide::encode_scall(num),
+            |compact| encoding::wide::encode_scall(u32::from(compact)),
         );
         code.extend_from_slice(&word.to_le_bytes());
     }
@@ -367,8 +364,8 @@ where
     for &num in syscalls {
         let num = num.into();
         let word = u8::try_from(num).map_or_else(
-            |_| encoding::wide::encode_syscallx(num),
-            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+            |_| encoding::wide::encode_scall(num),
+            |compact| encoding::wide::encode_scall(u32::from(compact)),
         );
         code.extend_from_slice(&word.to_le_bytes());
     }

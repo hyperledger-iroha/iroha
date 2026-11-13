@@ -415,7 +415,7 @@ name = "ivm-repository-fixtures"
 kind = "file"
 outputs = [
   "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
-  "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+  "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode01_vlen8_cycles1000_abi1.to",
   "crates/ivm/tests/fixtures/predecoder/mixed/code.bin",
   "crates/ivm/tests/fixtures/predecoder/mixed/decoded.json",
   "crates/ivm/tests/fixtures/predecoder/mixed/index.json",

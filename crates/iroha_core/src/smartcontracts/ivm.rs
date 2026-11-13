@@ -5,6 +5,8 @@
 pub mod cache;
 /// Host adapter for IVM. See module docs for design and current limitations.
 pub mod host;
+/// Effective restrictions for separately selected named contract host profiles.
+pub(crate) mod host_profile;
 /// Exact, privacy-safe public return decoding.
 pub mod return_value;
 use crate::state::WorldReadOnly;
@@ -36,15 +38,6 @@ pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissio
         ivm::VMError::UnsupportedProgramAbiVersion { version } => {
             IvmAdmissionError::UnsupportedAbiVersion(version)
         }
-        ivm::VMError::ProgramVectorLengthTooLarge {
-            vector_length,
-            max_allowed,
-        } => IvmAdmissionError::VectorLengthTooLarge(
-            iroha_data_model::executor::VectorLengthTooLargeInfo {
-                vector_length,
-                max_allowed,
-            },
-        ),
         ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
             IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                 expected: Hash::prehashed(expected),
@@ -225,18 +218,15 @@ pub(crate) fn validate_cycle_limits(
     }
     Ok(cycles)
 }
-/// Compute a conservative gas limit for a given cycle budget.
+/// Gas limit granted to an invocation by its cycle budget.
 ///
-/// The interpreter pads traces to exactly `max_cycles` when cycle limits are enabled, charging one
-/// unit of gas per padded cycle in addition to the per‑instruction gas schedule. To ensure padding
-/// cannot exhaust gas after executing costlier instructions, use the worst-case instruction cost as
-/// the multiplier. V1 requires a positive cycle limit, represented by [`NonZeroU64`], so this
-/// helper cannot manufacture an unbounded budget.
+/// The conversion is the ABI constant [`ivm::gas::GAS_PER_CYCLE`], bound into the gas-schedule
+/// hash; it does not depend on the opcode price table. The limit covers instructions, ZK trace
+/// padding (one gas per padded cycle) and syscalls alike. V1 requires a positive cycle limit,
+/// represented by [`NonZeroU64`], so this helper cannot manufacture an unbounded budget.
 #[must_use]
 pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
-    cycles
-        .get()
-        .saturating_mul(ivm::gas::max_instruction_cost())
+    ivm::gas::gas_limit_for_cycles(cycles)
 }
 /// Convenience helper to derive a gas limit from program metadata.
 ///
@@ -459,13 +449,18 @@ mod tests {
         );
     }
     #[test]
-    fn gas_limit_for_cycles_scales_by_max_instruction_cost() {
-        let cost = ivm::gas::max_instruction_cost();
-        assert_eq!(gas_limit_for_cycles(NonZeroU64::new(1).unwrap()), cost);
+    fn gas_limit_for_cycles_uses_the_abi_conversion_constant() {
+        let per_cycle = ivm::gas::GAS_PER_CYCLE;
+        assert_eq!(
+            per_cycle, 5_000,
+            "changing the conversion rescales every budget"
+        );
+        assert_eq!(gas_limit_for_cycles(NonZeroU64::new(1).unwrap()), per_cycle);
         assert_eq!(
             gas_limit_for_cycles(NonZeroU64::new(2).unwrap()),
-            cost.saturating_mul(2)
+            per_cycle * 2
         );
+        assert_eq!(gas_limit_for_cycles(NonZeroU64::MAX), u64::MAX);
     }
     #[test]
     fn gas_limit_for_meta_rejects_zero_cycle_budget() {
@@ -473,7 +468,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 0,
             abi_version: 1,
         };
@@ -487,7 +481,7 @@ mod tests {
         };
         assert_eq!(
             gas_limit_for_meta(&positive).unwrap(),
-            ivm::gas::max_instruction_cost().saturating_mul(2)
+            ivm::gas::GAS_PER_CYCLE * 2
         );
     }
     #[test]
@@ -600,4 +594,55 @@ mod tests {
             })
         );
     }
+}
+
+/// Select only the exact named profile advertised by the artifact and active in this root.
+/// This is a policy choice, not header admission: the explicit parser still authenticates every
+/// header field in its original order. Unselected/unknown hashes retain baseline rejection.
+pub(crate) fn artifact_policy(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::SyscallPolicy {
+    let named = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
+    if bytes.get(ivm::metadata::HEADER_ABI_HASH_OFFSET..ivm::metadata::HEADER_SIZE)
+        == Some(ivm::syscalls::compute_abi_hash(named).as_slice())
+        && named_policy_selected(world, named)
+    {
+        named
+    } else {
+        ivm::SyscallPolicy::AbiV1
+    }
+}
+/// Exact named-policy support in this execution selection; baseline consumers keep their
+/// existing admission boundary and rejection precedence.
+pub(crate) fn named_policy_selected(
+    world: &impl WorldReadOnly,
+    policy: ivm::SyscallPolicy,
+) -> bool {
+    if policy == ivm::SyscallPolicy::AbiV1 {
+        return true;
+    }
+    let hash = ivm::syscalls::compute_abi_hash(policy);
+    world.runtime_selection().active.iter().any(|id| {
+        matches!(world.runtime_definitions().get(id),
+        Some(iroha_data_model::runtime::definition::DefinitionDescriptorV1::HostProfile(profile))
+            if profile.abi_version == 1 && profile.abi_hash == hash)
+    })
+}
+
+/// Preserve baseline hash acceptance and admit only an exact compiled named profile selected
+/// by this root. Runtime execution still enforces the effective restrictions at its block height.
+#[must_use]
+pub fn known_selected_abi(world: &impl WorldReadOnly, hash: &[u8; 32]) -> bool {
+    ivm::syscalls::policy_for_abi_hash(hash)
+        .is_some_and(|policy| named_policy_selected(world, policy))
+}
+/// Verify an original contract under its root's selection using the original State pool.
+pub(crate) fn verify_contract_in_world(
+    world: &impl WorldReadOnly,
+    bytes: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<ivm::VerifiedContractArtifact, ivm::ContractArtifactError> {
+    ivm::verify_contract_artifact_with_memory_budget_for_policy(
+        bytes,
+        budget,
+        artifact_policy(world, bytes),
+    )
 }

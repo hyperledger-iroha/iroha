@@ -281,7 +281,7 @@ impl IVM {
             || !results.is_multiple_of(8)
             || (layout.frame.argument_words == 0 && argument != 0)
         {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         if root {
             if layout.frame.argument_words != 0 {
@@ -317,7 +317,7 @@ impl IVM {
             .ok_or(VMError::DecodeError)?
             .callable(index)?;
         if self.registers.get(11) != layout.frame.result_words as u64 {
-            return Err(VMError::AssertionFailed);
+            return Err(VMError::ControlFlowViolation);
         }
         let result_base = self.registers.get(10);
         self.validate_call_values(&callable.results, layout.results, result_base, true)?;
@@ -693,15 +693,15 @@ mod tests {
         let result = vm.registers.get(12);
         vm.registers.set(10, result);
         vm.registers.set(11, 1);
-        assert!(matches!(vm.finish_call(), Err(VMError::AssertionFailed)));
+        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
         vm.store_u64(result, 2).unwrap();
         assert!(matches!(vm.finish_call(), Err(VMError::DecodeError)));
         vm.store_u64(result, 1).unwrap();
         vm.registers.set(10, result + 8);
-        assert!(matches!(vm.finish_call(), Err(VMError::AssertionFailed)));
+        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
         vm.registers.set(10, result);
         vm.registers.set(11, 0);
-        assert!(matches!(vm.finish_call(), Err(VMError::AssertionFailed)));
+        assert!(matches!(vm.finish_call(), Err(VMError::ControlFlowViolation)));
         vm.registers.set(11, 1);
         vm.finish_call().unwrap();
         assert!(matches!(vm.public_call_result_word(0), Ok(1)));

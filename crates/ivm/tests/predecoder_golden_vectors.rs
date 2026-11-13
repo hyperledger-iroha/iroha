@@ -78,7 +78,6 @@ fn decode_artifact_invariant_across_metadata_fields() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
@@ -89,12 +88,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
         d
     };
     let golden = decode(&base);
-    for mode in [
-        0,
-        ivm_mode::ZK,
-        ivm_mode::VECTOR,
-        ivm_mode::ZK | ivm_mode::VECTOR,
-    ] {
+    for mode in [0, ivm_mode::ZK] {
         let mut m = base.clone();
         m.mode = mode;
         assert_eq!(&*golden, &*decode(&m), "mode 0x{mode:02x}");
@@ -120,17 +114,14 @@ fn decode_artifact_invariant_across_metadata_fields() {
     assert!(match (
         &(err),
         &(VMError::ProgramVectorLengthTooLarge {
-            vector_length: 65,
             max_allowed: ivm::VECTOR_LENGTH_MAX,
         })
     ) {
         (
             VMError::ProgramVectorLengthTooLarge {
-                vector_length: actual_field_0,
                 max_allowed: actual_field_1,
             },
             VMError::ProgramVectorLengthTooLarge {
-                vector_length: expected_field_0,
                 max_allowed: expected_field_1,
             },
         ) => actual_field_0 == expected_field_0 && actual_field_1 == expected_field_1,
@@ -145,7 +136,6 @@ fn decode_artifact_rejects_retired_or_unknown_minor_version() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };

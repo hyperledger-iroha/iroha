@@ -484,18 +484,6 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
             x.gas_remaining -= 1;
             x
         }),
-        (
-            {
-                let mut x = segment.before;
-                x.vector_length += 1;
-                x
-            },
-            {
-                let mut x = segment.after;
-                x.vector_length += 1;
-                x
-            },
-        ),
     ] {
         let changed = ScalarSegment::new(
             segment.contract.clone(),
@@ -506,9 +494,7 @@ fn scalar_segment_boundaries_code_table_tags_and_record_claims_are_bound() {
         )
         .unwrap();
         assert_ne!(changed.digest().unwrap(), digest);
-        if before.vector_length == segment.before.vector_length {
-            assert!(rejects(&changed, &segment.witness_rows(&records).unwrap()));
-        }
+        assert!(rejects(&changed, &segment.witness_rows(&records).unwrap()));
     }
 }
 

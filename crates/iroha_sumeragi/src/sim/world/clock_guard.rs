@@ -735,6 +735,31 @@ impl World {
         (!certified).then(|| ExecOutcome::Failed(rule.reason().to_owned()))
     }
 
+    /// Bind an expected local fault to this execution's original clock-guard refusal.
+    /// Unrelated executor failures, certified executions and other replicas remain O-FAULT.
+    pub(super) fn clock_guard_failure(&self, r: usize, event: &Event) -> Option<u64> {
+        let Event::Executed {
+            block_hash,
+            outcome: ExecOutcome::Failed(reason),
+            ..
+        } = event
+        else {
+            return None;
+        };
+        self.clock_guard
+            .as_ref()?
+            .events
+            .iter()
+            .rev()
+            .find_map(|guard| {
+                (guard.replica == r
+                    && guard.block_hash == *block_hash
+                    && !guard.certified
+                    && guard.rule.reason() == reason)
+                    .then_some(guard.height)
+            })
+    }
+
     /// O-TIME (§13.2, §4.5 "Upper bound") at the first honest commit of `block`: its time
     /// exceeds no honest wall clock by more than `2·max_clock_drift_ms`.
     pub(in crate::sim) fn check_certified_time(

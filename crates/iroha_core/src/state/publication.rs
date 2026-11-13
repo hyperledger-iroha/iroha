@@ -90,6 +90,8 @@ pub(super) struct StatePublication<'state> {
     package_read: Option<retained_musubi::RetainedPackageRead>,
     musubi_group_read: Option<retained_musubi_group::RetainedMusubiGroupRead>,
     tiered_snapshot: Option<tiered_publication::PreparedTieredSnapshot>,
+    runtime_checkpoint: Option<crate::snapshot::checkpoint_capture::PreparedCheckpoint>,
+    runtime_checkpoint_prepared: bool,
     da_effects: Option<carrier_da_effects::PreparedDaCommitmentEffects>,
     lifecycle_effects: Option<carrier_lifecycle_effects::PreparedLaneLifecycleEffects>,
     da_post_publication: Option<carrier_da_effects::DaCommitmentPostPublication>,
@@ -132,6 +134,8 @@ impl<'state> StatePublication<'state> {
             package_read: None,
             musubi_group_read: None,
             tiered_snapshot: None,
+            runtime_checkpoint: None,
+            runtime_checkpoint_prepared: false,
             da_effects: None,
             lifecycle_effects: None,
             da_post_publication: None,
@@ -213,12 +217,18 @@ impl<'state> StateBlock<'state> {
             execution.with_scope(|_| {
                 membership.with_scope(|_| {
                     hashes.with_scope(|_| {
-                        let result = self.attempt_original_publication(&mut original);
+                        let mut result = self.attempt_original_publication(&mut original);
                         if original.fields_frozen && !original.irreversible {
                             // The attempt has returned: every State/effect fence is free.
                             // Recover all original cursors before retiring any notice.
                             self.recover_original_publication_fields();
                             self.retire_original_publication_notices();
+                            if matches!(result, Err(TransactionsBlockError::CheckpointDeferred(_)))
+                                && let Some(checkpoint) = original.runtime_checkpoint.as_ref()
+                                && let Err(reason) = checkpoint.request()
+                            {
+                                result = Err(TransactionsBlockError::CheckpointDeferred(reason));
+                            }
                         }
                         result
                     })
@@ -235,6 +245,8 @@ impl<'state> StateBlock<'state> {
                         &error,
                         TransactionsBlockError::ExecutionDeferred(_)
                             | TransactionsBlockError::CaptureDeferred(_)
+                            | TransactionsBlockError::CheckpointDeferred(_)
+                            | TransactionsBlockError::CheckpointReadDeferred(_)
                             | TransactionsBlockError::BlockHashesBusy(_)
                             | TransactionsBlockError::PublicationBusy(_)
                             | TransactionsBlockError::MembershipAdmission(
@@ -274,6 +286,19 @@ impl<'state> StateBlock<'state> {
         self.publication = Some(original);
         if terminal {
             mv::BlockRetirement::release_writers(self);
+            if self
+                .publication
+                .as_ref()
+                .is_some_and(|publication| publication.published)
+                && let Some(checkpoint) = self
+                    .publication
+                    .as_mut()
+                    .expect("publication")
+                    .runtime_checkpoint
+                    .take()
+            {
+                checkpoint.publish();
+            }
             // Releasing persistent nodes can wake allocation waiters. All publication
             // fences and physical writers must be free before dropping retired versions.
             drop(
@@ -317,6 +342,8 @@ impl<'state> StateBlock<'state> {
             package_read: _,
             musubi_group_read,
             tiered_snapshot,
+            runtime_checkpoint,
+            runtime_checkpoint_prepared,
             da_effects,
             lifecycle_effects,
             da_post_publication,
@@ -577,6 +604,16 @@ impl<'state> StateBlock<'state> {
             committed_topology.finish_freeze();
             *fields_frozen = true;
         }
+        // Serialize while every original is still in its immutable captured phase.
+        // Keyed-cut preparation below temporarily installs the membership publisher;
+        // that phase carries publication authority, never renewed execution reads.
+        if !*runtime_checkpoint_prepared {
+            *runtime_checkpoint = state_ref.runtime_checkpoint_capture.prepare(this)?;
+            *runtime_checkpoint_prepared = true;
+        }
+        if let Some(checkpoint) = runtime_checkpoint.as_ref() {
+            checkpoint.durability()?;
+        }
         // Generate P_h only after all tail writes and the joint freeze. A refused
         // allocation releases the reacquired membership writer and leaves the same
         // original journals available for retry. X_h remains the sealed version.
@@ -765,6 +802,29 @@ impl<'state> StateBlock<'state> {
             *irreversible = true;
             return Err(TransactionsBlockError::PublicationRecoveryRequired);
         }
+        // Only the exact certified native publication may advance durable runtime
+        // history. Authenticate its boundary before acquiring Kura's geometry
+        // leases, then persist the prepared bytes immediately before visibility.
+        let runtime_history_boundary = if native_execution_tip.get().is_some_and(|tip| {
+            tip.height() == block_height && tip.iroha_hash() == block_header_hash
+        }) {
+            let now_ms = u64::try_from(_curr_block.creation_time().as_millis())
+                .map_err(|_| TransactionsBlockError::PublicationRecoveryRequired)?;
+            crate::runtime::checkpoint::history_boundary(&*world, now_ms)
+                .into_iter()
+                .chain(state_ref.kura.upgrade_checkpoint().copied())
+                .filter(|boundary| boundary.height <= block_height)
+                .max_by_key(|boundary| boundary.height)
+                .map(|boundary| state_ref.kura.prepare_runtime_history_boundary(&boundary))
+                .transpose()
+                .map_err(|error| {
+                    error!(block_height, %error, "runtime history boundary does not match durable history");
+                    TransactionsBlockError::PublicationRecoveryRequired
+                })?
+                .flatten()
+        } else {
+            None
+        };
         // Policy and predecessor reads precede physical effect writers. The
         // same commit/lifecycle fences protect this exact preflight until apply.
         let prepared_geometry = pending_autoscale_lifecycle
@@ -866,6 +926,12 @@ impl<'state> StateBlock<'state> {
             // Every source and original scalar cut is now retained under the State
             // writer. Consuming installation or visibility failure is terminal.
             *irreversible = true;
+            if let Some(boundary) = runtime_history_boundary {
+                boundary.persist(&state_ref.kura).map_err(|error| {
+                    error!(block_height, %error, "failed to persist runtime history boundary before State publication");
+                    TransactionsBlockError::PublicationRecoveryRequired
+                })?;
+            }
             let autoscale_storage_hold = if let Some(geometry) = prepared_geometry {
                 let autoscale_start = Instant::now();
                 if let Err(error) = geometry.apply(geometry_lease.lease()) {

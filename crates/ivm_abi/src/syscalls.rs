@@ -882,9 +882,11 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
 pub fn is_generic_program_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     is_syscall_allowed(policy, number)
         && match policy {
-            crate::SyscallPolicy::AbiV1 => GENERIC_PROGRAM_DENIED_SYSCALLS_V1
-                .binary_search(&number)
-                .is_err(),
+            crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle => {
+                GENERIC_PROGRAM_DENIED_SYSCALLS_V1
+                    .binary_search(&number)
+                    .is_err()
+            }
         }
 }
 /// Host-state access conservatively implied by an ABI syscall.
@@ -1497,7 +1499,7 @@ const fn abi_v1_syscall_numbers() -> [u32; ABI_V1_SYSCALL_COUNT] {
 const ABI_V1_SYSCALL_NUMBERS: [u32; ABI_V1_SYSCALL_COUNT] = abi_v1_syscall_numbers();
 /// Return the canonical syscall list for the first-release ABI policy.
 pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
-    let crate::SyscallPolicy::AbiV1 = policy;
+    let (crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
     &ABI_V1_SYSCALL_NUMBERS
 }
 /// Return a symbolic name for a syscall number, when known.
@@ -1586,7 +1588,13 @@ pub fn render_abi_hashes_markdown_table() -> String {
         }
         s
     }
-    let items: &[(&str, crate::SyscallPolicy)] = &[("ABI v1", crate::SyscallPolicy::AbiV1)];
+    let items: &[(&str, crate::SyscallPolicy)] = &[
+        ("ABI v1", crate::SyscallPolicy::AbiV1),
+        (
+            RUNTIME_LIFECYCLE_HOST_PROFILE,
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ),
+    ];
     let mut out = String::new();
     out.push_str("| Policy | abi_hash (hex) |\n");
     out.push_str("|---|---|\n");
@@ -1598,9 +1606,13 @@ pub fn render_abi_hashes_markdown_table() -> String {
     out
 }
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 10;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 11;
 const ABI_V1_NORITO_ENCODE_FLAGS: u8 = norito::core::header_flags::COMPACT_LEN;
-const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8=1;version_minor:u8=1;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
+const PROGRAM_HEADER_LAYOUT_V1: &str = "48-bytes:magic[4]=IVM\\0;version_major:u8=1;version_minor:u8=1;mode:u8(ZK=0x01-only);max_cycles:u64le(ZK-trace-bound,nonzero-iff-ZK;gas-is-the-sole-budget-and-caller-owned);abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
+/// ZK privacy-tag propagation rule bound into the ABI descriptor.
+const ISA_TAG_RULE_V1: &str = "zk-mode-only;tag=public|private-per-register-and-per-memory-byte;r0-always-public;non-ZK-execution-has-no-private-state;three-register-ALU-compare-MIN-MAX-MUL-GCD-MEAN-dest=OR(rs1-tag,rs2-tag);immediate-and-unary-dest=rs1-tag;CMOV-condition-public,taken-copies-source-tag,false-keeps-destination-and-tag;CMOVI-condition-public,taken-writes-public-immediate;DIV-DIVU-REM-REMU-DIV_CEIL-ABS-operands-public;branch-operands-public;LOAD64-STORE64-base-public;LOAD64-dest=private-iff-any-loaded-byte-private;STORE64-private-value-only-into-stack;JALR-base-public;JAL-JALR-JALS-link-public;LDLIT-LDI64-dest-public;SCALL-arguments-public-except-declared-private-input-syscalls;tags-never-declassify-except-PRIVATE_NUMERIC_VALCOM-commitment";
+/// Deterministic instruction fault mapping bound into the ABI descriptor.
+const ISA_FAULT_SEMANTICS_V1: &str = "admission:unassigned-opcode=InvalidOpcode,reserved-operand-bit=DecodeError;execution:gas-debited-before-effects,insufficient-gas=OutOfGas;DIV-DIVU-REM-REMU-DIV_CEIL-zero-divisor=Numeric(DivisionByZero);DIV-REM-i64-MIN-by-minus-one=Numeric(RegisterIntegerOverflow);ABS-i64-MIN=Numeric(RegisterIntegerOverflow);DIV_CEIL-quotient-overflow=Numeric(RegisterIntegerOverflow);ADD-SUB-MUL-NEG-shifts-rotates-wrap-without-fault;GCD-MEAN-ISQRT-total;private-operand-where-public-required=PrivacyViolation;protected-contract:direct-call-depth-beyond-limit=CallDepthExceeded,return-to-untrusted-pc-or-indirect-JALR-or-HALT=ControlFlowViolation;end-of-code-without-terminator=MissingHalt";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
@@ -1909,11 +1921,45 @@ struct AbiGenericProgramSurface {
     durable_state: &'static str,
     reserved_transaction_metadata: &'static str,
 }
+/// One admitted opcode and its operand layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AbiOpcodeSurface {
+    opcode: u8,
+    layout: &'static str,
+}
+/// Instruction-set architecture bound into the ABI descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiIsaSurface {
+    word_layout: &'static str,
+    register_count: u8,
+    opcodes: Vec<AbiOpcodeSurface>,
+    tag_rule: &'static str,
+    fault_semantics: &'static str,
+}
+fn isa_surface_v1() -> Result<AbiIsaSurface, AbiSurfaceError> {
+    use crate::instruction::wide;
+    Ok(AbiIsaSurface {
+        word_layout: wide::WORD_LAYOUT,
+        register_count: u8::try_from(wide::REGISTER_COUNT)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        opcodes: (0..=u8::MAX)
+            .filter_map(|opcode| {
+                wide::operand_format(opcode).map(|format| AbiOpcodeSurface {
+                    opcode,
+                    layout: format.layout(),
+                })
+            })
+            .collect(),
+        tag_rule: ISA_TAG_RULE_V1,
+        fault_semantics: ISA_FAULT_SEMANTICS_V1,
+    })
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiSurface {
     descriptor_format_version: u16,
     policy_tag: u8,
     program_header_layout: &'static str,
+    isa: AbiIsaSurface,
     syscalls: Vec<AbiSyscallSurface>,
     pointer_type_ids: Vec<u16>,
     core_query_projections: Vec<AbiCoreQueryProjectionSurface>,
@@ -2167,6 +2213,16 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     )?;
     descriptor.u8("policy_tag", surface.policy_tag)?;
     descriptor.text("program_header_layout", surface.program_header_layout)?;
+    descriptor.record("isa", |isa| {
+        isa.text("word_layout", surface.isa.word_layout)?;
+        isa.u8("register_count", surface.isa.register_count)?;
+        isa.sequence("opcodes", &surface.isa.opcodes, |record, opcode| {
+            record.u8("opcode", opcode.opcode)?;
+            record.text("layout", opcode.layout)
+        })?;
+        isa.text("tag_rule", surface.isa.tag_rule)?;
+        isa.text("fault_semantics", surface.isa.fault_semantics)
+    })?;
     descriptor.record("generic_program", |generic| {
         generic.u8(
             "semantics_version",
@@ -3037,7 +3093,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
     })
 }
 fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSurfaceError> {
-    let crate::SyscallPolicy::AbiV1 = policy;
+    let (crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
     let syscalls =
         collect_abi_syscall_surface(syscalls_for_policy(policy), syscalls_doc_gen::DOCS)?;
     let mut pointer_type_ids = crate::pointer_abi::policy_pointer_types(policy)
@@ -3147,6 +3203,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         descriptor_format_version: ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION,
         policy_tag: 1,
         program_header_layout: PROGRAM_HEADER_LAYOUT_V1,
+        isa: isa_surface_v1()?,
         syscalls,
         pointer_type_ids,
         core_query_projections,
@@ -3159,14 +3216,27 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         durable_state,
     })
 }
+mod runtime_lifecycle;
+pub use runtime_lifecycle::{
+    RUNTIME_LIFECYCLE_HOST_PROFILE, SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
+    SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+};
+
 fn build_abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<Vec<u8>, AbiSurfaceError> {
-    encode_abi_surface(&collect_abi_surface(policy)?)
+    match policy {
+        crate::SyscallPolicy::AbiV1 => encode_abi_surface(&collect_abi_surface(policy)?),
+        crate::SyscallPolicy::AbiV1RuntimeLifecycle => runtime_lifecycle::descriptor(),
+    }
 }
 fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8], AbiSurfaceError> {
     use std::sync::OnceLock;
     static ABI_V1: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
-    let crate::SyscallPolicy::AbiV1 = policy;
-    match ABI_V1.get_or_init(|| build_abi_surface_descriptor(policy)) {
+    static RUNTIME_LIFECYCLE: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
+    let cached = match policy {
+        crate::SyscallPolicy::AbiV1 => &ABI_V1,
+        crate::SyscallPolicy::AbiV1RuntimeLifecycle => &RUNTIME_LIFECYCLE,
+    };
+    match cached.get_or_init(|| build_abi_surface_descriptor(policy)) {
         Ok(descriptor) => Ok(descriptor.as_slice()),
         Err(error) => Err(*error),
     }
@@ -3194,6 +3264,17 @@ pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
         Err(error) => invalid_abi_surface_hash(error),
     }
 }
+/// Resolve an exact implemented ABI V1 host identity. Unknown identities never select a fallback.
+#[must_use]
+pub fn policy_for_abi_hash(hash: &[u8; 32]) -> Option<crate::SyscallPolicy> {
+    [
+        crate::SyscallPolicy::AbiV1,
+        crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+    ]
+    .into_iter()
+    .find(|policy| compute_abi_hash(*policy) == *hash)
+}
+
 #[cfg(test)]
 #[path = "syscalls/access_profile_tests.rs"]
 mod access_profile_tests;
@@ -3512,6 +3593,43 @@ mod tests {
         });
     }
     #[test]
+    fn abi_hash_binds_isa_layout_registers_tag_rule_and_fault_semantics() {
+        let surface = canonical_surface();
+        assert_eq!(surface.isa.register_count, 32);
+        assert_eq!(surface.isa.opcodes.len(), 58);
+        assert!(
+            surface
+                .isa
+                .opcodes
+                .windows(2)
+                .all(|pair| pair[0].opcode < pair[1].opcode)
+        );
+        assert!(surface.isa.opcodes.iter().any(|opcode| {
+            opcode.opcode == crate::instruction::wide::system::SCALL
+                && opcode.layout == "number24[23:0]"
+        }));
+        assert!(surface.isa.tag_rule.contains("dest=OR(rs1-tag,rs2-tag)"));
+        assert!(
+            surface
+                .isa
+                .fault_semantics
+                .contains("Numeric(RegisterIntegerOverflow)")
+        );
+        assert_surface_mutation_changes_hash(|candidate| candidate.isa.register_count = 256);
+        assert_surface_mutation_changes_hash(|candidate| {
+            candidate.isa.opcodes[0].layout = "rd[23:16]+rs1[15:8]+rs2[7:0]";
+        });
+        assert_surface_mutation_changes_hash(|candidate| {
+            candidate.isa.tag_rule = "binary-operands-require-equal-tags";
+        });
+        assert_surface_mutation_changes_hash(|candidate| {
+            candidate.isa.fault_semantics = "division-by-zero=AssertionFailed";
+        });
+        assert_surface_mutation_changes_hash(|candidate| {
+            candidate.isa.word_layout = "registers=256";
+        });
+    }
+    #[test]
     fn abi_hash_binds_runtime_fault_identity_layout_and_origin() {
         let surface = canonical_surface();
         assert_eq!(
@@ -3534,8 +3652,9 @@ mod tests {
             "Execute1{pc_offset:u64-executable-relative}",
             "Numeric10(NumericFaultV1)",
             "PointerAbi11(PointerAbiFaultV1)",
-            "ReentrantCall28",
-            "CallDepthExceeded29",
+            "ReentrantCall25",
+            "CallDepthExceeded26",
+            "ControlFlowViolation27",
         ] {
             assert!(surface.entrypoint.fault_layout.contains(layout));
         }

@@ -554,11 +554,11 @@ if (( run_fast )); then
     if [[ "${segmented_fast}" == true ]]; then
         run_segmented_fast_tests
     elif [[ -n "${test_threads}" ]]; then
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads=${test_threads}"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads="${test_threads}"
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools -- --test-threads=${test_threads}"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools -- --test-threads="${test_threads}"
     else
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools,iroha_core/dev-tools
     fi
 else
     echo "==> skipping fast test suite"

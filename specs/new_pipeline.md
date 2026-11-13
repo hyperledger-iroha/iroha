@@ -619,26 +619,17 @@ Vectorization, AOT_SIMD, and Acceleration
 - SIMD backends (NEON/PMULL, CLMUL, AVX2/512) and optional GPU offload
   (CUDA/Metal) are feature‑gated. A portable scalar path is always available
   and canonical.
-- Word‑wise VM ops (vadd/vxor/etc.) use fixed lane policies with wrap‑around
-  (mod‑2^N) per‑lane semantics for integer operations to ensure bit‑exact
-  results across backends.
+- Word‑wise host helpers (vadd/vxor/etc.) use fixed lane policies with
+  wrap‑around (mod‑2^N) per‑lane semantics for integer operations to ensure
+  bit‑exact results across backends.
 
 SIMD op exposure
-- SIMD vectorization is an implementation detail for scalar opcodes unless and
-  until vector opcodes are standardized as public IVM instructions. If vector
-  opcodes are exposed, they MUST appear in the Opcode Reference with full
-  semantics and gas pricing.
-  - Current status: public vector opcodes exist (e.g., VADD32/64, VAND/VXOR/VOR,
-    VROT32), and their semantics/gas are specified in the Opcode Reference.
-
-Logical vector length and parallel markers (normative)
-- `SETVL` sets a logical element count for subsequent vector ops. It does not
-  expose hardware SIMD width and MUST NOT change results across hardware.
-  Gas for vector ops is a function of the number of elements processed, not
-  CPU width. Tails are handled by the scalar path; results are bit‑exact.
-- `PARBEGIN`/`PAREND` are compiler markers with no runtime concurrency
-  semantics. They are treated as no‑ops by the interpreter; scheduling and
-  parallelism are driven by the block‑level scheduler only.
+- SIMD vectorization is an implementation detail of host‑side helpers (Merkle
+  hashing, syscall primitives, proof tooling). The IVM instruction set has no
+  vector opcodes, vector registers, logical vector length or parallel markers.
+  Hardware SIMD width MUST NOT change a result or a gas charge.
+- Each contract executes sequentially; scheduling and parallelism are driven
+  by the block‑level scheduler only.
 
 GPU targets & flags (if enabled)
 - CUDA/PTX: target PTX ISA 7.8 with `sm_80` and `sm_86` (Ampere) as the
@@ -1480,11 +1471,13 @@ Determinism specification (normative, summary)
 
 - Hardware‑neutral: gas costs are derived from the scalar reference
   implementation, independent of wall‑clock time or acceleration.
-- Opcode table: every IVM opcode defines a base gas cost and per‑byte/element
-  increments; overflow checks and memory ops are accounted explicitly.
+- Opcode table: every IVM opcode has one fixed gas cost; the terminating `HALT`
+  is the only free opcode. An invocation's gas limit is derived from its cycle
+  limit with the fixed `GAS_PER_CYCLE` conversion bound into the gas‑schedule
+  hash (`specs/gas_model.md`).
 - Syscalls/precompiles: built‑ins and host syscalls specify fixed cost models
-  (e.g., per key touched, per byte hashed); cryptographic intrinsics are
-  priced as precompiles with published schedules.
+  (e.g., per key touched, per byte hashed); cryptographic primitives are
+  syscalls priced with published schedules.
 - Enforcement: execution halts when gas exceeds the provided limit; partial
   effects are discarded with clear error codes.
 - Reporting: nodes expose metrics for gas usage distributions and hit rates of
@@ -1501,9 +1494,10 @@ Determinism specification (normative, summary)
   byte‑reproducible.
 - Capabilities & protocol version: on‑chain protocol/VM version gates behavior
   and feature negotiation; nodes refuse mismatched artifacts.
-- Gas schedule version: gas pricing changes (e.g., SHA3BLOCK/AESDEC/ECDSAVERIFY)
-  are introduced under a new protocol/VM version and activated via governance
-  to preserve consensus; validators reject mixed schedules.
+- Gas schedule version: gas pricing changes (e.g., an opcode price or a syscall
+  formula parameter) are introduced under a new protocol/VM version and
+  activated via governance to preserve consensus; validators reject mixed
+  schedules.
 Derivation notes
 - Gas constants are derived from the scalar reference implementation’s work
   (operation counts, byte costs) and validated by benchmarks. Any future
@@ -1520,7 +1514,6 @@ Derivation notes
 Initial defaults (proposed)
 - Protocol version: `2` (draft). Default: disabled on mainnet; enabled on dev/test networks.
 - VM version: `1.2` (draft) — clarifies determinism rules; no semantic opcode changes from 1.1. Activation via protocol v2 at `vm_activation_height`.
-- Gas schedule: `v2` — updates `SHA3BLOCK=50`, `AESDEC=30`, `ECDSAVERIFY=1500` (others unchanged). Activation via `gas_schedule_v2_activation_height`.
 - AOT_SIMD: default off on mainnet (shadow mode only) until post‑canary; on by default in dev/test.
 - GPU backends (`cuda`, `metal`): default off (must be explicitly enabled by operators after conformance passes).
 - ZK verify: on by default; ZK pre‑verify budgets off by default (operators opt‑in with `zk_preverify_*` settings).
@@ -1686,7 +1679,7 @@ Data Availability
 
 ## Conformance Test Checklist
 
-- IVM opcodes: golden vectors for every opcode (inputs/outputs/overflow) across x86‑64 and ARM64; identical results on scalar, SIMD, and (where applicable) GPU backends.
+- IVM opcodes: golden vectors for every opcode (inputs/outputs/overflow) across x86‑64 and ARM64; host‑side helpers give identical results on scalar, SIMD, and (where applicable) GPU backends.
 - Arithmetic semantics: explicit tests for mod‑2^N vs saturating behavior per opcode; wrap/saturate verified under boundary conditions.
 - Endianness/alignment: misaligned loads/stores, byte‑order, and structure layout tests; no UB; out‑of‑bounds/uninitialized access rejected.
 - SIMD chunking: 64‑byte block processing and scalar tails validated; unaligned/tail cases produce identical results to scalar path.

@@ -67,8 +67,8 @@ not define a function-call value window; see [`syscalls.md`](syscalls.md).
   `r27`–`r29` serve spill shuttling and wide frame addresses.
 - **`r0`:** reads as zero and is never allocated.
 
-The allocator uses the first 32 of the VM's 256 registers. This allocation
-choice does not limit the size of an argument or result table.
+The VM has exactly 32 registers, all addressable by the five-bit register
+fields. The register count does not limit the size of an argument or result table.
 
 ## Stack frame layout
 

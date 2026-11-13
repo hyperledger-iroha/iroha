@@ -1694,6 +1694,14 @@ fingerprint. A rejected positional argument reports
 
 ### Assets
 
+The two `ledger::runtime` operations, `register_obligation(bytes)` and
+`complete_obligation(bytes)`, require the exact build profile
+`iroha.ivm.runtime_lifecycle.v1`. Each accepts canonical Norito `InstructionBox` bytes and queues
+one host effect; returning from the builtin does not certify successful State execution. Registration
+accepts `RegisterContractRuntimeObligationV1`, whose owner and contract identity come from the
+authenticated invocation. Completion accepts `CompleteRuntimeObligationV1` only for that same
+contract subject. These operations keep ABI version 1 and are unavailable in baseline builds.
+
 `ledger::asset::register(asset_definition:, name:, spec:, mintable:, owning_domain:)`
 registers exactly the definition it names under the explicit `owning_domain`
 (`DomainId`). `name` is the human-readable display name;
@@ -1828,10 +1836,9 @@ private VM memory.
 The V1 source declassifier is `crypto::valcom`. Both operands must be typed
 secrets. It binds the nominal kind and every byte of each canonical numeric TLV,
 derives full-width BLS12-381 scalars without `u64` truncation, and returns the
-complete compressed Pedersen point as a public `int`. The scalar `POSEIDON2`
-and `POSEIDON6` opcodes are internal proof gadgets that reject private
-operands. ABI V1 has no register-level BLS12-381 public-key, commitment, or
-curve operations; full-width typed syscall boundaries provide those semantics.
+complete compressed Pedersen point as a public `int`. ABI V1 has no
+register-level BLS12-381 public-key, commitment, or curve operations;
+full-width typed syscall boundaries provide those semantics.
 
 Secrets cannot influence public control flow, public returns, logs, error
 selection, state keys, state values, ledger writes, host queries, seiyaku calls,
@@ -1894,6 +1901,7 @@ configuration, locked package resolution, and project-wide commands through
 koto check seiyaku.ko
 musubi check --manifest-path Musubi.toml
 koto build seiyaku.ko --max-cycles 1000000
+koto build obligation.ko --host-profile iroha.ivm.runtime_lifecycle.v1
 musubi build --manifest-path Musubi.toml
 koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
@@ -1940,7 +1948,7 @@ own error enums.
 `--zk` is an explicit build capability, not source metadata. It is required for
 `Secret<T>` and the approved proof/commitment operations; ordinary builds reject
 those constructs. `koto check|build|doc|lsp` and `musubi check|build|test|lsp --zk` pass this policy to the same in-process compiler session.
-It does not make ABI, vector, or pointer policy selectable.
+It does not make ABI or pointer policy selectable.
 
 `koto fmt` and LSP formatting consume the compiler's lossless token stream and
 the parser's syntax roles. They refuse syntactically invalid input, preserve
@@ -2247,13 +2255,13 @@ compiler-service client. SDK adapters enforce the same 1 MiB UTF-8 source limit
 before native or network dispatch. There is no independent JavaScript compiler
 or offline browser compiler.
 
-ABI version, vector width, execution-mode bits, and compiler features are not
-source declarations or user-selectable language metadata. Build configuration
+ABI version, execution-mode bits, and compiler features are not source
+declarations or user-selectable language metadata. Build configuration
 may request a permitted execution capability such as ZK and may select a
 positive cycle ceiling no greater than node admission policy. Source-level
 `meta` blocks are errors. The manifest's hash-covered `features_bitmap` is
-derived from the execution header and currently mirrors only ZK and
-deterministic VECTOR capability; it never advertises host SIMD, Metal, or CUDA
+derived from the execution header and mirrors only the ZK capability, the
+sole ABI v1 execution-mode bit; it never advertises host SIMD, Metal, or CUDA
 availability.
 
 ## Seiyaku artifact

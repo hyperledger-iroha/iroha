@@ -4,9 +4,10 @@
 //! The adoption anchor and the startup floors are rows of `world.runtime_boundaries`, storage of
 //! the `iroha.runtime.lifecycle.v1` addition, written only by the two instructions of that
 //! addition. A root that has not activated it holds no boundary and binds neither instruction,
-//! and activation starts the table empty, so every boundary a root reads was checked by the
-//! rules below. The checkpoint policy is the custom parameter `runtime_checkpoint_policy_v1`,
-//! which governance sets like the other runtime policies.
+//! and activation starts the table empty. Readers require that selected storage before they
+//! use its rows: an unselected snapshot table carries no authority. Every boundary a root
+//! executes was checked by the rules below. The checkpoint policy is the custom parameter
+//! `runtime_checkpoint_policy_v1`, which governance sets like the other runtime policies.
 //!
 //! - **Commitment.** [`ratify_anchor`] and [`raise_floor`] check what committed State decides:
 //!   the committed block hash at the record's height, the transition rules and the statement of
@@ -18,7 +19,9 @@
 //!   block, its committed time, the certified World roots around the adoption height, the
 //!   committee, and for a floor that it holds the checkpoint.
 //! - **Boundary.** [`history_boundary`] is the height at or below which no release re-executes
-//!   a block: the highest boundary in force.
+//!   a block: the highest boundary in force. Certified publication persists that boundary in
+//!   Kura before State visibility; startup reads it before choosing a snapshot. An older snapshot
+//!   or removal of adoption configuration cannot lower the store's learned boundary.
 //!
 //! The genesis execution-policy digest stays re-validated at startup after an anchor is
 //! ratified: it is the only guard on the validity inputs a node still takes from its
@@ -71,9 +74,12 @@ pub fn committed_policy(
         .and_then(|parameter| RuntimeCheckpointPolicyV1::from_custom_parameter(parameter).ok())
 }
 
-/// The adoption anchor the root of `world` ratified, if it ratified one.
+/// The adoption anchor the root of `world` ratified under its selected lifecycle State.
 #[must_use]
 pub fn committed_anchor(world: &impl WorldReadOnly) -> Option<RuntimeAdoptionAnchorV1> {
+    if !lifecycle_installed(world.runtime_selection()) {
+        return None;
+    }
     // The anchor is the lowest boundary: no floor lies at or below it, and it is ratified
     // before any floor.
     match world.runtime_boundaries().iter().next() {
@@ -82,9 +88,12 @@ pub fn committed_anchor(world: &impl WorldReadOnly) -> Option<RuntimeAdoptionAnc
     }
 }
 
-/// The latest startup floor the root of `world` committed, in force or waiting out its notice.
+/// The latest startup floor under the selected lifecycle State, in force or waiting out its notice.
 #[must_use]
 pub fn latest_floor(world: &impl WorldReadOnly) -> Option<RuntimeStartupFloorV1> {
+    if !lifecycle_installed(world.runtime_selection()) {
+        return None;
+    }
     world
         .runtime_boundaries()
         .iter()
@@ -100,6 +109,11 @@ pub fn latest_floor(world: &impl WorldReadOnly) -> Option<RuntimeStartupFloorV1>
 /// height and block at or below which no release re-executes a block.
 #[must_use]
 pub fn history_boundary(world: &impl WorldReadOnly, now_ms: u64) -> Option<UpgradeCheckpointV1> {
+    // A selected schema does not authenticate an inactive table. In particular,
+    // unselected snapshot bytes may never advance Kura's durable local floor.
+    if !lifecycle_installed(world.runtime_selection()) {
+        return None;
+    }
     iroha_data_model::runtime::checkpoint::history_boundary(
         world
             .runtime_boundaries()

@@ -33,7 +33,8 @@ import {
 
 const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
-const IVM_EXECUTION_HEADER_BYTES = 17;
+const IVM_EXECUTION_HEADER_BYTES = 16;
+const IVM_HEADER_ABI_VERSION_OFFSET = 15;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const SERVICE_ABI_HASH = "23".repeat(IVM_ABI_HASH_BYTES);
@@ -375,7 +376,7 @@ function compilerArtifactFixture({
     interfacePayload,
   );
   const header = concatBytes(
-    Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x03, 0]),
+    Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x01]),
     u64Le(1_000_000),
     Uint8Array.from([1]),
     Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => headerAbiByte),
@@ -1150,7 +1151,10 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
     }, /features_bitmap.*unsigned safe integer/u],
     ["unknown features bitmap bit", ({ manifest }) => {
       manifest.features_bitmap = 4;
-    }, /features_bitmap.*0\.\.3/u],
+    }, /features_bitmap.*0\.\.1/u],
+    ["retired vector feature bit", ({ manifest }) => {
+      manifest.features_bitmap = 2;
+    }, /features_bitmap.*0\.\.1/u],
     ["unknown entrypoint field", ({ manifest }) => {
       manifest.entrypoints[0].unknown = true;
     }, /entrypoint 0 has an invalid field set/u],
@@ -1427,12 +1431,17 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
     })()],
     ["wrong ABI", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
-      bytes[16] = 2;
+      bytes[IVM_HEADER_ABI_VERSION_OFFSET] = 2;
       return bytes;
     })()],
     ["unknown IVM mode bit", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
       bytes[6] = 0x04;
+      return bytes;
+    })()],
+    ["retired VECTOR mode bit", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[6] |= 0x02;
       return bytes;
     })()],
     ["post-header image beyond IVM code memory", (() => {
@@ -1446,9 +1455,14 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       bytes[IVM_EXECUTION_HEADER_BYTES] ^= 1;
       return bytes;
     })()],
-    ["retired 17-byte header", concatBytes(
+    ["header without the authenticated ABI hash", concatBytes(
       SERVICE_ARTIFACT.subarray(0, IVM_EXECUTION_HEADER_BYTES),
       SERVICE_ARTIFACT.subarray(IVM_HEADER_BYTES),
+    )],
+    ["retired 49-byte header with a vector-length byte", concatBytes(
+      SERVICE_ARTIFACT.subarray(0, 7),
+      Uint8Array.of(0),
+      SERVICE_ARTIFACT.subarray(7),
     )],
     ["mismatched embedded ABI hash", compilerArtifactFixture({ interfaceAbiByte: 0x25 })],
     ["bad CNTR marker", (() => {

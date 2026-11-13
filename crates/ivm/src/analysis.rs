@@ -70,33 +70,33 @@ enum StaticNoritoKey {
 }
 #[derive(Clone, PartialEq, Eq)]
 struct StaticStateFacts {
-    names: [Option<u16>; 256],
-    paths: [Option<StaticStatePath>; 256],
-    pointer_literals: [Option<u16>; 256],
-    norito_keys: [Option<StaticNoritoKey>; 256],
-    content_may_be_mutable: [bool; 256],
-    stack_offsets: [Option<i64>; 256],
+    names: [Option<u16>; crate::parallel::REGISTER_COUNT],
+    paths: [Option<StaticStatePath>; crate::parallel::REGISTER_COUNT],
+    pointer_literals: [Option<u16>; crate::parallel::REGISTER_COUNT],
+    norito_keys: [Option<StaticNoritoKey>; crate::parallel::REGISTER_COUNT],
+    content_may_be_mutable: [bool; crate::parallel::REGISTER_COUNT],
+    stack_offsets: [Option<i64>; crate::parallel::REGISTER_COUNT],
     direct: bool,
 }
 impl StaticStateFacts {
     fn entrypoint() -> Self {
         Self {
-            names: [None; 256],
-            paths: [None; 256],
-            pointer_literals: [None; 256],
-            norito_keys: [None; 256],
-            content_may_be_mutable: [false; 256],
+            names: [None; crate::parallel::REGISTER_COUNT],
+            paths: [None; crate::parallel::REGISTER_COUNT],
+            pointer_literals: [None; crate::parallel::REGISTER_COUNT],
+            norito_keys: [None; crate::parallel::REGISTER_COUNT],
+            content_may_be_mutable: [false; crate::parallel::REGISTER_COUNT],
             stack_offsets: std::array::from_fn(|register| (register == 31).then_some(0)),
             direct: true,
         }
     }
     fn clear(&mut self) {
-        self.names = [None; 256];
-        self.paths = [None; 256];
-        self.pointer_literals = [None; 256];
-        self.norito_keys = [None; 256];
-        self.content_may_be_mutable = [false; 256];
-        self.stack_offsets = [None; 256];
+        self.names = [None; crate::parallel::REGISTER_COUNT];
+        self.paths = [None; crate::parallel::REGISTER_COUNT];
+        self.pointer_literals = [None; crate::parallel::REGISTER_COUNT];
+        self.norito_keys = [None; crate::parallel::REGISTER_COUNT];
+        self.content_may_be_mutable = [false; crate::parallel::REGISTER_COUNT];
+        self.stack_offsets = [None; crate::parallel::REGISTER_COUNT];
     }
     fn clear_content(&mut self, register: usize) {
         self.names[register] = None;
@@ -188,15 +188,15 @@ impl StaticStateFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterUsage {
     /// Number of times each register was read.
-    pub reads: [u64; 256],
+    pub reads: [u64; crate::parallel::REGISTER_COUNT],
     /// Number of times each register was written.
-    pub writes: [u64; 256],
+    pub writes: [u64; crate::parallel::REGISTER_COUNT],
 }
 impl Default for RegisterUsage {
     fn default() -> Self {
         Self {
-            reads: [0; 256],
-            writes: [0; 256],
+            reads: [0; crate::parallel::REGISTER_COUNT],
+            writes: [0; crate::parallel::REGISTER_COUNT],
         }
     }
 }
@@ -205,8 +205,6 @@ impl Default for RegisterUsage {
 pub struct MemoryAccesses {
     pub load64: u64,
     pub store64: u64,
-    pub load128: u64,
-    pub store128: u64,
 }
 /// Syscall usage summary sorted by syscall number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,7 +339,7 @@ pub fn analyze_prepared_static_state_accesses(
 
 fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let offset_words = match wide::opcode(op.inst) {
-        wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::imm16(op.inst)),
+        wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::jal_offset(op.inst)),
         wide::control::JALS => i64::from(wide::imm24(op.inst)),
         _ => return None,
     };
@@ -356,7 +354,7 @@ fn is_protected_contract_return(op: &DecodedOp) -> bool {
     wide::opcode(op.inst) == wide::control::JALR
         && wide::rd(op.inst) == 0
         && wide::rs1(op.inst) == 1
-        && wide::imm8(op.inst) == 0
+        && wide::imm14(op.inst) == 0
 }
 fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
     let start = contract
@@ -403,25 +401,14 @@ fn transfer_static_state_facts(
             facts.clear_register(wide::rd(op.inst));
         }
         wide::memory::LOAD64 => {
-            let (_, destination, _, _) = encoding::wide::decode_mem(op.inst);
+            let (_, destination, _, _) = encoding::wide::decode_load(op.inst);
             facts.clear_register(usize::from(destination));
         }
         wide::memory::STORE64 => {
-            let (_, base, _, immediate) = encoding::wide::decode_mem(op.inst);
+            let (_, base, _, immediate) = encoding::wide::decode_store(op.inst);
             if !facts.store_is_within_minimum_stack(usize::from(base), i64::from(immediate), 8) {
                 facts.invalidate_mutable_content();
             }
-        }
-        wide::memory::STORE128 => {
-            let (_, base, _, _) = encoding::wide::decode_store128(op.inst);
-            if !facts.store_is_within_minimum_stack(usize::from(base), 0, 16) {
-                facts.invalidate_mutable_content();
-            }
-        }
-        wide::memory::LOAD128 => {
-            let (_, destination_low, _, destination_high) = encoding::wide::decode_load128(op.inst);
-            facts.clear_register(usize::from(destination_low));
-            facts.clear_register(usize::from(destination_high));
         }
         wide::arithmetic::ADDI => {
             let (_, destination, source, immediate) = encoding::wide::decode_ri(op.inst);
@@ -441,7 +428,6 @@ fn transfer_static_state_facts(
         | wide::control::BLTU
         | wide::control::BGEU
         | wide::control::JMP
-        | wide::control::JR
         | wide::control::HALT => {}
         wide::control::JAL => {
             facts.clear_register(wide::rd(op.inst));
@@ -453,11 +439,7 @@ fn transfer_static_state_facts(
             facts.clear_register(wide::rd(op.inst));
         }
         wide::system::SCALL => {
-            let number = u32::from(wide::imm8(op.inst) as u8);
-            return transfer_static_state_syscall(number, literals, facts, result);
-        }
-        wide::system::SYSTEM => {
-            let number = encoding::wide::decode_syscallx(op.inst);
+            let number = wide::syscall_number(op.inst);
             return transfer_static_state_syscall(number, literals, facts, result);
         }
         _ => {
@@ -606,9 +588,7 @@ pub fn enforce_amx_budget(
     let memory_accesses = analysis
         .memory
         .load64
-        .saturating_add(analysis.memory.store64)
-        .saturating_add(analysis.memory.load128)
-        .saturating_add(analysis.memory.store128);
+        .saturating_add(analysis.memory.store64);
     let syscall_calls = analysis
         .syscalls
         .iter()
@@ -846,6 +826,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             crate::prepared::PreparedContractParts {
                 artifact: prepared.shared_artifact(),
                 metadata: prepared.metadata().clone(),
+                syscall_policy: prepared.syscall_policy(),
                 manifest: prepared.manifest().clone(),
                 header_len: prepared.header_len(),
                 code_offset: prepared.code_offset(),
@@ -882,7 +863,6 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             0,
         ))));
         for inst in [
-            wide_enc::encode_rr(wide::control::JR, 1, 0, 0),
             wide_enc::encode_rr(wide::control::JALR, 1, 1, 0),
             wide_enc::encode_rr(wide::control::JALR, 0, 2, 0),
             wide_enc::encode_ri(wide::control::JALR, 0, 1, 1),
@@ -898,10 +878,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             envelopes: &[],
             payloads: &[Some(&[0])],
         };
-        let stores = [
-            wide_enc::encode_store(wide::memory::STORE64, 2, 3, 0),
-            wide_enc::encode_store128(wide::memory::STORE128, 2, 3, 4),
-        ];
+        let stores = [wide_enc::encode_store(wide::memory::STORE64, 2, 3, 0)];
         for store in stores {
             let mut facts = StaticStateFacts::entrypoint();
             facts.names[10] = Some(0);
@@ -989,7 +966,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             wide_enc::encode_load(wide::memory::LOAD64, 2, 1, 0),
             wide_enc::encode_store(wide::memory::STORE64, 3, 2, 8),
             wide_enc::encode_branch(wide::control::BEQ, 2, 1, 1),
-            wide_enc::encode_sys(wide::system::SCALL, 0x22),
+            wide_enc::encode_scall(0x22),
             wide_enc::encode_halt(),
         ];
         let program = build_program(&words);
@@ -1013,7 +990,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
     #[test]
     fn analysis_reports_extended_syscall_numbers() {
         let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
-        let words = [wide_enc::encode_syscallx(syscall), wide_enc::encode_halt()];
+        let words = [wide_enc::encode_scall(syscall), wide_enc::encode_halt()];
         let program = build_program(&words);
         let report = analyze_program(&program).expect("analysis succeeds");
         assert_eq!(
@@ -1031,48 +1008,17 @@ seiyaku IndirectStateAnalysis { permission CanRun;
         assert!(matches!(err, ProgramAnalysisError::Metadata(_)));
     }
     #[test]
-    fn analysis_treats_setvl_operand_as_immediate() {
-        let words = [
-            wide_enc::encode_rr(wide::crypto::SETVL, 0, 0, 8),
-            wide_enc::encode_halt(),
-        ];
-        let program = build_program(&words);
-        let report = analyze_program(&program).expect("analysis succeeds");
-        assert_eq!(report.instruction_count, words.len());
-        assert_eq!(
-            report.registers.reads[8], 0,
-            "SETVL immediate must not be reported as a register read"
-        );
-    }
-    #[test]
-    fn analysis_tracks_poseidon_register_inputs() {
-        let words = [
-            wide_enc::encode_poseidon2(9, 10, 11),
-            wide_enc::encode_poseidon6(8, 20),
-            wide_enc::encode_halt(),
-        ];
-        let report = analyze_program(&build_program(&words)).expect("analysis succeeds");
-        assert_eq!(report.registers.writes[9], 1);
-        assert_eq!(report.registers.writes[8], 1);
-        assert_eq!(report.registers.reads[10], 1);
-        assert_eq!(report.registers.reads[11], 1);
-        for register in 20..26 {
-            assert_eq!(report.registers.reads[register], 1);
-        }
-        assert_eq!(report.memory, MemoryAccesses::default());
-    }
-    #[test]
     fn analysis_tracks_indexed_literal_and_implicit_far_link() {
         let words = [
-            wide_enc::encode_literal(wide::memory::LDLIT, 42, 0x1234),
-            wide_enc::encode_literal(wide::memory::LDI64, 43, 0x5678),
+            wide_enc::encode_literal(wide::memory::LDLIT, 22, 0x1234),
+            wide_enc::encode_literal(wide::memory::LDI64, 23, 0x5678),
             wide_enc::encode_offset24(wide::control::JALS, 1),
             wide_enc::encode_halt(),
         ];
         let program = build_program(&words);
         let report = analyze_program(&program).expect("analysis succeeds");
-        assert_eq!(report.registers.writes[42], 1);
-        assert_eq!(report.registers.writes[43], 1);
+        assert_eq!(report.registers.writes[22], 1);
+        assert_eq!(report.registers.writes[23], 1);
         assert_eq!(report.registers.writes[1], 1);
         assert_eq!(report.registers.reads.iter().sum::<u64>(), 0);
     }

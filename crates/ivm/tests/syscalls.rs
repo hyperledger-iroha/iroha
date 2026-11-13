@@ -16,7 +16,7 @@ use std::{cell::Cell, collections::BTreeMap};
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 fn assemble_syscall(syscall: u8) -> Vec<u8> {
     let mut code = Vec::with_capacity(8);
-    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall);
+    let word = encoding::wide::encode_scall(u32::from(syscall));
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&HALT);
     assemble(&code)
@@ -77,10 +77,7 @@ fn syscall_exit_halts_execution() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(10, 5);
     let mut code = Vec::new();
-    let exit_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_EXIT as u8,
-    );
+    let exit_sys = encoding::wide::encode_scall(syscalls::SYSCALL_EXIT);
     code.extend_from_slice(&exit_sys.to_le_bytes());
     let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 0, 9);
     code.extend_from_slice(&addi.to_le_bytes());
@@ -376,7 +373,7 @@ fn traced_execution_summary_quotes_and_commits_the_invocation_register_log() {
         .to_le_bytes()
         .to_vec();
     code.extend_from_slice(
-        &encoding::wide::encode_syscallx(syscalls::SYSCALL_EXECUTION_SUMMARY).to_le_bytes(),
+        &encoding::wide::encode_scall(syscalls::SYSCALL_EXECUTION_SUMMARY).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);

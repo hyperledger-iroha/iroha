@@ -284,6 +284,12 @@ pub enum PublicationDeferral {
     /// Exact original frozen State source, canonical encoding or local policy refusal.
     #[error(transparent)]
     StateCapture(crate::state::StateCaptureDeferral),
+    /// Exact checkpoint writer observation; the original image remains pending locally.
+    #[error(transparent)]
+    Checkpoint(crate::snapshot::CheckpointDeferral),
+    /// The exact local checkpoint reader cause, including its original resource owner.
+    #[error(transparent)]
+    CheckpointRead(crate::snapshot::TryReadError),
     /// Exact World storage or execution-root decoder refusal before validation effects.
     #[error(transparent)]
     StateStorage(crate::state::StateStorageAdmissionError),
@@ -363,6 +369,8 @@ impl PublicationDeferral {
         match self {
             Self::SharedControl(_)
             | Self::StaleDueWork { .. }
+            | Self::Checkpoint(_)
+            | Self::CheckpointRead(_)
             | Self::IsolatedSourceTransport(_) => None,
             Self::Execution(original) => match original.allocation_refusal() {
                 Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {

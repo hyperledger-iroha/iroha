@@ -63,6 +63,11 @@ pub enum NumericFaultV1 {
     /// Integer square root received a negative operand.
     #[codec(index = 13)]
     NegativeSquareRoot = 13,
+    /// A signed 64-bit register operation overflowed (`i64::MIN / -1`, `ABS(i64::MIN)` or a
+    /// ceiling quotient beyond `i64::MAX`). Distinct from the 512-bit [`Self::MantissaOverflow`];
+    /// numeric syscalls never return it.
+    #[codec(index = 14)]
+    RegisterIntegerOverflow = 14,
 }
 impl NumericFaultV1 {
     /// Decode a stable ABI tag.
@@ -82,6 +87,7 @@ impl NumericFaultV1 {
             11 => Self::InvalidFailureMode,
             12 => Self::ReservedRegisterNonZero,
             13 => Self::NegativeSquareRoot,
+            14 => Self::RegisterIntegerOverflow,
             _ => return None,
         })
     }
@@ -343,51 +349,45 @@ pub enum IvmFaultKindV1 {
     /// Guest-selected metadata was invalid during execution.
     #[codec(index = 14)]
     InvalidMetadata,
-    /// The guest selected an invalid logical vector length.
-    #[codec(index = 15)]
-    InvalidVectorLength,
     /// The executable stream ended without a terminating instruction.
-    #[codec(index = 16)]
+    #[codec(index = 15)]
     MissingHalt,
-    /// The artifact did not enable the requested vector extension.
-    #[codec(index = 17)]
-    VectorExtensionDisabled,
-    /// The artifact did not enable the requested ZK extension.
-    #[codec(index = 18)]
-    ZkExtensionDisabled,
     /// The replicated state already contains the nullifier.
-    #[codec(index = 19)]
+    #[codec(index = 16)]
     NullifierAlreadyUsed,
     /// The running guest attempted an unauthorized operation.
-    #[codec(index = 20)]
+    #[codec(index = 17)]
     PermissionDenied,
     /// The guest violated deterministic privacy-tag rules.
-    #[codec(index = 21)]
+    #[codec(index = 18)]
     PrivacyViolation,
     /// The guest selected a register outside the VM register domain.
-    #[codec(index = 22)]
+    #[codec(index = 19)]
     RegisterOutOfBounds,
     /// A canonical Norito envelope or value was invalid.
-    #[codec(index = 23)]
+    #[codec(index = 20)]
     NoritoInvalid,
     /// The selected pointer type is not allowed by ABI V1.
-    #[codec(index = 24)]
+    #[codec(index = 21)]
     AbiTypeNotAllowed,
     /// The retained effect count exceeded the consensus limit.
-    #[codec(index = 25)]
+    #[codec(index = 22)]
     HostOutputItemsExceeded,
     /// The retained effect bytes exceeded the consensus limit.
-    #[codec(index = 26)]
+    #[codec(index = 23)]
     HostOutputBytesExceeded,
     /// The deterministic static AMX estimate exceeded its governed budget.
-    #[codec(index = 27)]
+    #[codec(index = 24)]
     AmxBudgetExceeded,
     /// A nested call targeted an already active contract address.
-    #[codec(index = 28)]
+    #[codec(index = 25)]
     ReentrantCall,
-    /// A nested call exceeded the canonical call-depth limit.
-    #[codec(index = 29)]
+    /// A nested or protected direct call exceeded the canonical call-depth limit.
+    #[codec(index = 26)]
     CallDepthExceeded,
+    /// A protected contract returned to an untrusted PC, used an indirect transfer or `HALT`.
+    #[codec(index = 27)]
+    ControlFlowViolation,
 }
 impl core::fmt::Display for IvmFaultV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -421,10 +421,7 @@ mod tests {
             IvmFaultKindV1::AssertionFailed,
             IvmFaultKindV1::ExceededMaxCycles,
             IvmFaultKindV1::InvalidMetadata,
-            IvmFaultKindV1::InvalidVectorLength,
             IvmFaultKindV1::MissingHalt,
-            IvmFaultKindV1::VectorExtensionDisabled,
-            IvmFaultKindV1::ZkExtensionDisabled,
             IvmFaultKindV1::NullifierAlreadyUsed,
             IvmFaultKindV1::PermissionDenied,
             IvmFaultKindV1::PrivacyViolation,
@@ -436,9 +433,10 @@ mod tests {
             IvmFaultKindV1::AmxBudgetExceeded,
             IvmFaultKindV1::ReentrantCall,
             IvmFaultKindV1::CallDepthExceeded,
+            IvmFaultKindV1::ControlFlowViolation,
         ];
         kinds.extend(
-            (1..=13).map(|tag| IvmFaultKindV1::Numeric(NumericFaultV1::from_tag(tag).unwrap())),
+            (1..=14).map(|tag| IvmFaultKindV1::Numeric(NumericFaultV1::from_tag(tag).unwrap())),
         );
         kinds.extend(
             (1..=11)
@@ -527,10 +525,7 @@ mod tests {
             "AssertionFailed",
             "ExceededMaxCycles",
             "InvalidMetadata",
-            "InvalidVectorLength",
             "MissingHalt",
-            "VectorExtensionDisabled",
-            "ZkExtensionDisabled",
             "NullifierAlreadyUsed",
             "PermissionDenied",
             "PrivacyViolation",
@@ -542,6 +537,7 @@ mod tests {
             "AmxBudgetExceeded",
             "ReentrantCall",
             "CallDepthExceeded",
+            "ControlFlowViolation",
         ];
         let expected: Vec<_> = names
             .into_iter()

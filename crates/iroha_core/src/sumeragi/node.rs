@@ -608,13 +608,57 @@ impl core::fmt::Debug for Prepared {
     reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
 )]
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
+    prepare_with_checkpoint_writer_inner(inputs, None)
+}
+
+/// Rebuild from original certified history while preserving every mandatory checkpoint cut.
+/// The supplied writer must own the same State. Replay persists its original frozen overlay
+/// before visibility, then relocates that certified image without retention or rolling writes.
+///
+/// # Errors
+/// Returns the original replay/resource failure, or a typed checkpoint persistence refusal.
+#[expect(
+    clippy::result_large_err,
+    reason = "Retain the original typed local refusal."
+)]
+pub fn prepare_with_checkpoint_writer(
+    inputs: PrepareInputs,
+    writer: &mut crate::snapshot::SnapshotMaker,
+) -> Result<Prepared, NodeError> {
+    writer
+        .begin_checkpoint_replay(&inputs.state)
+        .map_err(|reason| NodeError::Replay {
+            height: startup::applied_height(&inputs.state),
+            reason: ReplayError::Execution(super::driver::traits::PublicationError::Deferred(
+                super::driver::traits::PublicationDeferral::Checkpoint(reason),
+            )),
+        })?;
+    prepare_with_checkpoint_writer_inner(inputs, Some(writer))
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Retain the original typed local refusal."
+)]
+fn prepare_with_checkpoint_writer_inner(
+    inputs: PrepareInputs,
+    mut checkpoint_writer: Option<&mut crate::snapshot::SnapshotMaker>,
+) -> Result<Prepared, NodeError> {
+    let restored = startup::applied_height(&inputs.state);
+    if let Some(boundary) = inputs.state.kura().history_boundary()
+        && restored < boundary.height
+    {
+        return Err(NodeError::Input(format!(
+            "restored height {restored} is below runtime history boundary {}; historical execution requires an authenticated checkpoint at or above the boundary",
+            boundary.height
+        )));
+    }
     // Tiered rows and the query-index marker are derived local projections. Replaying
     // each historical block must not rewrite either; persist the exact final ones once.
     let derived_replay = inputs
         .state
         .defer_derived_persistence_for_startup_replay()
         .map_err(NodeError::Input)?;
-    let restored = startup::applied_height(&inputs.state);
     let replay_started = std::time::Instant::now();
     let mut prepared = if restored == 0 {
         prepare_genesis(inputs, None)?
@@ -649,12 +693,45 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             })?;
         body_read_elapsed += phase_started.elapsed();
         let phase_started = std::time::Instant::now();
-        executor
-            .replay(&body, &commit_qc)
-            .map_err(|reason| NodeError::Replay {
-                height,
-                reason: ReplayError::Execution(reason),
-            })?;
+        loop {
+            match executor.replay(&body, &commit_qc) {
+                Err(super::driver::traits::PublicationError::Deferred(
+                    super::driver::traits::PublicationDeferral::Checkpoint(
+                        crate::snapshot::CheckpointDeferral::DurabilityPending { .. }
+                        | crate::snapshot::CheckpointDeferral::QueueFull { .. },
+                    ),
+                )) if checkpoint_writer.is_some() => {
+                    checkpoint_writer
+                        .as_deref_mut()
+                        .expect("matched writer")
+                        .checkpoint_replay_step()
+                        .map_err(|reason| NodeError::Replay {
+                            height,
+                            reason: ReplayError::Execution(
+                                super::executor::publication::original_refusal(reason),
+                            ),
+                        })?;
+                    // Same source and certificate retry the worker's retained original overlay.
+                }
+                outcome => {
+                    outcome.map_err(|reason| NodeError::Replay {
+                        height,
+                        reason: ReplayError::Execution(reason),
+                    })?;
+                    break;
+                }
+            }
+        }
+        if let Some(writer) = checkpoint_writer.as_deref_mut() {
+            writer
+                .checkpoint_replay_step()
+                .map_err(|reason| NodeError::Replay {
+                    height,
+                    reason: ReplayError::Execution(super::executor::publication::original_refusal(
+                        reason,
+                    )),
+                })?;
+        }
         execution_elapsed += phase_started.elapsed();
         let phase_started = std::time::Instant::now();
         // No lane runner reconciles retirement during replay; release the stores of
@@ -859,8 +936,8 @@ fn prepare_restored(
     // Under the keyed commitment a decoded State is still a claim (§16.5). With the node's
     // configuration installed, rebuild its complete selected schema and require the parent
     // State root that the certified successor of its tip binds, before anything is built
-    // from it or replayed onto it. An LtHash State carries no claim: its World was
-    // authenticated when it was decoded.
+    // from it or replayed onto it. Nonempty LtHash snapshots are refused by the decoder:
+    // a World-only root cannot authenticate the State-level fields.
     inputs
         .state
         .authenticate_restored_keyed_state()
@@ -868,6 +945,22 @@ fn prepare_restored(
             height,
             reason: ReplayError::StateRoot(reason),
         })?;
+    // A local snapshot signature authenticates bytes, not consensus State. Only
+    // the verified complete claim may advance the durable history boundary.
+    // This also applies to a copied-store replay without adoption configuration.
+    if let Some(boundary) = crate::runtime::checkpoint::history_boundary(
+        &inputs.state.world_view(),
+        inputs
+            .state
+            .latest_block_creation_time_ms_fast()
+            .unwrap_or(0),
+    ) {
+        inputs
+            .state
+            .kura()
+            .record_history_boundary(&boundary)
+            .map_err(|error| NodeError::Input(error.to_string()))?;
+    }
     let chain_id = inputs.state.chain_id_ref().to_string();
     let Some((block, _certificate, tip)) = startup::stored_genesis(&inputs.state)? else {
         return Err(NodeError::Input(
@@ -1300,6 +1393,10 @@ impl Prepared {
             &state.telemetry,
             MetricsInstance::Global,
         ));
+        // The configured writer owns the same bounded consumer from certified startup
+        // replay through the first live publication. Ordinary maintenance still waits
+        // for the successful-startup handshake.
+        state.runtime_checkpoint_capture.activate();
         let running = driver_owner
             .spawn(
                 driver,
@@ -2055,12 +2152,15 @@ mod tests {
         start_all_with_states(chain, disks, fresh, states)
     }
 
-    /// A State restored from `snapshot`, authenticated against the successor its Kura holds.
-    fn restored_state(snapshot: &str, kura: &Arc<Kura>) -> Arc<State> {
+    /// Decode a signed snapshot; nonempty World-only snapshots require native replay.
+    fn decode_snapshot(
+        snapshot: &str,
+        kura: &Arc<Kura>,
+    ) -> Result<Box<State>, crate::state::deserialize::StateRestoreError> {
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let manifests =
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-        let state = crate::state::deserialize::KuraSeed {
+        crate::state::deserialize::KuraSeed {
             execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
@@ -2071,8 +2171,6 @@ mod tests {
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
         .into_state_from_json_str_with_configured_nexus(snapshot, nexus)
-        .expect("the certified successor authenticates the snapshot World");
-        Arc::from(state)
     }
 
     fn start_all_with_states(
@@ -2945,10 +3043,10 @@ mod tests {
     }
 
     #[test]
-    fn restart_from_an_authenticated_snapshot_replays_only_later_blocks() {
+    fn restart_refuses_world_only_snapshot_and_replays_the_certified_history() {
         let _scenario = real_node_scenario_guard();
         if crate::unit_test_support::run_in_isolated_harness(
-            "sumeragi::node::tests::restart_from_an_authenticated_snapshot_replays_only_later_blocks",
+            "sumeragi::node::tests::restart_refuses_world_only_snapshot_and_replays_the_certified_history",
         ) {
             return;
         }
@@ -2976,18 +3074,13 @@ mod tests {
         let heights = committed_heights(&validators);
         assert!(heights[0] > u64::try_from(snapshot_height).unwrap());
         shutdown(validators);
-        // Validator 0 restores the snapshot, which the next Kura block certifies, and replays
-        // only the later blocks; the others replay from genesis.
-        let restored = restored_state(snapshot.as_json(), &disks[0].kura);
-        assert_eq!(restored.committed_height(), snapshot_height);
-        let states = std::iter::once(restored)
-            .chain(
-                disks[1..]
-                    .iter()
-                    .map(|disk| empty_state(&chain.chain_id, &chain.genesis, &disk.kura)),
-            )
-            .collect();
-        let validators = start_all_with_states(&chain, &disks, false, states);
+        // The successor certifies only World under this profile. The cache cannot authorize
+        // transaction membership or other State-level fields, so all validators replay.
+        assert!(matches!(
+            decode_snapshot(snapshot.as_json(), &disks[0].kura),
+            Err(crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let validators = start_all(&chain, &disks, false);
         assert_eq!(committed_heights(&validators), heights);
         assert_eq!(world_state_roots(&validators), roots);
         let hash = submit(&chain, &validators, "after the restart");

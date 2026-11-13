@@ -212,12 +212,12 @@ const ABI_V1_POINTER_TYPES: &[PointerType] = &[
 /// Expose the policy allowlist for callers that need to diff surfaces.
 pub fn policy_pointer_types(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
-    let SyscallPolicy::AbiV1 = policy;
+    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
     ABI_V1.get_or_init(|| ABI_V1_POINTER_TYPES.iter().copied().collect())
 }
 /// Check the static pointer-ABI allowlist without allocating on first use.
 pub fn is_type_allowed_for_policy(policy: SyscallPolicy, ty: PointerType) -> bool {
-    let SyscallPolicy::AbiV1 = policy;
+    let (SyscallPolicy::AbiV1 | SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
     ABI_V1_POINTER_TYPES.contains(&ty)
 }
 thread_local! {

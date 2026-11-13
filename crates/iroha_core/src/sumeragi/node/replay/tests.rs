@@ -375,6 +375,41 @@ fn replay_preserves_original_target_and_expired_deadline() {
 }
 
 #[test]
+fn isolated_replay_respects_a_boundary_learned_before_or_during_reconstruction() {
+    run(|| {
+        let (chain, seed, _) = fixture();
+        let target = native(&chain, 2);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut replay = seed.begin(&target, deadline).unwrap();
+        let boundary = crate::state::upgrade_checkpoint::UpgradeCheckpointV1 {
+            height: 2,
+            block_hash: chain
+                .kura()
+                .get_durable_block_hash(NonZeroUsize::new(2).unwrap())
+                .unwrap(),
+        };
+        chain.kura().record_history_boundary(&boundary).unwrap();
+        let files = inventory(&chain.kura().store_root());
+        assert!(matches!(
+            replay.advance(&target, deadline, 64),
+            Err(IsolatedReplayError::BelowHistoryBoundary {
+                next: 2,
+                boundary: 2
+            })
+        ));
+        assert_eq!(replay.next, 2);
+        assert!(matches!(
+            seed.begin(&target, deadline),
+            Err(IsolatedReplayError::BelowHistoryBoundary {
+                next: 1,
+                boundary: 2
+            })
+        ));
+        assert_eq!(inventory(&chain.kura().store_root()), files);
+    });
+}
+
+#[test]
 fn isolated_state_configuration_preserves_live_pool_and_process_cache() {
     // Final owner release uses the process-global EBR collector. Other tests may retain
     // unrelated epochs, so run this exact refund/cache check in its own harness process.

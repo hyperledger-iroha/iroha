@@ -148,7 +148,6 @@ fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
             | Instr::Gcd { .. }
             | Instr::Mean { .. }
             | Instr::Isqrt { .. }
-            | Instr::Poseidon2 { .. }
             | Instr::Pubkgen { .. }
             | Instr::Valcom { .. }
             | Instr::PointerFromString { .. }
@@ -567,8 +566,7 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         Instr::Min { a, b, .. }
         | Instr::Max { a, b, .. }
         | Instr::Gcd { a, b, .. }
-        | Instr::Mean { a, b, .. }
-        | Instr::Poseidon2 { a, b, .. } => {
+        | Instr::Mean { a, b, .. } => {
             visit(*a);
             visit(*b);
         }
@@ -588,11 +586,6 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         Instr::Store64 { address, value } => {
             visit(*address);
             visit(*value);
-        }
-        Instr::Poseidon6 { args, .. } => {
-            for temp in args {
-                visit(*temp);
-            }
         }
         Instr::Valcom { value, blind, .. } | Instr::PrivateNumericValcom { value, blind, .. } => {
             visit(*value);
@@ -1191,15 +1184,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         ResolveAccountAlias { alias, .. } => f(*alias),
         Abs { src, .. } => f(*src),
         Isqrt { src, .. } => f(*src),
-        Poseidon2 { a, b, .. } => {
-            f(*a);
-            f(*b);
-        }
-        Poseidon6 { args, .. } => {
-            for temp in args {
-                f(*temp);
-            }
-        }
         Pubkgen { src, .. } => f(*src),
         Valcom { value, blind, .. } | PrivateNumericValcom { value, blind, .. } => {
             f(*value);
@@ -1341,7 +1325,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         TupleGet { tuple, .. } => f(*tuple),
         Copy { src, .. } => f(*src),
         SetExecutionDepth { value } => f(*value),
-        SetVl { value } => f(*value),
         Call { args, .. } | CallMulti { args, .. } => {
             for arg in args {
                 f(*arg);
@@ -1725,8 +1708,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Mean { dest, .. }
         | Instr::Isqrt { dest, .. }
         | Instr::LoadVar { dest, .. }
-        | Instr::Poseidon2 { dest, .. }
-        | Instr::Poseidon6 { dest, .. }
         | Instr::Pubkgen { dest, .. }
         | Instr::Valcom { dest, .. }
         | Instr::PrivateNumericValcom { dest, .. }
@@ -1845,7 +1826,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::TransferNft { .. }
         | Instr::CreateNftsForAllUsers
         | Instr::SetExecutionDepth { .. }
-        | Instr::SetVl { .. }
         | Instr::SetAccountDetail { .. }
         | Instr::RegisterDomain { .. }
         | Instr::RegisterAccount { .. }

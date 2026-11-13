@@ -205,7 +205,7 @@ where
     // It produces no execution verdict or negative registry entry; the live executor repeats
     // original scope/authorization admission before any effect or fee can be published.
     code::with_code_bytes(state_ro, &artifact_id, |bytecode| {
-        cache.get_or_prepare(artifact_id.code_hash, bytecode)
+        cache.get_or_prepare_in_world(state_ro.world(), artifact_id.code_hash, bytecode)
     })
     .ok()??
     .ok()
@@ -793,7 +793,11 @@ where
                 state_ro.and_then(|state| {
                     state
                         .prepared_contract_cache()
-                        .get_or_prepare(ivm::contract_code_hash(bytecode_ref), bytecode_ref)
+                        .get_or_prepare_in_world(
+                            state.world(),
+                            ivm::contract_code_hash(bytecode_ref),
+                            bytecode_ref,
+                        )
                         .ok()
                 })
             });
@@ -2061,7 +2065,7 @@ where
     let manifest = state_ro.world().contract_manifests().get(&artifact_id)?;
     let cache = state_ro.prepared_contract_cache();
     let contract = cache
-        .get_or_prepare(artifact_id.code_hash, bytecode_ref)
+        .get_or_prepare_in_world(state_ro.world(), artifact_id.code_hash, bytecode_ref)
         .ok()?;
     manifest_access_set(
         manifest,
@@ -2267,7 +2271,11 @@ where
             metadata,
         )
         .map_err(|error| error.to_string())?;
-        let prepared = dynamic_execution::prepare(&state_ro.prepared_contract_cache(), bytecode)?;
+        let prepared = dynamic_execution::prepare_in_world(
+            &state_ro.prepared_contract_cache(),
+            state_ro.world(),
+            bytecode,
+        )?;
         if prepared.code_hash() != identity.code_hash {
             return Err(
                 ("raw contract bytecode no longer matches its live binding".to_owned()).into(),
@@ -2712,7 +2720,7 @@ mod tests {
             } else {
                 enc::encode_ri(wide::arithmetic::ADDI, 10, 16, 0)
             },
-            enc::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+            enc::encode_scall(ivm::syscalls::SYSCALL_STATE_SET),
             enc::encode_load(wide::memory::LOAD64, 12, 31, 8),
             enc::encode_store(wide::memory::STORE64, 12, 0, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
@@ -2751,7 +2759,6 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 10_000,
             abi_version: 1,
         };
@@ -3059,12 +3066,7 @@ mod tests {
     fn generic_state_get_test_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_STATE_GET)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
@@ -3072,12 +3074,7 @@ mod tests {
     fn state_get_test_program() -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_STATE_GET)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
         );
         code.extend_from_slice(&crate::ivm_test_support::unit_return());
         let mut entrypoint = default_test_entrypoint();
@@ -4049,12 +4046,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         let value_tlv = make_tlv(ivm::PointerType::Json as u16, &value_payload);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_GET_AUTHORITY)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_AUTHORITY).to_le_bytes(),
         );
         code.extend_from_slice(
             &kotodama_lang::compiler::encode_addi(13, 10, 0)
@@ -4066,12 +4058,8 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                .to_le_bytes(),
         );
         code.extend_from_slice(
             &kotodama_lang::compiler::encode_addi(11, 10, 0)
@@ -4083,12 +4071,8 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                .to_le_bytes(),
         );
         code.extend_from_slice(
             &kotodama_lang::compiler::encode_addi(12, 10, 0)
@@ -4101,19 +4085,14 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 .to_le_bytes(),
         ); // r10 = account ptr
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+                .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 10_000,
             abi_version: 1,
         };
@@ -4259,7 +4238,6 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 10_000,
             abi_version: 1,
         }
@@ -4270,12 +4248,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 .to_le_bytes(),
         );
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_ALLOC)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_ALLOC).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let error =
@@ -4310,19 +4283,14 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             );
         }
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+                .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            vector_length: 0,
             max_cycles: 10_000,
             abi_version: 1,
         };
@@ -4370,13 +4338,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use iroha_data_model::transaction::IvmProved;
         fn program_with_syscall(number: u32) -> Vec<u8> {
             let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(
-                &ivm::encoding::wide::encode_sys(
-                    ivm::instruction::wide::system::SCALL,
-                    u8::try_from(number).expect("test syscall fits in the encoded immediate"),
-                )
-                .to_le_bytes(),
-            );
+            program.extend_from_slice(&ivm::encoding::wide::encode_scall(number).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             program
         }
@@ -4444,7 +4406,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             (0x01_0030, "*"),
         ] {
             let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
             program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let mut set = AccessSet::new();
             assert!(apply_unverified_ivm_access_fence(&program, &mut set));
@@ -4489,7 +4451,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             let code = [
                 ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
                 ivm::encoding::wide::encode_halt(),
-                ivm::encoding::wide::encode_syscallx(syscall),
+                ivm::encoding::wide::encode_scall(syscall),
                 ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
             ];
             let mut program = ivm::ProgramMetadata::default().encode();
@@ -5200,12 +5162,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_STATE_GET)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();
@@ -5323,12 +5280,8 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
+                .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();
@@ -5419,12 +5372,8 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
-                    .expect("syscall identifier fits in 8 bits"),
-            )
-            .to_le_bytes(),
+            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
+                .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut prog = ivm::ProgramMetadata::default().encode();

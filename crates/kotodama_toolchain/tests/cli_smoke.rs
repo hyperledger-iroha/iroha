@@ -50,8 +50,7 @@ fn koto_build_meta_header_smoke() {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 2000);
-    assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
-    assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
+    assert_eq!(meta.mode, 0);
 }
 #[test]
 fn compile_tuple_return_minimal() {
@@ -539,4 +538,50 @@ fn private_witness_builds_warn_and_document_the_host_requirement() {
             "Prover/test host required"
         }));
     }
+}
+
+#[test]
+fn koto_build_named_runtime_profile_smoke() {
+    let bin = env!("CARGO_BIN_EXE_koto");
+    let directory = build_dir("named_runtime_profile");
+    let input = directory.join("obligation.ko");
+    let output = directory.join("obligation.to");
+    fs::write(
+        &input,
+        "seiyaku Obligations { kotoage fn register(bytes request) authorize(anyone) { ledger::runtime::register_obligation(request); } }",
+    )
+    .expect("write profile source");
+    let baseline = Command::new(bin)
+        .arg("build")
+        .arg(&input)
+        .arg("--out")
+        .arg(directory.join("baseline.to"))
+        .output()
+        .expect("baseline build attempt");
+    assert!(
+        !baseline.status.success(),
+        "kernel call requires its named profile"
+    );
+    let named = Command::new(bin)
+        .arg("build")
+        .arg(&input)
+        .args(["--host-profile", "iroha.ivm.runtime_lifecycle.v1", "--out"])
+        .arg(&output)
+        .output()
+        .expect("named profile build");
+    assert!(
+        named.status.success(),
+        "{}",
+        String::from_utf8_lossy(&named.stderr)
+    );
+    let bytes = fs::read(output).expect("named artifact");
+    assert!(ivm::verify_contract_artifact(&bytes).is_err());
+    let admitted = ivm::verify_contract_artifact_with_declared_profile(&bytes)
+        .expect("exact named artifact admission");
+    assert_eq!(
+        admitted.syscall_policy,
+        ivm::SyscallPolicy::AbiV1RuntimeLifecycle
+    );
+    assert_eq!(admitted.metadata.abi_version, 1);
+    assert_eq!(admitted.manifest.abi_hash, Some(admitted.abi_hash));
 }

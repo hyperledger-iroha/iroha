@@ -29,7 +29,9 @@ impl LifecycleHook {
     /// Return the artifact's initialization hook, when canonical admission succeeds and it declares one.
     #[must_use]
     pub fn from_artifact(artifact: &[u8]) -> Option<Self> {
-        let verified = ivm_artifact_admission::verify_contract_artifact(artifact).ok()?;
+        let verified =
+            ivm_artifact_admission::verify_contract_artifact_with_declared_profile(artifact)
+                .ok()?;
         Self::from_verified(&verified)
     }
 

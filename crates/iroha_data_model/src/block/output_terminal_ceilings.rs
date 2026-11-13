@@ -144,9 +144,10 @@ impl ExecutionOutputTerminalCeilings {
         })
     }
 
-    /// Return this phase's complete canonical terminal-row frame ceiling.
+    /// Return this phase's complete canonical terminal-row frame ceiling. The
+    /// governance-start phase reserves a partition and no terminal row: zero.
     pub fn for_phase(self, phase: ExecutionOutputPhase) -> u64 {
-        self.bytes[phase.index()]
+        phase.terminal_index().map_or(0, |index| self.bytes[index])
     }
 
     /// Combine derived byte ceilings with prospective callback counts.

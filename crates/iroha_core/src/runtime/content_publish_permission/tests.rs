@@ -10,7 +10,7 @@ use iroha_data_model::{
     permission::Permissions,
     role::{Role, RoleId},
     runtime::{
-        definition::{DefinitionKind, RestrictionEntryV1},
+        definition::{DefinitionKind, RestrictionEntryV1, RestrictionV1},
         lifecycle::{
             ChangeSetRecordV1, ChangeSetStatusV1, RestrictionKindV1, RuntimeNoticeV1,
             SupportAttestationV1, committee_digest,
@@ -152,11 +152,16 @@ fn run(world: &World, height: u64, change: &ChangeSetV1) -> ChangeSetStatusV1 {
     start_block(world, height, change)
 }
 
-fn set_direct(world: &World, holder: &AccountId, permissions: impl IntoIterator<Item = Permission>) {
+fn set_direct(
+    world: &World,
+    holder: &AccountId,
+    permissions: impl IntoIterator<Item = Permission>,
+) {
     let mut block = world.block();
-    block
-        .account_permissions
-        .insert(holder.clone(), permissions.into_iter().collect::<Permissions>());
+    block.account_permissions.insert(
+        holder.clone(),
+        permissions.into_iter().collect::<Permissions>(),
+    );
     block.commit();
 }
 
@@ -176,42 +181,38 @@ fn the_permission_is_published_once_after_the_frozen_baseline() {
 }
 
 #[test]
-fn only_a_disabled_restriction_stops_recognizing_a_selected_definition() {
+fn every_restriction_kind_stops_a_selected_definition_being_active() {
     let catalog = release_catalog().expect("release catalog");
     let id = descriptor().id().unwrap();
     let mut selection = catalog.baseline.clone();
     assert!(!selected(&selection));
-    assert!(!recognized(&selection));
+    assert!(!active(&selection));
     selection.active.push(id);
     selection.active.sort_unstable();
     assert!(selected(&selection));
-    assert!(recognized(&selection));
+    assert!(active(&selection));
     for restriction in [
         RestrictionV1::Deprecated(3),
         RestrictionV1::AdmissionClosed(3),
         RestrictionV1::CompletionOnly(3),
+        RestrictionV1::Disabled(3),
     ] {
         selection.restrictions = vec![RestrictionEntryV1 {
             definition: id,
             restriction,
         }];
+        assert!(selected(&selection), "{restriction:?} keeps the selection");
         assert!(
-            recognized(&selection),
-            "{restriction:?} applies to interfaces and implementations only"
+            !active(&selection),
+            "{restriction:?} stops publishing and grants"
         );
     }
-    selection.restrictions = vec![RestrictionEntryV1 {
-        definition: id,
-        restriction: RestrictionV1::Disabled(3),
-    }];
-    assert!(selected(&selection));
-    assert!(!recognized(&selection));
     selection.restrictions = vec![RestrictionEntryV1 {
         definition: catalog.baseline.bindings[0].implementation,
         restriction: RestrictionV1::Disabled(3),
     }];
     assert!(
-        recognized(&selection),
+        active(&selection),
         "a restriction on another definition changes nothing"
     );
 }
@@ -241,7 +242,7 @@ fn the_draft_selects_the_permission_from_every_compiled_selection_once() {
             [SelectionTransitionV1::Activate(activated)] if *activated == id
         ));
         let applied = change.apply(&current, &published).expect("applies");
-        assert!(recognized(&applied.selection));
+        assert!(active(&applied.selection));
         let mut expected = current.clone();
         expected.active.push(id);
         expected.active.sort_unstable();
@@ -269,15 +270,15 @@ fn the_draft_selects_the_permission_from_every_compiled_selection_once() {
 fn the_inventory_counts_every_held_permission_of_the_name() {
     let holder = account(0x61);
     let world = World::with([], [Account::new(holder.clone()).build(&holder)], []);
-    assert!(validate_inventory(&world.view()).is_ok());
+    assert!(validate_activation_inventory(&world.view()).is_ok());
     // A malformed token of the name counts too: selection would change its meaning.
     let malformed = Permission::new(NAME.into(), Json::new(5_u32));
     for held in [token(), malformed] {
         set_direct(&world, &holder, [held]);
-        assert!(validate_inventory(&world.view()).is_err());
+        assert!(validate_activation_inventory(&world.view()).is_err());
     }
     set_direct(&world, &holder, []);
-    assert!(validate_inventory(&world.view()).is_ok());
+    assert!(validate_activation_inventory(&world.view()).is_ok());
     let role: RoleId = "content_publishers".parse().unwrap();
     let mut block = world.block();
     block.roles.insert(
@@ -287,25 +288,20 @@ fn the_inventory_counts_every_held_permission_of_the_name() {
             .build(&holder),
     );
     block.commit();
-    assert!(validate_inventory(&world.view()).is_err());
+    assert!(validate_activation_inventory(&world.view()).is_err());
 }
 
 #[test]
-fn selection_changes_lapse_while_any_account_or_role_holds_the_name() {
+fn activation_and_retirement_lapse_while_the_permission_is_held() {
     let holder = account(0x62);
     let world = World::with([], [Account::new(holder.clone()).build(&holder)], []);
-    // A token of the name granted under the baseline's rules never becomes publishing
-    // authority: the activation lapses until it is removed.
+    // A token of the name granted under the baseline's rules, directly or through a role, never
+    // becomes publishing authority: the activation lapses until it is removed.
     set_direct(&world, &holder, [token()]);
     let change = draft(&world, 5);
     assert_eq!(run(&world, 5, &change), ChangeSetStatusV1::Lapsed(5));
     assert!(!selected(world.view().runtime_selection()));
     set_direct(&world, &holder, []);
-    let change = draft(&world, 6);
-    assert_eq!(run(&world, 6, &change), ChangeSetStatusV1::Activated(6));
-    assert!(recognized(world.view().runtime_selection()));
-
-    // Retirement waits until no role or account holds it.
     let role: RoleId = "content_publishers".parse().unwrap();
     let mut block = world.block();
     block.roles.insert(
@@ -315,16 +311,25 @@ fn selection_changes_lapse_while_any_account_or_role_holds_the_name() {
             .build(&holder),
     );
     block.commit();
-    let change = retirement(&world, 7);
-    assert_eq!(run(&world, 7, &change), ChangeSetStatusV1::Lapsed(7));
-    assert!(selected(world.view().runtime_selection()));
+    let change = draft(&world, 6);
+    assert_eq!(run(&world, 6, &change), ChangeSetStatusV1::Lapsed(6));
     let mut block = world.block();
     block.roles.remove(role);
     block.commit();
+    let change = draft(&world, 7);
+    assert_eq!(run(&world, 7, &change), ChangeSetStatusV1::Activated(7));
+    assert!(active(world.view().runtime_selection()));
+
+    // Retirement waits until no account holds it, so no grant outlives the definition.
+    set_direct(&world, &holder, [token()]);
     let change = retirement(&world, 8);
-    assert_eq!(run(&world, 8, &change), ChangeSetStatusV1::Activated(8));
+    assert_eq!(run(&world, 8, &change), ChangeSetStatusV1::Lapsed(8));
+    assert!(selected(world.view().runtime_selection()));
+    set_direct(&world, &holder, []);
+    let change = retirement(&world, 9);
+    assert_eq!(run(&world, 9, &change), ChangeSetStatusV1::Activated(9));
     assert!(!selected(world.view().runtime_selection()));
-    assert!(!recognized(world.view().runtime_selection()));
+    assert!(!active(world.view().runtime_selection()));
 }
 
 #[test]

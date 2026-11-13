@@ -1689,7 +1689,13 @@ EXPIRY_CALL = (
     "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)\n"
     "            .map_err(StateBlockStartError::Storage)?;"
 )
-ENACTMENT_CALL = "Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;"
+# The one positioned pass: SCCP's rank-three work, the baseline Parliament enactments between
+# G2c and G3, then the same pass's pause enactments.
+ENACTMENT_CALL = (
+    "governance_start::run(&mut sb, |sb| {\n"
+    "            Self::apply_block_start_parliament_enactments(sb, now_h)\n"
+    "        })?;"
+)
 SCCP_BEGIN_CALL = (
     "crate::smartcontracts::isi::sccp::hook::begin_block(&mut sb)\n"
     "            .map_err(StateBlockStartError::Storage)?;"
@@ -1699,11 +1705,6 @@ SCCP_LAPSE_CALL = (
     "            .map_err(StateBlockStartError::Storage)?;"
 )
 SCCP_DRAW_CALL = "crate::smartcontracts::isi::sccp::fast_pause::draw::at_boundary(&mut sb)?;"
-SCCP_RECONCILE_CALL = (
-    "let sccp_pauses =\n"
-    "            crate::smartcontracts::isi::sccp::governance_clock::advance_reconciliation(&mut sb)?;"
-)
-SCCP_ENACT_CALL = "sccp_pauses.enact(&mut sb)?;"
 SORAFS_TERM_PASS = (
     "if crate::runtime::sorafs_authority_enabled(sb.world.runtime_selection())\n"
     "            .map_err(|error| StateBlockStartError::Policy(error.to_string()))?\n"
@@ -1744,11 +1745,11 @@ def test_block_start_phase_call_order_baseline_and_mandatory_construction(
     assert observed == [source]
     observed.clear()
     with pytest.raises(RuntimeError, match="start phases"):
-        guard.require_block_start_enactment_phases(source.replace(SCCP_ENACT_CALL, "", 1))
+        guard.require_block_start_enactment_phases(source.replace(ENACTMENT_CALL, "", 1))
     assert observed == []
 
 
-@pytest.mark.parametrize("call", (SCCP_DRAW_CALL, SCCP_RECONCILE_CALL, SCCP_ENACT_CALL))
+@pytest.mark.parametrize("call", (SCCP_DRAW_CALL, ENACTMENT_CALL))
 @pytest.mark.parametrize("mutation", ("missing", "duplicate", "foreign", "conditional", "swallowed", "late"))
 def test_block_start_phase_call_order_sccp_owners(call: str, mutation: str) -> None:
     """Every new call keeps its original block, one use, order and typed failure."""
@@ -1777,9 +1778,8 @@ def test_block_start_phase_call_order_sccp_owners(call: str, mutation: str) -> N
 
 
 @pytest.mark.parametrize("first,second", (
-    (SCCP_BEGIN_CALL, SCCP_DRAW_CALL), (SCCP_DRAW_CALL, SCCP_RECONCILE_CALL),
-    (SCCP_RECONCILE_CALL, ENACTMENT_CALL), (ENACTMENT_CALL, SCCP_ENACT_CALL),
-    (SCCP_ENACT_CALL, SCCP_LAPSE_CALL), (SORAFS_TERM_PASS, EXPIRY_CALL),
+    (SCCP_BEGIN_CALL, SCCP_DRAW_CALL), (SCCP_DRAW_CALL, ENACTMENT_CALL),
+    (ENACTMENT_CALL, SCCP_LAPSE_CALL), (SORAFS_TERM_PASS, EXPIRY_CALL),
     (SORAFS_TERM_PASS, ENACTMENT_CALL),
 ))
 def test_block_start_phase_call_order_sccp_order(first: str, second: str) -> None:
@@ -1791,10 +1791,11 @@ def test_block_start_phase_call_order_sccp_order(first: str, second: str) -> Non
 
 
 @pytest.mark.parametrize("original,replacement", (
-    (SCCP_RECONCILE_CALL, SCCP_RECONCILE_CALL.replace("let sccp_pauses", "let discarded")),
-    (SCCP_ENACT_CALL, "other_pauses.enact(&mut sb)?;"),
-    (SCCP_ENACT_CALL, "drop(sccp_pauses);"),
-    (SCCP_ENACT_CALL, "let sccp_pauses = other_pauses; " + SCCP_ENACT_CALL),
+    (ENACTMENT_CALL, ENACTMENT_CALL.replace("&mut sb, |sb|", "&mut other, |sb|")),
+    (ENACTMENT_CALL, ENACTMENT_CALL.replace("(sb, now_h)", "(other, now_h)")),
+    (ENACTMENT_CALL, ENACTMENT_CALL.replace("governance_start::run", "governance_start::run_on_global_chain")),
+    # The baseline enactments alone are not the pass.
+    (ENACTMENT_CALL, "Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;"),
     ("let now_h = sb._curr_block.height().get();", "let now_h = other._curr_block.height().get();"),
     # The SoraFS term pass keeps its own complete rollback boundary on the same block.
     ("let mut terms = sb.try_transaction()?;", "let mut terms = other.try_transaction()?;"),
@@ -1859,9 +1860,44 @@ def test_block_start_phase_call_order_complete_body_refuses_bypass(mutation: str
         guard.require_block_start_phase_call_order(source)
 
 
+GOVERNANCE_START_PATH = "crates/iroha_core/src/state/governance_start.rs"
+
+
+def test_governance_start_dispatch_is_pinned_to_the_selected_global_root() -> None:
+    """The positioned pass runs once on the global chain, Parliament only where installed."""
+    guard.require_governance_start_dispatch(guard.read(GOVERNANCE_START_PATH))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    # The pass would run on a lane or private root.
+    ("if state.sumeragi_schedule.original_root_scope() != Some(SumeragiRootScope::Global) {\n"
+     "        return before_enactments(state);\n    }\n",
+     ""),
+    # The selection gate would be bypassed.
+    ("let installed = crate::runtime::parliament_anonymous_installed(state.world.runtime_selection())",
+     "let installed = true || crate::runtime::parliament_anonymous_installed(state.world.runtime_selection())"),
+    # A block of a root without the family would reserve a partition.
+    ("if installed {\n        state.governance_start_outputs = Some(report.rows);\n    }",
+     "state.governance_start_outputs = Some(report.rows);"),
+    # The pass's applied flag would not reach K2.
+    ("state.governance_due_applied = report.governance_due_applied();", ""),
+    # A local refusal would become a verdict on the block.
+    ("let local = error.is_local()", "let local = false && error.is_local()"),
+    ("AnonymousPassWorldErrorV1::Storage(error) if local => StateBlockStartError::Storage(error),",
+     "AnonymousPassWorldErrorV1::Storage(error) if local => StateBlockStartError::Policy(String::new()),"),
+))
+def test_governance_start_dispatch_refuses_a_changed_gate(original: str, replacement: str) -> None:
+    source = guard.read(GOVERNANCE_START_PATH)
+    assert source.count(original) == 1, original
+    with pytest.raises(RuntimeError, match="governance_start.rs"):
+        guard.require_governance_start_dispatch(source.replace(original, replacement, 1))
+
+
 def test_block_start_phase_call_order_allows_code_comments_and_spacing() -> None:
     source = guard.read(STATE_PATH)
-    source = source.replace(SCCP_ENACT_CALL, "sccp_pauses /* same batch */ . enact( &mut sb ) ? ;", 1)
+    source = source.replace(
+        "governance_start::run(&mut sb, |sb| {",
+        "governance_start :: run( &mut sb , /* one pass */ |sb| {", 1)
     source = source.replace("let now_h = sb._curr_block.height().get();", "let now_h = /* same height */ sb._curr_block.height().get();", 1)
     guard.require_block_start_phase_call_order(source)
 
@@ -3012,6 +3048,22 @@ def test_replay_dispatch_preserves_typed_admission_and_channel_refusal(
      "            return Err(TransactionsBlockError::SnapshotObservationChanged);",
      "if musubi_group_read.as_ref().is_none_or(|plan| !plan.retired) {\n"
      "            return Ok(());"),
+    ("state_ref.runtime_checkpoint_capture.prepare(this)?",
+     "state_ref.runtime_checkpoint_capture.prepare(foreign)?"),
+    ("state_ref.runtime_checkpoint_capture.prepare(this)?",
+     "state_ref.runtime_checkpoint_capture.prepare(this).ok()"),
+    ("if !*runtime_checkpoint_prepared {", "if false {"),
+    ("        if keyed_cut.is_none()\n            && let Some(execution) = &this.keyed_execution\n        {",
+     "        if keyed_cut.is_none()\n            && let Some(execution) = &foreign.keyed_execution\n        {"),
+    ("*runtime_checkpoint_prepared = true;", "*runtime_checkpoint_prepared = false;"),
+    ("if let Some(checkpoint) = runtime_checkpoint.take() {",
+     "if let Some(checkpoint) = foreign_checkpoint.take() {"),
+    ("            checkpoint.publish()?;", "            drop(checkpoint);"),
+    ("            checkpoint.publish()?;", "            let _ = checkpoint.publish();"),
+    ("boundary.persist(&state_ref.kura).map_err(|error| {",
+     "boundary.persist(&foreign.kura).map_err(|error| {"),
+    ("tip.height() == block_height && tip.iroha_hash() == block_header_hash",
+     "tip.height() == block_height"),
 ))
 def test_publication_retains_original_block_capture_policy(
     original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
@@ -4946,7 +4998,7 @@ FRESH_SLOT = "    /\\ sortitionPulseHeight' = FreshSortitionPulseSlot\n"
      "    is_closed: impl Fn(ProposalContentId) -> bool,\n"
      "    finalized_beacon_pulse_slots: &BTreeSet<(BeaconSessionId, u64)>,\n"
      ") -> Result<ParliamentDerivedReadIndexesV1, String> {",
-     "must be rebuilt from attempts alone"),
+     "must be rebuilt from attempts and closure receipts alone"),
     # Pulse demand is every open attempt's frozen slots, never filtered by a stored pulse.
     (STATE_PATH,
      "            .into_iter()\n            .filter(|_| !is_closed(attempt.proposal_content_id()))\n",

@@ -38,8 +38,8 @@ fn every_fixed_register_path_matches_canonical_tree_and_authenticates_its_origin
 #[test]
 fn fixed_register_paths_reject_outside_indices_without_changing_original_state() {
     let mut registers = Registers::new();
-    registers.set(255, 17);
-    registers.set_tag(255, true);
+    registers.set(REGISTER_COUNT - 1, 17);
+    registers.set_tag(REGISTER_COUNT - 1, true);
     let values = registers.snapshot();
     let tags = registers.snapshot_tags();
     let root = registers.merkle_root();

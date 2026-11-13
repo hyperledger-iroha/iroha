@@ -1002,7 +1002,7 @@ export function blake2b256(
   },
 ): Uint8Array;
 
-export const IVM_PROGRAM_HEADER_LENGTH: 49;
+export const IVM_PROGRAM_HEADER_LENGTH: 48;
 export const IVM_ARTIFACT_MAX_BYTES: 4194304;
 
 /** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
@@ -7473,7 +7473,7 @@ export interface ContractCallSimulateRequest {
 
 /** Deterministic execution fault bound to its originating artifact and invocation. */
 export interface IvmFaultV1 {
-  kind: {kind: "OutOfGas" | "MemoryLimitExceeded" | "MemoryAccessViolation" | "MisalignedAccess" | "MemoryOutOfBounds" | "DecodeError" | "InvalidOpcode" | "UnknownSyscall" | "UnsupportedSyscall" | "GasCostOverflow" | "AssertionFailed" | "ExceededMaxCycles" | "InvalidMetadata" | "InvalidVectorLength" | "MissingHalt" | "VectorExtensionDisabled" | "ZkExtensionDisabled" | "NullifierAlreadyUsed" | "PermissionDenied" | "PrivacyViolation" | "RegisterOutOfBounds" | "NoritoInvalid" | "AbiTypeNotAllowed" | "HostOutputItemsExceeded" | "HostOutputBytesExceeded" | "AmxBudgetExceeded" | "ReentrantCall" | "CallDepthExceeded"; value: null} | {kind: "Numeric"; value: {kind: "MantissaOverflow" | "ScaleOverflow" | "DivisionByZero" | "RepeatingDecimal" | "ExactDivisionScaleOverflow" | "InvalidScale" | "InexactConversion" | "NegativeQuantity" | "QuantityUnderflow" | "InvalidRoundingMode" | "InvalidFailureMode" | "ReservedRegisterNonZero" | "NegativeSquareRoot"; value: null}} | {kind: "PointerAbi"; value: {kind: "InvalidAddress" | "UnknownType" | "TypeNotAllowed" | "WrongType" | "InvalidEnvelopeVersion" | "OversizedLength" | "TruncatedEnvelope" | "PayloadHashMismatch" | "MalformedFrame" | "SchemaMismatch" | "NonCanonical"; value: null}};
+  kind: {kind: "OutOfGas" | "MemoryLimitExceeded" | "MemoryAccessViolation" | "MisalignedAccess" | "MemoryOutOfBounds" | "DecodeError" | "InvalidOpcode" | "UnknownSyscall" | "UnsupportedSyscall" | "GasCostOverflow" | "AssertionFailed" | "ExceededMaxCycles" | "InvalidMetadata" | "MissingHalt" | "NullifierAlreadyUsed" | "PermissionDenied" | "PrivacyViolation" | "RegisterOutOfBounds" | "NoritoInvalid" | "AbiTypeNotAllowed" | "HostOutputItemsExceeded" | "HostOutputBytesExceeded" | "AmxBudgetExceeded" | "ReentrantCall" | "CallDepthExceeded" | "ControlFlowViolation"; value: null} | {kind: "Numeric"; value: {kind: "MantissaOverflow" | "ScaleOverflow" | "DivisionByZero" | "RepeatingDecimal" | "ExactDivisionScaleOverflow" | "InvalidScale" | "InexactConversion" | "NegativeQuantity" | "QuantityUnderflow" | "InvalidRoundingMode" | "InvalidFailureMode" | "ReservedRegisterNonZero" | "NegativeSquareRoot" | "RegisterIntegerOverflow"; value: null}} | {kind: "PointerAbi"; value: {kind: "InvalidAddress" | "UnknownType" | "TypeNotAllowed" | "WrongType" | "InvalidEnvelopeVersion" | "OversizedLength" | "TruncatedEnvelope" | "PayloadHashMismatch" | "MalformedFrame" | "SchemaMismatch" | "NonCanonical"; value: null}};
   site: {
     code_hash: string;
     selector: {kind: "Generic"; value: null} | {kind: "Entrypoint"; value: number};

@@ -404,6 +404,7 @@ genesis-signed execution policy and the governance authority.
 | Completion-only from `H` | Implementations | Only narrowly scoped completion capabilities for live obligations run |
 | Disabled from `H` | Interfaces, implementations | No execution from `H`; allowed only once no live obligation needs it |
 | Disabled from `H` | Parameters | The root stops recognizing the parameter from `H`; the change set lapses unless the committed value equals the definition's initial value (`genesis_bound_node_configuration.md`, "Frozen-baseline constraint on G2") |
+| Any restriction from `H` | Permissions | The root stops honouring the permission from `H`: nothing new is granted or authorized under it; revocation and the terminal paths of work done under it continue (`CanReadStateRow`, `runtime::state_row_permission`; `CanPublishContentBundle`, `content_hosting.md`, "Publishers") |
 | Re-enabled from `J` | Interfaces, implementations | A new committed authorization interval; earlier restrictions remain historical facts |
 | Installed, retired | Storage | Installed storage stays committed and readable; a migration retires it |
 
@@ -767,23 +768,39 @@ not a date: it happens once everything its first selection needs is implemented 
    block start, the unsupported-node stop with a reason naming the selection, stable rejection
    codes and lifecycle events, handshake host profiles, and native escrow obligations, whose
    continuations and completions run through admission closure and completion-only and which no
-   activation strands. Deferred consent (8.2) is not built: capturing the resolved closure of
-   multisig occurrences and trigger incarnations changes what the baseline's registration,
-   proposal, approval and trigger execution write and decide, so it ships as a release addition
-   rebinding those interfaces, never inside the baseline. Native escrow activation also preserves its original completion closure instead of
+  activation strands. Deferred consent (8.2) is selected through the independent
+  `iroha.runtime.deferred_consent.v1` addition: new native implementations and services capture
+  multisig occurrences and trigger incarnations, check approval and execution, suspend restricted
+  triggers, and support explicit current-binding consent at registration. Activation drains earlier
+  deferred work; the frozen baseline remains unchanged. Native escrow activation also preserves its original completion closure instead of
    treating any active replacement as settlement authority. AMX participations are obligations
    too: an undecided global transaction and an unsettled participant escrow keep completing
    through admission closure and completion-only, and no activation strands them. The kernel
    registers obligations: an account, or the account that controls a contract's lifecycle,
    commits the exact instructions that complete an obligation with their captured closure;
-   restrictions short of disabling do not stop those instructions, and no change set alters the
-   closure while the obligation is live. A migration's cursor is the kernel's own obligation,
+   restrictions short of disabling do not stop those instructions. Registered completions execute
+   their captured bindings beside replacements through a scoped context, while the committed
+   selection and undo remain intact. Required definitions and storage remain retained; changing
+   root-wide kernel, commitment or services profiles still requires draining. A migration's cursor is the kernel's own obligation,
    and the emergency panel suspends a running migration by closing its admission. The lifecycle
    State is compiled over the baseline, Time, Ironwood and Ironwood-with-Time families, so a
    root activates it from the selection it executes.
-   Still open: the deferred-consent addition, running a captured implementation beside its
-   replacement (so a change set may rebind what a live obligation reaches), a kernel call for
-   contracts, which needs a new host profile, and narrower authenticated dynamic-call manifests.
+   The independent native escrow capture service now prepares a custody-bound original closure
+   before funding, retains it beside the frozen escrow row, and runs direct continuations and
+   completions under that context with their original step. Its activation drains earlier custody;
+   internal orderbook batches still pin their predecessor graph. The current candidate must qualify
+   the funded, nested-authority and transition regressions. The independent native AMX capture
+   service binds undecided global transactions and verified participant Yes custody to their
+   immutable openings and original completion graphs. Shared tracker operations require cohort
+   agreement; automatic expiry checks every due capture before writing witnesses. Activation
+   drains earlier AMX work, and restore refuses missing or substituted custody. Native AMX invokes
+   no IVM code and retains no unrelated host profile. Its signed-root, resource-refusal and
+   transition regressions still require current-candidate qualification. The separately selected
+   `iroha.runtime.contract_lifecycle.v1` addition provides authenticated contract registration and
+   completion under the named ABI V1 profile `iroha.ivm.runtime_lifecycle.v1`; it requires the
+   lifecycle registry and retains ordinary admission for new captures. Its integrated execution,
+   cache, compiler and deployment tests still need current-candidate qualification. Still open: registering
+   game-unit exports with captured closures and narrower authenticated dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
@@ -805,9 +822,22 @@ not a date: it happens once everything its first selection needs is implemented 
    the boundary they set; checkpoint production at the heights the committed policy names and
    retention of what it keeps, in a checkpoint store beside the rolling snapshots; and the
    operator routes and CLI that have a node sign its statement of the anchor or a floor and
-   relay every validator's statements. Still open: capturing every checkpoint height on a chain
-   whose blocks commit faster than a capture, bootstrap from a transferred checkpoint without the
-   block bodies below it, the deletion guard, and the rehearsal.
+   relay every validator's statements. Exact finalized-overlay capture now retains the original
+   publication through a bounded nonblocking durability request. Signed private pending artifacts
+   must be synced before State visibility; only original visibility or strict post-recovery
+   complete-State authentication permits atomic promotion and committed retention. Pending quota is
+   two identities, and missing actual H+1 leaves a verified image pending. Kura durably remembers
+   the highest authenticated boundary before selecting a restore candidate, independent of adoption
+   configuration. Retained checkpoints preserve single-link custody; strict startup discovers
+   retained and pending candidates after rolling GC, and signed immutable generations before a
+   first rolling pointer exists, under the same floor and complete-State authentication. Synchronous
+   certified replay now persists each original cadence overlay before visibility and promotes it
+   without retention; repeated startup verifies the same retained original and rebuilds only its
+   interrupted staging identity. Rolling writes, orphan reconciliation and retention wait for
+   successful startup. Writer resource failures move once with their actual cause and original
+   release source. Still open: current-candidate replay, staging and pending-spool crash qualification,
+   bootstrap from a transferred checkpoint without the block bodies below it, the deletion guard,
+   and the rehearsal.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the

@@ -1548,7 +1548,7 @@ pub mod manifest {
         pub compiler_fingerprint: Option<String>,
         /// Compiler-derived, hash-covered execution capability bitmap.
         ///
-        /// V1 mirrors the artifact's ZK and VECTOR execution-mode bits. This is not
+        /// V1 mirrors the artifact's ZK execution-mode bit, its only capability bit. This is not
         /// source-selectable metadata and never describes host SIMD, Metal, or CUDA availability.
         pub features_bitmap: Option<u64>,
         /// Optional advisory access-set hints for scheduler.
@@ -2353,7 +2353,7 @@ pub mod manifest {
         pub abi_hash: Option<Hash>,
         /// Optional compiler fingerprint (e.g., rustc/LLVM versions).
         pub compiler_fingerprint: Option<String>,
-        /// Compiler-derived, hash-covered ZK/VECTOR execution capability bitmap.
+        /// Compiler-derived, hash-covered ZK execution capability bitmap.
         ///
         /// This mirrors the signed manifest field and is unrelated to host
         /// hardware acceleration availability.

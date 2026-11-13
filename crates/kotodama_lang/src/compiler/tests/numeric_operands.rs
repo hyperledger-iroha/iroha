@@ -45,10 +45,7 @@ fn publication_words(output: &CompileOutput) -> usize {
     let start = ProgramMetadata::parse(&output.artifact)
         .unwrap()
         .code_offset;
-    let publication = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-    );
+    let publication = encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV);
     output.artifact[start..]
         .as_chunks::<4>()
         .0
