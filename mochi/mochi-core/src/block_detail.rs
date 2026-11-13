@@ -300,7 +300,10 @@ impl BlockDetail {
             .iter()
             .enumerate()
             .filter_map(|(output_index, output)| match output {
-                ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => None,
+                // Network rows and governance block-start rows are not trigger invocations.
+                ExecutionOutputV1::Network(_)
+                | ExecutionOutputV1::NetworkWithLifecycle(_)
+                | ExecutionOutputV1::GovernanceBlockStart(_) => None,
                 ExecutionOutputV1::Pipeline(row)
                 | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
                     execution: row,

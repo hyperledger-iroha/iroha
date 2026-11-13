@@ -429,7 +429,7 @@ impl Core {
                         });
                         #[cfg(sumeragi_mutation = "MS54")]
                         {
-                            Signature([0; crate::types::SIGNATURE_LEN])
+                            crate::types::Signature([0; crate::types::SIGNATURE_LEN])
                         }
                         #[cfg(not(sumeragi_mutation = "MS54"))]
                         return None;

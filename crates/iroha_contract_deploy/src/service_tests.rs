@@ -1334,7 +1334,7 @@ fn named_profile_artifact_verification_and_lifecycle_guidance_preserve_exact_ide
     let hook = lifecycle::LifecycleHook::from_artifact(&request.artifact)
         .expect("named lifecycle guidance");
     assert_eq!(hook.params[0].name, "initial");
-    call::check_contract_arguments(&request.artifact, "read", &norito::json::json!({}), true)?;
+    call::check_contract_arguments(&request.artifact, "read", &norito::json!({}), true)?;
     request.artifact[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET] ^= 1;
     assert!(verify_request(&request).is_err());
     assert!(lifecycle::LifecycleHook::from_artifact(&request.artifact).is_none());
