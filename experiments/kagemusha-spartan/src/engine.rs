@@ -712,9 +712,11 @@ impl NativeEngine {
         {
             return Err(Error::AuthorityMismatch("committed protected time anchor"));
         }
-        let interval = anchor
+        let mut interval = anchor
             .interval_at(&now, uint(step.before_core[25])?)
             .map_err(|e| Error::Rejected(e.to_string()))?;
+        interval.lower_ms = interval.lower_ms.max(floor).max(accepted);
+        interval.upper_ms = interval.upper_ms.max(interval.lower_ms);
         if !fresh {
             if step.lower != interval.lower_ms || step.upper != interval.upper_ms {
                 return Err(Error::AuthorityMismatch("observed Send time interval"));

@@ -35,8 +35,15 @@ pub(crate) fn enabled(selection: &RootSelectionV1) -> Result<bool, String> {
 
 fn wires(role: Role) -> Vec<String> {
     match role {
-        Role::Destination => vec![ImportReservedGameUnitV1::WIRE_ID.into(), CancelReservedGameUnitImportV1::WIRE_ID.into()],
-        Role::Source => vec![ExportReservedGameUnitV1::WIRE_ID.into(), CancelGameUnitExportRequestV1::WIRE_ID.into(), AcknowledgeGameUnitImportV1::WIRE_ID.into()],
+        Role::Destination => vec![
+            ImportReservedGameUnitV1::WIRE_ID.into(),
+            CancelReservedGameUnitImportV1::WIRE_ID.into(),
+        ],
+        Role::Source => vec![
+            ExportReservedGameUnitV1::WIRE_ID.into(),
+            CancelGameUnitExportRequestV1::WIRE_ID.into(),
+            AcknowledgeGameUnitImportV1::WIRE_ID.into(),
+        ],
     }
 }
 
@@ -112,6 +119,21 @@ pub(crate) fn prepare_execution(
         .downcast_ref::<AcknowledgeGameUnitImportV1>()
     {
         (ack.proof.record.transfer_id, Role::Source)
+    } else if let Some(export) = instruction
+        .as_any()
+        .downcast_ref::<ExportReservedGameUnitV1>()
+    {
+        (export.proof.record.transfer_id(), Role::Source)
+    } else if let Some(cancel) = instruction
+        .as_any()
+        .downcast_ref::<CancelGameUnitExportRequestV1>()
+    {
+        (cancel.transfer_id, Role::Source)
+    } else if let Some(cancel) = instruction
+        .as_any()
+        .downcast_ref::<CancelReservedGameUnitImportV1>()
+    {
+        (cancel.proof.record.intent.transfer_id(), Role::Destination)
     } else {
         return Ok(None);
     };
@@ -134,16 +156,26 @@ pub(crate) fn check_partition_capacity(
     world: &impl WorldReadOnly,
     candidate: &GamePartitionStateV1,
 ) -> Result<(), Error> {
+    check_capacity_after(world, candidate, None)
+}
+
+/// Check a prepared partition after the exact original row completes its reserved step.
+pub(crate) fn check_capacity_after(
+    world: &impl WorldReadOnly,
+    candidate: &GamePartitionStateV1,
+    completing: Option<Hash>,
+) -> Result<(), Error> {
     if !enabled(world.runtime_selection()).map_err(refused)? {
         return Ok(());
     }
     let reservations: Vec<_> = world
         .runtime_game_transfers()
         .iter()
-        .filter(|(_, row)| {
+        .filter(|(id, row)| {
             row.role == Role::Destination
                 && row.capture.is_some()
                 && row.intent.world_id == candidate.world_id
+                && completing != Some(**id)
         })
         .map(|(_, row)| &row.intent.unit)
         .collect();
@@ -166,6 +198,42 @@ pub(crate) fn check_partition_capacity(
             "identity capacity is held by original import reservations",
         ));
     }
+    let source_requests = world
+        .runtime_game_transfers()
+        .iter()
+        .filter(|(id, row)| {
+            row.role == Role::Source
+                && row.capture.is_some()
+                && row.export.is_none()
+                && row.intent.world_id == candidate.world_id
+                && completing != Some(**id)
+        })
+        .count();
+    if candidate.exports.len() + source_requests > GAME_PARTITION_MAX_RECEIPTS {
+        return Err(refused(
+            "source receipt capacity is held by original export requests",
+        ));
+    }
+    Ok(())
+}
+
+/// An admitted source request locks only its original unexported unit, never a later return.
+pub(crate) fn ensure_unlocked(
+    world: &impl WorldReadOnly,
+    world_id: Hash,
+    unit_id: Hash,
+) -> Result<(), Error> {
+    if world.runtime_game_transfers().iter().any(|(_, row)| {
+        row.role == Role::Source
+            && row.capture.is_some()
+            && row.export.is_none()
+            && row.intent.world_id == world_id
+            && row.intent.unit.unit_id == unit_id
+    }) {
+        return Err(refused(
+            "original unit is locked by an admitted export request",
+        ));
+    }
     Ok(())
 }
 
@@ -174,6 +242,7 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
     let selected = enabled(world.runtime_selection()).map_err(refused)?;
     let mut counts = std::collections::BTreeMap::<Hash, usize>::new();
     let mut reservations = std::collections::BTreeSet::new();
+    let mut source_locks = std::collections::BTreeSet::new();
     for (id, row) in world.runtime_game_transfers().iter() {
         if !selected {
             return Err(refused(
@@ -210,12 +279,24 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
             return Err(refused("transfer proof retention bound"));
         }
         match row.role {
-            Role::Source => {
+            Role::Source if row.export.is_some() => {
                 let export = &row.export.as_ref().expect("validated source shape").export;
                 if !partition.exports.contains(export) {
                     return Err(refused("source transfer lost its permanent tombstone"));
                 }
             }
+            Role::Source if row.capture.is_some() => {
+                let mut prior = r.unit.clone();
+                prior.sequence -= 1; // Intrinsic validation required a positive export sequence.
+                if !source_locks.insert((r.world_id, r.unit.unit_id))
+                    || !partition.units.contains(&prior)
+                {
+                    return Err(refused(
+                        "admitted source request lost its exact original unit lock",
+                    ));
+                }
+            }
+            Role::Source => {} // Authenticated pre-export cancellation leaves a permanent identity.
             Role::Destination if row.capture.is_some() => {
                 if !reservations.insert((r.world_id, r.unit.unit_id))
                     || partition
@@ -231,7 +312,7 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
                     ));
                 }
             }
-            Role::Destination => {
+            Role::Destination if row.acknowledgement.is_some() => {
                 if !partition.imported.contains(
                     &row.export
                         .as_ref()
@@ -244,6 +325,7 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
                     ));
                 }
             }
+            Role::Destination => {} // Exact certified source cancellation released the reservation.
         }
         if let Some(capture) = &row.capture {
             if !capture.host_profiles.is_empty() {

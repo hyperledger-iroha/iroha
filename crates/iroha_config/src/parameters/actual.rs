@@ -4178,8 +4178,8 @@ pub fn execution_policy_digest_v1(
         &execution_policy_usize(pipeline.quarantine_max_txs_per_block),
     );
     policy.push(
-        "pipeline.quarantine_tx_max_cycles",
-        &pipeline.quarantine_tx_max_cycles,
+        "pipeline.quarantine_tx_max_gas",
+        &pipeline.quarantine_tx_max_gas,
     );
     policy.push(
         "pipeline.query_max_fetch_size",
@@ -5448,7 +5448,7 @@ pub struct Pipeline {
     pub overlay_chunk_instructions: usize,
     /// Committed pipeline fee projection; node configuration cannot set it.
     pub gas: Gas,
-    /// Mandatory admission-time ceiling for `ProgramMetadata.max_cycles`.
+    /// Mandatory admission-time ceiling for the ZK trace bound `ProgramMetadata.max_cycles`.
     pub ivm_max_cycles_upper_bound: NonZeroU64,
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
     pub ivm_max_decoded_instructions: u64,
@@ -5456,8 +5456,8 @@ pub struct Pipeline {
     pub ivm_max_decoded_bytes: u64,
     /// Maximum transactions processed by the quarantine lane per block (0 = disabled).
     pub quarantine_max_txs_per_block: usize,
-    /// Per-transaction cycle cap for quarantine lane (0 = unlimited).
-    pub quarantine_tx_max_cycles: u64,
+    /// Per-transaction gas cap for the quarantine lane (0 = no cap).
+    pub quarantine_tx_max_gas: u64,
     /// Default cursor mode for server-facing query endpoints.
     pub query_default_cursor_mode: QueryCursorMode,
     /// Maximum fetch size for iterable queries executed inside the IVM.
@@ -5505,7 +5505,7 @@ impl_default!(Pipeline => {
             ivm_max_decoded_instructions: defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
             ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-            quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_gas: defaults::pipeline::QUARANTINE_TX_MAX_GAS,
             query_default_cursor_mode: QueryCursorMode::Ephemeral,
             query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,

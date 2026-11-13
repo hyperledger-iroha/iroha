@@ -4349,10 +4349,8 @@ pub struct WorldData {
         iroha_data_model::runtime::native_amx::NativeAmxCaptureV1,
     >,
     /// Native game transfers and their original completion captures, installed by its service.
-    pub(crate) runtime_game_transfers: Storage<
-        iroha_crypto::Hash,
-        iroha_data_model::runtime::native_game::NativeGameTransferV1,
-    >,
+    pub(crate) runtime_game_transfers:
+        Storage<iroha_crypto::Hash, iroha_data_model::runtime::native_game::NativeGameTransferV1>,
     /// Original native escrow execution retained until terminal custody, installed only by its selected service.
     pub(crate) runtime_escrow_captures:
         Storage<EscrowId, iroha_data_model::runtime::native_escrow::NativeEscrowCaptureV1>,

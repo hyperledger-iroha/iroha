@@ -103,7 +103,8 @@ fn contract_lifecycle_activates_exact_profile_after_kernel_storage_on_every_comp
     let mut families = vec![catalog.baseline.clone(), catalog.lifecycle.clone()];
     if let Some(ironwood) = &catalog.ironwood {
         families.push(ironwood.selection.clone());
-        families.push(catalog.lifecycle_successor(&ironwood.selection).unwrap());
+        let mut draft = catalog.clone();
+        families.push(draft.lifecycle_successor(&ironwood.selection).unwrap());
     }
     let original_families = families.clone();
     for family in original_families {

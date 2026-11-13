@@ -752,9 +752,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     }) => output.invocation.execution_call_hash(self.source.hash())?,
                     // The seal attaches the block-start rows; the producer owns none.
                     ExecutionOutputV1::GovernanceBlockStart(_) => {
-                        return Err(
-                            "a governance block-start row has no execution source".into()
-                        );
+                        return Err("a governance block-start row has no execution source".into());
                     }
                 };
                 if original.call() != call {

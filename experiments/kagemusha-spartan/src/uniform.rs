@@ -3135,7 +3135,7 @@ impl<F: Scalar> UniformCircuit<F> {
         h.update(b"kagemusha-spartan/program/v1\0");
         let word=|h:&mut blake3::Hasher,v:usize|{h.update(&(v as u64).to_le_bytes());};
         word(&mut h,self.shape.label.len());h.update(self.shape.label.as_bytes());
-        for v in [self.shape.sx,self.shape.row_bits,self.shape.col_bits,self.shape.k,self.io_len,
+        for v in [self.shape.sx,self.shape.row_bits,self.shape.col_bits,self.shape.k,self.io_len,self.constraints,
             self.p1_rows,self.pl_rows,self.p2_rows,self.fixed_rows,self.wallet_rows,
             self.wallet_io.unwrap_or(usize::MAX)] {word(&mut h,v);}
         let degree=self.challenge_degrees();

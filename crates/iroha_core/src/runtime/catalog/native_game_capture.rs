@@ -456,3 +456,157 @@ impl ReleaseCatalog {
         Ok(())
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn network() -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([72; 32]),
+        ))
+    }
+
+    fn select(catalog: &ReleaseCatalog, before: &RootSelectionV1, module: &str) -> RootSelectionV1 {
+        catalog
+            .activation(module, before, &catalog.definitions, network(), 50, [2; 32])
+            .unwrap_or_else(|error| panic!("{module}: {error}"))
+            .apply(before, &catalog.definitions)
+            .unwrap()
+            .selection
+    }
+
+    #[test]
+    fn game_capture_installs_both_tables_atomically_without_changing_baseline() {
+        let catalog = release_catalog().unwrap();
+        let baseline = catalog.baseline.clone();
+        for wire in additions::NATIVE_GAME_CAPTURE.instructions {
+            assert!(
+                !baseline
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.wire_id == *wire)
+            );
+        }
+        assert!(!selected_capture(&baseline, &catalog.definitions));
+        let selected = select(catalog, &baseline, additions::NATIVE_GAME_CAPTURE.module);
+        assert_eq!(catalog.baseline, baseline);
+        assert_eq!(catalog.unsupported(&selected), None);
+        assert!(selected_capture(&selected, &catalog.definitions));
+        assert_eq!(
+            unqualified_native_activation(&baseline, &selected, &catalog.definitions),
+            None
+        );
+        let game = catalog
+            .additions
+            .iter()
+            .find(|addition| addition.module == additions::GAME_PARTITIONS.module)
+            .unwrap();
+        let captures = catalog
+            .additions
+            .iter()
+            .find(|addition| addition.module == additions::NATIVE_GAME_CAPTURE.module)
+            .unwrap();
+        for id in game.storage.values().chain(captures.storage.values()) {
+            assert!(baseline.installed_storage.binary_search(id).is_err());
+            assert!(selected.installed_storage.binary_search(id).is_ok());
+        }
+        assert!(
+            catalog
+                .activation(
+                    additions::NATIVE_GAME_CAPTURE.module,
+                    &selected,
+                    &catalog.definitions,
+                    network(),
+                    51,
+                    [2; 32]
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn game_capture_qualification_requires_every_exact_binding_and_service() {
+        let catalog = release_catalog().unwrap();
+        let endorsed = select(
+            catalog,
+            &catalog.baseline,
+            additions::ENDORSED_RUNTIME_UPGRADE_PROPOSAL.module,
+        );
+        let legacy = select(catalog, &endorsed, additions::GAME_PARTITIONS.module);
+        assert!(unqualified_native_activation(&endorsed, &legacy, &catalog.definitions).is_some());
+        let selected = select(
+            catalog,
+            &catalog.baseline,
+            additions::NATIVE_GAME_CAPTURE.module,
+        );
+        for wire in additions::NATIVE_GAME_CAPTURE
+            .instructions
+            .iter()
+            .chain(additions::NATIVE_GAME_CAPTURE.rebinds)
+        {
+            let mut incomplete = selected.clone();
+            incomplete
+                .bindings
+                .retain(|binding| binding.wire_id != *wire);
+            assert!(
+                !selected_capture(&incomplete, &catalog.definitions),
+                "missing {wire}"
+            );
+            assert!(
+                unqualified_native_activation(&catalog.baseline, &incomplete, &catalog.definitions)
+                    .is_some()
+            );
+        }
+        let mut wrong = selected.clone();
+        wrong.services_profile = catalog.baseline.services_profile;
+        assert!(!selected_capture(&wrong, &catalog.definitions));
+        let mut changed = catalog.definitions.clone();
+        let Some(DefinitionDescriptorV1::ServicesProfile(profile)) =
+            changed.get_mut(&selected.services_profile)
+        else {
+            panic!("services");
+        };
+        profile
+            .services
+            .iter_mut()
+            .find(|entry| entry.name == SERVICE)
+            .unwrap()
+            .reference_closure = [91; 32];
+        assert!(!selected_capture(&selected, &changed));
+    }
+
+    #[test]
+    fn game_capture_composes_with_existing_services_kernel_lifecycle_and_contract_profile() {
+        let catalog = release_catalog().unwrap();
+        let mut families = vec![catalog.baseline.clone(), catalog.lifecycle.clone()];
+        if let Some(ironwood) = &catalog.ironwood {
+            families.push(ironwood.selection.clone());
+            let mut draft = catalog.clone();
+            families.push(draft.lifecycle_successor(&ironwood.selection).unwrap());
+        }
+        for original in families.clone() {
+            let escrow = select(catalog, &original, additions::NATIVE_ESCROW_CAPTURE.module);
+            let consent = select(catalog, &escrow, additions::DEFERRED_CONSENT.module);
+            families.push(escrow);
+            families.push(consent.clone());
+            families.push(select(
+                catalog,
+                &consent,
+                additions::NATIVE_AMX_CAPTURE.module,
+            ));
+        }
+        for family in families {
+            let captured = select(catalog, &family, additions::NATIVE_GAME_CAPTURE.module);
+            assert!(selected_capture(&captured, &catalog.definitions));
+            assert_eq!(catalog.unsupported(&captured), None);
+            let after = select(catalog, &captured, additions::RUNTIME_LIFECYCLE.module);
+            let lifecycle = select(catalog, &family, additions::RUNTIME_LIFECYCLE.module);
+            let before = select(catalog, &lifecycle, additions::NATIVE_GAME_CAPTURE.module);
+            assert_eq!(after, before);
+            let contract = select(catalog, &after, additions::CONTRACT_LIFECYCLE.module);
+            assert_eq!(contract.services_profile, after.services_profile);
+            assert!(selected_capture(&contract, &catalog.definitions));
+            assert_eq!(catalog.unsupported(&contract), None);
+        }
+    }
+}

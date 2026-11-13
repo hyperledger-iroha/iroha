@@ -72,6 +72,9 @@ fn native_controls_off_needs_no_clock_but_cannot_choose_time() {
     let chain = fixture();
     let engine = NativeEngine::default();
     let mut send = chain.send;
+    // The arithmetic fixture permits an arbitrary conservative upper bound;
+    // Native's controls-off path derives the exact floor-only interval.
+    send.upper = send.lower;
     assert!(
         engine
             .check_send_time(&ExactOperationWitness::Send(Box::new(send.clone())), false)

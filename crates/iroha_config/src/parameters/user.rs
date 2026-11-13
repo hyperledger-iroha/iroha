@@ -4431,7 +4431,7 @@ impl Pipeline {
             ivm_max_decoded_instructions: defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
             ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
             quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-            quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_gas: defaults::pipeline::QUARANTINE_TX_MAX_GAS,
             query_default_cursor_mode: self.query_default_cursor_mode.into_actual(),
             query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,

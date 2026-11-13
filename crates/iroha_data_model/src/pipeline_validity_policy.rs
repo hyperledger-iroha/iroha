@@ -3,8 +3,8 @@
 //! [`PipelineValidityPolicyV1`] is the typed payload of the custom parameter
 //! [`PipelineValidityPolicyV1::PARAMETER_ID_STR`]. It carries the limits of
 //! the transaction pipeline that decide whether a transaction, a contract
-//! program or a query is accepted: overlay size, IVM cycle and decoded-program
-//! bounds, the quarantine lane, stored-query limits and the AMX budget model,
+//! program or a query is accepted: overlay size, the IVM ZK trace bound and
+//! decoded-program bounds, the quarantine lane, stored-query limits and the AMX budget model,
 //! and the access-set derivation mode. A chain installs it with an ordinary
 //! authorized `SetParameter`, in genesis or later; a change takes effect from
 //! the block after the one that commits it. A chain that never installs the
@@ -148,7 +148,8 @@ pipeline_policy! {
     overlay_max_bytes: u64,
     /// Instructions applied per overlay chunk; at least 1.
     overlay_chunk_instructions: u64,
-    /// Largest cycle budget a contract program may declare; non-zero.
+    /// Largest ZK trace bound (`max_cycles`) a ZK-mode program may declare;
+    /// non-zero. Gas, not this bound, budgets every execution.
     ivm_max_cycles_upper_bound: u64,
     /// Decoded instructions accepted for one program (0 = unlimited).
     ivm_max_decoded_instructions: u64,
@@ -156,8 +157,9 @@ pipeline_policy! {
     ivm_max_decoded_bytes: u64,
     /// Transactions the quarantine lane admits per block (0 = lane disabled).
     quarantine_max_txs_per_block: u64,
-    /// Cycle cap of one quarantine-lane transaction (0 = unlimited).
-    quarantine_tx_max_cycles: u64,
+    /// Gas cap of one quarantine-lane transaction, applied as
+    /// `min(transaction gas limit, cap)` (0 = no cap).
+    quarantine_tx_max_gas: u64,
     /// Largest fetch size of one query inside the IVM (0 is read as 1).
     query_max_fetch_size: u64,
     /// Gas units required before a stored cursor may be used (0 = none).
@@ -217,7 +219,7 @@ impl PipelineValidityPolicyV1 {
             ivm_max_decoded_instructions: 1_048_576,
             ivm_max_decoded_bytes: 4 * 1024 * 1024,
             quarantine_max_txs_per_block: 0,
-            quarantine_tx_max_cycles: 0,
+            quarantine_tx_max_gas: 0,
             query_max_fetch_size: 500,
             query_stored_min_gas_units: 0,
             amx_per_dataspace_budget_ms: 30,

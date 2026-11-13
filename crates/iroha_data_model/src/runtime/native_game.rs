@@ -104,6 +104,7 @@ record! {
 }
 record! {
     /// Destination's immutable assertion that the exact source export was imported once.
+    #[derive(Copy)]
     #[norito_schema(name = "iroha_data_model::runtime::native_game::GameUnitImportAckV1")]
     pub struct GameUnitImportAckV1 {
         /// Identity of the original reservation and transfer.

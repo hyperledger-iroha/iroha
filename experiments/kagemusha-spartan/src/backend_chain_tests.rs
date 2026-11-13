@@ -629,7 +629,7 @@ fn fixed_profile_candidate_selection_matches_both_circuit_halves() {
     };
     let p = Shape {
         label: "candidate parser P",
-        sx: 5,
+        sx: 10,
         row_bits: 2,
         col_bits: 8,
         k: 1,

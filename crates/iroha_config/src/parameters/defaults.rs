@@ -3938,7 +3938,7 @@ pub mod pipeline {
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
     /// Default gas-collection technical account identifier (encoded-only literal).
     pub const GAS_TECH_ACCOUNT_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-    /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
+    /// Admission-time upper bound for the ZK trace bound `max_cycles` of ZK-mode IVM headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: NonZeroU64 = nonzero!(1_000_000_u64);
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
     pub const IVM_MAX_DECODED_INSTRUCTIONS: u64 = 1_048_576;
@@ -3950,8 +3950,8 @@ pub mod pipeline {
     pub const QUERY_MAX_FETCH_SIZE: u64 = super::torii::APP_API_MAX_FETCH_SIZE as u64;
     /// Maximum number of transactions allowed in the quarantine lane per block (0 = disabled).
     pub const QUARANTINE_MAX_TXS_PER_BLOCK: usize = 0;
-    /// Per-transaction cycle cap enforced for the quarantine lane (0 = unlimited).
-    pub const QUARANTINE_TX_MAX_CYCLES: u64 = 0;
+    /// Per-transaction gas cap enforced for the quarantine lane (0 = no cap).
+    pub const QUARANTINE_TX_MAX_GAS: u64 = 0;
     /// Minimum gas units required before stored cursor mode can be used (0 = disabled).
     pub const QUERY_STORED_MIN_GAS_UNITS: u64 = 0;
     /// AMX per-dataspace execution budget in milliseconds.
