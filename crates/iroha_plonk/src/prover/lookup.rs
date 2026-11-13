@@ -34,10 +34,7 @@ use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
 use rand_core::Rng;
 use rayon::prelude::*;
 
-use super::{
-    ProverError, batch::invert_column_cancellable, quotient::CompiledExpressions, random_values,
-    write_point,
-};
+use super::{ProverError, quotient::CompiledExpressions, random_values, write_point};
 use crate::{
     keys::ProvingKey, pcs::ipa::PinnedParams, protocol::Shape, transcript::TranscriptWrite,
 };
@@ -105,7 +102,7 @@ impl<F: iroha_pasta::PastaField> Drop for Committed<F> {
 /// that the malicious-prover tests can substitute a forged permutation and
 /// drive a lookup violation through the verifier while every other prover
 /// step stays the real one.
-pub(super) trait LookupPermutation<F> {
+pub(super) trait LookupPermutation<F: PastaField> {
     /// Only the production membership-checking permutation opts into public
     /// fixed-table bounds. Malicious-prover strategies keep the original
     /// full-width commitment route so verifier-negative tests still form proofs.
@@ -125,7 +122,32 @@ pub(super) trait LookupPermutation<F> {
         lookup: usize,
         rng: &mut R,
     ) -> Result<(Vec<F>, Vec<F>), ProverError>;
+
+    /// The usable rows of every lookup's `(A', S')`, in lookup order and
+    /// without padding, for a strategy that arranges them without randomness,
+    /// working on at most `at_once` lookups at a time.
+    /// The caller then pads each pair in lookup order exactly as
+    /// [`Self::permute`] would, so the random stream and the proof bytes do
+    /// not change. `None`, the default, keeps one [`Self::permute`] call per
+    /// lookup.
+    ///
+    /// # Errors
+    ///
+    /// [`ProverError::LookupInputMissing`] when a lookup has no permutation.
+    fn arrange_all(
+        &mut self,
+        _compressed: &[(Vec<F>, Vec<F>)],
+        _usable_rows: usize,
+        _n: usize,
+        _at_once: usize,
+        _cancellation: Option<&CancellationToken>,
+    ) -> Option<Result<Vec<Arranged<F>>, ProverError>> {
+        None
+    }
 }
+
+/// One lookup's permuted usable rows `(A', S')`, each with room for `n` rows.
+pub(super) type Arranged<F> = (SecretPolynomial<F>, SecretPolynomial<F>);
 
 /// The vendored permutation ([`permute`]), the only production strategy.
 #[derive(Clone, Copy, Debug)]
@@ -145,6 +167,38 @@ impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
     ) -> Result<(Vec<F>, Vec<F>), ProverError> {
         permute(input, table, usable_rows, n, lookup, rng)
     }
+
+    /// Lookups do not depend on each other, and the sorts of one lookup
+    /// leave most workers idle (the phase that sorts and commits them kept
+    /// about three of a Pixel 6's eight workers busy): `at_once` of them are
+    /// sorted and paired on the pool together.
+    fn arrange_all(
+        &mut self,
+        compressed: &[(Vec<F>, Vec<F>)],
+        usable_rows: usize,
+        n: usize,
+        at_once: usize,
+        cancellation: Option<&CancellationToken>,
+    ) -> Option<Result<Vec<Arranged<F>>, ProverError>> {
+        let at_once = at_once.max(1);
+        let mut arranged = Vec::with_capacity(compressed.len());
+        for (group, lookups) in compressed.chunks(at_once).enumerate() {
+            let first = group * at_once;
+            let pairs: Result<Vec<_>, _> = lookups
+                .par_iter()
+                .enumerate()
+                .map(|(offset, (input, table))| {
+                    CancellationToken::checkpoint(cancellation)?;
+                    arrange(input, table, usable_rows, n, first + offset)
+                })
+                .collect();
+            match pairs {
+                Ok(pairs) => arranged.extend(pairs),
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        Some(Ok(arranged))
+    }
 }
 
 /// The vendored permutation of the usable rows of `input` and `table`
@@ -163,10 +217,44 @@ pub(super) fn permute<F: PastaField, R: Rng>(
     lookup: usize,
     rng: &mut R,
 ) -> Result<(Vec<F>, Vec<F>), ProverError> {
+    let (mut permuted_input, mut permuted_table) = arrange(input, table, usable_rows, n, lookup)?;
+    pad(&mut permuted_input, &mut permuted_table, n, rng);
+    Ok((permuted_input.into_vec(), permuted_table.into_vec()))
+}
+
+/// Pads `A'` and then `S'` to `n` rows with random values, in that order.
+fn pad<F: PastaField, R: Rng>(
+    permuted_input: &mut SecretPolynomial<F>,
+    permuted_table: &mut SecretPolynomial<F>,
+    n: usize,
+    rng: &mut R,
+) {
+    let rows = n.saturating_sub(permuted_input.len());
+    let input_pad = SecretPolynomial::new(random_values::<F, _>(rng, rows));
+    permuted_input.extend_from_slice(&input_pad);
+    let rows = n.saturating_sub(permuted_table.len());
+    let table_pad = SecretPolynomial::new(random_values::<F, _>(rng, rows));
+    permuted_table.extend_from_slice(&table_pad);
+}
+
+/// The usable rows of the vendored permutation (see the module
+/// documentation), without padding and without randomness.
+///
+/// # Errors
+///
+/// [`ProverError::LookupInputMissing`] when an input value is not in the
+/// table.
+fn arrange<F: PastaField>(
+    input: &[F],
+    table: &[F],
+    usable_rows: usize,
+    n: usize,
+    lookup: usize,
+) -> Result<Arranged<F>, ProverError> {
     let missing = || ProverError::LookupInputMissing { lookup };
     let input = input.get(..usable_rows).ok_or_else(missing)?;
     let table = table.get(..usable_rows).ok_or_else(missing)?;
-    let pad = n.checked_sub(usable_rows).ok_or_else(missing)?;
+    n.checked_sub(usable_rows).ok_or_else(missing)?;
     // Field ordering converts both operands out of Montgomery form on each
     // comparison. Convert once, then sort compact integer keys in precisely
     // the same canonical order, without a tree allocation for every group.
@@ -199,31 +287,31 @@ pub(super) fn permute<F: PastaField, R: Rng>(
     if groups.next().is_some() {
         return Err(missing());
     }
+    // At most three sorting columns live at once: the sorted table is done.
+    drop(sorted_table);
     // The sorted input is already the permuted input; order the table keys, then
     // convert both back to field elements in parallel within the final allocations.
     let mut table_keys = zeroize::Zeroizing::new(Vec::with_capacity(usable_rows));
-    let mut leftover = leftover.iter().copied();
+    let mut unused = leftover.iter().copied();
     for group in sorted_input.chunk_by(|left, right| left == right) {
         table_keys.push(group[0]);
         for _ in 1..group.len() {
-            table_keys.push(leftover.next().ok_or_else(missing)?);
+            table_keys.push(unused.next().ok_or_else(missing)?);
         }
     }
-    if leftover.next().is_some() || sorted_input.len() != usable_rows {
+    if unused.next().is_some() || sorted_input.len() != usable_rows {
         return Err(missing());
     }
+    drop(leftover);
     let to_field = |keys: &[[u64; 4]]| {
         let mut values = SecretPolynomial::new(Vec::with_capacity(n));
         values.par_extend(keys.par_iter().map(|key| canonical_value::<F>(*key)));
         values
     };
-    let (mut permuted_input, mut permuted_table) =
-        rayon::join(|| to_field(&sorted_input), || to_field(&table_keys));
-    let input_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
-    permuted_input.extend_from_slice(&input_pad);
-    let table_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
-    permuted_table.extend_from_slice(&table_pad);
-    Ok((permuted_input.into_vec(), permuted_table.into_vec()))
+    Ok(rayon::join(
+        || to_field(&sorted_input),
+        || to_field(&table_keys),
+    ))
 }
 
 /// Most-significant limb first, so array ordering equals field ordering.
@@ -289,6 +377,25 @@ fn public_table_bits<F: PastaField>(
     Ok((bits < 255).then_some(bits))
 }
 
+/// Lookups whose three sorting columns each may live at once without raising
+/// the proof's peak (`super::memory`).
+///
+/// While the lookups are arranged the prover holds the advice evaluations,
+/// both instance forms and four columns per lookup beside the sorting
+/// columns. The quotient's peak holds the advice and instance coefficients,
+/// the permutation products, three columns per lookup, `R`, the masks, the
+/// residues beside the recombined pieces, and a workspace of at least the
+/// advice, instance, product and lookup columns and one more. The difference
+/// is at least `advice + 2 sets + 2 pieces + 5` columns for every key.
+fn arranged_at_once(shape: &Shape) -> usize {
+    let spare = shape
+        .num_advice
+        .saturating_add(shape.permutation_sets.saturating_mul(2))
+        .saturating_add(shape.quotient_pieces.saturating_mul(2))
+        .saturating_add(5);
+    (spare / 3).max(1)
+}
+
 /// Compresses, permutes (with `permutation`), blinds, commits and writes
 /// every lookup's `A'` and `S'` (`BlindingScheduleV1` item 2).
 ///
@@ -336,18 +443,37 @@ where
     let tables = pk.commitment_tables();
     let mut permuted = Vec::with_capacity(compressed.len());
     let mut bounds = Vec::with_capacity(compressed.len());
+    let mut arranged = permutation
+        .arrange_all(
+            &compressed,
+            shape.usable_rows,
+            shape.n,
+            arranged_at_once(shape),
+            cancellation,
+        )
+        .transpose()?
+        .map(Vec::into_iter);
     for (lookup, (compressed_input, compressed_table)) in compressed.iter_mut().enumerate() {
         CancellationToken::checkpoint(cancellation)?;
         let compressed_input = SecretPolynomial::new(core::mem::take(compressed_input));
         let compressed_table = SecretPolynomial::new(core::mem::take(compressed_table));
-        let (permuted_input, permuted_table) = permutation.permute(
-            &compressed_input,
-            &compressed_table,
-            shape.usable_rows,
-            shape.n,
-            lookup,
-            rng,
-        )?;
+        let (permuted_input, permuted_table) = match arranged.as_mut() {
+            Some(arranged) => {
+                let (mut permuted_input, mut permuted_table) = arranged
+                    .next()
+                    .ok_or(ProverError::LookupInputMissing { lookup })?;
+                pad(&mut permuted_input, &mut permuted_table, shape.n, rng);
+                (permuted_input.into_vec(), permuted_table.into_vec())
+            }
+            None => permutation.permute(
+                &compressed_input,
+                &compressed_table,
+                shape.usable_rows,
+                shape.n,
+                lookup,
+                rng,
+            )?,
+        };
         let permuted_input = SecretPolynomial::new(permuted_input);
         let permuted_table = SecretPolynomial::new(permuted_table);
         let input_blind = C::ScalarExt::random(&mut *rng);
@@ -402,14 +528,123 @@ where
     Ok(permuted)
 }
 
+/// Most rows per pool task of a lookup product; the result does not depend on it.
+const PRODUCT_ROWS_PER_TASK: usize = 1 << 11;
+
+/// Rows per pool task of a product over `u` rows. Each running task inverts
+/// its own block, so the blocks in flight never need more inversion scratch
+/// than one column: a worker runs one block at a time.
+fn product_block_rows(u: usize) -> usize {
+    PRODUCT_ROWS_PER_TASK
+        .min(u.div_ceil(rayon::current_num_threads()))
+        .max(1)
+}
+
+/// One block of a lookup product: the fractions of its rows, then their
+/// running product starting at one, written over `numerators` (the compressed
+/// input on entry), with `denominators` (the compressed table on entry) as
+/// scratch. Returns the product of the block's fractions.
+fn product_block<F: PastaField>(
+    numerators: &mut [F],
+    denominators: &mut [F],
+    permuted_input: &[F],
+    permuted_table: &[F],
+    beta: F,
+    gamma: F,
+    cancellation: Option<&CancellationToken>,
+) -> F {
+    for ((numerator, denominator), (a, s)) in numerators
+        .iter_mut()
+        .zip(denominators.iter_mut())
+        .zip(permuted_input.iter().zip(permuted_table))
+    {
+        *numerator =
+            crate::norm_factor(*numerator + beta) * crate::norm_factor(*denominator + gamma);
+        *denominator = crate::norm_factor(*a + beta) * crate::norm_factor(*s + gamma);
+    }
+    // A cancelled block leaves rows that the caller's checkpoint discards.
+    if iroha_pasta::field::batch_invert_cancellable(denominators, cancellation).is_err() {
+        return F::ONE;
+    }
+    let mut running = F::ONE;
+    for (value, inverse) in numerators.iter_mut().zip(denominators.iter()) {
+        let fraction = *inverse * *value;
+        *value = running;
+        running *= fraction;
+    }
+    running
+}
+
+/// Rows `0..=u` of one lookup's grand product, written over its compressed
+/// input, with its compressed table as scratch.
+///
+/// One pool task per block of rows forms the block's fractions and their
+/// running product starting at one. Every block after the first is then
+/// scaled by the product of all rows before it. Field arithmetic is exact, so
+/// the rows equal one running product over the whole column. Block boundaries
+/// depend only on the public row count and the pool size.
+fn product_rows<F: PastaField>(
+    lookup: &mut Permuted<F>,
+    u: usize,
+    beta: F,
+    gamma: F,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), ProverError> {
+    CancellationToken::checkpoint(cancellation)?;
+    let rows = product_block_rows(u);
+    let totals = SecretPolynomial::new(
+        lookup.compressed_input[..u]
+            .par_chunks_mut(rows)
+            .zip(lookup.compressed_table[..u].par_chunks_mut(rows))
+            .zip(
+                lookup.input_values[..u]
+                    .par_chunks(rows)
+                    .zip(lookup.table_values[..u].par_chunks(rows)),
+            )
+            .map(|((numerators, denominators), (input, table))| {
+                product_block(
+                    numerators,
+                    denominators,
+                    input,
+                    table,
+                    beta,
+                    gamma,
+                    cancellation,
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    CancellationToken::checkpoint(cancellation)?;
+    let mut starts = SecretPolynomial::new(Vec::with_capacity(totals.len()));
+    let mut running = F::ONE;
+    for total in totals.iter() {
+        starts.push(running);
+        running *= total;
+    }
+    lookup.compressed_input[..u]
+        .par_chunks_mut(rows)
+        .zip(starts[..].par_iter())
+        .skip(1)
+        .for_each(|(rows, start)| {
+            for row in rows {
+                *row *= start;
+            }
+        });
+    lookup.compressed_input[u] = running;
+    Ok(())
+}
+
 /// Builds, blinds, commits and writes every lookup's product `z`
 /// (`BlindingScheduleV1` item 4).
 ///
-/// Every product is built and its randomness drawn in lookup order first; the
-/// products are then committed in one batch and their points written in the
-/// same order, so the proof bytes equal committing one product at a time.
-/// One full-width column at a time left about a third of a Pixel 6's workers
-/// idle (10 columns: 1.44 s one at a time, 1.15 s in one batch).
+/// Every lookup's product rows are built on the pool at once, which draws no
+/// randomness: one lookup after another kept the fractions and the running
+/// product on the proving thread. The randomness is then drawn in lookup
+/// order, the products are committed in one batch and their points written in
+/// the same order, so the proof bytes equal building and committing one
+/// product at a time. Committing one full-width column at a time left about
+/// a third of a Pixel 6's workers idle (10 columns: 1.44 s one at a time,
+/// 1.15 s in one batch).
 ///
 /// # Errors
 ///
@@ -434,34 +669,17 @@ where
 {
     let tables = pk.commitment_tables();
     let u = shape.usable_rows;
+    let mut permuted = permuted;
+    // The compressed values have no consumer after the fractions are formed:
+    // their two allocations become the product and the inversion scratch
+    // instead of new fraction and product columns.
+    permuted
+        .par_iter_mut()
+        .try_for_each(|lookup| product_rows(lookup, u, beta, gamma, cancellation))?;
     let mut built = Vec::with_capacity(permuted.len());
     for mut lookup in permuted {
         CancellationToken::checkpoint(cancellation)?;
-        // The compressed values have no consumer after these numerators are
-        // formed. Reuse their two allocations for the numerator and inverse
-        // denominator columns instead of allocating fractions and a product.
-        for ((numerator, denominator), (a, s)) in lookup.compressed_input[..u]
-            .iter_mut()
-            .zip(&mut lookup.compressed_table[..u])
-            .zip(
-                lookup.input_values[..u]
-                    .iter()
-                    .zip(&lookup.table_values[..u]),
-            )
-        {
-            *numerator =
-                crate::norm_factor(*numerator + beta) * crate::norm_factor(*denominator + gamma);
-            *denominator = crate::norm_factor(*a + beta) * crate::norm_factor(*s + gamma);
-        }
-        invert_column_cancellable(&mut lookup.compressed_table[..u], cancellation)?;
         let mut product = SecretPolynomial::new(core::mem::take(&mut lookup.compressed_input));
-        let mut running = C::ScalarExt::ONE;
-        for (value, inverse) in product[..u].iter_mut().zip(&lookup.compressed_table[..u]) {
-            let fraction = *inverse * *value;
-            *value = running;
-            running *= fraction;
-        }
-        product[u] = running;
         // No later phase needs this scratch, including the commitment MSM.
         // Move it into the wiping owner and release the allocation now; clearing
         // the vector would retain a whole field column through the MSM and FFTs.
@@ -488,27 +706,32 @@ where
     for commitment in &commitments {
         write_point(transcript, &commitment.to_affine())?;
     }
-    let mut committed = Vec::with_capacity(built.len());
-    for (mut lookup, mut product, product_blind) in built {
-        // The grand product is the last consumer of the evaluations. Move
-        // their allocations into coefficient form instead of retaining an
-        // extra pair of n-element vectors for every pending lookup.
-        let mut input_poly = SecretPolynomial::new(core::mem::take(&mut lookup.input_values));
-        let mut table_poly = SecretPolynomial::new(core::mem::take(&mut lookup.table_values));
-        // Three independent transforms: one column alone leaves most workers idle.
-        [&mut product, &mut input_poly, &mut table_poly]
-            .into_par_iter()
-            .try_for_each(|column| pk.domain().ifft_cancellable(column, cancellation))?;
-        committed.push(Committed {
-            input_poly: input_poly.into_vec(),
+    // The grand products are the last consumers of the evaluations: every
+    // `z`, `A'` and `S'` goes to coefficient form in its own allocation, as
+    // one batch. Three columns at a time left workers idle between lookups.
+    let mut columns: Vec<&mut [C::ScalarExt]> = built
+        .iter_mut()
+        .flat_map(|(lookup, product, _)| {
+            [
+                &mut product[..],
+                &mut lookup.input_values[..],
+                &mut lookup.table_values[..],
+            ]
+        })
+        .collect();
+    pk.domain()
+        .ifft_many_cancellable(&mut columns, cancellation)?;
+    Ok(built
+        .into_iter()
+        .map(|(mut lookup, product, product_blind)| Committed {
+            input_poly: core::mem::take(&mut lookup.input_values),
             input_blind: lookup.input_blind,
-            table_poly: table_poly.into_vec(),
+            table_poly: core::mem::take(&mut lookup.table_values),
             table_blind: lookup.table_blind,
             product_poly: product.into_vec(),
             product_blind,
-        });
-    }
-    Ok(committed)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -830,6 +1053,133 @@ mod tests {
         assert_eq!(committed.product_blind, expected_blind);
         assert_eq!(transcript.finish(), expected_transcript.finish());
         assert_eq!(rng.next_u64(), replay.next_u64());
+    }
+
+    /// The pooled product rows equal one running product over the column: for
+    /// lengths around the task size, on several pool sizes, on both fields.
+    #[test]
+    fn pooled_product_rows_match_one_running_product() {
+        fn check<F: PastaField>() {
+            let mut data = ChaCha20Rng::seed_from_u64(905);
+            let (beta, gamma) = (F::random(&mut data), F::random(&mut data));
+            for workers in [1, 3, 8] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                for u in [
+                    1,
+                    2,
+                    PRODUCT_ROWS_PER_TASK - 1,
+                    PRODUCT_ROWS_PER_TASK,
+                    PRODUCT_ROWS_PER_TASK + 1,
+                    3 * PRODUCT_ROWS_PER_TASK + 5,
+                    8 * PRODUCT_ROWS_PER_TASK + 1,
+                ] {
+                    let n = u + 6;
+                    let mut column =
+                        || -> Vec<F> { (0..n).map(|_| F::random(&mut data)).collect() };
+                    let mut lookup = Permuted {
+                        compressed_input: column(),
+                        compressed_table: column(),
+                        input_values: column(),
+                        table_values: column(),
+                        input_blind: F::ONE,
+                        table_blind: F::ONE,
+                    };
+                    let fractions: Vec<F> = (0..u)
+                        .map(|row| {
+                            let numerator = crate::norm_factor(lookup.compressed_input[row] + beta)
+                                * crate::norm_factor(lookup.compressed_table[row] + gamma);
+                            let denominator = crate::norm_factor(lookup.input_values[row] + beta)
+                                * crate::norm_factor(lookup.table_values[row] + gamma);
+                            numerator * denominator.invert().unwrap()
+                        })
+                        .collect();
+                    let mut expected = lookup.compressed_input.clone();
+                    let mut running = F::ONE;
+                    for (row, fraction) in expected[..u].iter_mut().zip(&fractions) {
+                        *row = running;
+                        running *= fraction;
+                    }
+                    expected[u] = running;
+                    pool.install(|| product_rows(&mut lookup, u, beta, gamma, None))
+                        .unwrap();
+                    // Rows past `u` wait for their random values untouched.
+                    assert!(
+                        lookup.compressed_input == expected,
+                        "workers={workers} u={u}"
+                    );
+                }
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    /// Arranging the lookups on the pool, in groups of every size, and padding
+    /// in lookup order gives the columns and the random stream of one
+    /// `permute` call per lookup.
+    #[test]
+    fn arranging_every_lookup_matches_one_permutation_each() {
+        let mut data = ChaCha20Rng::seed_from_u64(77);
+        let (usable, n) = (500, 512);
+        let compressed: Vec<(Vec<Fp>, Vec<Fp>)> = (0..3)
+            .map(|_| {
+                let table: Vec<Fp> = (0..n).map(|_| Fp::from(data.next_u64() % 97)).collect();
+                // Every input is a value of one of the table's usable rows.
+                let input: Vec<Fp> = (0..n)
+                    .map(|_| table[usize::try_from(data.next_u64() % 500).unwrap()])
+                    .collect();
+                (input, table)
+            })
+            .collect();
+        let mut strategy = VendoredPermutation;
+        for at_once in [0, 1, 2, 3, 8] {
+            let arranged = strategy
+                .arrange_all(&compressed, usable, n, at_once, None)
+                .expect("the vendored strategy arranges every lookup")
+                .unwrap();
+            let mut rng = ChaCha20Rng::seed_from_u64(5);
+            let mut replay = rng.clone();
+            for (lookup, ((input, table), (mut permuted_input, mut permuted_table))) in
+                compressed.iter().zip(arranged).enumerate()
+            {
+                pad(&mut permuted_input, &mut permuted_table, n, &mut rng);
+                let expected = permute(input, table, usable, n, lookup, &mut replay).unwrap();
+                assert!(
+                    (permuted_input.into_vec(), permuted_table.into_vec()) == expected,
+                    "lookup {lookup}, {at_once} at once"
+                );
+            }
+            assert_eq!(rng.next_u64(), replay.next_u64());
+            // A value missing from one lookup's table is that lookup's error.
+            let mut broken = compressed.clone();
+            broken[2].0[3] = Fp::from(1000);
+            assert!(matches!(
+                strategy.arrange_all(&broken, usable, n, at_once, None),
+                Some(Err(ProverError::LookupInputMissing { lookup: 2 }))
+            ));
+        }
+    }
+
+    /// The lookups sorted together never hold more columns than the quotient
+    /// frees: at least one, and for a lookup's own minimum (one advice column,
+    /// five quotient pieces) five of them.
+    #[test]
+    fn lookups_arranged_at_once_follow_the_shape() {
+        let circuit = Lookups {
+            rows: 9,
+            tamper: None,
+            out_of_range: false,
+            offset: 0,
+        };
+        let setup = setup::<Ep, _>(&circuit, CHOICES[0]);
+        let protocol = Protocol::new(setup.pk.binding().descriptor()).expect("protocol");
+        let shape = protocol.shape();
+        let spare = shape.num_advice + 2 * shape.permutation_sets + 2 * shape.quotient_pieces + 5;
+        assert_eq!(arranged_at_once(shape), spare / 3);
+        assert!(arranged_at_once(shape) >= 5);
     }
 
     #[test]

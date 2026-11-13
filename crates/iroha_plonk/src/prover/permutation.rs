@@ -189,15 +189,20 @@ where
     for commitment in &commitments {
         write_point(transcript, &commitment.to_affine())?;
     }
-    let mut sets = Vec::with_capacity(built.len());
-    for (mut product, blind) in built {
-        pk.domain().ifft_cancellable(&mut product, cancellation)?;
-        sets.push(ProductSet {
+    // One batch: a single transform at a time leaves workers idle.
+    let mut columns: Vec<&mut [C::ScalarExt]> = built
+        .iter_mut()
+        .map(|(product, _)| &mut product[..])
+        .collect();
+    pk.domain()
+        .ifft_many_cancellable(&mut columns, cancellation)?;
+    Ok(built
+        .into_iter()
+        .map(|(product, blind)| ProductSet {
             poly: product.into_vec(),
             blind,
-        });
-    }
-    Ok(sets)
+        })
+        .collect())
 }
 
 #[cfg(test)]
