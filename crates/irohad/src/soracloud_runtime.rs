@@ -13689,12 +13689,21 @@ fn manifest_is_committed(view: &StateView<'_>, state: &State, manifest_digest: &
 }
 
 fn sanitize_path_component(raw: &str) -> String {
-    raw.chars()
+    let sanitized: String = raw
+        .chars()
         .map(|ch| match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => ch,
             _ => '_',
         })
-        .collect()
+        .collect();
+    // `.` and `..` survive the character filter but are not plain directory
+    // names: joined onto a root they resolve to the root itself or its parent.
+    // Service names and versions are only required to be non-empty, so map
+    // those (and the empty string) to inert names.
+    match sanitized.as_str() {
+        "" | "." | ".." => "_".repeat(sanitized.len().max(1)),
+        _ => sanitized,
+    }
 }
 
 fn build_effective_service_environment(
@@ -21010,6 +21019,46 @@ mod tests {
                 syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL
             })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn sanitize_path_component_rejects_dot_segments() {
+        assert_eq!(sanitize_path_component(""), "_");
+        assert_eq!(sanitize_path_component("."), "_");
+        assert_eq!(sanitize_path_component(".."), "__");
+        assert_eq!(sanitize_path_component("../x"), ".._x");
+        assert_eq!(sanitize_path_component("2026.03.0"), "2026.03.0");
+        assert_eq!(sanitize_path_component("..."), "...");
+    }
+
+    #[test]
+    fn ivm_host_dot_dot_service_version_cannot_read_other_service_secrets() -> Result<()> {
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(Vec::new());
+        bundle.service.service_version = "..".to_string();
+        let temp_dir = tempfile::tempdir()?;
+        let secrets_root = temp_dir.path().join("secrets");
+        fs::create_dir_all(secrets_root.join(bundle.service.service_name.to_string()))?;
+        let victim_root = secrets_root.join("victim_service").join("1.0.0").join("db");
+        fs::create_dir_all(&victim_root)?;
+        fs::write(victim_root.join("password"), b"victim-secret")?;
+
+        let private_request = sample_ordered_mailbox_request(
+            &bundle,
+            "private_update",
+            sample_mailbox_message(&bundle, "private_update", b"private".to_vec()),
+        );
+        let private_host = SoracloudIvmHost::new(
+            private_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+        assert_eq!(
+            private_host.read_material("secrets", "victim_service/1.0.0/db/password")?,
+            None
+        );
         Ok(())
     }
 
