@@ -42,11 +42,13 @@ impl PyIronwoodWorldReplayContext {
                 frames,
                 signed_transaction_versioned,
                 &self.network,
-                self.chain_discriminant,
-                &self.pool,
-                &self.asset,
-                &self.payer,
-                &self.profile,
+                IronwoodSelection {
+                    chain_discriminant: self.chain_discriminant,
+                    pool_id_hex: &self.pool,
+                    asset_definition_id: &self.asset,
+                    payer_account_id: &self.payer,
+                    expected_profile_digest_hex: &self.profile,
+                },
                 expected_amount_decimal,
             )
         })
@@ -185,10 +187,15 @@ pub(crate) fn verify_ironwood_world_replay_v1_py(
             let _guard = ChainDiscriminantGuard::enter(chain_discriminant);
             verified_context_json(
                 &page,
-                pool_id_hex,
+                IronwoodSelection {
+                    chain_discriminant,
+                    pool_id_hex,
+                    asset_definition_id,
+                    payer_account_id,
+                    expected_profile_digest_hex,
+                },
                 &asset,
                 &payer,
-                expected_profile_digest_hex,
                 verified.state(),
                 verified.payer_balance(),
                 verified.reserve_balance(),

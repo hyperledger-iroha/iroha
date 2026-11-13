@@ -53,7 +53,7 @@ fn registers_compact_helper_matches_syscall() {
 }
 #[test]
 fn registers_compact_depth_cap_returns_partial_root() {
-    let target = 200usize;
+    let target = 29usize;
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(3, 0xDEADBEEFCAFEBABE);
     vm.set_register(target, 0xBADC0FFEE0DDFACE);
@@ -79,7 +79,7 @@ fn registers_compact_depth_cap_returns_partial_root() {
 fn register_commitment(root: HashOf<MerkleTree<[u8; 32]>>) -> MerkleTreeCommitment<[u8; 32]> {
     MerkleTreeCommitment::new(
         root,
-        NonZeroU64::new(256).expect("register count is non-zero"),
+        NonZeroU64::new(ivm::parallel::REGISTER_COUNT as u64).expect("register count is non-zero"),
     )
 }
 fn register_leaf_digest(value: u64, private: bool) -> HashOf<[u8; 32]> {

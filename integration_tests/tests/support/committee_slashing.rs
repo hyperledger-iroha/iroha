@@ -386,10 +386,11 @@ pub async fn run_double_sign_qualification() -> Result<()> {
             sign.height == before.height + 1 && sign.offender == offender,
             "double-sign must name the first uncommitted height of the observed custody"
         );
+        // The custody probe's own node, an honest voter, reads the committed evidence.
         let penalty = committee_equivocation::await_applied_penalty(
             &network,
             &voters,
-            &admin,
+            &network.validators()[0],
             &sign,
             SLASHING_DELAY,
         )

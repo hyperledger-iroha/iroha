@@ -263,7 +263,8 @@ fn flattened_path_backing_erases_every_initialized_sibling_on_unwind() {
     let bytes = snapshot.paths.as_slice().len() * 32;
     let _watch = observer::watch(
         snapshot.paths.as_slice().as_ptr().cast(),
-        Layout::array::<[u8; 32]>(21).unwrap(),
+        // Two memory paths (2 + 3 siblings) and two full register paths.
+        Layout::array::<[u8; 32]>(5 + 2 * crate::REGISTER_MERKLE_PATH_DEPTH).unwrap(),
         0,
         bytes,
     );
@@ -275,7 +276,10 @@ fn flattened_path_backing_erases_every_initialized_sibling_on_unwind() {
     observer::assert_erased_and_freed();
     assert!(observer::original_credit_at_free() >= bytes);
     assert_eq!(budget.reserved_bytes(), 0);
-    assert_eq!(register_parts(&fixture.registers[1]).4, &[[6; 32]; 8]);
+    assert_eq!(
+        register_parts(&fixture.registers[1]).4,
+        &[[6; 32]; crate::REGISTER_MERKLE_PATH_DEPTH]
+    );
 }
 
 #[test]

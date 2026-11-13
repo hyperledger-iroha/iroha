@@ -1280,6 +1280,7 @@ macro_rules! with_world_overlay_fields {
             parliament_anonymous_attempts,
             parliament_anonymous_registrations,
             parliament_anonymous_boards,
+            parliament_anonymous_due,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4386,6 +4387,9 @@ pub struct WorldData {
         Storage<AssignmentId, ParliamentCredentialRecordV1>,
     /// Board of each sealed binding jury, by ballot scope.
     pub(crate) parliament_anonymous_boards: Storage<BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    /// Due index of the anonymous family: each nonterminal attempt with the scopes of its
+    /// boards, so listing reads at most `K` attempts (design §9).
+    pub(crate) parliament_anonymous_due: Storage<GovernanceAttemptId, Vec<BallotScopeV1>>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5472,6 +5476,10 @@ pub struct WorldBlockFields<'world> {
     /// Board of each sealed binding jury, by ballot scope.
     pub(crate) parliament_anonymous_boards:
         StorageField<'world, BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    /// Due index of the anonymous family: each nonterminal attempt with the scopes of its
+    /// boards, so listing reads at most `K` attempts (design §9).
+    pub(crate) parliament_anonymous_due:
+        StorageField<'world, GovernanceAttemptId, Vec<BallotScopeV1>>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6697,6 +6705,7 @@ impl WorldBlock<'_> {
             parliament_anonymous_attempts,
             parliament_anonymous_registrations,
             parliament_anonymous_boards,
+            parliament_anonymous_due,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7314,6 +7323,10 @@ pub struct WorldTransaction<'block, 'world> {
     /// Board of each sealed binding jury, by ballot scope.
     pub(crate) parliament_anonymous_boards:
         StorageTransaction<'block, BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    /// Due index of the anonymous family: each nonterminal attempt with the scopes of its
+    /// boards, so listing reads at most `K` attempts (design §9).
+    pub(crate) parliament_anonymous_due:
+        StorageTransaction<'block, GovernanceAttemptId, Vec<BallotScopeV1>>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9643,6 +9656,10 @@ pub struct WorldView<'world> {
     /// Board of each sealed binding jury, by ballot scope.
     pub(crate) parliament_anonymous_boards:
         StorageView<'world, BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    /// Due index of the anonymous family: each nonterminal attempt with the scopes of its
+    /// boards, so listing reads at most `K` attempts (design §9).
+    pub(crate) parliament_anonymous_due:
+        StorageView<'world, GovernanceAttemptId, Vec<BallotScopeV1>>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -21916,6 +21933,8 @@ macro_rules! world_ro_accessors {
             storage parliament_anonymous_registrations: AssignmentId => ParliamentCredentialRecordV1;
             /// Board of each sealed binding jury, by ballot scope.
             storage parliament_anonymous_boards: BallotScopeV1 => ParliamentBallotBoardRecordV1;
+            /// Due index of the anonymous family: each nonterminal attempt and its boards.
+            storage parliament_anonymous_due: GovernanceAttemptId => Vec<BallotScopeV1>;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -25833,6 +25852,7 @@ impl WorldTransaction<'_, '_> {
             parliament_anonymous_attempts: _,
             parliament_anonymous_registrations: _,
             parliament_anonymous_boards: _,
+            parliament_anonymous_due: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -26303,6 +26323,7 @@ impl WorldTransaction<'_, '_> {
         self.parliament_anonymous_attempts.apply();
         self.parliament_anonymous_registrations.apply();
         self.parliament_anonymous_boards.apply();
+        self.parliament_anonymous_due.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();

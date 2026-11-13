@@ -2,7 +2,8 @@ use ivm::{ProgramMetadata, ivm_cache::IvmCache};
 #[test]
 fn artifact_cache_key_ignores_non_version_header_fields() {
     let _lease = crate::predecode_test_support::exclusive();
-    // Same code (HALT) under headers that differ only in mode bits.
+    // Same code (HALT) under headers that differ only in mode bits and the
+    // ZK-only trace bound.
     let code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
     let mut a_base = ProgramMetadata {
         version_major: 1,
@@ -17,7 +18,7 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
         version_major: 1,
         version_minor: 1,
         mode: ivm::ivm_mode::ZK,
-        max_cycles: 0,
+        max_cycles: 64,
         abi_version: 1,
     }
     .encode();

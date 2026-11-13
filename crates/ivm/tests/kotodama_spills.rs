@@ -80,8 +80,11 @@ fn odd_eight_byte_nested_call_frame_is_padded_and_restored() {
     assert_eq!(vm.register(31), initial_stack_pointer);
 }
 #[test]
-fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
-    const LIVE_VALUES: usize = 700;
+fn frame_and_spill_offsets_beyond_the_immediate_reach_are_bounded_and_execute() {
+    // 14-bit immediates reach +/-8 KiB, so the frame must exceed that reach
+    // before adjustments and offsets need indexed scalar literals.
+    const IMMEDIATE_REACH: u32 = instruction::wide::IMM14_MAX as u32;
+    const LIVE_VALUES: usize = 1_100;
     const BLOCK_HEIGHT: u64 = 3;
     let mut body = String::from("let int seed = context::block_height();\n");
     for index in 0..LIVE_VALUES {
@@ -97,21 +100,21 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     let compiler = KotodamaCompiler::new();
     let (artifact, _manifest, report) = compiler
         .compile_source_with_manifest_and_report(&source)
-        .expect("compile >4KiB frame fixture");
+        .expect("compile beyond-immediate frame fixture");
     assert_eq!(
         artifact,
         compiler
             .compile_source(&source)
-            .expect("repeat >4KiB frame compilation"),
+            .expect("repeat beyond-immediate frame compilation"),
         "wide frame lowering must be deterministic"
     );
     let metadata = ProgramMetadata::parse(&artifact).expect("parse wide-frame artifact");
     let implementation = report
         .budget_report
         .iter()
-        .filter(|function| function.frame_bytes > 4096)
+        .filter(|function| function.frame_bytes > IMMEDIATE_REACH)
         .max_by_key(|function| function.frame_bytes)
-        .expect("fixture must force a frame above 4KiB");
+        .expect("fixture must force a frame beyond the immediate reach");
     assert_eq!(
         implementation.frame_bytes % 16,
         0,
@@ -182,7 +185,9 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     assert!(scalar_values.contains(&-frame_bytes));
     assert!(scalar_values.contains(&frame_bytes));
     assert!(
-        scalar_values.iter().any(|offset| *offset > 4096),
+        scalar_values
+            .iter()
+            .any(|offset| *offset > i64::from(IMMEDIATE_REACH)),
         "large positive spill/address offsets must use indexed scalars"
     );
     let mut host = DefaultHost::new();

@@ -962,10 +962,11 @@ fn semantic_simple_add() {
 #[test]
 fn encode_helpers() {
     use kotodama_lang::compiler::{encode_add, encode_addi};
+    // opcode[31:24] rd[23:19] rs1[18:14] rs2[13:9] / imm14[13:0]
     let add = encode_add(3, 1, 2);
-    assert_eq!(add, 0x0103_0102);
+    assert_eq!(add, 0x0118_4400);
     let addi = encode_addi(1, 1, 7).expect("encode addi");
-    assert_eq!(addi, 0x2001_0107);
+    assert_eq!(addi, 0x2008_4007);
 }
 #[test]
 fn compile_and_run_add() {

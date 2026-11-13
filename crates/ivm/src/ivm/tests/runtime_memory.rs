@@ -866,7 +866,11 @@ fn try_new_preserves_public_gas_limit_with_charged_memory() {
     let vm = IVM::try_new(257).expect("the default VM memory fits the test host");
     assert_eq!(vm.remaining_gas(), 257);
     assert!(vm.memory.stack_limit() > 0);
-    assert!(vm.registers.merkle_path(255).is_ok());
+    assert!(
+        vm.registers
+            .merkle_path(crate::parallel::REGISTER_COUNT - 1)
+            .is_ok()
+    );
 }
 #[test]
 fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_and_refund() {

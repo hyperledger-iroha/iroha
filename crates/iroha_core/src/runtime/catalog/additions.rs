@@ -300,8 +300,9 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
 /// one, and `RegisterParliamentCredentialV1`, which accepts a binding seat together with its
 /// verified credential. Its tables are `world.parliament_anonymous_attempts`, the State of
 /// each attempt, `world.parliament_anonymous_registrations`, the credential of each accepted
-/// binding assignment, and `world.parliament_anonymous_boards`, the board of each sealed
-/// binding jury. Until a change set activates it the instructions stay inactive and the
+/// binding assignment, `world.parliament_anonymous_boards`, the board of each sealed binding
+/// jury, and `world.parliament_anonymous_due`, its due index of nonterminal attempts and
+/// their boards. Until a change set activates it the instructions stay inactive and the
 /// tables stay empty and out of snapshots. Its dependencies are exactly the frozen baseline.
 ///
 /// TODO(`specs/parliament_private_ballot_design.md` §12.3): the family is activatable only
@@ -320,6 +321,7 @@ pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
         StorageAddition::Table("world.parliament_anonymous_attempts"),
         StorageAddition::Table("world.parliament_anonymous_registrations"),
         StorageAddition::Table("world.parliament_anonymous_boards"),
+        StorageAddition::Table("world.parliament_anonymous_due"),
     ],
 };
 

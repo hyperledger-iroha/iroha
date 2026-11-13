@@ -679,7 +679,7 @@ fn opcode_traps_and_obligation_profiles_are_consistent() {
     );
     assert!(
         opcode_entry(wide::control::HALT)
-            .is_some_and(|entry| entry.direct_traps.contains(&"AssertionFailed")),
+            .is_some_and(|entry| entry.direct_traps.contains(&"ControlFlowViolation")),
         "HALT traps inside a protected contract call"
     );
 }
@@ -1530,8 +1530,13 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
         );
     }
     assert_eq!(kind(VmTrapKind::MissingHalt).origins(), [InterpreterTrap]);
+    // Checked register division and signed overflow raise numeric faults from
+    // the interpreter; the numeric syscalls raise them in trap mode.
+    assert_eq!(
+        kind(VmTrapKind::NumericFault).origins(),
+        [InterpreterTrap, SyscallTrap]
+    );
     for syscall_only in [
-        VmTrapKind::NumericFault,
         VmTrapKind::PointerAbiFault,
         VmTrapKind::ContractAbort,
         VmTrapKind::HostOutputBudgetExceeded,
@@ -2399,7 +2404,7 @@ fn coverage_is_derived_from_components_and_never_complete() {
     let counts = summary();
     assert_eq!(counts.opcodes_uncovered + counts.opcodes_component_only, 58);
     assert_eq!(counts.opcodes_component_only, 55);
-    assert_eq!(counts.opcodes_uncovered, 4);
+    assert_eq!(counts.opcodes_uncovered, 3);
     assert_eq!(counts.components, COMPONENTS.len());
     for entry in OPCODES.iter() {
         let covered = components_for_opcode(entry.opcode).next().is_some();

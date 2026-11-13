@@ -16,8 +16,10 @@ use kotodama_lang::compiler::{Compiler, CompilerOptions};
 use std::{any::Any, cell::Cell, sync::Arc};
 
 fn generic(original: &AllocationBudget, words: &[u32], mode: TraceMode, cycles: u64) -> IVM {
+    // A ZK header must declare its trace bound; zero cycles selects an ordinary
+    // program without padding.
     let mut image = ProgramMetadata {
-        mode: crate::ivm_mode::ZK,
+        mode: if cycles == 0 { 0 } else { crate::ivm_mode::ZK },
         max_cycles: cycles,
         ..ProgramMetadata::default()
     }

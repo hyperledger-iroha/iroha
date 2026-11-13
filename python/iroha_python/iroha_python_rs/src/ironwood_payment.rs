@@ -17,7 +17,6 @@ pub(crate) mod world_replay;
 const MAX: usize = 16 * 1024 * 1024;
 use crate::state_rows::{bytes, finality_page, fixed, invalid};
 
-<<<<<<< HEAD
 /// Caller-pinned chain, pool, asset, payer and compiled profile of one Ironwood read.
 ///
 /// The certified State context and the payment effect echo exactly these original values.
@@ -30,12 +29,6 @@ struct IronwoodSelection<'a> {
     expected_profile_digest_hex: &'a str,
 }
 
-=======
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
-)]
->>>>>>> origin/optimizations
 fn verified_context_json(
     page: &VerifiedFinalityPage,
     selection: IronwoodSelection<'_>,
@@ -77,10 +70,6 @@ fn verified_context_json(
     })).map_err(|_| invalid())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
-)]
 fn verify_payment_from_context(
     cut_json: &str,
     payment_proof_frames_hex: Vec<String>,

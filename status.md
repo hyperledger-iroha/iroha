@@ -554,7 +554,8 @@ passes.
   whose election and deliberation machines run on the governance clock of
   [design section 8.1](specs/parliament_private_ballot_design.md#81-anonymous-family-lifecycle-scheduling)
   and report their positioned items; and the `iroha.governance.parliament.anonymous.v1`
-  release addition with three World tables (attempts, credentials, boards), its
+  release addition with four World tables (attempts, credentials, boards and
+  their due index), its
   three interfaces (attempt creation below the admission cap `K`,
   account-signed transitions, and `RegisterParliamentCredentialV1`, the sole
   instruction of a direct signed input under the candidate-testing selection),
@@ -563,12 +564,12 @@ passes.
   the start of every block of the global chain with one budget and position
   cursor for Parliament's and SCCP's items. Parliament's items (the
   casting-clock prelude, the height-progress ticket, draws from the committed
-  exact-slot pulse, lifecycle items, closures and openings over the three
+  exact-slot pulse, lifecycle items, closures and openings over those
   tables) run only on a root whose selection installs the family, and their
   outputs are committed as the leading rows of the block result within a
   partition reserved before the pass mutates. The pass is tested on seeded
-  World rows: no real-peer run exists and the due index still reads every
-  attempt and board (see the design's slice 3 "Open" list). A keepalive that
+  World rows: no real-peer run exists (see the design's slice 3 "Open"
+  list). Listing reads a due index of at most `K` attempts. A keepalive that
   Parliament work alone makes due is fee-exempt, and the keeper wakes at
   Parliament's next due time. Signerless execution does not exist yet. The real
   typed protocol is available for local testing with

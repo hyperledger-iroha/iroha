@@ -58,15 +58,14 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     // Build a tiny program making a known allowed syscall (ALLOC)
     // and then HALT. Set ABI version to 1 in the header to exercise policy.
     let mut bytes = assemble_syscall(syscalls::SYSCALL_ALLOC);
-    // Header layout: magic(4) major(1) minor(1) mode(1) vl(1) max_cycles(8) abi(1)
-    // Set abi_version (last header byte) to 1
-    bytes[4 + 1 + 1 + 1 + 1 + 8] = 1;
+    // Header layout: magic(4) major(1) minor(1) mode(1) max_cycles(8) abi(1) abi_hash(32)
+    bytes[ivm::HEADER_ABI_VERSION_OFFSET] = 1;
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytes).unwrap();
     vm.run().expect("known syscall should be allowed under V1");
     // Unknown ABI numbers are rejected during authenticated program admission.
     let mut bad = assemble_syscall(0xDF);
-    bad[4 + 1 + 1 + 1 + 1 + 8] = 1; // ABI v1
+    bad[ivm::HEADER_ABI_VERSION_OFFSET] = 1; // ABI v1
     let mut vm2 = IVM::new(u64::MAX);
     assert!(
         matches!(vm2.load_program(&bad), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xDF))

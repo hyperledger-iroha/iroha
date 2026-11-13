@@ -13,7 +13,7 @@
 use ff::Field;
 use iroha_pasta::PastaCurve;
 use iroha_pasta::fold::fold_generators_vartime;
-use iroha_pasta::msm::{FixedBaseTable, MemoryBudget, msm_public, msm_secret};
+use iroha_pasta::msm::{BudgetExceeded, FixedBaseTable, MemoryBudget, msm_public, msm_secret};
 use rayon::prelude::*;
 
 use crate::fs::{SpikeRng, Transcript};
@@ -102,21 +102,38 @@ impl<C: PastaCurve> Gens<C> {
         table
     }
 
-    /// The fixed-base table of `g[..active]` with window `window`, built once
-    /// per generator set; the second value is this call's build time.
-    pub fn table(&self, active: usize, window: usize) -> (std::sync::Arc<FixedBaseTable<C>>, f64) {
+    /// The fixed-base table of `g[..active]` with window `window`, when its
+    /// construction fits the fixed budget. The second value is build time.
+    pub fn table(
+        &self,
+        active: usize,
+        window: usize,
+    ) -> Result<(std::sync::Arc<FixedBaseTable<C>>, f64), BudgetExceeded> {
+        self.table_with_budget(active, window, MemoryBudget::DEFAULT)
+    }
+
+    pub(crate) fn table_with_budget(
+        &self,
+        active: usize,
+        window: usize,
+        budget: MemoryBudget,
+    ) -> Result<(std::sync::Arc<FixedBaseTable<C>>, f64), BudgetExceeded> {
         let mut tables = self.tables.lock().unwrap();
         if let Some((_, _, t)) = tables.iter().find(|(a, w, _)| *a == active && *w == window) {
-            return (t.clone(), 0.0);
+            // A cache hit needs no construction scratch, but its retained
+            // points and skip flags still belong to this call's budget.
+            budget.check(t.table_bytes().saturating_add(active))?;
+            return Ok((t.clone(), 0.0));
         }
         let clock = std::time::Instant::now();
-        let table = std::sync::Arc::new(
-            FixedBaseTable::<C>::with_window(&self.g[..active], window, MemoryBudget::DEFAULT)
-                .expect("table within budget"),
-        );
+        let table = std::sync::Arc::new(FixedBaseTable::<C>::with_window(
+            &self.g[..active],
+            window,
+            budget,
+        )?);
         let build = clock.elapsed().as_secs_f64();
         tables.push((active, window, table.clone()));
-        (table, build)
+        Ok((table, build))
     }
 }
 

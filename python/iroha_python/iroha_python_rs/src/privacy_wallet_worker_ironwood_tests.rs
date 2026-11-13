@@ -883,14 +883,7 @@ mod ironwood {
     fn warm_read_case(
         fixture: WarmReadFixture<'_>,
         height: u64,
-<<<<<<< HEAD
         frames: &[String],
-=======
-        original: &WarmQuery,
-        finality: (&str, &[String]),
-        schema: &crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
-        payer: &AccountId,
->>>>>>> origin/optimizations
         expected_missing: usize,
     ) {
         let WarmReadFixture {
@@ -904,7 +897,6 @@ mod ironwood {
             ironwood_warm_rows_v1_py, verify_ironwood_state_rows_v1_py,
         };
         use pyo3::types::PyBytesMethods;
-        let (checkpoint, frames) = finality;
         let budget = iroha_allocation::AllocationBudget::new(64 << 20);
         let fetch = |keys: &[(String, Vec<u8>)]| {
             let proof = chain
@@ -1105,14 +1097,7 @@ mod ironwood {
                 payer: &payer,
             },
             start,
-<<<<<<< HEAD
             &prepare_frames,
-=======
-            &warm,
-            (&checkpoint_hex, &prepare_frames),
-            &schema,
-            &payer,
->>>>>>> origin/optimizations
             0,
         );
         // The fixture supplies unrelated submitted work for an otherwise empty commit.
@@ -1142,14 +1127,7 @@ mod ironwood {
                 payer: &payer,
             },
             start + 2,
-<<<<<<< HEAD
             &retained,
-=======
-            &warm,
-            (&checkpoint_hex, &retained),
-            &schema,
-            &payer,
->>>>>>> origin/optimizations
             1,
         );
         chain.commit(Vec::new());

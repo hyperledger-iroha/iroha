@@ -45,6 +45,8 @@ struct Rows {
     /// The `(height, time)` of every block whose next due time disagreed with the due
     /// predicate; tests assert it stays empty after their own checks.
     next_due_disagreements: Vec<(u64, u64)>,
+    /// Due-index rows written over the ones the tables give, to make them disagree.
+    due_override: Vec<(GovernanceAttemptId, Vec<BallotScopeV1>)>,
 }
 
 fn header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -118,6 +120,10 @@ impl Rows {
             block
                 .parliament_anonymous_boards
                 .insert(*scope, board.clone());
+        }
+        crate::state::parliament_anonymous_tables::seed_due_index(&mut block);
+        for (id, scopes) in &self.due_override {
+            block.parliament_anonymous_due.insert(*id, scopes.clone());
         }
         block.commit();
         State::new_with_chain_and_network_id_for_testing(
@@ -207,7 +213,7 @@ impl Rows {
     fn open_windows(&self) -> usize {
         let state = self.state();
         let block = state.block(header(1, 1));
-        open_casting_windows(&*block.world.parliament_anonymous_boards)
+        open_casting_windows(&due_rows(&block.world).expect("due rows").boards)
     }
 
     /// Every block so far had Parliament work due exactly from its next due time on.
@@ -659,13 +665,13 @@ fn the_casting_limit_is_the_committed_parameter_or_its_default() {
 #[test]
 fn tables_that_disagree_abandon_the_block_without_a_verdict_of_their_own() {
     let (mut rows, height) = jury_in_deliberation();
-    // A scheduled board whose attempt World does not keep.
+    // A due index that names a board World does not keep.
     let now_ms = rows.next_due();
-    rows.boards[0].1.opening_at_ms = Some(now_ms);
-    rows.attempts.clear();
+    let (scope, _) = rows.boards.remove(0);
+    rows.due_override = vec![(rows.attempts[0].0, vec![scope])];
     let error = rows
         .run(height + 1, now_ms, no_pulse, false)
-        .expect_err("a board without its attempt");
+        .expect_err("an index naming no stored board");
     let GovernancePassErrorV1::Owner(error) = error else {
         panic!("the owner's error is preserved: {error:?}")
     };

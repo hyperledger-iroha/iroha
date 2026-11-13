@@ -96,9 +96,10 @@ fn committed_pulses(state: &StateBlock<'_>) -> Vec<AnonymousSortitionPulseV1> {
     let session = BeaconSessionId::for_network_v1(&network_id);
     let mut slots: Vec<u64> = state
         .world
-        .parliament_anonymous_attempts
+        .parliament_anonymous_due
         .iter()
-        .flat_map(|(_, attempt)| attempt.awaiting_slots())
+        .filter_map(|(id, _)| state.world.parliament_anonymous_attempts.get(id))
+        .flat_map(|attempt| attempt.awaiting_slots())
         .filter(|slot| *slot <= height)
         .collect();
     slots.sort_unstable();

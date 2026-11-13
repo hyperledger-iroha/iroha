@@ -74,6 +74,20 @@ targets:
         OTHER_LDFLAGS: $(inherited) -Wl,-force_load,${SPARTAN_DEVICE_ARCHIVE} -Wl,-export_dynamic
         DEAD_CODE_STRIPPING: NO
         ENABLE_DEBUG_DYLIB: NO
+  SpartanSDKTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ${IROHA_ROOT}/IrohaSwift/Tests/IrohaSwiftTests/KagemushaSpartanWalletV1Tests.swift
+    dependencies:
+      - target: SpartanRuntimeFixture
+      - target: IrohaSwift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.co.soramitsu.kagemusha.spartanfixture.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/SpartanRuntimeFixture.app/SpartanRuntimeFixture
+        BUNDLE_LOADER: $(TEST_HOST)
 schemes:
   SpartanRuntimeFixture:
     build:
@@ -81,6 +95,10 @@ schemes:
         SpartanRuntimeFixture: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - SpartanSDKTests
     profile:
       config: Debug
     analyze:

@@ -1,13 +1,17 @@
 //! The anonymous Parliament tables and their restore check (design §12.3, slice 2).
 //!
-//! World keeps three tables for the anonymous family, added by the
+//! World keeps four tables for the anonymous family, added by the
 //! `iroha.governance.parliament.anonymous.v1` release addition:
 //!
 //! - `world.parliament_anonymous_attempts`: the State of each attempt;
 //! - `world.parliament_anonymous_registrations`: the credential of each accepted binding
 //!   assignment, keyed by the assignment, whose identifier binds its election and member;
 //! - `world.parliament_anonymous_boards`: the board of each sealed binding jury, keyed by its
-//!   ballot scope.
+//!   ballot scope;
+//! - `world.parliament_anonymous_due`: the due index, every nonterminal attempt with the
+//!   scopes of its boards. Listing reads it, so a block reads at most `K` attempts whatever
+//!   the tables keep of terminal ones (design §9). [`store_attempt`] and [`store_board`]
+//!   keep it, and restore refuses a cut whose index is not the one its tables give.
 //!
 //! Until a change set activates the addition the tables stay empty and out of snapshots. A
 //! restored cut is accepted only if every attempt is one the reducer produces, every election
@@ -34,17 +38,80 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
-use super::{CitizenshipRecord, WorldReadOnly};
+use super::{CitizenshipRecord, WorldReadOnly, WorldTransaction};
 use crate::governance::parliament_anonymous::{
     AnonymousElectionCredentialsV1, AnonymousParliamentAttemptStateV1, AnonymousParliamentErrorV1,
 };
 
-/// The World members of the three tables, in registry order.
-const MEMBERS: [&str; 3] = [
+/// The World members of the four tables, in registry order.
+const MEMBERS: [&str; 4] = [
     "parliament_anonymous_attempts",
     "parliament_anonymous_registrations",
     "parliament_anonymous_boards",
+    "parliament_anonymous_due",
 ];
+
+/// Store `attempt` under `id` and keep the due index: a nonterminal attempt is listed, with
+/// the boards it keeps, and a terminal one is not.
+pub(crate) fn store_attempt(
+    world: &mut WorldTransaction<'_, '_>,
+    id: GovernanceAttemptId,
+    attempt: AnonymousParliamentAttemptStateV1,
+) {
+    if attempt.is_terminal() {
+        world.parliament_anonymous_due.remove(id);
+    } else if world.parliament_anonymous_due.get(&id).is_none() {
+        world.parliament_anonymous_due.insert(id, Vec::new());
+    }
+    world.parliament_anonymous_attempts.insert(id, attempt);
+}
+
+/// Store the board `record` under `scope` and list it under its attempt while the attempt
+/// is nonterminal.
+pub(crate) fn store_board(
+    world: &mut WorldTransaction<'_, '_>,
+    scope: BallotScopeV1,
+    record: ParliamentBallotBoardRecordV1,
+) {
+    let id = record.context.body_context.governance_attempt_id;
+    if let Some(scopes) = world.parliament_anonymous_due.get(&id)
+        && !scopes.contains(&scope)
+    {
+        let mut scopes = scopes.clone();
+        scopes.push(scope);
+        scopes.sort_unstable();
+        world.parliament_anonymous_due.insert(id, scopes);
+    }
+    world.parliament_anonymous_boards.insert(scope, record);
+}
+
+/// The due index the attempts and boards of `world` give: every nonterminal attempt with the
+/// scopes of its boards, in key order.
+pub(crate) fn derived_due_index(
+    world: &(impl WorldReadOnly + ?Sized),
+) -> BTreeMap<GovernanceAttemptId, Vec<BallotScopeV1>> {
+    let mut due: BTreeMap<GovernanceAttemptId, Vec<BallotScopeV1>> = world
+        .parliament_anonymous_attempts()
+        .iter()
+        .filter(|(_, attempt)| !attempt.is_terminal())
+        .map(|(id, _)| (*id, Vec::new()))
+        .collect();
+    // Boards iterate in scope order, so every list is sorted.
+    for (scope, board) in world.parliament_anonymous_boards().iter() {
+        if let Some(scopes) = due.get_mut(&board.context.body_context.governance_attempt_id) {
+            scopes.push(*scope);
+        }
+    }
+    due
+}
+
+/// Fill the due index of a World block whose attempts and boards were written directly.
+#[cfg(test)]
+pub(crate) fn seed_due_index(block: &mut super::WorldBlock<'_>) {
+    for (id, scopes) in derived_due_index(&*block) {
+        block.parliament_anonymous_due.insert(id, scopes);
+    }
+}
 
 /// The credentials World keeps for the accepted assignments `accepted` of one election, in
 /// assignment order. An accepted assignment without a stored credential is left out, and the
@@ -80,15 +147,13 @@ pub(crate) fn eligible_citizens(
     eligible
 }
 
-/// The anonymous attempts that are not terminal. Each holds one casting position until it ends,
-/// so their number is what the admission cap bounds (design §9).
+/// The anonymous attempts that are not terminal, as the due index lists them. Each holds one
+/// casting position until it ends, so their number is what the admission cap bounds
+/// (design §9).
 pub(crate) fn nonterminal_attempts(
-    attempts: &impl StorageReadOnly<GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+    due: &impl StorageReadOnly<GovernanceAttemptId, Vec<BallotScopeV1>>,
 ) -> usize {
-    attempts
-        .iter()
-        .filter(|(_, attempt)| !attempt.is_terminal())
-        .count()
+    due.len()
 }
 
 /// Why the anonymous Parliament tables of a restored cut are refused.
@@ -119,6 +184,7 @@ pub(crate) fn validate_cut(
     let attempts = cut.parliament_anonymous_attempts();
     let registrations = cut.parliament_anonymous_registrations();
     let stored_boards = cut.parliament_anonymous_boards();
+    let due = cut.parliament_anonymous_due();
 
     // A selection that does not install the family holds none of its rows.
     let uninstalled = crate::runtime::uninstalled_world_members(cut.runtime_selection())
@@ -128,6 +194,7 @@ pub(crate) fn validate_cut(
         attempts.is_empty(),
         registrations.is_empty(),
         stored_boards.is_empty(),
+        due.is_empty(),
     ]) {
         if !empty && uninstalled.contains(&member) {
             return Err(Invalid(format!(
@@ -153,6 +220,21 @@ pub(crate) fn validate_cut(
                 .flat_map(|generation| generation.elections())
                 .flat_map(|election| election.accepted().iter().copied()),
         );
+    }
+    // The due index is exactly the one the attempts and boards give.
+    // SPEC: §13.4 HC808 — restore refuses a due index its tables do not give.
+    let derived = derived_due_index(cut);
+    if (due.len() != derived.len()
+        || due
+            .iter()
+            .zip(&derived)
+            .any(|((id, scopes), (expected_id, expected))| id != expected_id || scopes != expected))
+        && !cfg!(all(test, sumeragi_core_mutation = "HC808"))
+    {
+        return Err(Invalid(
+            "the anonymous Parliament due index is not the one its attempts and boards give"
+                .to_owned(),
+        ));
     }
     if let Some((assignment, _)) = registrations
         .iter()

@@ -498,8 +498,14 @@ pub async fn double_sign(
 }
 
 /// Read the committed record of exactly this double-sign, if a block has admitted it.
-async fn committed_record(client: &Client, sign: &DoubleSign) -> Result<Option<EvidenceRecord>> {
-    let client = client.client().clone();
+///
+/// The evidence list is a node-local operator read that only the node's own key may sign, so it
+/// goes through `reader`'s own client, never an account client re-pointed at another node.
+async fn committed_record(
+    reader: &NetworkPeer,
+    sign: &DoubleSign,
+) -> Result<Option<EvidenceRecord>> {
+    let client = reader.client().client().clone();
     // One explicit maximal page: a qualification network retains far fewer records, and a
     // truncated page must never be read as absence.
     let page = read_on_dedicated_thread(move || {
@@ -558,11 +564,12 @@ async fn committed_record(client: &Client, sign: &DoubleSign) -> Result<Option<E
 ///
 /// A block led by the offender carries no admission, so the proof may enter one or more
 /// heights after the offence. The penalty must then follow exactly `slashing_delay_blocks`
-/// later. Every height is ordinary paid work signed by the current exact quorum.
+/// later. Every height is ordinary paid work signed by the current exact quorum. Committed
+/// evidence is read through the honest `reader` node's own operator client.
 pub async fn await_applied_penalty(
     network: &Network,
     voters: &[PeerId],
-    admin: &Client,
+    reader: &NetworkPeer,
     sign: &DoubleSign,
     slashing_delay_blocks: u64,
 ) -> Result<AppliedPenalty> {
@@ -570,7 +577,7 @@ pub async fn await_applied_penalty(
     // Each voter leads at most once in a rotation; the delay then elapses.
     let bound = sign.height + u64::try_from(voters.len())? + slashing_delay_blocks;
     loop {
-        if let Some(record) = committed_record(admin, sign).await? {
+        if let Some(record) = committed_record(reader, sign).await? {
             ensure!(
                 record.recorded_at_height >= sign.height && record.recorded_at_height <= height,
                 "evidence was recorded outside the paid heights after its offence"

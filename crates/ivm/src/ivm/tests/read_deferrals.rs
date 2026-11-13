@@ -300,7 +300,7 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
             control.call_result_word_count(),
         ) {
             (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
-            (Err(VMError::AssertionFailed), Err(VMError::AssertionFailed)) => {
+            (Err(VMError::ControlFlowViolation), Err(VMError::ControlFlowViolation)) => {
                 assert!(
                     !prepared,
                     "completed contract must publish its root result table"

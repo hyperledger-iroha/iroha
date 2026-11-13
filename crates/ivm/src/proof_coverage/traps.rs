@@ -228,7 +228,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/cache.rs",
-        PrepareRejection: [GenericSyscallNotAllowed, InvalidMetadata],
+        PrepareRejection: [ArtifactAbiHashMismatch, GenericSyscallNotAllowed, InvalidMetadata],
     ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/cache/runtime_slot.rs",
@@ -1161,10 +1161,13 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
     kind(VmTrapKind::Other),
 ];
 
-/// One stable numeric fault code of the Kotodama V1 numeric syscalls.
+/// One stable numeric fault code of the Kotodama V1 numeric syscalls and the
+/// checked register instructions.
 ///
-/// In status mode the tag is returned in `r11` and execution continues; in
-/// trap mode the syscall raises `VMError::NumericFault`. The relation must
+/// In status mode a numeric syscall returns the tag in `r11` and execution
+/// continues; in trap mode it raises `VMError::NumericFault`. Checked register
+/// division and signed overflow (`DivisionByZero`, `RegisterIntegerOverflow`)
+/// always raise `VMError::NumericFault`. The relation must
 /// bind the selected mode, the exact tag and the gas of every completed stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumericFaultEntry {
@@ -1194,7 +1197,7 @@ macro_rules! numeric_fault {
 }
 
 /// Number of [`NumericFaultV1`] variants.
-pub const NUMERIC_FAULT_COUNT: usize = 13;
+pub const NUMERIC_FAULT_COUNT: usize = 14;
 
 /// Every [`NumericFaultV1`] in ascending tag order.
 pub const NUMERIC_FAULTS: &[NumericFaultEntry; NUMERIC_FAULT_COUNT] = &[
@@ -1211,6 +1214,7 @@ pub const NUMERIC_FAULTS: &[NumericFaultEntry; NUMERIC_FAULT_COUNT] = &[
     numeric_fault!(InvalidFailureMode),
     numeric_fault!(ReservedRegisterNonZero),
     numeric_fault!(NegativeSquareRoot),
+    numeric_fault!(RegisterIntegerOverflow),
 ];
 
 /// One stable pointer or envelope validation fault code.

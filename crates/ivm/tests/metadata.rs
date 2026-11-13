@@ -397,6 +397,7 @@ fn parse_rejects_unknown_minor_version() {
 fn load_program_honors_zk_mode_bit() {
     let mut bytes = ProgramMetadata {
         mode: ivm_mode::ZK,
+        max_cycles: 1,
         abi_version: 1,
         ..ProgramMetadata::default()
     }

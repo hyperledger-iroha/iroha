@@ -397,6 +397,36 @@ fn prove_step(
     );
     let (cs, is, mut ws) = build(secondary(gens, plan.as_ref(), step), false, Some(layout.1));
     assert_eq!((cp.layout(), cs.layout()), layout);
+    if generation == 1 && matches!(step, Step::Receive) {
+        let independent = OperationPlan::new(gens, previous.unwrap(), step);
+        let (other, _, mut witness) = build(
+            primary(chain, gens, Some(&independent), step),
+            true,
+            Some(layout.0),
+        );
+        let difference = cp.public_program_differences(&other);
+        assert_eq!(
+            cp.program_digest(),
+            other.program_digest(),
+            "primary program must be independent of fresh private fold coins: {difference}",
+        );
+        zeroize::Zeroize::zeroize(&mut witness);
+        drop((other.into_verifier_program(), witness));
+        let (other, _, mut witness) = build(
+            secondary(gens, Some(&independent), step),
+            false,
+            Some(layout.1),
+        );
+        let difference = cs.public_program_differences(&other);
+        assert_eq!(
+            cs.program_digest(),
+            other.program_digest(),
+            "secondary program must be independent of fresh private fold coins: {difference}",
+        );
+        zeroize::Zeroize::zeroize(&mut witness);
+        drop((other.into_verifier_program(), witness));
+        eprintln!("fresh independent private fold entropy preserves both exact Receive programs");
+    }
     eprintln!(
         "full backend generation {generation} {step:?}: P shape={:?}, memory={:?}; S shape={:?}, memory={:?}",
         cp.shape,
@@ -784,11 +814,23 @@ fn complete_recursive_bootstrap_load_send_receive() {
     let seed_gens = empty_generators();
     let chain = chain_fixture::new(&seed_gens.p);
     let mut previous = generation(&chain, &seed_gens, None, 0);
+    let mut unchanged_geometry = 0;
     for hop in 1..=12 {
         let gens = previous.generators();
         let next = generation(&chain, &gens, Some(&previous), hop);
         let before = previous.program_ids();
         let after = next.program_ids();
+        let same_structure = previous.kinds.iter().zip(&next.kinds).all(|(a, b)| {
+            a.cp.layout() == b.cp.layout()
+                && a.cs.layout() == b.cs.layout()
+                && a.cp.public_program_counts() == b.cp.public_program_counts()
+                && a.cs.public_program_counts() == b.cs.public_program_counts()
+        });
+        unchanged_geometry = if same_structure {
+            unchanged_geometry + 1
+        } else {
+            0
+        };
         for kind in 0..4 {
             for side in 0..2 {
                 let hex = |v: &[u8; 32]| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
@@ -855,6 +897,10 @@ fn complete_recursive_bootstrap_load_send_receive() {
             );
             return;
         }
+        assert!(
+            unchanged_geometry < 2,
+            "exact public programs changed after two generations of identical geometry and instruction counts; inspect the component differences above before further proofs"
+        );
         previous = next;
     }
     panic!("the exact four-kind programs did not reach a fixed point in twelve generations");

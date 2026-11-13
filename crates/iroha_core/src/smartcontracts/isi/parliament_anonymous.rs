@@ -68,7 +68,7 @@ use crate::{
     state::{
         StateReadOnly, StateTransaction, WorldReadOnly,
         parliament_anonymous_tables::{
-            election_credentials, eligible_citizens, nonterminal_attempts,
+            election_credentials, eligible_citizens, nonterminal_attempts, store_attempt,
         },
     },
 };
@@ -240,7 +240,7 @@ impl Execute for CreateAnonymousParliamentAttemptV1 {
         // The admission cap: one casting position per nonterminal attempt (design §9).
         let limit = casting_window_limit(&*state.world)
             .map_err(|error| refused(format!("admission cap: {error}")))?;
-        if nonterminal_attempts(attempts) >= limit {
+        if nonterminal_attempts(&state.world.parliament_anonymous_due) >= limit {
             return Err(refused(format!(
                 "the anonymous Parliament admission cap of {limit} nonterminal attempts is reached"
             )));
@@ -266,10 +266,7 @@ impl Execute for CreateAnonymousParliamentAttemptV1 {
             },
         )
         .map_err(|error| anonymous_refusal(&error, state))?;
-        state
-            .world
-            .parliament_anonymous_attempts
-            .insert(id, attempt);
+        store_attempt(&mut state.world, id, attempt);
         Ok(())
     }
 }
@@ -350,10 +347,7 @@ impl Execute for SubmitAnonymousParliamentTransitionV1 {
             ),
         };
         result.map_err(|error| anonymous_refusal(&error, state))?;
-        state
-            .world
-            .parliament_anonymous_attempts
-            .insert(id, attempt);
+        store_attempt(&mut state.world, id, attempt);
         Ok(())
     }
 }
@@ -393,10 +387,7 @@ impl Execute for RegisterParliamentCredentialV1 {
             .unwrap_or_default();
         match attempt.register_credential(&network_id, authority, &self, &records, source, now_ms) {
             Ok((assignment, record)) => {
-                state
-                    .world
-                    .parliament_anonymous_attempts
-                    .insert(self.governance_attempt_id, attempt);
+                store_attempt(&mut state.world, self.governance_attempt_id, attempt);
                 state
                     .world
                     .parliament_anonymous_registrations

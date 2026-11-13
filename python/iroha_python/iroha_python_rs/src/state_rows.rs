@@ -134,11 +134,7 @@ fn keys(expected: &[u8]) -> Result<Vec<StateKeyV1>, NativeValidationError> {
 #[pyo3(name = "verify_state_rows_v1")]
 #[expect(
     clippy::too_many_arguments,
-<<<<<<< HEAD
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
-=======
-    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
->>>>>>> origin/optimizations
 )]
 pub(super) fn verify_state_rows_v1_py(
     py: Python<'_>,

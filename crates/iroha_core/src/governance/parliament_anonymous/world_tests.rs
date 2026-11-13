@@ -79,6 +79,7 @@ fn world_with(driver: &Driver) -> World {
     block
         .parliament_anonymous_attempts
         .insert(driver.id(), driver.state.clone());
+    crate::state::parliament_anonymous_tables::seed_due_index(&mut block);
     block.commit();
     world
 }
@@ -264,6 +265,7 @@ fn fill(
             .parliament_anonymous_boards
             .insert(*scope, board.clone());
     }
+    crate::state::parliament_anonymous_tables::seed_due_index(&mut block);
     block.commit();
 }
 
@@ -308,6 +310,25 @@ fn restore_accepts_exactly_the_tables_the_reducer_produces() {
     fill(&world, &driver, &records, &[(scope, board.clone())]);
     validate_cut(&world.view(), &network(), driver.height)
         .expect("the reducer's own tables restore");
+    // The due index lists the nonterminal attempt with its board; no other index restores.
+    assert_eq!(
+        world.view().parliament_anonymous_due.get(&driver.id()),
+        Some(&vec![scope])
+    );
+    for due in [Vec::new(), vec![scope, BallotScopeV1::new([0xee; 64])]] {
+        let disagreeing = activated_world();
+        fill(&disagreeing, &driver, &records, &[(scope, board.clone())]);
+        let mut block = disagreeing.block();
+        block.parliament_anonymous_due.insert(driver.id(), due);
+        block.commit();
+        assert!(
+            matches!(
+                validate_cut(&disagreeing.view(), &network(), driver.height),
+                Err(AnonymousTablesRestoreError::Invalid(message)) if message.contains("due index")
+            ),
+            "a due index that disagrees with its tables is refused"
+        );
+    }
     // Even with every credential already in history, this earlier cut did not seal its
     // juries. The cut check must inspect attempt anchors, not only credential locators.
     assert!(matches!(
@@ -594,6 +615,7 @@ fn the_executor_runs_a_registration_only_as_the_sole_instruction_of_its_input() 
     block
         .parliament_anonymous_attempts
         .insert(driver.id(), driver.state.clone());
+    crate::state::parliament_anonymous_tables::seed_due_index(&mut block);
     block.commit();
     let mut config = TestChainConfig::new(world, 1_000);
     config.genesis_parameters.push(Parameter::Custom(

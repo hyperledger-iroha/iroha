@@ -7174,6 +7174,11 @@
    "reason": "record_without_units",
    "note": "A session, roster, relay, registry, identifier, proof or governance record. It creates, moves and locks no unit."
   },
+  "anonymous_ballot::RegisterParliamentCredentialV1": {
+   "value_bearing": false,
+   "reason": "record_without_units",
+   "note": "A session, roster, relay, registry, identifier, proof or governance record. It creates, moves and locks no unit."
+  },
   "governance::CastZkBallot": {"value_bearing": true, "effects": ["voting.zk_ballot_lock"]},
   "governance::CastPlainBallot": {"value_bearing": true, "effects": ["voting.plain_ballot_lock"]},
   "governance::UpdatePlainConviction": {"value_bearing": true, "effects": ["voting.plain_ballot_lock"]},
@@ -7470,7 +7475,7 @@
    "owner": ["P.8"],
    "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
    "symbol": "fn ensure_qualified_standalone_zk_relation_v1() -> Result<(), Error> {",
-   "line": 1258,
+   "line": 1263,
    "summary": "A ZK ballot is refused before any proof is dispatched, so its bond lock cannot run.",
    "required": "P.8 delivers the ballot relation; the bond lock stays the exact transfer into escrow the plain ballot uses."
   },
@@ -7481,7 +7486,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
    "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {",
-   "line": 4849,
+   "line": 4853,
    "summary": "No test in the ledger crate submits an Orchard bundle, valid or mutated: the nullifier, anchor, successor and expiry checks of the Orchard apply arm are exercised by no test there.",
    "required": "P.16 supplies genuine Orchard proofs and mutations; P.3 supplies the shared ledger-effect tests."
   }
@@ -7489,7 +7494,7 @@
  "summary": {
   "protocols": 26,
   "value_bearing_protocols": 12,
-  "operations": 94,
+  "operations": 95,
   "value_bearing_operations": 20,
   "effects": 33,
   "effects_by_class": {

@@ -79,7 +79,7 @@ fn registers_compact_bundle_roundtrip() {
     assert_eq!(full.leaf_index(), 3);
     let commitment = MerkleTreeCommitment::new(
         root_t,
-        NonZeroU64::new(256).expect("register count is non-zero"),
+        NonZeroU64::new(ivm::parallel::REGISTER_COUNT as u64).expect("register count is non-zero"),
     );
     assert!(full.verify_sha256(&leaf_t, &commitment));
 }

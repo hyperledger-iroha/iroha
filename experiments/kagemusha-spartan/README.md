@@ -52,7 +52,8 @@ existing Ed25519 account's signature over a fresh Native challenge.
 Swift and Kotlin expose installation, account admission, prepare/review/execute,
 complete Payment verification, and exact retained-output recovery through the same
 native owner. Send confirmation uses hardware-backed biometric or device-credential
-authentication. See [NATIVE_BACKEND.md](NATIVE_BACKEND.md) for the exact API sequence,
+authentication in the application before execution; it is not a proof of user
+confirmation against a malicious SDK caller. See [NATIVE_BACKEND.md](NATIVE_BACKEND.md) for the exact API sequence,
 custody boundaries and four-operation profile scope.
 
 The physical device fixture uses the real Android/Apple platform adapters and
@@ -91,7 +92,7 @@ export CARGO_TARGET_DIR="$PWD/target"
 cargo iroha-fast -- test --locked --offline --release --lib
 KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS="$PWD/output/full-backend-chain/native-device" \
   cargo iroha-fast -- test --locked --offline --release --lib \
-  backend_chain_tests::complete_recursive_bootstrap_load_send_receive \
+  full::backend_chain_tests::complete_recursive_bootstrap_load_send_receive \
   -- --ignored --exact --nocapture --test-threads=1
 ```
 

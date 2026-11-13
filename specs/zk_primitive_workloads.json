@@ -871,7 +871,7 @@
     "extensions": [".rs", ".kt", ".kts", ".java", ".swift", ".ts", ".js", ".mjs", ".cjs", ".py", ".cs", ".json", ".b64", ".norito", ".toml", ".yaml", ".yml", ".txt", ".tsv"],
     "exclude_prefixes": ["specs/", "scripts/", "docs/", "dist/"],
     "scope_note": "Identifier forms of the Exact12 catalog commitment field and type in code, fixtures and configuration. Documentation, plan ledgers and tooling are not carriers. The phrase with a space names Nexus lane catalogs and is not matched.",
-    "type_files": ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift", "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12CapabilityManifestV1Tests.swift", "artifacts/openapi/torii.json", "artifacts/openapi/versions/current/torii.json", "configs/soranexus/taira/privacy_rollout_plan_v1.json", "crates/connect_norito_bridge/src/privacy_capability_ffi_tests.rs", "crates/iroha_core/src/executor_tests.rs", "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs", "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_p256.rs", "crates/iroha_core_privacy/src/privacy_verifier.rs", "crates/iroha_core_zk/src/stark.rs", "crates/iroha_crypto/src/privacy.rs", "crates/iroha_data_model/src/isi/generated_record_identity_tests/native_capture.rs", "crates/iroha_data_model/src/isi/privacy.rs", "crates/iroha_data_model/src/privacy.rs", "crates/iroha_data_model/src/privacy/action_role.rs", "crates/iroha_data_model/src/privacy/proofs.rs", "crates/iroha_data_model/src/privacy/protocol.rs", "crates/iroha_data_model/src/privacy/release_manifest.rs", "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs", "crates/iroha_data_model/src/privacy/tests/release_manifest.rs", "crates/iroha_data_model/src/transaction/signed_model_tests.rs", "crates/iroha_data_model/tests/fixtures/manual_protocol_identity_frames.json", "crates/iroha_data_model/tests/manual_frame_identity/protocol.rs", "crates/iroha_kagami/src/privacy_bootstrap/release.rs", "crates/iroha_torii/assets/openapi/torii.json", "crates/iroha_torii/src/openapi/tests.rs", "crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs", "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_hash.rs", "integration_tests/tests/privacy_exact12_zk_ams_vega_network.rs", "javascript/iroha_js/src/norito.js", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt", "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1Test.kt", "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1Test.kt", "python/iroha_python/src/iroha_python/privacy_exact12.py", "python/iroha_python/tests/privacy_exact12_fixture_test.py"],
+    "type_files": ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift", "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12CapabilityManifestV1Tests.swift", "artifacts/openapi/torii.json", "artifacts/openapi/versions/current/torii.json", "configs/soranexus/taira/privacy_rollout_plan_v1.json", "crates/connect_norito_bridge/src/privacy_capability_ffi_tests.rs", "crates/iroha_core/src/executor_tests.rs", "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs", "crates/iroha_core_privacy/src/privacy_engines/zk_x509/fixed_algebraic_p256.rs", "crates/iroha_core_privacy/src/privacy_verifier.rs", "crates/iroha_core_zk/src/stark.rs", "crates/iroha_crypto/src/privacy.rs", "crates/iroha_data_model/src/isi/generated_record_identity_tests/native_capture.rs", "crates/iroha_data_model/src/isi/privacy.rs", "crates/iroha_data_model/src/privacy.rs", "crates/iroha_data_model/src/privacy/action_role.rs", "crates/iroha_data_model/src/privacy/exact12_wire.rs", "crates/iroha_data_model/src/privacy/ironwood_wire.rs", "crates/iroha_data_model/src/privacy/proofs.rs", "crates/iroha_data_model/src/privacy/protocol.rs", "crates/iroha_data_model/src/privacy/release_manifest.rs", "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs", "crates/iroha_data_model/src/privacy/tests/release_manifest.rs", "crates/iroha_data_model/src/transaction/signed_model_tests.rs", "crates/iroha_data_model/tests/fixtures/manual_protocol_identity_frames.json", "crates/iroha_data_model/tests/manual_frame_identity/protocol.rs", "crates/iroha_kagami/src/privacy_bootstrap/release.rs", "crates/iroha_torii/assets/openapi/torii.json", "crates/iroha_torii/src/openapi/tests.rs", "crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs", "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_proof_hash.rs", "integration_tests/tests/privacy_exact12_zk_ams_vega_network.rs", "javascript/iroha_js/src/norito.js", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt", "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1Test.kt", "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1Test.kt", "python/iroha_python/src/iroha_python/privacy_exact12.py", "python/iroha_python/tests/privacy_exact12_fixture_test.py"],
     "sdk_owners": [
      {
       "path": "crates/iroha_data_model/src/privacy.rs",
@@ -2701,7 +2701,7 @@
    "domain_separation": "Plain BLAKE3-256 over the tag iroha:privacy:statement:v1, the canonical Norito length as u64 little-endian and the canonical Norito bytes.",
    "sites": [
     {
-     "path": "crates/iroha_data_model/src/privacy/statements.rs",
+     "path": "crates/iroha_data_model/src/privacy/exact12_wire.rs",
      "symbol": "pub fn digest(&self) -> Result<PrivacyStatementDigestV1, norito::Error> {",
      "literals": ["hasher.update(PRIVACY_STATEMENT_DIGEST_DOMAIN_V1);"],
      "compiled": "production"
@@ -2743,7 +2743,7 @@
    "domain_separation": "Plain BLAKE3-256 over a per-record domain tag and the canonical Norito bytes; the producer ledger lists each function with its tag.",
    "sites": [
     {
-     "path": "crates/iroha_data_model/src/privacy/protocol.rs",
+     "path": "crates/iroha_data_model/src/privacy/exact12_wire.rs",
      "symbol": "pub fn digest(&self) -> Result<PrivacyRootPublicationDigestV1, norito::Error> {",
      "compiled": "production"
     },
@@ -2977,6 +2977,11 @@
     "keccak": {
      "class": "label-only",
      "note": "Documentation of the upstream reference profile."
+    },
+    "lthash": {
+     "class": "role",
+     "note": "Ironwood replay and State-row verification accept only the LtHash16 World State accumulator as the selected commitment profile.",
+     "roles": ["state.lthash16-accumulator"]
     },
     "poseidon": {
      "class": "label-only",
@@ -3219,7 +3224,7 @@
    }
   },
   "halo2-ipa": {
-   "description": "Native PLONK/PIPA-R systems and Pasta gadgets, retained explicit transcript profiles, standalone IPA helpers and generic native verification.",
+   "description": "Native PLONK/PIPA-R systems, native ProtoGalaxy folding of their relations (iroha_fold) and Pasta gadgets, retained explicit transcript profiles, standalone IPA helpers and generic native verification.",
    "uses": {
     "blake2b": {
      "class": "role",
@@ -4514,7 +4519,7 @@
     "consumer": "privacy-substrate"
    },
    {
-    "pattern": "^crates/iroha_zkp_halo2/|^crates/iroha_plonk|^crates/iroha_pasta/|^crates/iroha_core_zk/|halo2|pasta",
+    "pattern": "^crates/iroha_zkp_halo2/|^crates/iroha_plonk|^crates/iroha_fold/|^crates/iroha_pasta/|^crates/iroha_core_zk/|halo2|pasta",
     "consumer": "halo2-ipa"
    },
    {
@@ -4917,13 +4922,18 @@
    "crates/iroha_core/src/state/authority_registry/complete/frozen_escrows/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/frozen_nfts_rwas/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/original_stream/encoding.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/complete/original_stream/membership.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/complete/original_stream/publication_timing.rs": ["lthash"],
    "crates/iroha_core/src/state/authority_registry/complete/original_stream/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture.rs": ["iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture/aggregate/group_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture/catalog.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture/confidential_policy_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture/contract_subject_tests.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/complete/table_capture/native_game_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/table_capture/native_world.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/complete/table_capture/runtime_retirement_tests.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/complete/table_capture/sorafs_authority_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/transaction_membership.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/complete/transaction_membership_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/grouped_ownership/asset_definitions.rs": ["iroha-hash"],
@@ -4938,6 +4948,7 @@
    "crates/iroha_core/src/state/authority_registry/grouped_ownership/nfts_rwas/test_support.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/grouped_ownership/nfts_rwas/work_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/grouped_ownership/tests.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/keyed_commitment.rs": ["lthash"],
    "crates/iroha_core/src/state/authority_registry/leaf.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/leaf/frame.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/leaf/literal_identity_tests.rs": ["iroha-hash"],
@@ -5004,6 +5015,7 @@
    "crates/iroha_core/tests/ivm_corehost_zk_gate.rs": ["iroha-hash"],
    "crates/iroha_core/tests/ivm_host_mapping.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/tests/kaigi_privacy.rs": ["iroha-hash"],
+   "crates/iroha_core/tests/zk_lane_warning.rs": ["iroha-hash"],
    "crates/iroha_core/tests/zk_ledger_scaffold.rs": ["iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_core/tests/zk_roots_get_cap.rs": ["iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_core/tests/zk_stark.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "poseidon2"],
@@ -5029,7 +5041,9 @@
    "crates/iroha_core_privacy/src/execution_proofs/stark/proof_managed_note_stark.rs": ["digest384", "poseidon"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs": ["digest384", "poseidon", "sha2-512"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark_digest_tests.rs": ["digest384", "shake"],
-   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/ironwood_replay.rs": ["lthash"],
+   "crates/iroha_core_privacy/src/ironwood_state_rows.rs": ["iroha-hash"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs": ["keccak", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/initial_preflighted_cost_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_initial_coalescing.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_observation_tests.rs": ["sha3"],
@@ -5051,7 +5065,7 @@
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/relation.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/stark.rs": ["iroha-hash", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/test_fixtures.rs": ["iroha-hash"],
-   "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet.rs": ["iroha-hash"],
+   "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation/custody.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation/custody/tests.rs": ["iroha-hash"],
@@ -5236,6 +5250,7 @@
    "crates/iroha_core_privacy/src/privacy_verifier/x509_attachment/tests.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/tests/common/zk_x509_der.rs": ["sha2-256"],
    "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs": ["iroha-hash", "poseidon"],
+   "crates/iroha_core_privacy/tests/orchard_compatibility.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/tests/state_commitment_candidates_measurement.rs": ["blake2b", "blake3", "digest384", "poseidon", "poseidon2", "rescue", "sha2-256"],
    "crates/iroha_core_timed_ovn/src/tle.rs": ["pedersen", "sha2-256"],
    "crates/iroha_core_zk/examples/confidential_redemption.rs": ["iroha-hash"],
@@ -5340,7 +5355,7 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/load/native_finality_tests/selected_epoch.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/monetary/incoming_original.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/tests.rs": ["iroha-hash"],
-   "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs": ["poseidon"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs": ["blake2b", "poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1/tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1.rs": ["sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/builder.rs": ["sha2-256"],
@@ -5355,11 +5370,14 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger/tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger_producer.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger_producer/tests.rs": ["iroha-hash"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix_ledger.rs": ["sha2-256"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix_ledger/tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker.rs": ["sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs": ["blake2b", "poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/retention.rs": ["sha2-256"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kaigi_client_v1.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/lib.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],
    "crates/iroha_core_zk/src/native_pipa_r_tests.rs": ["iroha-hash"],
@@ -5372,6 +5390,10 @@
    "crates/iroha_core_zk/src/stark/frame_identity_tests.rs": ["digest384", "poseidon"],
    "crates/iroha_core_zk/src/stark/tests.rs": ["digest384", "poseidon", "poseidon2", "sha2-256"],
    "crates/iroha_core_zk/src/strict_verifying_key_preparation_tests.rs": ["iroha-hash", "poseidon"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus.rs": ["sha2-256"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus/activation.rs": ["sha2-256"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus/continuation.rs": ["poseidon", "sha2-256"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus/stages.rs": ["sha2-256"],
    "crates/iroha_crypto/benches/sm_perf.rs": ["sha2-256", "sm3"],
    "crates/iroha_crypto/examples/compute_shielded_golden.rs": ["iroha-hash"],
    "crates/iroha_crypto/src/bin/sm_perf_check.rs": ["sha2-256", "sm3"],
@@ -5576,11 +5598,12 @@
    "crates/iroha_data_model/src/privacy.rs": ["blake3", "digest384", "keccak", "poseidon", "poseidon2", "sha2-256", "sha3"],
    "crates/iroha_data_model/src/privacy/capability_manifest.rs": ["sha2-256"],
    "crates/iroha_data_model/src/privacy/credentials.rs": ["blake3", "sha2-256", "sha3"],
+   "crates/iroha_data_model/src/privacy/exact12_wire.rs": ["blake3"],
    "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": ["iroha-hash"],
    "crates/iroha_data_model/src/privacy/proofs.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_data_model/src/privacy/protocol.rs": ["blake3", "sha2-256"],
    "crates/iroha_data_model/src/privacy/release_manifest.rs": ["sha2-256"],
-   "crates/iroha_data_model/src/privacy/statements.rs": ["blake3", "sha2-256"],
+   "crates/iroha_data_model/src/privacy/statements.rs": ["sha2-256"],
    "crates/iroha_data_model/src/privacy/tests/adversarial.rs": ["sha3"],
    "crates/iroha_data_model/src/privacy/tests/namespaces_and_governance.rs": ["sha2-256", "sha2-512"],
    "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs": ["digest384", "poseidon", "poseidon2", "sha2-256", "sha3"],
@@ -5633,6 +5656,11 @@
    "crates/iroha_fhe/tests/bgv_threshold.rs": ["blake3"],
    "crates/iroha_fhe/tests/support/oracle.rs": ["blake3"],
    "crates/iroha_fhe/tests/vectors/bgv_reference.py": ["blake3"],
+   "crates/iroha_fold/src/circuit/decider_v2.rs": ["poseidon"],
+   "crates/iroha_fold/src/circuit/field.rs": ["poseidon"],
+   "crates/iroha_fold/src/commit.rs": ["pedersen"],
+   "crates/iroha_fold/src/ivc.rs": ["poseidon"],
+   "crates/iroha_fold/src/transcript.rs": ["poseidon"],
    "crates/iroha_js_codec/src/verifying_key_instruction_tests.rs": ["poseidon"],
    "crates/iroha_js_host/src/kaigi_authorization_v1.rs": ["iroha-hash"],
    "crates/iroha_js_host/src/lib.rs": ["blake2b", "blake3", "iroha-hash", "poseidon", "sha3"],
@@ -5711,11 +5739,15 @@
    "crates/iroha_plonk/src/pcs/ipa/verification_memo.rs": ["sha2-256"],
    "crates/iroha_plonk/src/pcs/ipa/verification_memo/tests.rs": ["poseidon"],
    "crates/iroha_plonk/src/pcs/ipa/verifier.rs": ["blake2b", "poseidon"],
+   "crates/iroha_plonk/src/pcs/mle/tests.rs": ["poseidon"],
+   "crates/iroha_plonk/src/pcs/multiopen/prover.rs": ["blake2b"],
    "crates/iroha_plonk/src/pcs/multiopen/soundness_tests.rs": ["blake2b", "poseidon"],
    "crates/iroha_plonk/src/pipa_r_tests.rs": ["blake2b", "poseidon"],
    "crates/iroha_plonk/src/protocol/schedule.rs": ["poseidon"],
    "crates/iroha_plonk/src/prover/cancellation_tests.rs": ["poseidon"],
+   "crates/iroha_plonk/src/prover/committed_advice_tests.rs": ["poseidon"],
    "crates/iroha_plonk/src/prover/fixed_only_tests.rs": ["poseidon"],
+   "crates/iroha_plonk/src/prover/instance_cell_tests.rs": ["poseidon"],
    "crates/iroha_plonk/src/prover/lookup.rs": ["blake2b"],
    "crates/iroha_plonk/src/prover/lookup/bounded_tests.rs": ["poseidon"],
    "crates/iroha_plonk/src/prover/mod.rs": ["blake2b", "poseidon"],
@@ -5791,6 +5823,8 @@
    "crates/iroha_plonk_gadgets/tests/word_hash.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/src/accumulation.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/src/operation.rs": ["poseidon"],
+   "crates/iroha_plonk_recursion/src/restructure.rs": ["poseidon"],
+   "crates/iroha_plonk_recursion/src/restructure/tests.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/src/terminal.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/src/tests.rs": ["poseidon", "sha2-256"],
    "crates/iroha_plonk_recursion/src/transcript.rs": ["poseidon"],
@@ -5800,6 +5834,7 @@
    "crates/iroha_plonk_recursion/tests/accumulation_circuit.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/tests/codec.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/tests/compact_components.rs": ["blake2b", "poseidon"],
+   "crates/iroha_plonk_recursion/tests/restructure_circuit.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/tests/source_choice.rs": ["poseidon"],
    "crates/iroha_plonk_recursion/tests/transcript.rs": ["poseidon"],
    "crates/iroha_telemetry/src/metrics.rs": ["blake3", "poseidon"],
@@ -6433,6 +6468,7 @@
    "python/iroha_python/iroha_python_rs/src/privacy_native_actions_orchard_ordered_tests.rs": ["iroha-hash"],
    "python/iroha_python/iroha_python_rs/src/privacy_wallet_bundle.rs": ["sha2-256"],
    "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs": ["hmac", "iroha-hash", "sha2-256"],
+   "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker_ironwood_tests.rs": ["lthash"],
    "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker_orchard_ordered_tests.rs": ["iroha-hash"],
    "python/iroha_python/iroha_python_rs/src/zk_vk_draft.rs": ["iroha-hash"],
    "python/iroha_python/src/iroha_python/__init__.py": ["blake2b", "poseidon", "poseidon2"],
@@ -6440,7 +6476,7 @@
    "python/iroha_python/src/iroha_python/gpu.py": ["poseidon", "poseidon2"],
    "python/iroha_python/src/iroha_python/kaigi.py": ["sha2-256"],
    "python/iroha_python/src/iroha_python/privacy_exact12.py": ["blake2b", "blake3", "digest384", "hmac", "sha2-256"],
-   "python/iroha_python/src/iroha_python/privacy_issuance.py": ["hmac", "sha2-256"],
+   "python/iroha_python/src/iroha_python/privacy_issuance.py": ["hmac"],
    "python/iroha_python/src/iroha_python/privacy_wallet_worker.py": ["hmac", "sha2-256"],
    "python/iroha_python/tests/client_kaigi_operator_auth_test.py": ["blake2b"],
    "python/iroha_python/tests/client_ledger_helpers_test.py": ["blake2b", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],
@@ -6470,6 +6506,7 @@
    "crates/iroha_data_model#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "keccak", "lthash", "sha2-256", "sha3", "sm3"],
    "crates/iroha_deploy#other": ["blake3", "iroha-hash", "scrypt", "sha2-256"],
    "crates/iroha_executor_data_model#other": ["iroha-hash"],
+   "crates/iroha_fold#other": ["sha2-256"],
    "crates/iroha_genesis#other": ["iroha-hash"],
    "crates/iroha_js_codec#other": ["blake2b", "iroha-hash", "sha2-256"],
    "crates/iroha_js_host#other": ["blake2b", "iroha-hash"],
@@ -6494,7 +6531,7 @@
    "crates/iroha_telemetry#other": ["blake3"],
    "crates/iroha_test_network#other": ["iroha-hash", "sha2-256"],
    "crates/iroha_test_samples#other": ["iroha-hash"],
-   "crates/iroha_torii#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "sm3"],
+   "crates/iroha_torii#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "lthash", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "sm3"],
    "crates/iroha_torii_shared#other": ["argon2", "blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "sha2-256", "sha3"],
    "crates/iroha_wallet#other": ["iroha-hash", "scrypt", "sha2-256"],
    "crates/irohad#other": ["blake3", "iroha-hash", "sha2-256", "sha3"],
@@ -6520,11 +6557,11 @@
    "integration_tests#other": ["argon2", "blake3", "iroha-hash", "sha2-256", "sha3"],
    "java#other": ["argon2", "blake2b", "blake2s", "blake3", "hkdf", "hmac", "iroha-hash", "lthash", "pbkdf2", "sha2-256", "sha3"],
    "javascript#other": ["argon2", "blake2b", "blake3", "hkdf", "iroha-hash", "md5", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "sm3"],
-   "kagemusha": ["blake2b", "hmac", "iroha-hash", "pedersen", "poseidon", "sha1", "sha2-256"],
+   "kagemusha": ["blake2b", "blake3", "hmac", "iroha-hash", "pedersen", "poseidon", "sha1", "sha2-256"],
    "kotlin#other": ["argon2", "blake2b", "blake2s", "blake3", "hkdf", "hmac", "iroha-hash", "sha1", "sha2-256", "sha3"],
    "mochi#other": ["iroha-hash", "sha2-256"],
    "pytests#other": ["blake2b", "blake3", "iroha-hash", "keccak", "poseidon", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3"],
-   "python#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "scrypt", "sha2-256", "sha2-512", "sha3", "sm3"],
+   "python#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "lthash", "scrypt", "sha2-256", "sha2-512", "sha3", "sm3"],
    "scripts#other": ["anemoi", "argon2", "blake2b", "blake2s", "blake3", "digest384", "hkdf", "hmac", "iroha-hash", "keccak", "md5", "monolith", "poseidon", "poseidon2", "rescue", "sha1", "sha2-256", "sha2-512", "sha3", "shake", "sm3", "streebog", "tip5"],
    "state-candidates": ["blake2b", "blake3", "digest384", "iroha-hash", "poseidon", "poseidon2", "rescue", "sha2-256"],
    "tools#other": ["argon2", "blake2b", "blake3", "hkdf", "iroha-hash", "sha1", "sha2-256", "sha2-512", "sha3"],
@@ -6778,6 +6815,26 @@
      "role": "privacy.record-digest-sha256"
     }
    },
+   "crates/iroha_data_model/src/privacy/exact12_wire.rs": {
+    "privacy_wire_statement_digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyStatementDigestV1, norito::Error>",
+     "role": "privacy.statement-digest-blake3"
+    },
+    "PrivacyRootPublicationV1::digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyRootPublicationDigestV1, norito::Error>",
+     "role": "privacy.record-digest-blake3"
+    },
+    "PrivacyPgcAccountBootstrapV1::digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyPgcAccountBootstrapDigestV1, norito::Error>",
+     "role": "privacy.record-digest-blake3"
+    }
+   },
    "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": {
     "PrivateSettlementProtocolClosureDrainV1::capture": {
      "primitives": ["iroha-hash"],
@@ -6806,6 +6863,12 @@
      "primitives": ["blake3"],
      "domains": [],
      "returns": "Result<PrivacyOrchardPoolBootstrapDigestV1, norito::Error>",
+     "role": "privacy.record-digest-blake3"
+    },
+    "PrivacyIronwoodPoolBootstrapV1::digest": {
+     "primitives": ["blake3"],
+     "domains": [],
+     "returns": "Result<PrivacyIronwoodPoolBootstrapDigestV1, norito::Error>",
      "role": "privacy.record-digest-blake3"
     },
     "PrivacyFcmpOutputTupleV1::output_id": {
@@ -6838,18 +6901,6 @@
      "domains": ["iroha:privacy:security-claim:v1"],
      "returns": "Result<PrivacySecurityClaimDigestV1, norito::Error>",
      "role": "privacy.record-digest-sha256"
-    },
-    "PrivacyRootPublicationV1::digest": {
-     "primitives": ["blake3"],
-     "domains": [],
-     "returns": "Result<PrivacyRootPublicationDigestV1, norito::Error>",
-     "role": "privacy.record-digest-blake3"
-    },
-    "PrivacyPgcAccountBootstrapV1::digest": {
-     "primitives": ["blake3"],
-     "domains": [],
-     "returns": "Result<PrivacyPgcAccountBootstrapDigestV1, norito::Error>",
-     "role": "privacy.record-digest-blake3"
     }
    },
    "crates/iroha_data_model/src/privacy/release_manifest.rs": {
@@ -6886,12 +6937,6 @@
      "domains": [],
      "returns": "Result<PrivacyActionDigestV1, norito::Error>",
      "role": "privacy.record-digest-sha256"
-    },
-    "PrivacyStatementV1::digest": {
-     "primitives": ["blake3"],
-     "domains": [],
-     "returns": "Result<PrivacyStatementDigestV1, norito::Error>",
-     "role": "privacy.statement-digest-blake3"
     }
    },
    "crates/iroha_zkp_halo2/src/vega/zk_ams.rs": {
@@ -7147,7 +7192,7 @@
    "crates/iroha_core_privacy/src/privacy_state/public_reserve_digest_tests.rs": 1,
    "crates/iroha_data_model/src/kaigi/authorization.rs": 2,
    "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": 1,
-   "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs": 2,
+   "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs": 3,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs": 17,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active.rs": 14,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active/source_stream.rs": 6,

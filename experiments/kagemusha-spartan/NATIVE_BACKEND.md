@@ -59,6 +59,11 @@ The C entry points use `connect_norito_kagemusha_spartan_*_v1`; Android uses the
 the same frozen capsule after Pending or an uncertain call failure. Closing releases
 the owner while preserving committed custody.
 
+Installation retries authenticate the exact original bytes against the retained
+installation identity. Execute caches every terminal result before foreign output
+allocation, so a lost reply cannot turn a definite NotPerformed into a later debit.
+Pending and uncertain calls keep their frozen operation available for recovery.
+
 ## Proof and custody boundaries
 
 Each complete pair verifies both scalar/point proofs, both accumulated matrix
@@ -78,6 +83,10 @@ proofs for already released operations.
 Proof masks and the pair-binding mask use fresh native entropy. Deterministic
 streams are restricted to explicit test replay. Public program transport, malformed
 proof parsing, and exact Payment serialization are separately bounded and canonical.
+The pair's first-phase preview commits the actual masked primary rows to obtain
+the linking digest. It does not generate a discarded full proof. After the secondary
+proof, Native drops its private circuit and witness before proving the primary.
+Both paths replay the same first-phase entropy schedule.
 
 ## Scope and validation
 

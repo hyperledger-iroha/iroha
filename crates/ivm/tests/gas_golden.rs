@@ -135,8 +135,8 @@ fn gas_linear_sequence_syscall_and_jumps() {
         vm.run().unwrap();
         assert_eq!(start - vm.gas_remaining, expected);
     }
-    let scallx = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
-    assert_eq!(cost_of(scallx), 5);
+    let scall = ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
+    assert_eq!(cost_of(scall), 5);
     // JAL: opcode 0x6F (test schedule via low 7-bit opcode)
     let jal = wide_jump(wide::control::JAL, 0, 0);
     assert_eq!(cost_of(jal), 2);

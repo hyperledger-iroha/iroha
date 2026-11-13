@@ -2010,7 +2010,7 @@ mod test_mode_tests {
         );
     }
     #[test]
-    fn test_mode_helpers_emit_private_scallx_syscalls() {
+    fn test_mode_helpers_emit_private_scall_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c177.ko");
         let compiler = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,

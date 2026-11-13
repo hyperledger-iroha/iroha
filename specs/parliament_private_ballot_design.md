@@ -1942,6 +1942,7 @@ as release additions and activated by a governed change set:
 | Storage | `world.parliament_anonymous_attempts`: the purpose-bound reducer State, policy snapshot and certificate of an attempt |
 | Storage | `world.parliament_anonymous_registrations`: the compact credential of each accepted assignment with the locator of the signed input that carried its proof |
 | Storage | `world.parliament_anonymous_boards`: seal, anchors, casting clock, corpus and closure record of each sealed binding body |
+| Storage | `world.parliament_anonymous_due`: the due index, each nonterminal attempt with the scopes of its boards |
 | Services | The block-start items (seal publication, casting clock, closures, openings), the signerless ballot entrypoint and the committed outputs |
 
 - **No switch of a baseline attempt.** An attempt created through the baseline
@@ -2041,7 +2042,7 @@ activatable only after the fourth.
   and its predecessor; a seal or board the node cannot rebuild defers the
   restore instead of refusing the tables.
 - **Addition.** The `iroha.governance.parliament.anonymous.v1` release
-  addition holds the credential interface and the three tables, and its
+  addition holds the family's interfaces and its tables, and its
   dependencies are exactly the frozen baseline. The release publishes it, but
   it stays unactivated until the fourth slice, and a root that runs the
   kernel's lifecycle services profile needs a composition for it first.
@@ -2049,8 +2050,8 @@ activatable only after the fourth.
 **Slice 3: the positioned pass.** Implemented and dispatched: the pass runs
 once at the start of every block of the global chain, and Parliament's items
 run on a root whose selection installs the family and on no other. Its outputs
-are committed as the leading rows of the block result. The due index and the
-real-peer test are still open (last bullet).
+are committed as the leading rows of the block result. The real-peer test is
+still open (last bullet).
 
 - **Cursor.** One cursor per block holds the remaining budget and the next
   position for G1 to G3. It is bound to the block's header and to the World
@@ -2064,7 +2065,7 @@ real-peer test are still open (last bullet).
   opening that finds `K` windows open ends G2c only; exhausting the budget or
   the output partition ends every later segment and leaves the item due.
 - **Parliament's owner.** Every item is applied in one World transaction over
-  the three tables, so an attempt, its board and their outputs change
+  the family's tables, so an attempt, its board and their outputs change
   together and a refused item changes nothing.
   - The prelude establishes the clock of every board opened in the parent
     block, in `(governance_attempt_id, body)` order. A board that opened
@@ -2170,6 +2171,13 @@ real-peer test are still open (last bullet).
   counts only where consensus requires the native pulse at that height, so
   every valid candidate block carries it; a later block counts a slot once its
   pulse is committed.
+- **Due index.** `world.parliament_anonymous_due` lists every nonterminal
+  attempt with the scopes of its boards. Listing, the due predicate, the
+  keeper's deadline and the admission cap read it, so a block reads at most
+  `K` attempts and their boards whatever the tables keep of terminal ones; an
+  open ballot never outlives its attempt. Every write of an attempt or a
+  board keeps the index, and restore refuses a cut whose index is not the one
+  its attempts and boards give.
 - **Local refusals.** A refusal the node cannot decide (World storage
   admission, its proof profile, a pinned frame, the verifier backend or an
   allocation) defers the block. Any other refusal of a listed item abandons it.
@@ -2227,9 +2235,6 @@ real-peer test are still open (last bullet).
     With no such time it waits for a pulse or a transaction; an unavailable
     Parliament observation is never a deadline.
 - **Open.**
-  - A due index bounded by `K`, rebuilt on restore: listing reads every
-    attempt and board, terminal ones included, and the admission cap counts
-    nonterminal attempts by reading the attempts table.
   - A real-peer test: no network may activate the family before slice 4, so
     the interfaces and the pass are tested on World rows only.
   - Clients (slice 5): a committed-transaction proof assumes a Network

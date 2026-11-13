@@ -40,7 +40,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         id: "invocation_entry",
         path: INTERPRETER,
         function: RUN,
-        summary: "from function entry to the loop: admits the register logger and trace storage, refuses a non-ZK run that still holds private state, clears the previous invocation's protected call state and enters root-call initialization. Stale logger custody, stale private state and refused logger or trace storage produce local deferrals, never deterministic contract faults",
+        summary: "from function entry to the loop: refuses an incomplete program image, admits the register logger and trace storage, refuses a non-ZK run that still holds private state, clears the previous invocation's protected call state and enters root-call initialization. Stale logger custody, stale private state and refused logger or trace storage produce local deferrals, never deterministic contract faults",
         obligations: &[
             Obligation::Initialization,
             Obligation::PrivateMasking,
@@ -50,7 +50,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         fallible_helpers: &[
             "begin_root_call",
             "begin_trace_invocation",
-            "budget.ensure_healthy",
+            "ensure_complete_program_image",
             "prepare_invocation_register_log",
         ],
         result_sources: &[],

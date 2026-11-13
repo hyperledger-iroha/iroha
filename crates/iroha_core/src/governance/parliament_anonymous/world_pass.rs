@@ -68,7 +68,9 @@ use super::{
 };
 use crate::state::{
     StateBlock, StateReadOnly, StateStorageAdmissionError, StateTransaction, WorldReadOnly,
-    parliament_anonymous_tables::{election_credentials, eligible_citizens},
+    parliament_anonymous_tables::{
+        election_credentials, eligible_citizens, store_attempt, store_board,
+    },
 };
 
 /// Why Parliament's items of a pass did not complete. The block is abandoned in every case.
@@ -291,29 +293,65 @@ pub(crate) fn casting_window_limit(
     Ok(usize::from(ballot.max_nonterminal_attempts))
 }
 
+/// The rows Parliament's listing reads: the nonterminal attempts the due index lists, at
+/// most `K` (design §9), and the boards of each. Terminal attempts and their boards are
+/// never read: an open ballot never outlives its attempt.
+pub(crate) struct DueRows<'world> {
+    attempts: Vec<(GovernanceAttemptId, &'world Attempt)>,
+    boards: Vec<(BallotScopeV1, &'world ParliamentBallotBoardRecordV1)>,
+}
+
+/// The [`DueRows`] of `world`.
+///
+/// # Errors
+/// [`PassError::World`] when the due index names an attempt or board World does not keep.
+pub(crate) fn due_rows<'world>(
+    world: &'world (impl WorldReadOnly + ?Sized),
+) -> Result<DueRows<'world>, PassError> {
+    let stored_attempts = world.parliament_anonymous_attempts();
+    let stored_boards = world.parliament_anonymous_boards();
+    let mut rows = DueRows {
+        attempts: Vec::new(),
+        boards: Vec::new(),
+    };
+    for (id, scopes) in world.parliament_anonymous_due().iter() {
+        let attempt = stored_attempts
+            .get(id)
+            .ok_or(PassError::World("the due index names no stored attempt"))?;
+        rows.attempts.push((*id, attempt));
+        for scope in scopes {
+            let board = stored_boards
+                .get(scope)
+                .ok_or(PassError::World("the due index names no stored board"))?;
+            rows.boards.push((*scope, board));
+        }
+    }
+    Ok(rows)
+}
+
 /// Casting windows that count as open: opened, with no closure processed.
-fn open_casting_windows(
-    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
-) -> usize {
+fn open_casting_windows(boards: &[(BallotScopeV1, &ParliamentBallotBoardRecordV1)]) -> usize {
     boards
         .iter()
         .filter(|(_, board)| board.opening.is_some() && board.closure.is_none())
         .count()
 }
 
-/// The board World keeps for the sealed `instance` of `attempt`, with its scope.
+/// The board World keeps for the sealed `instance` of the nonterminal `attempt`, with its
+/// scope, found through the due index.
 fn stored_board(
-    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    tx: &StateTransaction<'_, '_>,
     attempt: GovernanceAttemptId,
     instance: BodyInstanceId,
 ) -> Option<(BallotScopeV1, ParliamentBallotBoardRecordV1)> {
-    boards
+    tx.world
+        .parliament_anonymous_due
+        .get(&attempt)?
         .iter()
-        .find(|(_, board)| {
-            board.context.body_context.governance_attempt_id == attempt
-                && board.body_instance_id == instance
+        .find_map(|scope| {
+            let board = tx.world.parliament_anonymous_boards.get(scope)?;
+            (board.body_instance_id == instance).then(|| (*scope, board.clone()))
         })
-        .map(|(scope, board)| (*scope, board.clone()))
 }
 
 /// The board of the sealed jury `body` of the attempt `id`, as World keeps it.
@@ -330,7 +368,7 @@ fn jury_board(
         .sealed_body(body)
         .ok_or(PassError::World("a ballot item names an unsealed jury"))?
         .body_instance_id;
-    stored_board(&tx.world.parliament_anonymous_boards, id, instance).ok_or(PassError::World(
+    stored_board(tx, id, instance).ok_or(PassError::World(
         "a sealed binding jury has no stored board",
     ))
 }
@@ -350,7 +388,7 @@ fn establish_casting_clocks(
     let header = state._curr_block;
     let (height, timestamp_ms) = (header.height().get(), header.creation_time_ms);
     let mut due = Vec::new();
-    for (scope, board) in state.world.parliament_anonymous_boards.iter() {
+    for (scope, board) in due_rows(&state.world)?.boards {
         let Some(opening) = board.opening else {
             continue;
         };
@@ -363,7 +401,7 @@ fn establish_casting_clocks(
             ));
         }
         let context = board.context.body_context;
-        due.push((context.governance_attempt_id, context.body_role, *scope));
+        due.push((context.governance_attempt_id, context.body_role, scope));
     }
     if due.is_empty() {
         return Ok(());
@@ -393,7 +431,7 @@ fn establish_casting_clocks(
             )?;
             (board.record(), established)
         };
-        tx.world.parliament_anonymous_boards.insert(scope, record);
+        store_board(&mut tx.world, scope, record);
         report
             .rows
             .admit_prelude(GovernanceBlockStartOutputV1 {
@@ -416,12 +454,12 @@ fn establish_casting_clocks(
 /// G1: the generations of active attempts awaiting a slot at or below `height` whose
 /// exact-slot pulse is available.
 fn draw_items(
-    attempts: &impl StorageReadOnly<GovernanceAttemptId, Attempt>,
+    attempts: &[(GovernanceAttemptId, &Attempt)],
     height: u64,
     pulse_available: &impl Fn(u64) -> bool,
 ) -> Vec<GovernancePassItemV1> {
     let mut items = Vec::new();
-    for (id, attempt) in attempts.iter() {
+    for (id, attempt) in attempts {
         for slot in attempt.awaiting_slots() {
             if slot <= height && pulse_available(slot) {
                 items.push(GovernancePassItemV1::Draw { slot, attempt: *id });
@@ -433,11 +471,11 @@ fn draw_items(
 
 /// G2a ranks 0 to 2: every attempt's lifecycle items due at `now_ms`.
 fn lifecycle_items(
-    attempts: &impl StorageReadOnly<GovernanceAttemptId, Attempt>,
+    attempts: &[(GovernanceAttemptId, &Attempt)],
     now_ms: u64,
 ) -> Result<Vec<GovernancePassItemV1>, PassError> {
     let mut items = Vec::new();
-    for (_, attempt) in attempts.iter() {
+    for (_, attempt) in attempts {
         items.extend(
             attempt
                 .due_lifecycle_items(now_ms)?
@@ -450,7 +488,7 @@ fn lifecycle_items(
 
 /// G2b: every clocked ballot whose closing time `now_ms` has reached.
 fn closure_items(
-    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    boards: &[(BallotScopeV1, &ParliamentBallotBoardRecordV1)],
     now_ms: u64,
 ) -> Vec<GovernancePassItemV1> {
     boards
@@ -492,11 +530,11 @@ fn at_jury_stage(
 /// never opens.
 fn opening_items(
     attempts: &impl StorageReadOnly<GovernanceAttemptId, Attempt>,
-    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
+    boards: &[(BallotScopeV1, &ParliamentBallotBoardRecordV1)],
     now_ms: u64,
 ) -> Result<Vec<GovernancePassItemV1>, PassError> {
     let mut items = Vec::new();
-    for (_, board) in boards.iter() {
+    for (_, board) in boards {
         let Some(due_ms) = board.opening_at_ms else {
             continue;
         };
@@ -521,7 +559,7 @@ fn opening_items(
 /// parent and never stored; the block of the slot itself consumes the last one, so a slot
 /// that passed without its pulse produces none.
 fn height_progress_ticket(
-    attempts: &impl StorageReadOnly<GovernanceAttemptId, Attempt>,
+    attempts: &[(GovernanceAttemptId, &Attempt)],
     height: u64,
     now_ms: u64,
     parent_time_ms: Option<u64>,
@@ -667,9 +705,7 @@ fn occurrence(
         GovernancePassItemV1::Open { attempt, body, .. } => {
             if !at_jury_stage(attempts, attempt, body)? {
                 Ok(GovernanceOccurrenceV1::Lapsed)
-            } else if open_casting_windows(&*state.world.parliament_anonymous_boards)
-                >= casting_limit
-            {
+            } else if open_casting_windows(&due_rows(&state.world)?.boards) >= casting_limit {
                 Ok(GovernanceOccurrenceV1::NoCastingSlot)
             } else {
                 Ok(GovernanceOccurrenceV1::Live)
@@ -738,7 +774,7 @@ fn apply_draw(
         vec![receipt(at, item, &attempt, None)?],
     )
     .map_err(PassError::Output)?;
-    tx.world.parliament_anonymous_attempts.insert(id, attempt);
+    store_attempt(&mut tx.world, id, attempt);
     tx.apply();
     Ok(())
 }
@@ -787,10 +823,9 @@ fn apply_lifecycle(
             .sealed_body(body)
             .ok_or(PassError::World("a jury in Reflection is not sealed"))?
             .body_instance_id;
-        let (scope, record) = stored_board(&tx.world.parliament_anonymous_boards, id, instance)
-            .ok_or(PassError::World(
-                "a sealed binding jury has no stored board",
-            ))?;
+        let (scope, record) = stored_board(&tx, id, instance).ok_or(PassError::World(
+            "a sealed binding jury has no stored board",
+        ))?;
         if record.opening_at_ms.is_none() {
             let mut scheduled = typed_board(record)?;
             attempt.schedule_ballot_board(&mut scheduled, &network_id)?;
@@ -810,9 +845,9 @@ fn apply_lifecycle(
     )
     .map_err(PassError::Output)?;
     if let Some((scope, record)) = board {
-        tx.world.parliament_anonymous_boards.insert(scope, record);
+        store_board(&mut tx.world, scope, record);
     }
-    tx.world.parliament_anonymous_attempts.insert(id, attempt);
+    store_attempt(&mut tx.world, id, attempt);
     tx.apply();
     Ok(())
 }
@@ -855,8 +890,8 @@ fn apply_close(
         ],
     )
     .map_err(PassError::Output)?;
-    tx.world.parliament_anonymous_boards.insert(scope, record);
-    tx.world.parliament_anonymous_attempts.insert(id, attempt);
+    store_board(&mut tx.world, scope, record);
+    store_attempt(&mut tx.world, id, attempt);
     tx.apply();
     Ok(())
 }
@@ -899,7 +934,7 @@ fn apply_open(
         .map_err(PassError::Output)?;
         record
     };
-    tx.world.parliament_anonymous_boards.insert(scope, record);
+    store_board(&mut tx.world, scope, record);
     tx.apply();
     Ok(())
 }
@@ -991,19 +1026,9 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
         establish_casting_clocks(state, &mut report).map_err(parliament_error)?;
     }
     report.rows.close_prelude();
-    let parliament_work = parliament.is_some()
-        && (state
-            .world
-            .parliament_anonymous_attempts
-            .iter()
-            .next()
-            .is_some()
-            || state
-                .world
-                .parliament_anonymous_boards
-                .iter()
-                .next()
-                .is_some());
+    // Only a nonterminal attempt can have due work.
+    let parliament_work =
+        parliament.is_some() && state.world.parliament_anonymous_due.iter().next().is_some();
     if !parliament_work && !foreign.has_due_work(state) {
         // Nothing can be due: no cursor, and the clock policy is not read.
         before_enactments(state).map_err(foreign_error)?;
@@ -1020,15 +1045,16 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
     let limit = usize::try_from(pass.remaining())
         .unwrap_or(usize::MAX)
         .saturating_add(1);
-    let ticket = parliament.as_ref().and_then(|inputs| {
-        height_progress_ticket(
-            &*state.world.parliament_anonymous_attempts,
+    let ticket = match &parliament {
+        Some(inputs) => height_progress_ticket(
+            &due_rows(&state.world).map_err(parliament_error)?.attempts,
             height,
             now_ms,
             inputs.parent_time_ms,
             state.world.parameters().sumeragi().block_cadence_ms.get(),
-        )
-    });
+        ),
+        None => None,
+    };
     let pulse_at = |slot: u64| -> Option<AnonymousSortitionPulseV1> {
         parliament
             .as_ref()
@@ -1053,8 +1079,8 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
             before_enactments(state).map_err(foreign_error)?;
         }
         let mut items = if parliament.is_some() {
-            let attempts = &*state.world.parliament_anonymous_attempts;
-            let boards = &*state.world.parliament_anonymous_boards;
+            let due = due_rows(&state.world).map_err(parliament_error)?;
+            let (attempts, boards) = (due.attempts.as_slice(), due.boards.as_slice());
             match segment {
                 Segment::G1 => {
                     let mut items = draw_items(attempts, height, &|slot| pulse_at(slot).is_some());
@@ -1064,7 +1090,8 @@ pub(crate) fn run_governance_pass<F: ForeignPassOwnerV1>(
                 Segment::G2a => lifecycle_items(attempts, now_ms).map_err(parliament_error)?,
                 Segment::G2b => closure_items(boards, now_ms),
                 Segment::G2c => {
-                    opening_items(attempts, boards, now_ms).map_err(parliament_error)?
+                    opening_items(&*state.world.parliament_anonymous_attempts, boards, now_ms)
+                        .map_err(parliament_error)?
                 }
                 Segment::G3 => Vec::new(),
             }
@@ -1193,8 +1220,8 @@ pub(crate) fn parliament_due(
     parent_time_ms: Option<u64>,
     pulse_available: impl Fn(u64) -> bool,
 ) -> Result<bool, PassError> {
-    let attempts = world.parliament_anonymous_attempts();
-    let boards = world.parliament_anonymous_boards();
+    let due = due_rows(world)?;
+    let (attempts, boards) = (due.attempts.as_slice(), due.boards.as_slice());
     if clock_due(boards, height)
         || !draw_items(attempts, height, &pulse_available).is_empty()
         || height_progress_ticket(
@@ -1210,15 +1237,14 @@ pub(crate) fn parliament_due(
     {
         return Ok(true);
     }
-    Ok(!opening_items(attempts, boards, timestamp_ms)?.is_empty()
-        && open_casting_windows(boards) < casting_window_limit(world)?)
+    Ok(
+        !opening_items(world.parliament_anonymous_attempts(), boards, timestamp_ms)?.is_empty()
+            && open_casting_windows(boards) < casting_window_limit(world)?,
+    )
 }
 
 /// Whether a casting window opened in the parent of the block at `height` awaits its clock.
-fn clock_due(
-    boards: &impl StorageReadOnly<BallotScopeV1, ParliamentBallotBoardRecordV1>,
-    height: u64,
-) -> bool {
+fn clock_due(boards: &[(BallotScopeV1, &ParliamentBallotBoardRecordV1)], height: u64) -> bool {
     boards.iter().any(|(_, board)| {
         board.casting_clock.is_none()
             && board
@@ -1247,8 +1273,8 @@ pub(crate) fn parliament_next_due_ms(
     parent_time_ms: Option<u64>,
     pulse_available: impl Fn(u64) -> bool,
 ) -> Result<Option<u64>, PassError> {
-    let attempts = world.parliament_anonymous_attempts();
-    let boards = world.parliament_anonymous_boards();
+    let due = due_rows(world)?;
+    let (attempts, boards) = (due.attempts.as_slice(), due.boards.as_slice());
     if clock_due(boards, height) || !draw_items(attempts, height, &pulse_available).is_empty() {
         return Ok(Some(0));
     }
@@ -1261,7 +1287,7 @@ pub(crate) fn parliament_next_due_ms(
     let mut consider = |due_ms: u64| {
         next = Some(next.map_or(due_ms, |next| next.min(due_ms)));
     };
-    for (_, attempt) in attempts.iter() {
+    for (_, attempt) in attempts {
         if let Some(item) = attempt.lifecycle_items()?.first() {
             consider(item.due_ms);
         }
@@ -1271,7 +1297,7 @@ pub(crate) fn parliament_next_due_ms(
             consider(due_ms);
         }
     }
-    let openings = opening_items(attempts, boards, u64::MAX)?;
+    let openings = opening_items(world.parliament_anonymous_attempts(), boards, u64::MAX)?;
     if !openings.is_empty() && open_casting_windows(boards) < casting_window_limit(world)? {
         for item in openings {
             if let GovernancePassItemV1::Open { due_ms, .. } = item {

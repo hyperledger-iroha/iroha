@@ -14,11 +14,11 @@ use std::time::Instant;
 
 use ff::{Field, PrimeField};
 use group::GroupEncoding;
-use iroha_pasta::PastaCurve;
 use iroha_pasta::msm::{
-    BoundedSecretScalars, MemoryBudget, SharedMemoryBudget, msm_public, msm_secret,
+    BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public, msm_secret,
     msm_secret_bounded_cancellable,
 };
+use iroha_pasta::{CancellationToken, PastaCurve};
 use rayon::prelude::*;
 
 use crate::fs::{Scalar, SpikeRng, Transcript};
@@ -32,6 +32,10 @@ use crate::r1cs::{self, Circuit, Instance, Rel, Shape, ToyCircuit, Witness};
 #[cfg(test)]
 #[path = "phase1_tests.rs"]
 mod phase1_tests;
+
+#[cfg(test)]
+#[path = "commitment_budget_tests.rs"]
+mod commitment_budget_tests;
 
 #[derive(Clone)]
 pub struct Proof<C: PastaCurve> {
@@ -688,14 +692,14 @@ pub static COMMIT_SPLIT: std::sync::Mutex<[f64; 3]> = std::sync::Mutex::new([0.0
 /// Commits rows `range` of `w` in lanes (one single-threaded plan per row,
 /// iroha_pasta's bounded columns API), each at its public bit bound.
 /// Table windows (Pixel 6, b04a57 11-09): c14 for P on Vesta, c13 for S on
-/// Pallas; `ZKS_TABLE_WINDOW_P` / `ZKS_TABLE_WINDOW_S` override them.
+/// Pallas. A table that does not fit the hard budget is not constructed.
 pub fn table_window<C: PastaCurve>() -> usize {
     let p = std::any::type_name::<C>() == std::any::type_name::<iroha_pasta::Eq>();
     if p { 14 } else { 13 }
 }
 
-/// Whether row commitments use the generators' fixed-base table (the
-/// default) or the variable-base column MSM (`ZKS_COMMIT=variable`).
+/// Row commitments first attempt the generators' fixed-base table and use
+/// the bounded secret variable-base MSM when that table does not fit.
 pub fn table_commits() -> bool {
     true
 }
@@ -715,7 +719,8 @@ pub fn warm_table<C: PastaCurve>(gens: &Gens<C>, shape: &Shape) -> f64 {
     if !table_commits() {
         return 0.0;
     }
-    gens.table(shape.active_cols(), table_window::<C>()).1
+    gens.table(shape.active_cols(), table_window::<C>())
+        .map_or(0.0, |(_, build)| build)
 }
 
 /// `sum_j col[j] G_j` per bounded column, through the fixed-base table or the
@@ -726,23 +731,42 @@ pub(crate) fn column_sums<C: PastaCurve>(
     columns: &[BoundedSecretScalars<F<C>>],
     table: bool,
 ) -> Vec<C> {
+    column_sums_with_budget(gens, active, columns, table, MemoryBudget::DEFAULT, None)
+        .expect("bounded row commitment")
+}
+
+fn column_sums_with_budget<C: PastaCurve>(
+    gens: &Gens<C>,
+    active: usize,
+    columns: &[BoundedSecretScalars<F<C>>],
+    table: bool,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C>, MsmError> {
     use iroha_pasta::msm::msm_secret_bounded_columns_cancellable;
+    CancellationToken::checkpoint(cancellation)?;
     let shared = SharedMemoryBudget::process_default();
     if table {
-        let (t, build) = gens.table(active, table_window::<C>());
-        *TABLE_BUILD.lock().unwrap() += build;
-        t.msm_secret_bounded_columns_cancellable(columns, MemoryBudget::DEFAULT, &shared, None)
-            .expect("table msm")
-    } else {
-        msm_secret_bounded_columns_cancellable::<C>(
-            columns,
-            &gens.g[..active],
-            MemoryBudget::DEFAULT,
-            &shared,
-            None,
-        )
-        .expect("msm")
+        if let Ok((t, build)) = gens.table_with_budget(active, table_window::<C>(), budget) {
+            *TABLE_BUILD.lock().unwrap() += build;
+            return t.msm_secret_bounded_columns_cancellable(
+                columns,
+                budget,
+                &shared,
+                cancellation,
+            );
+        }
     }
+    // Table refusal depends only on public geometry and budget. Preserve
+    // every scalar's checked public bound and use the canonical secret API,
+    // including its scratch ceiling, clearing and cancellation behavior.
+    msm_secret_bounded_columns_cancellable::<C>(
+        columns,
+        &gens.g[..active],
+        budget,
+        &shared,
+        cancellation,
+    )
 }
 
 /// `sum_j row[j] G_j` for a row whose nonzero cells take few distinct values,

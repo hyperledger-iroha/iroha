@@ -10090,9 +10090,10 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     const MODULE: &str = "crates/iroha_data_model/src/governance/anonymous_ballot";
     const CUSTODY: &str = "crates/iroha_core/src/state/parliament_registration.rs";
     const HANDLER: &str = "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs";
-    const TABLES: [&str; 3] = [
+    const TABLES: [&str; 4] = [
         "world.parliament_anonymous_attempts",
         "world.parliament_anonymous_boards",
+        "world.parliament_anonymous_due",
         "world.parliament_anonymous_registrations",
     ];
     const REVIEW: &str = "review the anonymous-ballot tag classification";

@@ -44,7 +44,10 @@ fn all_register_paths_include_cold_dirty_rebuilds_without_any_heap_request() {
         ));
         let siblings =
             path.map(|sibling| Some(HashOf::from_untyped_unchecked(Hash::prehashed(sibling))));
-        let commitment = MerkleTreeCommitment::new(root, NonZeroU64::new(256).unwrap());
+        let commitment = MerkleTreeCommitment::new(
+            root,
+            NonZeroU64::new(ivm::parallel::REGISTER_COUNT as u64).unwrap(),
+        );
         assert!(MerkleProof::verify_audit_path_sha256(
             index as u32,
             &siblings,

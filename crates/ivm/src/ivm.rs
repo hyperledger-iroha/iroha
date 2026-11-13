@@ -6090,7 +6090,7 @@ mod tests {
         assert!(matches!(err, VMError::MissingHalt));
     }
     #[test]
-    fn scallx_dispatches_extended_syscall_id() {
+    fn scall_dispatches_extended_syscall_id() {
         struct RecordingHost {
             seen: Option<u32>,
         }
@@ -6118,7 +6118,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code).expect("load raw code");
         let mut host = RecordingHost { seen: None };
-        vm.run_with_host(&mut host).expect("SCALLX program runs");
+        vm.run_with_host(&mut host).expect("SCALL program runs");
         assert_eq!(host.seen, Some(syscall));
         assert_eq!(vm.register(10), u64::from(syscall));
     }
@@ -6127,7 +6127,7 @@ mod tests {
         let mut vm = quiet_vm(u64::MAX);
         let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
         assert_eq!(program.len(), crate::HEADER_SIZE);
-        program[16] = 2;
+        program[crate::HEADER_ABI_VERSION_OFFSET] = 2;
         program.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         assert!(
             matches!((&(vm.load_program(&program)), &(VMError::UnsupportedProgramAbiVersion { version: 2 })), (Err(VMError::UnsupportedProgramAbiVersion { version: __actual_version }), VMError::UnsupportedProgramAbiVersion { version: __expected_version }) if __actual_version == __expected_version)

@@ -143,6 +143,13 @@ fn creation_records_what_core_derives_and_nothing_the_caller_chose() {
         .get(&instruction.governance_attempt_id())
         .expect("the attempt is stored under the family's identifier")
         .clone();
+    // The due index lists the new attempt, which has no board yet.
+    assert_eq!(
+        tx.world
+            .parliament_anonymous_due
+            .get(&instruction.governance_attempt_id()),
+        Some(&Vec::new())
+    );
     assert_eq!(stored.purpose(), &candidate());
     assert_eq!(
         stored.attempt(),
@@ -229,7 +236,7 @@ fn the_admission_cap_refuses_an_attempt_beyond_k_nonterminal_ones() {
     assert_eq!(tx.world.parliament_anonymous_attempts.iter().count(), 2);
     assert_eq!(
         crate::state::parliament_anonymous_tables::nonterminal_attempts(
-            &tx.world.parliament_anonymous_attempts
+            &tx.world.parliament_anonymous_due
         ),
         2
     );
@@ -254,6 +261,7 @@ fn world_with(driver: &Driver) -> (World, AccountId) {
     block
         .parliament_anonymous_attempts
         .insert(driver.id(), driver.state.clone());
+    crate::state::parliament_anonymous_tables::seed_due_index(&mut block);
     for citizen in &driver.citizens {
         block.citizens.insert(
             citizen.clone(),
@@ -358,9 +366,11 @@ fn transitions_record_facts_and_intents_under_their_authorities() {
     let member = election.primaries()[0].member.clone();
     let mut block = state.block(header(driver.height + 1, driver.now_ms + 1));
     let mut tx = block.transaction();
-    tx.world
-        .parliament_anonymous_attempts
-        .insert(driver.id(), driver.state.clone());
+    crate::state::parliament_anonymous_tables::store_attempt(
+        &mut tx.world,
+        driver.id(),
+        driver.state.clone(),
+    );
     let response = submit(
         &driver,
         Transition::RecordInvitationResponse(ParliamentRecordInvitationResponseV1 {

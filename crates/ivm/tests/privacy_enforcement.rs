@@ -189,7 +189,10 @@ fn wide_binary_operations_join_operand_tags() {
         a::GCD,
     ] {
         for (left_private, right_private) in [(true, false), (false, true), (false, false)] {
-            let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
+            // Multi-cycle MEAN and GCD need more than the default two-cycle bound.
+            let mut metadata = meta_with_mode(ivm::ivm_mode::ZK);
+            metadata.max_cycles = 16;
+            let mut program = metadata.encode();
             let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
             program.extend_from_slice(&word.to_le_bytes());
             program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());

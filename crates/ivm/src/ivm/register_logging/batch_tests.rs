@@ -69,7 +69,7 @@ impl IVMHost for InputHost {
     fn prepared_entrypoint_arguments(&self) -> Option<PreparedArgumentRecord> {
         // This unrelated metadata observation must be masked. Actual ordinary
         // default/prepared argument installation must remain traced.
-        assert_eq!(self.foreign.get(199), 987);
+        assert_eq!(self.foreign.get(29), 987);
         self.probes.set(self.probes.get() + 1);
         self.prepared.clone()
     }
@@ -106,7 +106,7 @@ fn input_host(contract: &PreparedContract, prepared: bool) -> InputHost {
     tlv.extend_from_slice(iroha_crypto::Hash::new(&record).as_ref());
     crate::pointer_abi::validate_tlv_bytes(&tlv).unwrap();
     let mut foreign = Registers::new();
-    foreign.set(199, 987);
+    foreign.set(29, 987);
     InputHost {
         prepared: prepared.then_some(owner),
         inner: DefaultHost::default().with_public_inputs(BTreeMap::from([(
@@ -193,7 +193,7 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
         assert!(!log.lock().as_slice().iter().any(|event| matches!(
             event,
             zk::RegEvent::Read {
-                index: 199,
+                index: 29,
                 value: 987,
                 ..
             }
@@ -344,7 +344,7 @@ impl IVMHost for AllRegisters {
 }
 
 #[test]
-fn actual_reserved_syscalls_prepay_restore_and_all_255_host_net_writes() {
+fn actual_reserved_syscalls_prepay_restore_and_all_host_net_writes() {
     for reject_prepare in [false, true] {
         let original = AllocationBudget::new(LIMIT);
         let mut vm = generic(&original, &[encode_halt()], 1);
@@ -393,7 +393,10 @@ fn actual_reserved_syscalls_prepay_restore_and_all_255_host_net_writes() {
         } else {
             result.unwrap();
             assert_eq!(host.calls, 1);
-            assert_eq!(log.lock().as_slice().len(), 258);
+            assert_eq!(
+                log.lock().as_slice().len(),
+                crate::parallel::REGISTER_COUNT + 2
+            );
             for (index, event) in log.lock().as_slice()[3..].iter().enumerate() {
                 assert!(
                     matches!(event, zk::RegEvent::Write { index: observed, value, tag: false, .. } if *observed == index + 1 && *value == index as u64 + 101)
@@ -731,7 +734,10 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
             assert!(vm.registers.tag(10));
         } else {
             result.unwrap().unwrap();
-            assert_eq!(log.lock().as_slice().len(), 258);
+            assert_eq!(
+                log.lock().as_slice().len(),
+                crate::parallel::REGISTER_COUNT + 2
+            );
             for (index, event) in log.lock().as_slice()[3..].iter().enumerate() {
                 assert!(
                     matches!(event, zk::RegEvent::Write { index: observed, value, tag: false, .. }
@@ -764,7 +770,7 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
             assert_eq!(retry.calls, 1);
             // Host panic restored its declared output, but other guest writes
             // remain ordinary VM state. Retry emits three sanitation events
-            // and exactly one changed output, not 255 duplicate net writes.
+            // and exactly one changed output, not one duplicate net write per register.
             let events = log.lock();
             assert_eq!(events.as_slice().len(), 4);
             assert!(matches!(

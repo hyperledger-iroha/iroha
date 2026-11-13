@@ -9156,6 +9156,10 @@ fn decode_world_fields(
         iroha_data_model::governance::anonymous_ballot::BallotScopeV1,
         iroha_data_model::governance::anonymous_ballot::ParliamentBallotBoardRecordV1,
     > = take_required(&mut map, "parliament_anonymous_boards")?;
+    let parliament_anonymous_due: Storage<
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        Vec<iroha_data_model::governance::anonymous_ballot::BallotScopeV1>,
+    > = take_required(&mut map, "parliament_anonymous_due")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9265,6 +9269,7 @@ fn decode_world_fields(
         parliament_anonymous_attempts,
         parliament_anonymous_registrations,
         parliament_anonymous_boards,
+        parliament_anonymous_due,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),

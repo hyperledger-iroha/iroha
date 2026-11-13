@@ -209,6 +209,9 @@ fn validate_treasury_bond_observation(
 /// Retained real stake and the exact obligation committed by its pending request.
 pub struct WithdrawalLifecycle {
     owner: Operator,
+    // The retained return-committee seat whose ingress the owner uses. Its node-local
+    // operator reads (committed evidence) go through its own client and key.
+    ingress: PeerId,
     escrow: AssetId,
     destination: AssetId,
     reward_treasury: AssetId,
@@ -445,10 +448,13 @@ impl WithdrawalLifecycle {
         );
         let sign =
             committee_equivocation::double_sign(network, carrier, &self.owner.peer, tip).await?;
+        // `admin` only re-points account-signed reads; the ingress node itself signs its
+        // operator evidence read.
+        let reader = exact_process_roster(network, std::slice::from_ref(&self.ingress))?[0];
         let penalty = committee_equivocation::await_applied_penalty(
             network,
             voters,
-            admin,
+            reader,
             &sign,
             slashing_delay_blocks,
         )
@@ -1060,6 +1066,7 @@ pub async fn schedule_retained_withdrawal(
     let mut lifecycle = WithdrawalLifecycle {
         destination: AssetId::with_scope(xor, owner.account.clone(), *escrow.scope()),
         owner,
+        ingress: ingress.id(),
         escrow,
         reward_treasury,
         reserve_validator,
