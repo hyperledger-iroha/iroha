@@ -48,9 +48,12 @@ design text is unchanged. Everything below was read from committed source and th
   preparation constraints", and its focused relation test failed at a completed-Request row with left 1, right 0.
   Cause: the fixture built the successor Request with `request_self`, which copies the payer's wallet and account
   into the receiver words. `request::append_completed` refuses payer == receiver (`equal[0]·equal[1] = 0`, since
-  441496899d). The successor now pays the sender's wallet (`device_fixture::request_to`/`send10_to`). The phone
-  fixture's Bootstrap → Load100 → Send10 → `receive_self` flow is the same self-transfer and is refused at Send10;
-  a device run needs a two-wallet fixture first.
+  441496899d). The successor now pays the sender's wallet (`device_fixture::request_to`/`send10_to`); with that,
+  every completed-Request row holds (`output/post-burn-successor-relation-e02b88-run.log`). The test still fails,
+  next at "Send checked arithmetic and state preservation" row 44 (left nonzero, right 0): the fixture rewrites
+  `after_core[10]` and the statement after `send10_to` built them. Open. The phone fixture's Bootstrap → Load100 →
+  Send10 → `receive_self` flow is the same self-transfer and is refused at Send10; a device run needs a two-wallet
+  fixture first.
 - **Full library suite** (`output/fixed-tail-full-lib-suite.log`, before 14e5a5e1f4): 191 passed, 3 failed
   (`bootstrap::tests::recursive_natural_layout_profiles`, `full::tests::bootstrap_pair_carries_the_empty_claim`,
   `points::tests::points_side_holds_proves_and_refuses`), 10 ignored.
