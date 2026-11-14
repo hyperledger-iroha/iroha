@@ -8,6 +8,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+mod leg_pipeline;
+use leg_pipeline::{Admission, ProverHelpers, Ready};
+
 pub fn driver_identity() -> DriverIdentityV1 {
     DriverIdentityV1 {
         id: "private_settlement_preparation".into(),
@@ -535,85 +538,37 @@ impl PreparationDriver {
         .await?;
         lease = original_lease;
         let (contexts, context_digest, max_carrier_bytes) = original?;
-        let mut complete = Vec::with_capacity(self.request.intent().legs.len());
-        let mut bytes = retained_length;
-        for index in 0..self.request.intent().legs.len() {
-            let request = self.request.clone();
-            let key = ArtifactKey {
-                request: request.0.digest,
+        // One admitted worker and the original round lease cover every leg. Wallet calls
+        // and artifact publication stay on that worker in leg order; only the proofs of
+        // already reserved legs overlap, and each window joins before it is published.
+        let request = self.request.clone();
+        let permit = self
+            .worker
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+        let artifacts = self.artifacts.clone();
+        let wallet = self.wallet.clone();
+        let verified_proofs = Arc::clone(&self.verified);
+        let (prepared, original_lease) = run_native_worker(permit, lease, move || {
+            LegOriginals {
+                request: &request,
                 round,
-                ordinal: request.intent().legs[index].ordinal,
-            };
-            let contexts = contexts.clone();
-            let permit = self
-                .worker
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
-            let artifacts = self.artifacts.clone();
-            let wallet = self.wallet.clone();
-            let verified_proofs = Arc::clone(&self.verified);
-            let block = block.clone();
-            let (result,original_lease)=run_native_worker(permit,lease,move||{
-                (|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
-                    let leg=&request.intent().legs[index];
-                    let context=contexts.contexts[index].verify(request.intent().network_id,request.0.schemas.as_slice(),
-                        PrivateSettlementPoolKeyV1{route:leg.route,pool_id:leg.pool_id},&block)?;
-                    if context.pool_cut().block_time_ms()<request.0.minimum_context_time_ms {
-                        return Err(OneCallPrivateSettlementError::Binding);
-                    }
-                    let existing=artifacts.read(key,request.0.max_artifact_bytes)?;
-                    let (artifact,length)=if let Some(existing)=existing {
-                        validate_artifact(&request,&context,context_digest,&existing.0,&verified_proofs)?; existing
-                    } else {
-                        if !may_prepare {return Ok(None);}
-                        let terms=&request.0.terms[index];
-                        let opening=wallet.open_policy(request.intent(),leg.ordinal,terms)?;
-                        let verified=context.verify_openings(&opening.governance,&opening.policy,&terms.asset,
-                            opening.governance.body.asset_binding_salt,request.intent().expiry_height)?;
-                        let secrets=wallet.reserve_or_reopen(round,request.intent(),leg.ordinal,terms)?;
-                        let plaintext=secrets.plaintext();
-                        let asset_matches = plaintext.asset_definition_id == terms.asset;
-                        let reimbursement_matches = plaintext.sponsor_reimbursement_amount == terms.reimbursement;
-                        if plaintext.payer!=terms.payer || plaintext.recipient!=terms.recipient
-                            || !asset_matches || plaintext.amount!=terms.amount
-                            || !reimbursement_matches || plaintext.memo!=terms.memo {
-                            return Err(OneCallPrivateSettlementError::Binding);
-                        }
-                        let prepared=prepare_atomic_private_settlement_leg_v1(request.intent(),leg.ordinal,
-                            &verified,secrets,request.0.padding)?;
-                        let artifact=Artifact{key,context_id:context.pool_cut().context_id(),context_digest,
-                            statement:prepared.statement,proof:prepared.proof,delta:prepared.delta,
-                            capsule:prepared.audit_capsule,policy:opening.policy,authority:context.authority().clone(),
-                            retention_height:request.0.retention_height};
-                        // The prover released this proof only after verifying it under the
-                        // cut's height; at the request's height that is the check below.
-                        if artifact.statement.authority_context_height==request.intent().authority_context_height {
-                            verified_proofs.record(artifact.digest()?)?;
-                        }
-                        validate_artifact(&request,&context,context_digest,&artifact,&verified_proofs)?;
-                        let length=norito::canonical_frame_len(&artifact)?;
-                        if bytes.checked_add(length).is_none_or(|n|n>request.0.max_total_artifact_bytes) {
-                            return Err(OneCallPrivateSettlementError::Capacity);
-                        }
-                        artifacts.publish(&artifact,request.0.max_artifact_bytes)?;
-                        (artifact,length)
-                    };
-                    if bytes.checked_add(length).is_none_or(|n|n>request.0.max_total_artifact_bytes) {
-                        return Err(OneCallPrivateSettlementError::Capacity);
-                    }
-                    Ok(Some((artifact,length)))
-                })()
-            }).await?;
-            lease = original_lease;
-            let Some((artifact, length)) = result? else {
-                return Ok(None);
-            };
-            bytes = bytes
-                .checked_add(length)
-                .ok_or(OneCallPrivateSettlementError::Capacity)?;
-            complete.push(artifact);
-        }
+                contexts: &contexts,
+                context_digest,
+                block: &block,
+                artifacts: &artifacts,
+                wallet: &*wallet,
+                verified: &verified_proofs,
+                may_prepare,
+            }
+            .prepare(retained_length, &leg_pipeline::PROCESS_PROVER_HELPERS)
+        })
+        .await?;
+        lease = original_lease;
+        let Some((complete, bytes)) = prepared? else {
+            return Ok(None);
+        };
         self.retained_bytes.store(bytes, Ordering::Relaxed);
         Ok(Some(OriginalArtifacts {
             artifacts: complete,
@@ -744,6 +699,229 @@ impl PreparationDriver {
         result
     }
 }
+/// Everything one round's legs are prepared from, borrowed by the original native worker.
+struct LegOriginals<'a> {
+    request: &'a OneCallPrivateSettlementRequest,
+    round: Digest32,
+    contexts: &'a PrivateSettlementContextsProofV1,
+    context_digest: Digest32,
+    block: &'a VerifiedSumeragiBlock,
+    artifacts: &'a FilePrivateSettlementArtifacts,
+    wallet: &'a dyn PrivateSettlementWallet,
+    verified: &'a VerifiedProofs,
+    may_prepare: bool,
+}
+
+/// One leg whose openings were checked and whose wallet inputs are reserved.
+struct AdmittedLeg<'a> {
+    context: iroha_data_model::nexus::VerifiedPrivateSettlementContextV1<'a>,
+    opening: PrivateSettlementRestrictedOpening,
+    secrets: AtomicPrivateSettlementAuthorizedWalletLegV1,
+}
+
+/// One leg's proof, released by the prover only after verifying it.
+struct ProvedLeg<'a> {
+    context: iroha_data_model::nexus::VerifiedPrivateSettlementContextV1<'a>,
+    policy: PrivateSettlementAuditPolicyV1,
+    prepared: AtomicPrivateSettlementPreparedLegV1,
+}
+
+impl<'a> LegOriginals<'a> {
+    /// Reopen or prepare every leg and return the artifacts with the retained byte total.
+    /// `None` means a leg is absent and this call may not prepare it.
+    fn prepare(
+        &self,
+        retained: usize,
+        helpers: &ProverHelpers,
+    ) -> std::result::Result<Option<(Vec<Artifact>, usize)>, OneCallPrivateSettlementError> {
+        let mut bytes = retained;
+        let artifacts = leg_pipeline::run_legs(
+            self.request.intent().legs.len(),
+            helpers,
+            |index| self.admit(index),
+            |index, leg| self.prove(index, leg),
+            |index, ready| self.complete(index, ready, &mut bytes),
+        )?;
+        Ok(artifacts.map(|artifacts| (artifacts, bytes)))
+    }
+
+    fn key(&self, index: usize) -> ArtifactKey {
+        ArtifactKey {
+            request: self.request.0.digest,
+            round: self.round,
+            ordinal: self.request.intent().legs[index].ordinal,
+        }
+    }
+
+    // On the original worker, in leg order: every check and wallet effect that precedes a
+    // proof. A leg is reserved only after its openings match the selected cut.
+    fn admit(
+        &self,
+        index: usize,
+    ) -> std::result::Result<
+        Admission<AdmittedLeg<'a>, (Artifact, usize)>,
+        OneCallPrivateSettlementError,
+    > {
+        let request = self.request;
+        let leg = &request.intent().legs[index];
+        let context = self.contexts.contexts[index].verify(
+            request.intent().network_id,
+            request.0.schemas.as_slice(),
+            PrivateSettlementPoolKeyV1 {
+                route: leg.route,
+                pool_id: leg.pool_id,
+            },
+            self.block,
+        )?;
+        if context.pool_cut().block_time_ms() < request.0.minimum_context_time_ms {
+            return Err(OneCallPrivateSettlementError::Binding);
+        }
+        if let Some(existing) = self
+            .artifacts
+            .read(self.key(index), request.0.max_artifact_bytes)?
+        {
+            validate_artifact(
+                request,
+                &context,
+                self.context_digest,
+                &existing.0,
+                self.verified,
+            )?;
+            return Ok(Admission::Reopened(existing));
+        }
+        if !self.may_prepare {
+            return Ok(Admission::Absent);
+        }
+        let terms = &request.0.terms[index];
+        let opening = self
+            .wallet
+            .open_policy(request.intent(), leg.ordinal, terms)?;
+        context.verify_openings(
+            &opening.governance,
+            &opening.policy,
+            &terms.asset,
+            opening.governance.body.asset_binding_salt,
+            request.intent().expiry_height,
+        )?;
+        let secrets =
+            self.wallet
+                .reserve_or_reopen(self.round, request.intent(), leg.ordinal, terms)?;
+        let plaintext = secrets.plaintext();
+        let asset_matches = plaintext.asset_definition_id == terms.asset;
+        let reimbursement_matches = plaintext.sponsor_reimbursement_amount == terms.reimbursement;
+        if plaintext.payer != terms.payer
+            || plaintext.recipient != terms.recipient
+            || !asset_matches
+            || plaintext.amount != terms.amount
+            || !reimbursement_matches
+            || plaintext.memo != terms.memo
+        {
+            return Err(OneCallPrivateSettlementError::Binding);
+        }
+        Ok(Admission::Admitted(AdmittedLeg {
+            context,
+            opening,
+            secrets,
+        }))
+    }
+
+    // On any prover thread: reads only its own admitted leg and the immutable request.
+    fn prove(
+        &self,
+        index: usize,
+        leg: AdmittedLeg<'a>,
+    ) -> std::result::Result<ProvedLeg<'a>, OneCallPrivateSettlementError> {
+        let request = self.request;
+        let terms = &request.0.terms[index];
+        let AdmittedLeg {
+            context,
+            opening,
+            secrets,
+        } = leg;
+        let prepared = {
+            // The same pure check admission passed; it only rebuilds the borrowed view.
+            let verified = context.verify_openings(
+                &opening.governance,
+                &opening.policy,
+                &terms.asset,
+                opening.governance.body.asset_binding_salt,
+                request.intent().expiry_height,
+            )?;
+            prepare_atomic_private_settlement_leg_v1(
+                request.intent(),
+                request.intent().legs[index].ordinal,
+                &verified,
+                secrets,
+                request.0.padding,
+            )?
+        };
+        Ok(ProvedLeg {
+            context,
+            policy: opening.policy,
+            prepared,
+        })
+    }
+
+    // On the original worker, in leg order, after every prover of the window joined:
+    // bind and validate the artifact, charge the aggregate budget, then publish it.
+    fn complete(
+        &self,
+        index: usize,
+        ready: Ready<ProvedLeg<'a>, (Artifact, usize)>,
+        bytes: &mut usize,
+    ) -> std::result::Result<Artifact, OneCallPrivateSettlementError> {
+        let request = self.request;
+        let within_total = |bytes: usize, length: usize| {
+            bytes
+                .checked_add(length)
+                .filter(|total| *total <= request.0.max_total_artifact_bytes)
+                .ok_or(OneCallPrivateSettlementError::Capacity)
+        };
+        let (artifact, length) = match ready {
+            Ready::Reopened(existing) => existing,
+            Ready::Proved(ProvedLeg {
+                context,
+                policy,
+                prepared,
+            }) => {
+                let artifact = Artifact {
+                    key: self.key(index),
+                    context_id: context.pool_cut().context_id(),
+                    context_digest: self.context_digest,
+                    statement: prepared.statement,
+                    proof: prepared.proof,
+                    delta: prepared.delta,
+                    capsule: prepared.audit_capsule,
+                    policy,
+                    authority: context.authority().clone(),
+                    retention_height: request.0.retention_height,
+                };
+                // The prover released this proof only after verifying it under the
+                // cut's height; at the request's height that is the check below.
+                if artifact.statement.authority_context_height
+                    == request.intent().authority_context_height
+                {
+                    self.verified.record(artifact.digest()?)?;
+                }
+                validate_artifact(
+                    request,
+                    &context,
+                    self.context_digest,
+                    &artifact,
+                    self.verified,
+                )?;
+                let length = norito::canonical_frame_len(&artifact)?;
+                within_total(*bytes, length)?;
+                self.artifacts
+                    .publish(&artifact, request.0.max_artifact_bytes)?;
+                (artifact, length)
+            }
+        };
+        *bytes = within_total(*bytes, length)?;
+        Ok(artifact)
+    }
+}
+
 // Only the authenticated selected cut supplies semantic bounds. The request may choose
 // smaller local carrier custody, but it cannot expand the committed transaction contract.
 fn validate_selected_request(

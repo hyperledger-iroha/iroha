@@ -567,21 +567,56 @@ def test_declared_items_are_not_yet_implemented_and_state_their_requirements() -
         "proof.product_proof_ceilings": "V.3",
         "proof.anonymous_ballot_verifier_budget": "P.8",
     }
-    # The canonical carrier exists, but the node cannot execute the ballot's verifier
-    # budget without its authenticated State/context adapter and typed protocol owner.
+    # Core executes the ballot's per-block verifier budget from committed State. The item
+    # stays declared: no value is a listed bound with its node site and at-bound tests yet.
     ballot = next(item for item in CONTRACT["declared"] if item["id"] == "proof.anonymous_ballot_verifier_budget")
-    assert "no node executes its verifier budget" in ballot["today"]
+    assert "check_block_ballot_budget" in ballot["today"]
+    assert "no value is yet a listed bound" in ballot["today"]
     entrypoints = (ROOT / "crates/iroha_data_model/src/transaction/signed.rs").read_text(encoding="utf-8")
     entrypoint_variants = entrypoints.split("pub enum TransactionEntrypoint {", 1)[1].split("\n    }", 1)[0]
     assert "AnonymousBallot(CanonicalAnonymousBallotEnvelopeV1)" in entrypoint_variants
     core_manifest = (ROOT / "crates/iroha_core/Cargo.toml").read_text(encoding="utf-8")
-    assert "iroha_parliament_ballot" not in core_manifest
-    core_transactions = (ROOT / "crates/iroha_core/src/tx.rs").read_text(encoding="utf-8")
+    assert "\niroha_parliament_ballot = { workspace = true }\n" in core_manifest
+    budget = (ROOT / "crates/iroha_core/src/governance/parliament_anonymous/ballot_input.rs").read_text(
+        encoding="utf-8")
+    # The budget is the parent-committed value: one whole reservation and the copied
+    # verifier-input bytes per ballot, and a ballot that does not fit charges nothing.
+    assert "let ballot = committed_ballot_parameters(parameters).map_err(|_| {" in budget
+    assert ("            reservations: ballot.max_verification_reservations_per_block,\n"
+            "            bytes: ballot.max_verifier_input_bytes_per_block,\n") in budget
     assert re.search(
-        r"fn anonymous_ballot_unavailable\(\) -> ExecutionDeferred \{\s*"
-        r"ivm::error::ExecutionDeferral::VerifierInitializationUnavailable\.into\(\)\s*}",
-        core_transactions,
+        r"self\s*\.reservations\s*\.checked_sub\(1\)\s*\.ok_or\(BallotBudgetErrorV1::Reservations \{",
+        budget,
     )
+    assert re.search(
+        r"\.bytes\s*\.checked_sub\(verifier_input_bytes\)\s*\.ok_or\(BallotBudgetErrorV1::Bytes \{",
+        budget,
+    )
+    block = (ROOT / "crates/iroha_core/src/block.rs").read_text(encoding="utf-8")
+    assert "check_block_ballot_budget(" in block
+    # The partition's and the ingress route's node-local bounds are iroha_config values: the
+    # scanned byte limits are excluded with a reason, and the ingress ceiling is the data
+    # model's envelope cap itself, never a second literal.
+    defaults = "crates/iroha_config/src/parameters/defaults.rs"
+    records = {tuple(record["module"]): record for record in CONTRACT["completeness"]["excluded"]
+               if record["path"] == defaults and any("ANONYMOUS_BALLOT" in symbol for symbol in record["symbols"])}
+    assert set(records) == {("pub mod queue {",), ("pub mod torii {",)}
+    assert records[("pub mod queue {",)]["exprs"] == {
+        "ANONYMOUS_BALLOT_PENDING_LIMIT": "nonzero!(1_024_usize)",
+        "ANONYMOUS_BALLOT_MAX_RETAINED_BYTES": "nonzero!(320_u64 * 1024 * 1024)"}
+    # The ordinary queue bounds are enforced on the ordinary counters, which exclude the
+    # partition's residents.
+    sites = {bound["id"]: bound["enforcement"][0]["contains"] for bound in CONTRACT["bounds"]
+             if bound["id"] in ("queue.capacity", "queue.max_retained_bytes")}
+    assert "self.ordinary_active_len()" in sites["queue.capacity"]
+    assert ".ordinary_retained_bytes()" in sites["queue.max_retained_bytes"]
+    assert (records[("pub mod torii {",)]["exprs"]["ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1"]
+            == "iroha_data_model::governance::anonymous_ballot::ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1")
+    assert not any(record["path"] == "crates/iroha_core/src/queue/anonymous_ballots.rs"
+                   for record in CONTRACT["completeness"]["excluded"])
+    queue_source = (ROOT / "crates/iroha_core/src/queue/anonymous_ballots.rs").read_text(encoding="utf-8")
+    assert "const ANONYMOUS_BALLOT" not in queue_source
+    assert "self.ballot_bounds.verifier_concurrency.get()" in queue_source
     relation_ids = {item["id"] for item in CONTRACT["relations"]}
     for item in CONTRACT["declared"]:
         assert item["status"] == "not_implemented"

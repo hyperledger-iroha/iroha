@@ -885,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_ballot_lane_admission_retains_unavailable_without_a_verdict() {
+    fn a_lane_batch_that_carries_an_anonymous_ballot_is_refused() {
         let record = record(Some(9));
         let config = lane_height_config(&record).expect("configuration");
         let chain = LaneChainView::default();
@@ -898,11 +898,13 @@ mod tests {
         let checks = global::StatelessChecks::new(crate::unit_test_support::synthetic_network_id(
             "anonymous representation",
         ));
-        assert!(
-            matches!(admit(&record, &anchors(), &chain, &checks, &config, &bytes),
-            Err(AdmissionAttemptError::ResourceDeferred(reason))
-                if reason.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable)
-        );
+        // Ballots execute only on the global chain: the lane's admission is a verdict.
+        assert!(matches!(
+            admit(&record, &anchors(), &chain, &checks, &config, &bytes),
+            Err(AdmissionAttemptError::Rejected(
+                AdmissionError::Transaction { index: 0, .. }
+            ))
+        ));
         assert!(chain.recent.is_empty());
     }
 

@@ -1,6 +1,6 @@
-//! Shared finality polling state and typed, read-only HTTP backpressure.
+//! Shared finality polling; only backpressure and transient transport failures repeat a read.
 //! One absolute deadline bounds status dispatch, sleeps and terminal-outcome admission.
-//! Unresolved deadlines retain the exact public transaction hash and observation count.
+//! Unresolved deadlines retain the exact transaction hash, observation count and last read error.
 
 use std::time::{Duration, Instant};
 
@@ -194,18 +194,7 @@ impl PollState {
                 self.last_read_error = None;
                 response
             }
-            Err(error) => {
-                if Instant::now() >= self.deadline {
-                    self.last_read_error = Some(error);
-                    return Err(self.timeout_error());
-                }
-                let Some(backpressure) = error.downcast_ref::<Backpressure>() else {
-                    return Err(error);
-                };
-                self.delay = self.delay.max(backpressure.retry_after.unwrap_or_default());
-                self.last_read_error = Some(error);
-                return Ok(None);
-            }
+            Err(error) => return self.observe_read_error(error),
         };
         let Some(response) = response else {
             self.ensure_before_deadline()?;
@@ -245,6 +234,35 @@ impl PollState {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Repeat the idempotent status read after backpressure or a transient transport failure.
+    ///
+    /// The repeat waits for the poll interval, or Torii's longer `Retry-After`, and never
+    /// outlives the original deadline, whose report keeps this error. Every other failure,
+    /// including a response that fails decoding or binding, ends the wait at once.
+    fn observe_read_error(
+        &mut self,
+        error: eyre::Report,
+    ) -> Result<Option<TransactionWaitOutcome>> {
+        if Instant::now() >= self.deadline {
+            self.last_read_error = Some(error);
+            return Err(self.timeout_error());
+        }
+        if let Some(backpressure) = error.downcast_ref::<Backpressure>() {
+            self.delay = self.delay.max(backpressure.retry_after.unwrap_or_default());
+        } else if crate::http_default::transport_failure_is_transient(&error) {
+            tracing::debug!(
+                hash = %self.hash,
+                attempts = self.attempts,
+                error = %format!("{error:#}"),
+                "repeating a transaction status read after a transient transport failure"
+            );
+        } else {
+            return Err(error);
+        }
+        self.last_read_error = Some(error);
+        Ok(None)
     }
 
     pub(super) fn next_delay(&mut self) -> Result<Duration> {

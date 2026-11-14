@@ -2066,8 +2066,12 @@ impl<'s> Worker<'s> {
                 u64::try_from(iroha_block.header().creation_time().as_millis()).map_err(|_| {
                     PublicationError::Retryable("candidate clock is unavailable".into())
                 })?;
+            // This worker's authenticated scope is the one the block's own governance pass
+            // runs under. Reading it again from the committed metadata here would decode
+            // that JSON under the attempt's budget before routing does, without an owner
+            // for its refusal.
             Some(
-                crate::smartcontracts::isi::sccp::keepalive::ProgressClock::capture(
+                crate::smartcontracts::isi::sccp::keepalive::ProgressClock::capture_on_global_root(
                     original_view.world(),
                     original_view
                         .native_execution_tip()

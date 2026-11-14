@@ -145,6 +145,12 @@ impl IVM {
             original: self.memory.allocation_budget().cloned(),
         };
         invocation.cycles = invocation.collection_enabled(self) && self.max_cycles != 0;
+        if invocation.cycles {
+            // Every completed cycle records the memory root. Allocate its Merkle
+            // storage now, before root arguments or guest effects, so no step
+            // meets the first allocation.
+            self.memory.ensure_merkle_storage()?;
+        }
         self.with_trace_scope(|vm, scope| {
             vm.validate_trace_scope(scope)?;
             match invocation.mode {
@@ -283,24 +289,25 @@ impl IVM {
         if !invocation.cycles {
             return Ok(());
         }
-        self.publish_admitted_cycles(last_logged_cycle);
-        Ok(())
+        self.publish_admitted_cycles(last_logged_cycle)
     }
 
-    fn publish_admitted_cycles(&mut self, last_logged_cycle: &mut u64) {
+    fn publish_admitted_cycles(&mut self, last_logged_cycle: &mut u64) -> Result<(), VMError> {
         while *last_logged_cycle < self.cycles {
+            // The invocation allocated the Merkle storage at its start; this
+            // only hashes leaves written since. Read it before either record so
+            // a cycle is never half published.
+            let memory_root = self.memory.root()?;
             self.trace_log.record_reserved(
                 self.pc,
                 self.registers.snapshot(),
                 self.registers.snapshot_tags(),
             );
-            self.step_log.record_reserved(
-                self.pc,
-                self.registers.merkle_root(),
-                self.memory.current_root(),
-            );
+            self.step_log
+                .record_reserved(self.pc, self.registers.merkle_root(), memory_root);
             *last_logged_cycle += 1;
         }
+        Ok(())
     }
 
     /// Finish on success, refusal or unwind without erasing initialized history.

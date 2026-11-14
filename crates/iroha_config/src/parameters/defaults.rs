@@ -540,6 +540,19 @@ pub mod queue {
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
+    /// Most verified signerless anonymous ballots the queue keeps resident in its ballot
+    /// partition. The partition has its own budget: it never consumes [`CAPACITY`].
+    pub const ANONYMOUS_BALLOT_PENDING_LIMIT: NonZeroUsize = nonzero!(1_024_usize);
+    /// Estimated retained memory budget of the ballot partition in bytes: room for
+    /// [`ANONYMOUS_BALLOT_PENDING_LIMIT`] carriers at their largest wire size. It is separate
+    /// from [`MAX_RETAINED_BYTES`].
+    pub const ANONYMOUS_BALLOT_MAX_RETAINED_BYTES: NonZeroU64 = nonzero!(320_u64 * 1024 * 1024);
+    /// Most ballot proofs the queue verifies at once.
+    pub const ANONYMOUS_BALLOT_VERIFIER_CONCURRENCY: NonZeroUsize = nonzero!(2_usize);
+    /// Ballot proof verifications the queue starts per second, over every local source.
+    pub const ANONYMOUS_BALLOT_VERIFICATION_RATE_PER_SEC: NonZeroU32 = nonzero!(8_u32);
+    /// Ballot proof verifications the queue starts in one burst.
+    pub const ANONYMOUS_BALLOT_VERIFICATION_BURST: NonZeroU32 = nonzero!(16_u32);
 }
 /// Transaction admission defaults enforced at pipeline ingress.
 pub mod transaction {
@@ -2421,6 +2434,23 @@ pub mod torii {
     pub const TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(4usize);
     /// Maximum signed transactions accepted by one HTTP batch submission.
     pub const TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS: NonZeroUsize = nonzero!(512usize);
+    /// Maximum concurrent anonymous-ballot ingress jobs (body read, decode, admission, proof).
+    /// They never take a transaction-ingress compute permit.
+    pub const ANONYMOUS_BALLOT_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(2usize);
+    /// First-release upper bound of the configured body limit: the envelope cap `E_max`,
+    /// defined once in the data model.
+    pub const ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1: usize =
+        iroha_data_model::governance::anonymous_ballot::ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1;
+    /// Largest anonymous-ballot submission body: one canonical envelope frame.
+    pub const ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES: NonZeroUsize =
+        match NonZeroUsize::new(ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1) {
+            Some(bytes) => bytes,
+            None => panic!("the envelope cap is nonzero"),
+        };
+    /// Anonymous-ballot submissions admitted per second over all callers together.
+    pub const ANONYMOUS_BALLOT_INGRESS_SUBMISSIONS_PER_SEC: NonZeroU32 = nonzero!(16u32);
+    /// Anonymous-ballot submissions admitted in one burst over all callers together.
+    pub const ANONYMOUS_BALLOT_INGRESS_SUBMISSION_BURST: NonZeroU32 = nonzero!(32u32);
     /// Maximum concurrent verified-source compiler working sets.
     pub const VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES: NonZeroUsize = nonzero!(1usize);
     /// First-release upper bound for configured verified-source compiler concurrency.

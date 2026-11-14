@@ -6673,7 +6673,11 @@ mod tests {
             .action(0)
             .expect("signed action")
             .statement_digest;
-        let namespace_encoding = norito::to_bytes(&namespace).expect("namespace encoding");
+        // The native relation binds the source-owned namespace grammar (the frozen
+        // `PrivacyNamespaceV1` frame), not the runtime type's own Norito frame.
+        let namespace_encoding = namespace
+            .canonical_wire_bytes_v1()
+            .expect("namespace encoding");
         let compiled =
             compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .expect("compiled Anonymous PGC profile");

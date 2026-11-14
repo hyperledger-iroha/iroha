@@ -570,7 +570,13 @@ fn receive_and_successors(
                 "Burn preserves unrelated funded value",
             ));
         }
-        let successor = post_burn_send(&loaded_witness, &witness, burned.head().profile(), &chain.receiver_key)?;
+        let successor = post_burn_send(
+            &loaded_witness,
+            &witness,
+            burned.head().profile(),
+            &chain.receiver_key,
+            &chain.send.credential,
+        )?;
         let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
         let after = step.after_core;
         let next = finish(
@@ -610,10 +616,12 @@ fn post_burn_send(
     witness: &crate::receive::Witness,
     profile: &[Fp; 64],
     key: &full::WalletKey,
+    payee: &crate::credential::Credential,
 ) -> Result<ExactOperationWitness> {
     // Reuse the witness builder only; this synthetic Load-shaped input is
     // never submitted as a Load or accepted as authority. The resulting Send
-    // must verify against the actual completed Receive head below.
+    // must verify against the actual completed Receive head below. It pays
+    // another wallet: the completed-Request relation refuses payer == receiver.
     let mut builder = loaded_witness.clone();
     let ExactOperationWitness::Load { step, .. } = &mut builder else {
         unreachable!()
@@ -622,7 +630,7 @@ fn post_burn_send(
     step.after_rest = witness.after_rest;
     step.statement = witness.statement;
     let request = CompletedRequest {
-        body: super::super::device_fixture::request_self(&builder)?
+        body: super::super::device_fixture::request_to(&builder, payee)?
             .try_into()
             .unwrap(),
         signature: [0; 64],
@@ -634,7 +642,7 @@ fn post_burn_send(
         &key.d,
         "post-Burn receiver Request fixture",
     );
-    let mut successor = super::super::device_fixture::send10(&builder, signature)?;
+    let mut successor = super::super::device_fixture::send10_to(&builder, payee, signature)?;
     let ExactOperationWitness::Send(step) = &mut successor else {
         unreachable!()
     };
@@ -679,7 +687,8 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
     profile[35] = Fp::from(10);
     let (_, credit_root) = crate::indexed_map::empty_insert::<32>(received.maps.credit_insert.key, received.maps.credit_insert.value);
     profile[37] = credit_root;
-    let successor = post_burn_send(&loaded, &received, &profile, &chain.receiver_key).unwrap();
+    let successor =
+        post_burn_send(&loaded, &received, &profile, &chain.receiver_key, &chain.send.credential).unwrap();
     let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
     let mut w = full::Wiring::default();
     let family = w.family(0, 1);

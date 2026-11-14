@@ -144,6 +144,55 @@ fn portable_bootstrap_reopens_exact_holes_and_never_creates_native_frames() {
 }
 
 #[test]
+fn portable_bootstrap_manifest_is_the_only_owner_of_unbound_canonical_history() {
+    run(|| {
+        let (directory, config, kura, _) = imported();
+        drop(kura);
+        assert!(is_published(directory.path()).unwrap());
+        let open =
+            || Kura::open_test_kura_with_configured_lane_config(&config, &LaneConfig::default());
+        let aside = tempfile::tempdir().unwrap();
+        // Without its manifest the same store is an unbound catalog over foreign bodies.
+        let manifest = directory.path().join(DIRECTORY).join(MANIFEST);
+        std::fs::rename(&manifest, aside.path().join(MANIFEST)).unwrap();
+        assert!(!is_published(directory.path()).unwrap());
+        let Err(Error::IO(error, _)) = open() else {
+            panic!("unbound canonical bodies opened without their portable manifest")
+        };
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("unbound configured primary block store is not empty"),
+            "{error}"
+        );
+        std::fs::rename(aside.path().join(MANIFEST), &manifest).unwrap();
+        // A pending fresh-store intent is not a published prefix.
+        let intent = directory.path().join(DIRECTORY).join(INTENT);
+        std::fs::write(&intent, [0_u8; Hash::LENGTH]).unwrap();
+        assert!(!is_published(directory.path()).unwrap());
+        std::fs::remove_file(intent).unwrap();
+        let (reopened, _) = open().unwrap();
+        assert_eq!(reopened.checkpoint_prefix_height(), Some(2));
+        drop(reopened);
+        // The published manifest cannot silently recreate a missing canonical chain.
+        let canonical = Kura::canonical_storage_path(directory.path());
+        std::fs::rename(&canonical, aside.path().join("canonical")).unwrap();
+        let Err(Error::IO(error, _)) = open() else {
+            panic!("a published portable prefix recreated its missing canonical chain")
+        };
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains("portable checkpoint canonical storage is missing"),
+            "{error}"
+        );
+        assert!(!canonical.exists());
+    });
+}
+
+#[test]
 fn portable_bootstrap_rejects_a_different_configured_catalog_without_rewriting_the_store() {
     run(|| {
         let (directory, config, kura, _) = imported();
@@ -316,22 +365,27 @@ fn portable_bootstrap_original_refusal_and_quota_do_not_publish_an_intent() {
         );
         config.max_disk_usage_bytes =
             iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES;
+        // The fixture's own journal and body reads are not the refusal under test: take the
+        // configured catalog and the successor before the zero-allocation scope so only the
+        // bootstrap runs inside it.
+        let configured_catalog = fixture
+            .chain
+            .kura()
+            .configured_lane_catalog_baseline()
+            .unwrap()
+            .unwrap();
+        let successor = fixture.chain.committed(3);
         let refusal = norito::core::with_decode_limits_scope(
             norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
             || {
                 Kura::prepare_portable_checkpoint_store(
                     &config,
-                    fixture
-                        .chain
-                        .kura()
-                        .configured_lane_catalog_baseline()
-                        .unwrap()
-                        .unwrap(),
+                    configured_catalog,
                     fixture.chain.state().chain_id_ref(),
                     fixture.chain.network_id(),
                     &fixture.genesis,
                     &fixture.hashes,
-                    fixture.chain.committed(3).block(),
+                    successor.block(),
                     &mut |height| Ok(fixture.frames[(height - 2) as usize].clone()),
                 )
             },

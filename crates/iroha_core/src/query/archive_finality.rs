@@ -400,9 +400,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
 
     /// Read one certified block belonging to both this State and the frozen durable boundary.
     pub(crate) fn block(&self, height: u64) -> Result<CertifiedBlock, ArchiveFinalityError> {
-        let block = self.certified(height)?;
-        self.require_journal_block(height, &block)?;
-        Ok(block)
+        // A certified block is over 13 KiB and this frame stays live across the whole
+        // certified walk below it: check the one read in place instead of moving it.
+        let read = self.certified(height);
+        if let Ok(block) = &read {
+            self.require_journal_block(height, block)?;
+        }
+        read
     }
 
     fn require_journal_block(
@@ -423,13 +427,33 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
         Ok(())
     }
 
+    // The reads below run in their own frames. This one is live across the prefix walk that
+    // `prepare_resume` starts, so it holds no certified block of its own.
     fn certified(&self, height: u64) -> Result<CertifiedBlock, ArchiveFinalityError> {
         let Some(retained) = self.retained else {
-            return Ok(self.chain.certified(height)?);
+            return self.chain_certified(height);
         };
         if !self.prepare_resume(retained, height)? {
-            return Ok(self.chain.certified(height)?);
+            return self.chain_certified(height);
         }
+        self.certified_after_resume(retained, height)
+    }
+
+    // The reader's own verdict for one height, with no retained prefix to answer for.
+    #[inline(never)]
+    fn chain_certified(&self, height: u64) -> Result<CertifiedBlock, ArchiveFinalityError> {
+        self.chain
+            .certified(height)
+            .map_err(ArchiveFinalityError::from)
+    }
+
+    // The first read after the cursor was placed on a retained point.
+    #[inline(never)]
+    fn certified_after_resume(
+        &self,
+        retained: &ArchiveCapturePrefix,
+        height: u64,
+    ) -> Result<CertifiedBlock, ArchiveFinalityError> {
         match self.chain.certified(height) {
             // Kura could not supply the frame, which may be transient, or this view does not
             // reach it. A fresh walk would need the same frame, so keep the points for a retry.
@@ -446,7 +470,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
                 retained.forget();
                 self.resume.lock().resumed = false;
                 self.chain.reset_archive_prefix();
-                Ok(self.chain.certified(height)?)
+                self.chain_certified(height)
             }
             other => Ok(other?),
         }
@@ -478,8 +502,10 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
                 "archive authentication is walking the certified chain from signed genesis"
             );
             // Stop one height short once. Retaining this predecessor lets a retry of
-            // `height` verify it again rather than restart at signed genesis.
-            self.chain.certified(height - 1)?;
+            // `height` verify it again rather than restart at signed genesis. Only the
+            // verdict is needed: the predecessor's block is released where it was read
+            // rather than moved through this frame, which the walk from genesis runs under.
+            self.chain.certified(height - 1).map(drop)?;
             progress.predecessor = self.chain.archive_prefix_point(&self.boundary.hashes);
         }
         Ok(progress.resumed)
@@ -948,6 +974,18 @@ mod tests {
         ));
     }
 
+    // A resuming view on the heap. The view owns its whole prefix cursor (over 40 KiB), and
+    // these tests read through several of them on the default test stack: each walk from
+    // signed genesis runs under the frame that opened it, so that frame holds a pointer.
+    #[inline(never)]
+    fn resume<'v, V: StateReadOnly + ?Sized>(
+        view: &'v V,
+        kura: &'v Kura,
+        authentication: &'v ArchiveAuthentication,
+    ) -> Result<Box<CertifiedArchiveView<'v, V>>, ArchiveFinalityError> {
+        CertifiedArchiveView::resuming(view, kura, authentication).map(Box::new)
+    }
+
     // Authenticate the view's tip the way archive capture does.
     fn authenticate_tip(
         chain: &CertifiedTestChain,
@@ -955,8 +993,8 @@ mod tests {
     ) -> Result<u64, ArchiveFinalityError> {
         let view = chain.state().view();
         let height = u64::try_from(view.height()).unwrap();
-        let certified = CertifiedArchiveView::resuming(&view, chain.kura(), authentication)?;
-        certified.block(height)?;
+        let certified = resume(&view, chain.kura(), authentication)?;
+        certified.block(height).map(drop)?;
         certified.verify_unchanged()?;
         certified.retain_verified_prefix();
         Ok(height)
@@ -1168,7 +1206,7 @@ mod tests {
         let state = Arc::clone(chain.state());
         let kura = Arc::clone(chain.kura());
         let old_view = state.view();
-        let old = CertifiedArchiveView::resuming(&old_view, &kura, &authentication).unwrap();
+        let old = resume(&old_view, &kura, &authentication).unwrap();
         assert_eq!(
             old.confirm_retained(3).unwrap(),
             RetainedPrefixCheck::Confirmed
@@ -1190,7 +1228,7 @@ mod tests {
 
         chain.commit_at(5_000, Vec::new());
         let view = state.view();
-        let current = CertifiedArchiveView::resuming(&view, &kura, &authentication).unwrap();
+        let current = resume(&view, &kura, &authentication).unwrap();
         assert_eq!(
             current.confirm_retained(5).unwrap(),
             RetainedPrefixCheck::Missing,
@@ -1204,7 +1242,7 @@ mod tests {
 
         chain.corrupt_local_quorum_for_test(4, Signers::BelowQuorum);
         let view = state.view();
-        let current = CertifiedArchiveView::resuming(&view, &kura, &authentication).unwrap();
+        let current = resume(&view, &kura, &authentication).unwrap();
         assert_eq!(
             current.confirm_retained(4).unwrap(),
             RetainedPrefixCheck::Changed

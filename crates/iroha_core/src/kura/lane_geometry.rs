@@ -1781,12 +1781,22 @@ impl Kura {
                 Err(error) => return Err(Error::IO(error, path)),
             }
         }
-        if bound {
+        // A portable checkpoint bootstrap publishes canonical bodies under the pristine
+        // configured-catalog baseline, before State has authenticated any lane binding. Its
+        // published manifest owns that history as a journal binding owns native history:
+        // neither may silently lose its canonical chain, and opening still verifies the
+        // complete portable proof against the journals before any body is trusted.
+        let portable = !bound && super::checkpoint_prefix::is_published(store_root)?;
+        if bound || portable {
             if blocks_identity.is_none() {
                 return Err(configured_catalog_preflight_error(
                     store_root,
                     ErrorKind::NotFound,
-                    "bound canonical storage is missing",
+                    if bound {
+                        "bound canonical storage is missing"
+                    } else {
+                        "portable checkpoint canonical storage is missing"
+                    },
                 ));
             }
         } else if blocks_identity.is_some() {
@@ -1807,7 +1817,7 @@ impl Kura {
                 blocks_identity,
             },
             parent_identity,
-            requires_existing_files: bound,
+            requires_existing_files: bound || portable,
         })
     }
 

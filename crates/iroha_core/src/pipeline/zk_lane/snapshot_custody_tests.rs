@@ -219,7 +219,7 @@ fn optional_capture_refusal_preserves_vm_effects_gas_and_source_trace() {
     vm.set_zk_trace_enabled(true);
     vm.set_max_cycles(8);
     vm.run().unwrap();
-    let before = vm.execution_summary();
+    let before = vm.execution_summary().unwrap();
     let gas = vm.remaining_gas();
     let budget = AllocationBudget::new(0);
     assert!(!capture_and_submit(
@@ -232,7 +232,7 @@ fn optional_capture_refusal_preserves_vm_effects_gas_and_source_trace() {
         None
     ));
     assert_eq!(vm.remaining_gas(), gas);
-    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(vm.execution_summary().unwrap(), before);
     assert_eq!(vm.register(1), 7);
     let funded = AllocationBudget::new(1024 * 1024);
     let snapshot = vm.try_diagnostic_snapshot(&funded).unwrap();

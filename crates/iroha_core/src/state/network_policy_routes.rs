@@ -7,7 +7,9 @@
 //! Routing failures are bounded transaction outcomes, while missing/foreign source custody
 //! invalidates the carrier. Stateless signature/network validation still precedes these outcomes.
 //! Sealed reveals bind the outer ordinal/hash and inner signed hash. Commitments keep their
-//! protocol-only validator. Authenticated genesis alone retains in-progress bootstrap routing.
+//! protocol-only validator. A signerless anonymous ballot has the global chain's native route
+//! and no physical policy: its proof authorizes it and its board decides it.
+//! Authenticated genesis alone retains in-progress bootstrap routing.
 
 use super::*;
 use crate::{
@@ -33,6 +35,8 @@ enum PolicyProjection {
     Signed(Result<PhysicalExecutionPolicyRoute, PhysicalPolicyRouteRejection>),
     Genesis(SumeragiRootScope),
     SealedCommitment,
+    /// A signerless ballot: no signed source and no physical policy capability.
+    AnonymousBallot,
 }
 
 /// A source-bound capability. Only the pristine owner (or explicit component test scope)
@@ -225,10 +229,9 @@ impl CapturedNetworkPolicyRoute {
         state: &StateTransaction<'_, '_>,
         native: RoutingDecision,
     ) -> Result<Self, ExecutionDeferred> {
-        if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-            return Err(crate::tx::anonymous_ballot_unavailable());
-        }
-        let projection = if tx.external().is_some() {
+        let projection = if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
+            PolicyProjection::AnonymousBallot
+        } else if tx.external().is_some() {
             let resolved = PhysicalExecutionPolicyRoute::resolve(
                 &state.nexus,
                 &state.world,
@@ -417,11 +420,6 @@ impl CapturedNetworkPolicyRoutes {
             ledger_time_ms,
         };
         for (index, input) in source.network_entrypoints().enumerate() {
-            if matches!(input, TransactionEntrypoint::AnonymousBallot(_)) {
-                return Err(ExecutionAttemptError::Deferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ));
-            }
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input));
             let native = if genesis {
                 RoutingDecision::new(
@@ -456,6 +454,10 @@ impl CapturedNetworkPolicyRoutes {
             } else if accepted.external().is_some() {
                 signed_projection(state, &accepted, native, height, ledger_time_ms)
                     .map_err(ExecutionAttemptError::Deferred)?
+            } else if matches!(input, TransactionEntrypoint::AnonymousBallot(_)) {
+                // Its route is lane zero of a root that installs the anonymous family; any
+                // other root gave it none above, which invalidates the carrier.
+                PolicyProjection::AnonymousBallot
             } else {
                 PolicyProjection::SealedCommitment
             };

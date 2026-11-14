@@ -199,6 +199,10 @@ pub enum AdmissionPolicy {
     /// The exact nested target route admits its own account, validator, operator, signed-body, or
     /// public-read principal before any target effect is performed.
     TargetRoute,
+    /// No principal: the body is admitted only by its own admission stamp and membership proof
+    /// (the anonymous-ballot admission checks), under node-local bounds isolated from ordinary
+    /// transactions. The route reads no account, session, token or caller identity.
+    AnonymousBallotProof,
 }
 impl AdmissionPolicy {
     /// Return the canonical first-release metadata label.
@@ -213,6 +217,7 @@ impl AdmissionPolicy {
             Self::GovernedAuditor => "governed_auditor",
             Self::Operator => "operator",
             Self::TargetRoute => "target_route",
+            Self::AnonymousBallotProof => "anonymous_ballot_proof",
         }
     }
 }
@@ -707,6 +712,9 @@ pub enum CatalogValidationErrorKind {
     NestedAuthenticationRequiresProtocolTargetRoute,
     /// A mutation can never be admitted without an eligible principal.
     PublicMutation,
+    /// Proof-based ballot admission is exactly one bounded, unauthenticated public HTTP `POST`
+    /// mutation; no other shape may claim it.
+    AnonymousBallotProofRequiresUnauthenticatedHttpMutation,
     /// Attacker-amplifiable computation can never be admitted without an eligible principal.
     PublicExpensiveCompute,
     /// Long-lived transports can never be admitted without an eligible principal.
@@ -871,6 +879,18 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::NestedAuthenticationRequiresProtocolTargetRoute,
+            });
+        }
+        if route.admission == AdmissionPolicy::AnonymousBallotProof
+            && (route.authentication != AuthenticationPolicy::Unauthenticated
+                || route.effect != RouteEffect::Mutation
+                || route.surface != ApiSurface::Public
+                || route.method != HttpMethod::Post
+                || route.transport != RouteTransport::Http)
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::AnonymousBallotProofRequiresUnauthenticatedHttpMutation,
             });
         }
         match (route.effect, route.admission) {
@@ -3126,6 +3146,53 @@ pub mod runtime_governance {
         "governance.parliament.transition.draft",
         "/v1/gov/parliament/transitions/draft",
     );
+    /// Submit one canonical signerless anonymous-ballot envelope.
+    ///
+    /// The route is account- and session-free (`specs/parliament_private_ballot_design.md`
+    /// section 6): the envelope's admission stamp and membership proof alone admit it, under
+    /// the node's isolated ballot ingress bounds. It is separate from the baseline
+    /// `/v1/gov/parliament/*` routes and from ordinary transaction submission.
+    pub const GOV_ANONYMOUS_BALLOT_SUBMIT: RouteDescriptor = RouteDescriptor::new(
+        "governance.anonymous_ballot.submit",
+        HttpMethod::Post,
+        "/v1/gov/anonymous-ballots",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AnonymousBallotProof,
+    )
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read the public board of one anonymous-ballot scope: its sealed context, casting
+    /// window and corpus, as canonical Norito bytes. A wallet builds its proof context from
+    /// the whole board and confirms acceptance from the whole corpus; no route answers for
+    /// one credential or one nullifier.
+    pub const GOV_ANONYMOUS_BALLOT_BOARD_READ: RouteDescriptor = RouteDescriptor::new(
+        "governance.anonymous_ballot.board.read",
+        HttpMethod::Get,
+        "/v1/gov/anonymous-ballots/boards/{scope}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
+    /// Read one attempt of the anonymous Parliament family: its elections, assignments and
+    /// committed schedule, as canonical Norito bytes.
+    pub const GOV_ANONYMOUS_BALLOT_ATTEMPT_READ: RouteDescriptor = RouteDescriptor::new(
+        "governance.anonymous_ballot.attempt.read",
+        HttpMethod::Get,
+        "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
@@ -3301,6 +3368,9 @@ pub mod runtime_governance {
         GOV_PARLIAMENT_ATTEMPT_READ,
         GOV_PARLIAMENT_ATTEMPT_PLAN,
         GOV_PARLIAMENT_TRANSITION_DRAFT,
+        GOV_ANONYMOUS_BALLOT_SUBMIT,
+        GOV_ANONYMOUS_BALLOT_BOARD_READ,
+        GOV_ANONYMOUS_BALLOT_ATTEMPT_READ,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
         VALIDATION_FEE_RETAIL_QUOTE,
         VALIDATION_FEE_RETAIL_STATUS,

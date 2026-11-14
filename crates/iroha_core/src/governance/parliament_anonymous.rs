@@ -41,15 +41,24 @@
 //!   the pass applies, and the restore check binds the stored credentials and boards to
 //!   the State.
 //!
-//! World keeps the attempts, the credentials and the boards in the three tables of the
-//! `iroha.governance.parliament.anonymous.v1` release addition
-//! (`crate::state::parliament_anonymous_tables`), and `RegisterParliamentCredentialV1`
-//! drives [`AnonymousParliamentAttemptStateV1::register_credential`]. No selection activates
-//! the addition yet, and nothing creates an attempt or applies its scheduled items.
+//! - **Ballots** ([`ballot_input`]). A signerless anonymous-ballot input is decided against
+//!   the board World keeps for its scope: an invalid one makes its block invalid, a valid one
+//!   outside its window or under a taken nullifier is recorded as rejected, and an accepted
+//!   one joins the board's corpus, which the closure counts.
 //!
-//! TODO(E2, slice 3): the positioned pass drives the scheduled items, the ballot openings
-//! and closures ([`AnonymousParliamentAttemptStateV1::close_ballot`]) and the enactment
-//! item.
+//! World keeps the attempts, the credentials, the boards and the due index in the tables of
+//! the `iroha.governance.parliament.anonymous.v1` release addition
+//! (`crate::state::parliament_anonymous_tables`). `CreateAnonymousParliamentAttemptV1`
+//! creates an attempt, `SubmitAnonymousParliamentTransitionV1` records its facts and intents,
+//! `RegisterParliamentCredentialV1` drives
+//! [`AnonymousParliamentAttemptStateV1::register_credential`], and the positioned block-start
+//! pass ([`world_pass`]) applies the scheduled items, the ballot openings and the closures
+//! ([`AnonymousParliamentAttemptStateV1::close_ballot`]). No selection activates the addition
+//! on a live network: binding production use stays disabled until the owner records the
+//! proof profile's qualification.
+//!
+//! TODO(design §12.3, slice 5): production enactment (G3) of a certified production attempt.
+//! This release certifies no production attempt.
 
 use std::collections::BTreeMap;
 
@@ -80,6 +89,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 
+pub(crate) mod ballot_input;
 pub mod ballot_lifecycle;
 pub mod credentials;
 pub mod deliberation;

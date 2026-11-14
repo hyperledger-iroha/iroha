@@ -5,15 +5,21 @@ fn partial_commit_consistency() {
     let mut batch = Memory::new();
     let a1 = Memory::HEAP_START;
     let a2 = Memory::HEAP_START + 64;
+    // `seq` allocates its Merkle storage first and commits after every write;
+    // `batch` leaves both writes pending until its only root request.
+    seq.root().unwrap();
     seq.store_u32(a1, 0xDEAD_BEEF).unwrap();
     seq.commit();
+    assert!(seq.dirty_ranges().is_empty());
     seq.store_u32(a2, 0xCAFE_BABE).unwrap();
     seq.commit();
-    let seq_root = seq.root();
+    let seq_root = seq.root().unwrap();
     batch.store_u32(a1, 0xDEAD_BEEF).unwrap();
     batch.store_u32(a2, 0xCAFE_BABE).unwrap();
     batch.commit();
-    let batch_root = batch.root();
+    assert!(!batch.merkle_storage_allocated());
+    assert_eq!(batch.dirty_ranges().len(), 2);
+    let batch_root = batch.root().unwrap();
     assert_eq!(seq_root, batch_root);
 }
 #[test]
@@ -25,11 +31,11 @@ fn dirty_range_tracking() {
     mem.store_u32(a2, 2).unwrap();
     let ranges = mem.dirty_ranges();
     assert_eq!(ranges.len(), 2);
-    let committed_root = mem.root();
+    let committed_root = mem.root().unwrap();
     assert!(mem.dirty_ranges().is_empty());
 
     let mut reference = Memory::new();
     reference.store_u32(a1, 1).unwrap();
     reference.store_u32(a2, 2).unwrap();
-    assert_eq!(committed_root, reference.root());
+    assert_eq!(committed_root, reference.root().unwrap());
 }

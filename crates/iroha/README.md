@@ -33,8 +33,11 @@ it for settlement. Hidden/private denials remain errors without whole-block fall
 
 Transaction finality waits require state-resolved `Applied` status. Temporary
 HTTP 429 responses repeat only the status read, respecting Torii's delta-seconds
-`Retry-After` and the original wait deadline. They never resubmit the transaction;
-an exhausted deadline retains the last backpressure diagnostic.
+`Retry-After` and the original wait deadline. A transient transport failure of
+that read (a refused, reset or prematurely closed connection, or a transport
+timeout) repeats it at the poll interval within the same deadline. Neither
+resubmits the transaction; an exhausted deadline retains the last read error.
+Other read failures end the wait at once, and one-shot status reads never repeat.
 
 `VerifiedPaymentReceipt::verify` independently joins one direct `SettleAtomic`
 payment to a successful certified Network output. Supply the network, signed
@@ -514,8 +517,14 @@ It owns their durable submission/recovery workflow.
 Independent requests to the four members of one private-settlement committee run
 concurrently. Every started request joins before roster-ordered response checks,
 quorum selection or phase handoff. Availability, promotion, Prepare, Commit,
-recovery and auditor calls retain the same exact certificate and quorum rules;
-legs remain sequential so fanout never multiplies by the number of participants.
+recovery and auditor calls retain the same exact certificate and quorum rules.
+Legs are independent committees: within one phase at most four legs, so sixteen
+requests, are in flight together, and every started leg joins before any result
+is used. Results are read in leg order, so the first leg that failed or has no
+certificate yet decides the phase exactly as a leg-by-leg loop would; later legs
+of that window have already been asked, later phases never start. Every
+availability certificate is durable before any promotion, every promotion joins
+before any Prepare vote, and Register finality precedes every Commit vote.
 Availability validates and encodes one immutable payload per committee, while
 transport retains a separate owned body and fresh signature for every endpoint.
 Genuine native wallet/prover/sealer orchestration belongs to the separate internal

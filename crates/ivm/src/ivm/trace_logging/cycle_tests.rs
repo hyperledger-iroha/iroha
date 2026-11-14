@@ -170,7 +170,10 @@ fn padding_refusal_precedes_cycle_and_gas_then_exact_retry_matches() {
     standalone
         .run_with_host(&mut DefaultHost::default())
         .unwrap();
-    assert_eq!(vm.execution_summary(), standalone.execution_summary());
+    assert_eq!(
+        vm.execution_summary().unwrap(),
+        standalone.execution_summary().unwrap()
+    );
     assert_eq!(vm.step_log(), standalone.step_log());
     assert_eq!(vm.gas_remaining, GAS - 8);
     drop((vm, previous_logger));

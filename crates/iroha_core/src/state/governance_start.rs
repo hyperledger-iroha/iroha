@@ -10,13 +10,15 @@
 //!
 //! A refusal the node cannot decide defers the block and is never a verdict on it.
 //!
-//! TODO(design §12.3, slice 3): no real-peer test drives this dispatch. No instruction
-//! creates an anonymous attempt on a network yet and no network may activate the family
-//! before slice 4, so the pass is exercised on seeded World rows
-//! (`governance::parliament_anonymous::world_pass` tests) and never through
-//! `integration_tests/tests/`. The four-validator test (seal, opening, successor-block clock
-//! and closure with identical committed rows on every peer and across a restart) belongs
-//! with the attempt-creation interface.
+//! Only a block whose pass ran Parliament's items executes signerless ballot inputs
+//! ([`StateBlock::parliament_pass_ran`]): every other block has no board to decide them.
+//!
+//! TODO(design §12.3, slices 3 and 4): no real-peer test drives this dispatch. The pass and
+//! the ballots it opens windows for are exercised on seeded World rows
+//! (`governance::parliament_anonymous::world_pass` and `ballot_input` tests) and never
+//! through `integration_tests/tests/`. The four-validator corridor (seal, opening,
+//! successor-block clock, ballots and closure with identical committed rows on every peer
+//! and across a restart) is still open.
 
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
@@ -177,6 +179,14 @@ impl StateBlock<'_> {
         self.governance_due_applied
     }
 
+    /// Whether this block's pass ran Parliament's items: the block belongs to the global
+    /// chain's ordinary carrier and its root's selection installs the anonymous family. Only
+    /// such a block has ballot boards, so only it executes anonymous-ballot inputs
+    /// (`specs/parliament_private_ballot_design.md` §3.6 and §12.3 slice 4).
+    pub(crate) fn parliament_pass_ran(&self) -> bool {
+        self.governance_start_outputs.is_some()
+    }
+
     /// The governance block-start rows this block's pass emitted, in emission order; `None`
     /// when the block reserves no governance-start partition.
     #[cfg(test)]
@@ -246,6 +256,10 @@ mod tests {
         assert_eq!(calls, 1);
         assert!(!block.governance_due_applied());
         assert!(block.governance_start_rows().is_none());
+        assert!(
+            !block.parliament_pass_ran(),
+            "a block outside the global chain has no board to decide a ballot against"
+        );
     }
 
     #[test]
@@ -264,5 +278,6 @@ mod tests {
             block.governance_start_rows().is_none(),
             "a root whose selection does not install the anonymous family reserves no governance-start partition"
         );
+        assert!(!block.parliament_pass_ran());
     }
 }

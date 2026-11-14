@@ -12,7 +12,7 @@ use crate::{
 fn allow_exact_invocation_shell(vm: &mut IVM, budget: &AllocationBudget) {
     let occupied = budget.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
-    let before = vm.execution_summary();
+    let before = vm.execution_summary().unwrap();
     budget.set_limit_bytes(occupied + shell - 1);
     assert!(matches!(
         vm.run(),
@@ -20,7 +20,7 @@ fn allow_exact_invocation_shell(vm: &mut IVM, budget: &AllocationBudget) {
             requested_bytes, ..
         })) if requested_bytes == shell
     ));
-    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(vm.execution_summary().unwrap(), before);
     assert_eq!(budget.reserved_bytes(), occupied);
     budget.set_limit_bytes(occupied + shell);
 }
@@ -118,7 +118,7 @@ fn funded_runtime_template_refusal_retry_and_final_owner_use_original_pool() {
         .unwrap();
     // Refresh both retained node arrays before planning their clone.
     vm.memory.commit();
-    let expected_root = vm.memory.current_root();
+    let expected_root = vm.memory.root().unwrap();
     let _ = vm.registers.merkle_root();
     let original_bytes = budget.reserved_bytes();
     let template_bytes = funded_template_demand(&vm);
@@ -153,7 +153,7 @@ fn funded_runtime_template_refusal_retry_and_final_owner_use_original_pool() {
     budget.set_limit_bytes(original_bytes + template_bytes + 8);
     vm.memory.store_u64(Memory::STACK_START, 0x5678).unwrap();
     vm.reset_from_runtime_template(&template).unwrap();
-    assert_eq!(vm.memory.current_root(), expected_root);
+    assert_eq!(vm.memory.root().unwrap(), expected_root);
     assert_eq!(
         template.data().private_memory_bytes,
         vm.private_memory_bytes
@@ -362,7 +362,7 @@ fn prepaid_dirty_tracking_resets_warm_vm_after_budget_shrink_with_identical_gas(
         vm.run().unwrap();
         ordinary.run().unwrap();
         assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
-        assert_eq!(vm.memory.current_root(), ordinary.memory.current_root());
+        assert_eq!(vm.memory.root().unwrap(), ordinary.memory.root().unwrap());
         assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
         budget.set_limit_bytes(0);
         vm.reset_from_runtime_template(&template).unwrap();
@@ -393,7 +393,7 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     let base = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     let pc = vm.pc;
-    let root = vm.memory.current_root();
+    let root = vm.memory.root().unwrap();
     let privacy = vm.private_memory_bytes.pairs_for_testing().to_vec();
     budget.set_limit_bytes(0);
     assert!(matches!(
@@ -403,7 +403,7 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(vm.pc, pc);
     assert!(matches!(vm.memory.load_u64(Memory::STACK_START), Ok(0)));
-    assert_eq!(vm.memory.current_root(), root);
+    assert_eq!(vm.memory.root().unwrap(), root);
     assert_eq!(vm.private_memory_bytes.pairs_for_testing(), privacy);
     assert_eq!(budget.reserved_bytes(), base);
     let append_bytes = 4 * std::mem::size_of::<crate::WriteLogEntry>() + 8;
@@ -415,7 +415,7 @@ fn funded_write_log_refusal_preserves_guest_bytes_privacy_gas_and_retry_result()
     vm.run().unwrap();
     local.run().unwrap();
     assert_eq!(vm.remaining_gas(), local.remaining_gas());
-    assert_eq!(vm.memory.current_root(), local.memory.current_root());
+    assert_eq!(vm.memory.root().unwrap(), local.memory.root().unwrap());
     assert_eq!(vm.registers.merkle_root(), local.registers.merkle_root());
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -699,7 +699,7 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     vm.delta_trace
         .record_reserved(4, gpr, [false; crate::parallel::REGISTER_COUNT]);
     let reg_root = vm.registers.merkle_root();
-    let mem_root = vm.memory.root();
+    let mem_root = vm.memory.root().unwrap();
     vm.step_log.prepare_cycles(1).expect("prepaid cycle row");
     vm.step_log.record_reserved(4, reg_root, mem_root);
     vm.pc_trace.prepare(1, None).unwrap();
@@ -941,7 +941,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     vm.run().unwrap();
     ordinary.run().unwrap();
     assert_eq!(vm.remaining_gas(), ordinary.remaining_gas());
-    assert_eq!(vm.memory.current_root(), ordinary.memory.current_root());
+    assert_eq!(vm.memory.root().unwrap(), ordinary.memory.root().unwrap());
     assert_eq!(vm.registers.merkle_root(), ordinary.registers.merkle_root());
     vm.reset().expect("private lifecycle cleanup succeeds");
     ordinary
@@ -1053,7 +1053,7 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     let occupied = budget.reserved_bytes();
     let gas = vm.remaining_gas();
     let pc = vm.pc;
-    let root = vm.memory.current_root();
+    let root = vm.memory.root().unwrap();
     let privacy = vm.private_memory_bytes.pairs_for_testing().to_vec();
     let mut output = [0xa5; 8];
     budget.set_limit_bytes(0);
@@ -1078,7 +1078,7 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     ));
     assert_eq!(vm.remaining_gas(), gas);
     assert_eq!(vm.pc, pc);
-    assert_eq!(vm.memory.current_root(), root);
+    assert_eq!(vm.memory.root().unwrap(), root);
     assert_eq!(vm.private_memory_bytes.pairs_for_testing(), privacy);
     assert_eq!(budget.reserved_bytes(), occupied);
     let read_bytes = 8 * std::mem::size_of::<crate::AccessRange>();
@@ -1096,7 +1096,7 @@ fn funded_read_refusal_preserves_output_privacy_gas_and_exact_credit_retry() {
     vm.run().unwrap();
     local.run().unwrap();
     assert_eq!(vm.remaining_gas(), local.remaining_gas());
-    assert_eq!(vm.memory.current_root(), local.memory.current_root());
+    assert_eq!(vm.memory.root().unwrap(), local.memory.root().unwrap());
     assert_eq!(vm.registers.merkle_root(), local.registers.merkle_root());
     drop(vm);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1122,4 +1122,53 @@ fn executed_runtime_is_retainable_after_template_reset() {
     vm.run().expect("reactivated runtime runs again");
     vm.reset_from_runtime_template(&template).unwrap();
     assert!(vm.try_retain_cache_allocations());
+}
+
+#[test]
+fn funded_non_zk_merkle_syscall_allocates_from_prepaid_credit_without_pool_admission() {
+    let gas_limit = 1_000_000;
+    let address = Memory::HEAP_START;
+    let mut program = ProgramMetadata::default().encode();
+    program.extend_from_slice(
+        &crate::encoding::wide::encode_scall(crate::syscalls::SYSCALL_GET_MERKLE_PATH)
+            .to_le_bytes(),
+    );
+    program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+    let prepare = |vm: &mut IVM| {
+        vm.load_program(&program).unwrap();
+        vm.memory.store_u32(address, 0xABCD).unwrap();
+        vm.set_register(10, address);
+        vm.set_register(11, Memory::OUTPUT_START);
+        vm.set_register(12, 0);
+    };
+    let mut reference = IVM::try_new(gas_limit).unwrap();
+    prepare(&mut reference);
+    assert!(!reference.memory.merkle_storage_allocated());
+    reference.run().unwrap();
+    assert!(reference.memory.merkle_storage_allocated());
+    let path_len = reference.register(10);
+    assert!(path_len > 0);
+    let expected_output = reference.memory.read_output_used().to_vec();
+    assert_eq!(expected_output.len() as u64, path_len * 32);
+
+    let budget = AllocationBudget::new(usize::MAX);
+    let mut vm = IVM::try_new_with_memory_budget(gas_limit, &budget).unwrap();
+    prepare(&mut vm);
+    assert!(!vm.memory.merkle_storage_allocated());
+    // Ordinary loading and running admitted the Merkle storage with the image
+    // and never allocated it. A syscall reached mid-run is the first request:
+    // it allocates from that prepaid credit, so the pool is never asked for the
+    // storage and the invocation meets no new deferral point.
+    let image_bytes = usize::try_from(vm.memory.stack_top()).unwrap();
+    let tree_bytes = crate::byte_merkle_tree::ByteMerkleTree::memory_plan(image_bytes.div_ceil(32))
+        .unwrap()
+        .requested_bytes();
+    budget.set_limit_bytes(budget.reserved_bytes() + tree_bytes / 2);
+    vm.run().unwrap();
+    assert!(vm.memory.merkle_storage_allocated());
+    assert_eq!(vm.register(10), path_len);
+    assert_eq!(vm.memory.read_output_used(), &expected_output[..]);
+    assert_eq!(vm.remaining_gas(), reference.remaining_gas());
+    drop(vm);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

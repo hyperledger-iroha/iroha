@@ -60,7 +60,9 @@ validation, gas and results. Reducing the budget clears idle Core/global cache
 references while outstanding borrowers remain charged until destruction.
 
 Each memory image owns two fixed bitmaps with one bit per 32-byte Merkle leaf:
-pending commit changes and changes since the runtime baseline. Constructor and
+leaves whose digests are pending and changes since the runtime baseline. Until
+the first root or path request allocates the Merkle storage, the pending bitmap
+holds every leaf written since the zero image. Constructor and
 snapshot plans reserve the complete bitmap geometry from the original execution
 lease; local images use the aggregate cache accounting owner. Stores and warm
 reset change initialized words without growing tracking sets. Bitmap backing
@@ -245,20 +247,54 @@ read-owner change does not close that gate or the remaining active-memory owners
 
 Memory construction and runtime-template copying prepay the complete canonical
 SHA-256 node geometry alongside the memory image, leaf digests and dirty bitmaps.
+Only the image and the bitmaps are allocated then. Leaf digests and canonical
+nodes cost about three times the image, and ordinary execution never reads a
+memory root, so they are allocated by the first root or path request
+(`Memory::root`, `merkle_path`, `merkle_root_and_path`, `merkle_compact`,
+`merkle_commitment`). ZK trace collection, which records a root every cycle,
+makes that request when the invocation begins, before any guest effect.
+
+Deferring the allocation changes no admission. Every image is accounted at its
+whole committed footprint from construction: it holds the cache retention charge
+the allocated storage will carry, and a funded image also keeps the storage's
+prepaid execution credit as an unspent lease. Caches and pools therefore admit,
+retain and refuse images exactly as they did when the storage was allocated with
+the image, the allocation needs no new pool admission, and an invocation meets
+no new deferral point. A copy of an image without storage holds the same
+accounting, partitioning its credit from its own lease. The accounted bytes of
+an image exceed its resident bytes until its first root request.
+TODO: Admit and charge the storage at the first request instead of with the
+image, so idle runtimes pin neither cache budget nor pool credit for storage
+they never use. That moves the pool and retention numbers the funded trace,
+refusal, warm-reset and cache tests pin and is a separate accounting change.
+
+A refused allocation is a local execution deferral that leaves the image and its
+pending bitmap unchanged, so the request can be repeated. A refused funded
+attempt drops the charges it had already split, which refunds them to the pool;
+the image takes its whole credit back at once and stays a prepaid, reusable
+runtime. Only if another owner took that capacity in between is the image left
+short: it is then refused idle retention and re-admits its credit, as an
+ordinary pool admission that can defer, on its next root or path request.
+
 The checked Crypto geometry includes its exact retained node capacity; the actual
 allocation must match that request before the owner is published. Funded nodes
-carry a split charge from the original execution lease. Local nodes use the same
-aggregate retention accounting as other IVM backing. Both charges remain until
-the canonical tree's node array has been destroyed. A freshly zeroed image has
-identical leaves, so construction computes one pair hash per tree level and
-fills each level with the bit-identical canonical nodes.
+carry a split charge from the original execution lease. Both charges remain until
+the canonical tree's node array has been destroyed. The allocation is the tree of
+a zeroed image: its leaves are identical, so it computes one pair hash per tree
+level and fills each level with the bit-identical canonical nodes. The pending
+bitmap is then hashed through the ordinary commit paths, so a root is the same
+function of the image bytes whenever it is first requested.
 
 Every byte tree retains this node storage. Sparse updates use canonical leaf-to-root
 updates; dense CPU or successful hardware leaf replacement marks the existing
 nodes stale. Root and proof queries rewrite their retained breadth-first slots
 using Crypto's existing SHA-256 relation. Warm resets keep node storage even when
-the known template root lets execution defer rewriting it. No query allocates a
-replacement canonical node array or queue. Proof output vectors, hardware block
+the known template root lets execution defer rewriting it, and never allocate or
+release it: an allocated worker restored from an allocated template copies the
+template's digests for its restored and still-pending leaves; two deferred images
+copy the template's pending bitmap; a worker whose allocation state differs from
+its template keeps its own pending leaves and adds the restored ones. No query
+allocates a replacement canonical node array or queue. Proof output vectors, hardware block
 and digest scratch, telemetry/Rayon bookkeeping and worker snapshot resources are
 separate from this canonical-node backing guarantee.
 

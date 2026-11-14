@@ -231,8 +231,10 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
         amount: 17,
         transaction: [5; 32],
     };
+    // Finalized fee payouts admit only a qualified native World schema; `wrong_world` below
+    // keeps the refusal of any other schema at the same certified cut.
     let world = WorldStateSnapshotV1 {
-        schema_hash: iroha_crypto::Hash::new(b"native payout ingress schema"),
+        schema_hash: iroha_data_model::sumeragi_finality::native_world_schema_family_v1()[0],
         entries: vec![WorldStateSnapshotEntryV1 {
             field_id: "world.kagemusha_wallet_ledger".into(),
             kind: WorldStateElementKindV1::Table,

@@ -18,10 +18,6 @@ fn accept_transaction_metadata(
             "PRTRY:NTS_UNHEALTHY",
             format!("failed to accept transaction: {err}"),
         ),
-        iroha_core::tx::AcceptTransactionFail::AnonymousBallotUnavailable => (
-            "anonymous_ballot_unavailable",
-            "Anonymous ballot State/context verification is locally unavailable.".to_owned(),
-        ),
         iroha_core::tx::AcceptTransactionFail::TransactionLimit(limit) => (
             "transaction_rejected",
             format!("failed to accept transaction: {}", limit.reason),

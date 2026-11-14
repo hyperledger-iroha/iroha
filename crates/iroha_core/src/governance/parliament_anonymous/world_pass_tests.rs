@@ -34,11 +34,16 @@ use iroha_data_model::governance::types::RiskTierV1;
 
 /// The rows of the three tables between two blocks, and the committed `K` when one is set.
 #[derive(Clone, Default)]
-struct Rows {
-    attempts: Vec<(GovernanceAttemptId, AnonymousParliamentAttemptStateV1)>,
-    registrations: Vec<(AssignmentId, ParliamentCredentialRecordV1)>,
-    boards: Vec<(BallotScopeV1, ParliamentBallotBoardRecordV1)>,
-    limit: Option<u16>,
+pub(in crate::governance::parliament_anonymous) struct Rows {
+    pub(in crate::governance::parliament_anonymous) attempts:
+        Vec<(GovernanceAttemptId, AnonymousParliamentAttemptStateV1)>,
+    pub(in crate::governance::parliament_anonymous) registrations:
+        Vec<(AssignmentId, ParliamentCredentialRecordV1)>,
+    pub(in crate::governance::parliament_anonymous) boards:
+        Vec<(BallotScopeV1, ParliamentBallotBoardRecordV1)>,
+    pub(in crate::governance::parliament_anonymous) limit: Option<u16>,
+    /// The committed per-block ballot budget `(B_work, B_bytes)`, when one is set.
+    pub(in crate::governance::parliament_anonymous) ballot_budget: Option<(u32, u64)>,
     /// The time of the parent block, when the next block has one: the height-progress
     /// ticket is due from it.
     parent_time_ms: Option<u64>,
@@ -49,7 +54,10 @@ struct Rows {
     due_override: Vec<(GovernanceAttemptId, Vec<BallotScopeV1>)>,
 }
 
-fn header(height: u64, timestamp_ms: u64) -> BlockHeader {
+pub(in crate::governance::parliament_anonymous) fn header(
+    height: u64,
+    timestamp_ms: u64,
+) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("nonzero height"),
         None,
@@ -59,7 +67,9 @@ fn header(height: u64, timestamp_ms: u64) -> BlockHeader {
     )
 }
 
-fn no_pulse(_: u64) -> Option<AnonymousSortitionPulseV1> {
+pub(in crate::governance::parliament_anonymous) fn no_pulse(
+    _: u64,
+) -> Option<AnonymousSortitionPulseV1> {
     None
 }
 
@@ -74,7 +84,7 @@ impl Rows {
     }
 
     /// A State on the driver's network whose World activates the family and keeps the rows.
-    fn state(&self) -> State {
+    pub(in crate::governance::parliament_anonymous) fn state(&self) -> State {
         self.state_with(true)
     }
 
@@ -82,12 +92,29 @@ impl Rows {
     /// selection does not install the family: rows no restore would accept, kept to observe
     /// that nothing reads them.
     fn state_with(&self, installed: bool) -> State {
+        self.state_on(installed, false)
+    }
+
+    /// [`Self::state`] whose World also commits the global root scope, as a signed genesis
+    /// does: the routing of signerless ballots and their queue admission read it.
+    pub(in crate::governance::parliament_anonymous) fn state_on_global_root(&self) -> State {
+        self.state_on(true, true)
+    }
+
+    fn state_on(&self, installed: bool, global_root: bool) -> State {
         let world = World::new();
         if installed {
             crate::runtime::activate_additions_for_testing(&world, PARLIAMENT_ANONYMOUS.module)
                 .expect("activate the anonymous family");
         }
         let mut block = world.block();
+        if global_root {
+            block
+                .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
+                    iroha_data_model::block::consensus::SumeragiRootScope::Global,
+                ))
+                .expect("commit the global root scope");
+        }
         block
             .set_parameter_for_testing(Parameter::Custom(
                 ParliamentCandidateTestingPolicyV1::CANDIDATE_V1
@@ -95,10 +122,17 @@ impl Rows {
                     .expect("candidate policy"),
             ))
             .expect("select candidate testing");
-        if let Some(limit) = self.limit {
+        if self.limit.is_some() || self.ballot_budget.is_some() {
+            let default = ParliamentBallotParametersV1::default();
+            let (reservations, bytes) = self.ballot_budget.unwrap_or((
+                default.max_verification_reservations_per_block,
+                default.max_verifier_input_bytes_per_block,
+            ));
             let ballot = ParliamentBallotParametersV1 {
-                max_nonterminal_attempts: limit,
-                ..ParliamentBallotParametersV1::default()
+                max_nonterminal_attempts: self.limit.unwrap_or(default.max_nonterminal_attempts),
+                max_verification_reservations_per_block: reservations,
+                max_verifier_input_bytes_per_block: bytes,
+                ..default
             };
             block
                 .set_parameter_for_testing(Parameter::Custom(
@@ -144,6 +178,19 @@ impl Rows {
         pulse_at: impl Fn(u64) -> Option<AnonymousSortitionPulseV1>,
         restorable: bool,
     ) -> Result<AnonymousPassReportV1, GovernancePassErrorV1<AnonymousPassWorldErrorV1>> {
+        self.run_with(height, timestamp_ms, pulse_at, restorable, |_| {})
+    }
+
+    /// [`Self::run`], then `inputs` on the same block before its rows are kept: the block's
+    /// Network inputs execute after its pass.
+    pub(in crate::governance::parliament_anonymous) fn run_with(
+        &mut self,
+        height: u64,
+        timestamp_ms: u64,
+        pulse_at: impl Fn(u64) -> Option<AnonymousSortitionPulseV1>,
+        restorable: bool,
+        inputs: impl FnOnce(&mut crate::state::StateBlock<'_>),
+    ) -> Result<AnonymousPassReportV1, GovernancePassErrorV1<AnonymousPassWorldErrorV1>> {
         let state = self.state();
         let mut block = state.block(header(height, timestamp_ms));
         // Tables that disagree have no due answer; the pass reports them.
@@ -174,6 +221,7 @@ impl Rows {
                 "the due predicate holds exactly when the pass applies work"
             );
         }
+        inputs(&mut block);
         if restorable {
             validate_cut(&block.world, &network(), height)
                 .expect("the pass leaves a cut restore accepts");
@@ -200,12 +248,18 @@ impl Rows {
     }
 
     /// A block without a pulse whose rows restore.
-    fn block(&mut self, height: u64, timestamp_ms: u64) -> AnonymousPassReportV1 {
+    pub(in crate::governance::parliament_anonymous) fn block(
+        &mut self,
+        height: u64,
+        timestamp_ms: u64,
+    ) -> AnonymousPassReportV1 {
         self.run(height, timestamp_ms, no_pulse, true)
             .expect("the pass")
     }
 
-    fn attempt(&self) -> &AnonymousParliamentAttemptStateV1 {
+    pub(in crate::governance::parliament_anonymous) fn attempt(
+        &self,
+    ) -> &AnonymousParliamentAttemptStateV1 {
         &self.attempts[0].1
     }
 
@@ -226,7 +280,7 @@ impl Rows {
     }
 
     /// The earliest due time of the attempt's live lifecycle items.
-    fn next_due(&self) -> u64 {
+    pub(in crate::governance::parliament_anonymous) fn next_due(&self) -> u64 {
         self.attempt().lifecycle_items().expect("items")[0].due_ms
     }
 }
@@ -252,7 +306,7 @@ fn sealed_in_world() -> (
 /// Rows whose jury is in Deliberation with its board sealed and unscheduled, and the height
 /// of the last block. The public bodies conclude through recorded endorsements, which are
 /// transactions: the reducer records them here.
-fn jury_in_deliberation() -> (Rows, u64) {
+pub(in crate::governance::parliament_anonymous) fn jury_in_deliberation() -> (Rows, u64) {
     let (mut rows, mut driver, _, _) = sealed_in_world();
     assert_eq!(rows.attempt(), &driver.state);
     for body in public_bodies() {
@@ -942,6 +996,11 @@ fn the_dispatch_runs_parliament_only_on_a_root_that_installs_the_family() {
         })
         .expect("the pass");
         assert_eq!(calls, 1, "the step before the enactments runs exactly once");
+        assert_eq!(
+            block.parliament_pass_ran(),
+            installed,
+            "only a pass that ran Parliament's items lets the block execute ballot inputs"
+        );
         let stored = block
             .world
             .parliament_anonymous_attempts

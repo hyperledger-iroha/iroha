@@ -51,7 +51,7 @@ use iroha_data_model::{
         },
         types::{BodyInstanceId, GovernanceAttemptId, GovernanceAttemptStatusV1, ParliamentBody},
     },
-    parameter::ParliamentBallotParametersV1,
+    parameter::{Parameters, ParliamentBallotParametersV1},
 };
 use iroha_parliament_ballot::board::BallotBoardV1;
 use mv::storage::StorageReadOnly;
@@ -271,16 +271,16 @@ pub(crate) enum GovernanceOwnerErrorV1<E> {
     Foreign(E),
 }
 
-/// `K`, the casting windows that may be open at once: `max_nonterminal_attempts` of the
-/// committed `gov.parliament_ballot` parameter, or of its default while none is committed.
+/// The `gov.parliament_ballot` value `parameters` commit, or its default while none is
+/// committed: the one authoritative value of `K`, `B_work` and `B_bytes` at its height
+/// (design §3.10).
 ///
 /// # Errors
 /// [`PassError::Policy`] for a committed value that does not decode or is out of range.
-pub(crate) fn casting_window_limit(
-    world: &(impl WorldReadOnly + ?Sized),
-) -> Result<usize, PassError> {
-    let ballot = world
-        .parameters()
+pub(crate) fn committed_ballot_parameters(
+    parameters: &Parameters,
+) -> Result<ParliamentBallotParametersV1, PassError> {
+    let ballot = parameters
         .custom()
         .get(ParliamentBallotParametersV1::parameter_id())
         .map(ParliamentBallotParametersV1::from_custom_parameter)
@@ -290,7 +290,19 @@ pub(crate) fn casting_window_limit(
     ballot
         .validate_structure()
         .map_err(|_| PassError::Policy("gov.parliament_ballot is out of range"))?;
-    Ok(usize::from(ballot.max_nonterminal_attempts))
+    Ok(ballot)
+}
+
+/// `K`, the casting windows that may be open at once: `max_nonterminal_attempts` of the
+/// committed `gov.parliament_ballot` parameter, or of its default while none is committed.
+///
+/// # Errors
+/// [`PassError::Policy`] for a committed value that does not decode or is out of range.
+pub(crate) fn casting_window_limit(
+    world: &(impl WorldReadOnly + ?Sized),
+) -> Result<usize, PassError> {
+    committed_ballot_parameters(world.parameters())
+        .map(|ballot| usize::from(ballot.max_nonterminal_attempts))
 }
 
 /// The rows Parliament's listing reads: the nonterminal attempts the due index lists, at
@@ -1308,6 +1320,7 @@ pub(crate) fn parliament_next_due_ms(
     Ok(next)
 }
 
+// The signerless-ballot tests (`ballot_input`) run their inputs on this harness's rows.
 #[cfg(test)]
 #[path = "world_pass_tests.rs"]
-mod tests;
+pub(super) mod tests;

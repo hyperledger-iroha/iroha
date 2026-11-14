@@ -17,7 +17,7 @@
 //! per-signer and framing bytes that `maximal_action_context_constants_are_the_measured_worst_case`
 //! derives here from actual signed transactions. When last measured, the largest required context
 //! at the defaults (the full statement with sixteen ML-DSA signers and the largest admissible fee
-//! intent and the flag-required metadata) made a 9,938,306-byte transaction, 547,454 bytes below
+//! intent and the flag-required metadata) made a 9,938,290-byte transaction, 547,470 bytes below
 //! the cap. The tests print every
 //! measurement (`MAXIMUM_PROOF_ENVELOPE`, `MAXIMUM_STATEMENT_ENVELOPE`, `ACTION_CONTEXT`) and
 //! assert the caps and the derived constants.
@@ -45,7 +45,7 @@ use iroha_data_model::{
         },
     },
     privacy::{
-        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
+        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeStatementV1,
         PrivacyStatementValidationError, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
         TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
@@ -272,6 +272,14 @@ fn signed_by_single_key(
     signed
 }
 
+/// One fixture row's envelope. The Exact12 bundle carries the frozen wire envelope
+/// (`PrivacyProofEnvelopeV1`); its runtime projection keeps every value and digest.
+fn fixture_envelope(envelope_norito: &[u8]) -> PrivacyRuntimeProofEnvelopeV1 {
+    norito::decode_canonical::<PrivacyProofEnvelopeV1>(envelope_norito)
+        .expect("fixture envelope")
+        .into()
+}
+
 /// The PQ-MASP fixture envelope with its statement saturated to the aggregate statement cap.
 fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyRuntimeProofEnvelopeV1 {
     let statement_cap = limits.max_statement_and_encrypted_output_bytes_per_transaction as usize;
@@ -280,8 +288,7 @@ fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyRuntimeP
         .rows
         .iter()
         .find_map(|row| {
-            let envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            let envelope = fixture_envelope(&row.envelope_norito);
             matches!(
                 envelope.statement,
                 PrivacyRuntimeStatementV1::PqMaspStarkV1(_)
@@ -373,8 +380,7 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
         .expect("sixteen-member signature policy");
         let authority = AccountId::new_multisig(policy);
         for row in &fixtures.rows {
-            let mut envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            let mut envelope = fixture_envelope(&row.envelope_norito);
             if let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) =
                 &mut envelope.statement
             {
@@ -504,8 +510,7 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
         .rows
         .iter()
         .find_map(|row| {
-            let envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            let envelope = fixture_envelope(&row.envelope_norito);
             matches!(
                 envelope.statement,
                 PrivacyRuntimeStatementV1::PqMaspStarkV1(_)

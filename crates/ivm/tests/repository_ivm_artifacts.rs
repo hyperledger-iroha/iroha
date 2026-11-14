@@ -158,7 +158,7 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         );
         assert_eq!(parsed.metadata.abi_version, 1, "{} ABI", path.display());
         assert_eq!(
-            bytes.get(17..ivm::HEADER_SIZE),
+            bytes.get(ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE),
             Some(expected_abi_hash.as_slice()),
             "{} does not authenticate the canonical ABI descriptor",
             path.display()

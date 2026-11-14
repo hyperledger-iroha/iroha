@@ -10,7 +10,7 @@ fn memory_root_and_path_combined_matches_separate() {
     mem.commit();
     // Separate calls
     let p0 = mem.merkle_path(addr0).unwrap();
-    let r0 = mem.current_root();
+    let r0 = mem.root().unwrap();
     // Combined call
     let (rc, pc) = mem.merkle_root_and_path(addr0).unwrap();
     assert_eq!(r0, rc);

@@ -26,6 +26,9 @@ fn configuration(fixture: &Fixture) -> Config {
     .unwrap()
 }
 
+// The five-second monotonic budget of one bounded operation. Take it when that operation (or
+// the original authorization it records) starts: fixture stores, parent custody and private
+// publications are setup work outside the operation and never spend its budget.
 fn options() -> BoundedTransactionOptions {
     BoundedTransactionOptions {
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
@@ -163,7 +166,6 @@ fn administrative_amx_partial_or_changed_origin_is_no_http_and_no_repair() {
     fixture.parent_receipt();
     let root = tempfile::tempdir().unwrap();
     let config = configuration(&fixture);
-    let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
     let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
@@ -182,7 +184,7 @@ fn administrative_amx_partial_or_changed_origin_is_no_http_and_no_repair() {
     let source = Offline(Cell::new(0));
     assert!(
         store
-            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options)
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options())
             .is_err()
     );
     assert_eq!(source.0.get(), 0);
@@ -191,8 +193,11 @@ fn administrative_amx_partial_or_changed_origin_is_no_http_and_no_repair() {
     // A separate complete origin proves changed authorization refusal rather than partial inventory.
     let mut complete =
         AttachmentStore::open(&root.path().join("complete"), fixture.identity.clone()).unwrap();
-    let bytes =
-        encode_bounded(&origin(&fixture, &config, utc, &options), MAX_RECORD_BYTES).unwrap();
+    let bytes = encode_bounded(
+        &origin(&fixture, &config, utc, &options()),
+        MAX_RECORD_BYTES,
+    )
+    .unwrap();
     let retained = complete
         .directory
         .publish_private_child(DIRECTORY, &[(ORIGIN, &bytes)])
@@ -200,7 +205,14 @@ fn administrative_amx_partial_or_changed_origin_is_no_http_and_no_repair() {
     validate_inventory(&retained).unwrap();
     assert!(
         complete
-            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc + 1, &options)
+            .advance_amx_registration(
+                &config,
+                &bootstrap,
+                &mut parent,
+                &source,
+                utc + 1,
+                &options(),
+            )
             .is_err()
     );
     assert_eq!(source.0.get(), 0);
@@ -221,7 +233,6 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
     fixture.parent_receipt();
     let root = tempfile::tempdir().unwrap();
     let config = configuration(&fixture);
-    let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
     let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
@@ -230,7 +241,7 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
     let source = Offline(Cell::new(0));
     assert!(
         store
-            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options)
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options())
             .is_err()
     );
     assert!(source.0.get() >= 3);
@@ -239,7 +250,7 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
     store.bind_cancellation(signal).unwrap();
     let before = source.0.get();
     assert!(matches!(
-        store.advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options),
+        store.advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options()),
         Err(AttachmentError::Cancelled)
     ));
     assert_eq!(source.0.get(), before);
@@ -258,12 +269,14 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
     assert_eq!(fixture.parent.checkpoint().height(), 2);
     let root = tempfile::tempdir().unwrap();
     let config = configuration(&fixture);
-    let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
     let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
-    let original =
-        encode_bounded(&origin(&fixture, &config, utc, &options), MAX_RECORD_BYTES).unwrap();
+    let original = encode_bounded(
+        &origin(&fixture, &config, utc, &options()),
+        MAX_RECORD_BYTES,
+    )
+    .unwrap();
     // This authenticated parent checkpoint is retained material, never a claimed AMX carrier.
     let checkpoint = fixture.parent.checkpoint().encode_canonical().unwrap();
     for proof_name in ["replay.nrt", "carrier.nrt"] {
@@ -281,7 +294,7 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
             .unwrap();
         let source = Offline(Cell::new(0));
         let error = store
-            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options)
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options())
             .unwrap_err();
         assert!(matches!(
             error,
@@ -308,7 +321,7 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
     let source = Offline(Cell::new(0));
     assert!(
         unsigned
-            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options,)
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options())
             .is_err()
     );
     assert!(

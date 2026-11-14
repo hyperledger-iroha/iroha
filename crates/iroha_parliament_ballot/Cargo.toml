@@ -10,6 +10,16 @@ description = "Typed protocol layer of the Parliament anonymous ballot: canonica
 [lints]
 workspace = true
 
+[features]
+# Reproducible fixed-tape ballots for the tests of dependent crates (`src/fixtures.rs`).
+# Never enable it in a wallet, node or other shipped build: a fixed tape reveals its secret.
+test-fixtures = []
+
+# The stamp miner of the pinned test ballots carries its own unit tests.
+[[example]]
+name = "mine_fixture_stamp"
+test = true
+
 [dependencies]
 # Wire types, pinned `Enc`, the public digests and the closed launch gate.
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }

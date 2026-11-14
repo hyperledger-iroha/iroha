@@ -80,6 +80,18 @@ impl DirtyChunks {
         self.count = other.count;
     }
 
+    /// Add every leaf of `other`. Both sets share one geometry, so the union
+    /// rewrites initialized words in place and cannot allocate.
+    pub(crate) fn union_with(&mut self, other: &Self) {
+        assert_eq!(self.chunks, other.chunks, "dirty-leaf geometry mismatch");
+        let mut count = 0;
+        for (word, added) in self.words.as_mut_slice().iter_mut().zip(other.words()) {
+            *word |= *added;
+            count += word.count_ones() as usize;
+        }
+        self.count = count;
+    }
+
     pub(crate) fn insert(&mut self, index: usize) {
         assert!(index < self.chunks, "dirty leaf outside memory geometry");
         let mask = 1_u64 << (index % 64);

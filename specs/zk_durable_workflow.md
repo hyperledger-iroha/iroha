@@ -501,7 +501,11 @@ witnesses are never serialized into that journal. The caller supplies the same
 prepared artifacts on resume. This API performs structural request validation,
 not proof generation or local proof verification. Committee helpers keep their
 existing bounded fanout and deadlines; a bounded worker retains its permit and
-original artifact owner if an awaiting call is dropped.
+original artifact owner if an awaiting call is dropped. Inside that worker the
+legs of one phase are dispatched in leg-ordered windows of at most four, each
+with its four committee requests. Every leg of a window joins before a result is
+used, and the first leg in order that failed or is not yet certified decides the
+round, so the journal records the same transcripts in the same step order.
 
 Only successful exact Finalize execution in a Global block verified from
 independently selected genesis constructs `VerifiedPrivateSettlementReceipt`.

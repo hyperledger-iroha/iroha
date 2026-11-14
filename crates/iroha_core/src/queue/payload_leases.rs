@@ -166,6 +166,7 @@ impl Queue {
                     && tracked.incarnation() > selection.admission_high_water)
                     || tracked.as_accepted().entrypoint_bytes() != original.entrypoint_bytes()
                     || tracked.is_in_blockchain(view)
+                    || self.anonymous_ballot_decided(&hash, view)
                     || self.is_expired_at(tracked.as_accepted(), now)
                 {
                     return Ok(None);
@@ -174,6 +175,7 @@ impl Queue {
                 if matches!(
                     original.entrypoint(),
                     TransactionEntrypoint::SealedCommitment(_)
+                        | TransactionEntrypoint::AnonymousBallot(_)
                 ) && enqueue_timestamp_ms.is_none()
                 {
                     return Ok(None);

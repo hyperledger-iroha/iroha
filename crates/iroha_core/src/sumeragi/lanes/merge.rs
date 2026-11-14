@@ -380,14 +380,6 @@ fn expand_from_view<'state>(
     let policy = routing.policy();
     let inputs = routing.inputs(view.world());
     let own = proposal.external_entrypoints_slice();
-    if own
-        .iter()
-        .any(|input| matches!(input, TransactionEntrypoint::AnonymousBallot(_)))
-    {
-        return Err(MergeError::ResourceDeferred(
-            crate::tx::anonymous_ballot_unavailable(),
-        ));
-    }
     let mut step = LaneStepInput {
         time_ms,
         ..LaneStepInput::default()
@@ -473,11 +465,9 @@ fn expand_from_view<'state>(
         step,
     };
     for (index, (lane, tx)) in candidates.into_iter().enumerate() {
-        if matches!(tx, TransactionEntrypoint::AnonymousBallot(_)) {
-            return Err(MergeError::ResourceDeferred(
-                crate::tx::anonymous_ballot_unavailable(),
-            ));
-        }
+        // A signerless ballot routes to lane zero of the global chain only, so one a lane
+        // block carried fails the route check below and is dropped like any other
+        // inadmissible merged input (`specs/parliament_private_ballot_design.md` §3.6).
         let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&tx));
         let cached = identities.candidates.as_slice()[index];
         let hash = cached.carrier;
@@ -851,11 +841,6 @@ impl<'policy> Admissibility<'policy> {
             false,
         ) {
             Ok(_) => {}
-            Err(crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable) => {
-                return Err(MergeError::ResourceDeferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ));
-            }
             Err(error) => match error.into_execution_deferred() {
                 Ok(original) => return Err(MergeError::RoutingDeferred(original)),
                 Err(_completed) => return Ok(false),
@@ -866,9 +851,8 @@ impl<'policy> Admissibility<'policy> {
                 Ok(commitment.payload().reveal_after_height > block.header().height().get())
             }
             TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_) => Ok(true),
-            TransactionEntrypoint::AnonymousBallot(_) => Err(MergeError::ResourceDeferred(
-                crate::tx::anonymous_ballot_unavailable(),
-            )),
+            // No lane carries a ballot: a merged one is never admitted.
+            TransactionEntrypoint::AnonymousBallot(_) => Ok(false),
         }
     }
 }

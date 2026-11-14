@@ -136,11 +136,6 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             )
         })?;
         for (index, input) in source.network_entrypoints().enumerate() {
-            if matches!(input, TransactionEntrypoint::AnonymousBallot(_)) {
-                return Err(ExecutionAttemptError::Deferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ));
-            }
             let (routing, policy_route) = policy_routes.get(source, index)?;
             // Lane admission does not preserve TTL. Expansion filters invalid
             // merged inputs at this same global time before they enter Network,
@@ -443,6 +438,27 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
     {
         return Err("Network attempt differs from its exact authenticated projection".into());
     }
+    // A signerless ballot is decided against the board World keeps for its scope, and boards
+    // exist only where this block's governance pass ran Parliament's items: on the global
+    // chain's ordinary carrier of a root whose selection installs the anonymous family
+    // (`specs/parliament_private_ballot_design.md` §3.6, §12.3 slice 4). Every other block
+    // that carries one is invalid, exactly as on a release without the family.
+    let ballot = match input {
+        TransactionEntrypoint::AnonymousBallot(envelope) => Some(envelope),
+        TransactionEntrypoint::External(_)
+        | TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::SealedReveal(_) => None,
+    };
+    // SPEC: §13.4 HC815 — only a block whose pass ran Parliament's items executes ballots.
+    if ballot.is_some()
+        && !state.parliament_pass_ran()
+        && !cfg!(all(test, sumeragi_core_mutation = "HC815"))
+    {
+        return Err(
+            "an anonymous ballot input needs a block whose governance pass ran Parliament's items"
+                .into(),
+        );
+    }
     // R-EX is a property of the original signed source and original parent state.
     // Admission is only a precheck; an eligible forgery cannot become an ordinary
     // rejected output (and a free failed transaction) inside a valid block.
@@ -477,19 +493,42 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
         Ok(_) if quarantine_overflow => Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("quarantine overflow".into()),
         )),
-        Ok(accepted) => match StateBlock::execute_accepted_transaction_in_overlay(
-            accepted,
-            transaction,
-            cache,
-            routing,
-            policy_route,
-            genesis,
-        ) {
-            Ok(sequence) => Ok(sequence),
-            Err(ExecutionAttemptError::Rejected(reason)) => Err(reason),
-            Err(ExecutionAttemptError::Deferred(reason)) => {
-                return Err(ExecutionAttemptError::Deferred(reason));
+        Ok(accepted) => match ballot {
+            Some(envelope) => {
+                use crate::governance::parliament_anonymous::ballot_input::{
+                    BallotInputOutcomeV1, execute_ballot_input,
+                };
+                // The proof alone authorizes the input: no instruction, fee, trigger or
+                // callback runs. An invalid ballot is a verdict on the block and leaves no
+                // row; a refusal the node cannot decide defers the block.
+                match execute_ballot_input(transaction, envelope, input_index) {
+                    Ok(BallotInputOutcomeV1::Accepted) => Ok(Vec::new()),
+                    Ok(BallotInputOutcomeV1::Rejected(reason)) => {
+                        Err(TransactionRejectionReason::AnonymousBallot(reason))
+                    }
+                    Err(error) if error.is_local() => {
+                        iroha_logger::warn!(%error, input_index, "anonymous ballot input deferred");
+                        return Err(ExecutionAttemptError::Deferred(
+                            ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+                        ));
+                    }
+                    Err(error) => return Err(error.to_string().into()),
+                }
             }
+            None => match StateBlock::execute_accepted_transaction_in_overlay(
+                accepted,
+                transaction,
+                cache,
+                routing,
+                policy_route,
+                genesis,
+            ) {
+                Ok(sequence) => Ok(sequence),
+                Err(ExecutionAttemptError::Rejected(reason)) => Err(reason),
+                Err(ExecutionAttemptError::Deferred(reason)) => {
+                    return Err(ExecutionAttemptError::Deferred(reason));
+                }
+            },
         },
         Err(reason) => Err(reason),
     };
@@ -531,6 +570,14 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
         requires_forgery_success,
         requires_keepalive_success,
     )?;
+    // The only rows of a ballot input are an empty success and its two ballot rejections
+    // (design §3.6). No generic limit may manufacture another: such a block is abandoned.
+    if ballot.is_some()
+        && let Err(reason) = &result
+        && !matches!(reason, TransactionRejectionReason::AnonymousBallot(_))
+    {
+        return Err(format!("an anonymous ballot input met a generic rejection: {reason}").into());
+    }
     if let Err(reason) = result {
         transaction
             .callback_journal
@@ -634,6 +681,11 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
         ReservedExecutionOutput::Accepted(row) => (row, !overflow),
         ReservedExecutionOutput::OutputLimit(row) => (row, false),
     };
+    if ballot.is_some() && !apply {
+        // An accepted ballot whose empty row does not fit is never recorded as a failed
+        // carrier: its corpus entry and its row are published together or not at all.
+        return Err("an anonymous ballot output exceeded an execution output limit".into());
+    }
     if (requires_forgery_success || requires_keepalive_success) && !apply {
         // A completed callback/event/output limit can reject an otherwise successful
         // handler. It is also R-EX: never publish a failed carrier without its evidence.

@@ -386,7 +386,7 @@ fn setup(words: &[u64]) -> IVM {
             .store_u64(BASE + (i * 8) as u64, *w)
             .expect("input");
     }
-    black_box(vm.memory.root());
+    black_box(vm.memory.root().unwrap());
     vm
 }
 fn check(vm: &IVM, expected: &[u64]) {
@@ -449,7 +449,7 @@ pub fn benchmark() -> Value {
             let start = Instant::now();
             vm.run().expect("hazard execution");
             walls.push(start.elapsed().as_nanos() as u64);
-            black_box(vm.memory.root());
+            black_box(vm.memory.root().unwrap());
             rooted.push(start.elapsed().as_nanos() as u64);
             gas = GAS - vm.gas_remaining;
             cycles = vm.get_cycle_count();

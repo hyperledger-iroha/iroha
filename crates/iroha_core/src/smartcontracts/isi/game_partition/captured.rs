@@ -7,9 +7,34 @@ use iroha_data_model::{
     sumeragi_amx::{AmxCertifiedBlockV1, AmxWriteProofV1},
 };
 
+/// One canonical record frame: a published witness value or the value a proof path commits.
+///
+/// The fixed flags, schema, header, padding and checksum equal `norito::encode_canonical`, so
+/// archived proof readers reproduce these exact bytes. Unlike that growable sink, the counted
+/// frame is admitted against the caller's enclosing decode-allocation budget and reserved
+/// fallibly before the second pass writes it. A local refusal therefore keeps its original owner
+/// instead of aborting or becoming a deterministic rejection.
+/// TODO: retain the published witness bytes in the transaction's finite pool.
 fn encoded<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, AmxError> {
-    norito::core::classify_decode_attempt(|| norito::encode_canonical(value))
-        .map_err(proof_encoding_error)
+    use norito::core::BoundedEncodeError;
+    norito::core::classify_decode_attempt(|| {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        match norito::core::to_bytes_bounded(value, GAME_PARTITION_MAX_PROOF_BYTES) {
+            Ok(bytes) => Ok(Ok(bytes)),
+            // A record is one member of its proof graph and cannot exceed that graph's bound.
+            Err(BoundedEncodeError::FrameTooLarge { .. }) => Ok(Err(AmxError::State(
+                "native game record exceeds its finite frame bound",
+            ))),
+            Err(BoundedEncodeError::AllocationFailed { bytes }) => {
+                Err(norito::Error::AllocationFailed {
+                    bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+                })
+            }
+            Err(BoundedEncodeError::Serialization(error)) => Err(error),
+        }
+    })
+    .map_err(proof_encoding_error)?
 }
 fn admission(error: AmxError, state: &mut StateTransaction<'_, '_>) -> Error {
     crate::sumeragi::amx::amx_error(&error, state)

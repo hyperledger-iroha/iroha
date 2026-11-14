@@ -46,9 +46,14 @@ impl Kura {
         tests::original_recovery_release_tests::fence_boundary(4);
         self.durable_mutation_authorized()?;
         let journal = self.read_lane_geometry_journal()?;
+        // Before State authenticates a binding the journal owns no lane instance. That is
+        // the state of an empty chain, and of a portable checkpoint bootstrap whose
+        // startup-verified prefix owns the canonical history under the pristine baseline.
+        // Any other unbound journal over committed blocks still fails closed below.
         if journal.configured_primary_binding.is_none()
             && journal.records.is_empty()
-            && self.exact_durable_blocks_count()? == 0
+            && (self.exact_durable_blocks_count()? == 0
+                || self.checkpoint_prefix_height().is_some())
         {
             return Ok(());
         }

@@ -119,10 +119,9 @@ pub use self::{
         GOVERNANCE_START_OUTPUT_BYTES_V1, GOVERNANCE_START_OUTPUT_ROWS_V1,
         GOVERNANCE_START_PRELUDE_ROWS_V1, GOVERNANCE_START_ROW_MAX_BYTES_V1,
         GOVERNANCE_START_ROWS_PER_ITEM_V1, GovernanceBlockStartEventV1,
-        GovernanceBlockStartOutputErrorV1, GovernanceBlockStartOutputV1,
-        GovernanceLifecycleItemV1, GovernanceOutputAnchorV1, LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1,
-        LifecycleAppliedV1, LifecycleBoardDigestV1, NativeSlotAdvancedV1,
-        SealedCredentialListPublishedV1,
+        GovernanceBlockStartOutputErrorV1, GovernanceBlockStartOutputV1, GovernanceLifecycleItemV1,
+        GovernanceOutputAnchorV1, LIFECYCLE_RECEIPT_ROW_MAX_BYTES_V1, LifecycleAppliedV1,
+        LifecycleBoardDigestV1, NativeSlotAdvancedV1, SealedCredentialListPublishedV1,
     },
     policy::{
         BallotCapacityCommitmentV1, BodyDecisionModeV1, FrozenBallotPolicyErrorV1,
@@ -158,9 +157,29 @@ pub const ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1: usize = 262_144;
 /// reserves per anonymous input. The inner envelope keeps its own
 /// [`ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1`] cap.
 ///
-/// TODO: the Core integration enforces this cap on the `TransactionEntrypoint::AnonymousBallot`
-/// input frame when it adds the entrypoint.
+/// Core checks the complete frame of every `TransactionEntrypoint::AnonymousBallot` input
+/// against this cap when it accepts the entrypoint, at ingress and again in block execution
+/// ([`check_anonymous_ballot_entrypoint_wire_len_v1`]).
 pub const ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1: usize = 263_168;
+
+/// Check the length of one complete canonical anonymous-ballot transaction entrypoint
+/// frame, its per-input framing included, against `E_wire`.
+///
+/// # Errors
+/// [`AnonymousBallotCodecErrorV1::TooLarge`] above
+/// [`ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1`].
+pub const fn check_anonymous_ballot_entrypoint_wire_len_v1(
+    actual: usize,
+) -> Result<(), AnonymousBallotCodecErrorV1> {
+    if actual > ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1 {
+        return Err(AnonymousBallotCodecErrorV1::TooLarge {
+            kind: "anonymous-ballot entrypoint wire",
+            actual,
+            max: ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1,
+        });
+    }
+    Ok(())
+}
 
 /// Largest canonical authenticated ballot context, `C_max`, which also bounds the
 /// sealed-list object it contains (design §3.3, integration decision 5).
@@ -433,6 +452,27 @@ mod tests {
         assert_eq!(
             ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1 - ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1,
             1_024
+        );
+    }
+
+    #[test]
+    fn the_entrypoint_wire_check_admits_the_cap_and_refuses_one_byte_more() {
+        assert_eq!(
+            check_anonymous_ballot_entrypoint_wire_len_v1(
+                ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1
+            ),
+            Ok(())
+        );
+        assert_eq!(check_anonymous_ballot_entrypoint_wire_len_v1(0), Ok(()));
+        assert_eq!(
+            check_anonymous_ballot_entrypoint_wire_len_v1(
+                ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1 + 1
+            ),
+            Err(AnonymousBallotCodecErrorV1::TooLarge {
+                kind: "anonymous-ballot entrypoint wire",
+                actual: 263_169,
+                max: 263_168,
+            })
         );
     }
 

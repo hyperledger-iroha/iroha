@@ -155,7 +155,9 @@ impl Fixture {
         }
     }
     fn prove(&self, statement_digest: [u8; 32], index: u32) -> Vec<u8> {
-        let namespace = norito::encode_canonical(&self.bootstrap.namespace).unwrap();
+        // The native relation binds the source-owned namespace grammar (the frozen
+        // `PrivacyNamespaceV1` frame), not the runtime type's own Norito frame.
+        let namespace = self.bootstrap.namespace.canonical_wire_bytes_v1().unwrap();
         let parameters = AnonymousPgcParametersV1::get().unwrap();
         let native = AnonymousPgcBootstrapStatementV1::new(
             &namespace,

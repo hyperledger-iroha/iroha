@@ -138,9 +138,12 @@ uses a genesis reset, a node-local activation flag or a new IVM ABI.
 
 The current design uses anonymous on-chain ballots. The retired timed-OVN/TLE
 registration, custody, opening and threshold-release sequence is not an activation
-route. Core currently returns local `AnonymousBallotUnavailable` at admission and
-defers anonymous inputs before Network execution. A proposal, CLI draft, public
-finding or support attestation cannot substitute for a genuine governance result.
+route. Core admits and executes anonymous ballots only on a root whose selection
+installs the anonymous Parliament family, and only for attempts of the
+candidate-testing purpose: the proof profile is not qualified, no network has
+activated the family and no attempt has the production purpose. A proposal, CLI
+draft, public finding, support attestation or candidate certificate cannot
+substitute for a genuine governance result.
 
 The required work is recorded in [Parliament implementation goals](parliament_ballot_implementation_goals.md)
 and [B6 qualification evidence](../docs/validation/parliament_ballot_b6.md):

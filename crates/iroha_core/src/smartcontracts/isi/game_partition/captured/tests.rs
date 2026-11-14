@@ -461,7 +461,7 @@ fn captured_game_original_codec_refusal_never_writes_or_funds_a_request() {
         0,
     );
     let mut block = source.state().block(header);
-    let _witness = crate::exec_witness::exec_witness_guard();
+    let recorder = crate::exec_witness::exec_witness_guard();
     crate::exec_witness::start_block();
     let mut tx = block.transaction();
     let request = RequestGameUnitExportV1 {
@@ -470,6 +470,8 @@ fn captured_game_original_codec_refusal_never_writes_or_funds_a_request() {
         destination: destination.instance().0,
         nonce: 23,
     };
+    // The request decodes nothing: its only codec work is the intent's ordinary-write frame,
+    // which the caller's zero allocation allowance refuses before any witness or State write.
     let result = norito::core::with_decode_limits_scope(
         norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
         || request.execute(&owner(), &mut tx),
@@ -492,7 +494,69 @@ fn captured_game_original_codec_refusal_never_writes_or_funds_a_request() {
     drop(tx);
     assert_eq!(block.require_storage_admission(), Err(original));
     drop(block);
+    // The ordinary block below begins its own capture, which this thread's recorder would refuse.
+    drop(recorder);
     assert!(commit(&mut source, request));
+    let admitted = source.state().view();
+    assert_eq!(admitted.world().runtime_game_transfers().iter().count(), 1);
+}
+
+#[test]
+fn captured_game_record_frame_is_canonical_and_charged_to_its_caller() {
+    use norito::core::{
+        DecodeAttemptErrorKind, DecodeFlagsGuard, DecodeLimits, default_encode_flags,
+        header_flags::COMPACT_LEN, with_decode_limits_scope,
+    };
+    let source = [0xA1; 32];
+    let intent = GameUnitExportIntentV1 {
+        world_id: world(),
+        source,
+        destination: [0xB2; 32],
+        kernel_hash: ivm::game_unit_step::kernel_hash(),
+        unit: GameUnitV1 {
+            unit_id: game_unit_id(world(), source, 31),
+            origin: source,
+            owner: owner(),
+            hp: 21,
+            x: -4,
+            sequence: 1,
+            work_remaining: 9,
+        },
+        nonce: 37,
+        source_height: 2,
+    };
+    intent.validate().unwrap();
+    let reservation = GameUnitReservationV1 {
+        intent: intent.clone(),
+        destination_height: 3,
+    };
+    // Archived proof readers recompute these values with the growable canonical encoder.
+    let frame = encoded(&intent).unwrap();
+    assert_eq!(frame, norito::encode_canonical(&intent).unwrap());
+    assert_eq!(
+        encoded(&reservation).unwrap(),
+        norito::encode_canonical(&reservation).unwrap()
+    );
+    {
+        let _ambient = DecodeFlagsGuard::enter(default_encode_flags() ^ COMPACT_LEN);
+        assert_eq!(encoded(&intent).unwrap(), frame);
+    }
+    let allowance =
+        |bytes| DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX);
+    // The caller pays for exactly the one reserved frame.
+    assert_eq!(
+        with_decode_limits_scope(allowance(frame.len()), || encoded(&intent)).unwrap(),
+        frame
+    );
+    let refused =
+        with_decode_limits_scope(allowance(frame.len() - 1), || encoded(&intent)).unwrap_err();
+    let AmxError::Resource(original) = &refused else {
+        panic!("a caller's allocation refusal must keep its original owner: {refused}");
+    };
+    assert_eq!(original.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    assert!(crate::sumeragi::amx::classified_decode_refusal(&refused).is_some());
+    // The refusal consumed nothing that a later ordinary attempt needs.
+    assert_eq!(encoded(&intent).unwrap(), frame);
 }
 
 #[test]

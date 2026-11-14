@@ -2490,6 +2490,12 @@ struct AppState {
     /// Immutable app-local ordinary-query geometry and configuration identity.
     ordinary_query_policy: OrdinaryQueryServerPolicy,
     transaction_ingress_compute_inflight: Arc<tokio::sync::Semaphore>,
+    /// Permits of the anonymous-ballot ingress alone; ordinary transactions never take one.
+    anonymous_ballot_ingress_inflight: Arc<tokio::sync::Semaphore>,
+    /// The one global submission rate of the anonymous-ballot ingress.
+    anonymous_ballot_rate_limiter: limits::RateLimiter,
+    /// Largest anonymous-ballot submission body in bytes.
+    anonymous_ballot_max_body_bytes: usize,
     #[cfg(feature = "app_api")]
     verified_source_compile_inflight: Arc<tokio::sync::Semaphore>,
     #[cfg(feature = "app_api")]
@@ -4771,6 +4777,19 @@ fn is_public_sorafs_gateway_route(request: &axum::http::Request<Body>) -> bool {
         .is_some_and(is_public_sorafs_gateway_metadata)
 }
 
+/// Whether `request` matched the account- and session-free anonymous-ballot submission route.
+fn is_anonymous_ballot_submission_route(request: &axum::http::Request<Body>) -> bool {
+    request
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(is_anonymous_ballot_submission_metadata)
+}
+
+fn is_anonymous_ballot_submission_metadata(route: &MatchedRouteMetadata) -> bool {
+    route.stable_route_id()
+        == route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT.stable_route_id()
+}
+
 fn is_public_sorafs_gateway_metadata(route: &MatchedRouteMetadata) -> bool {
     let stable_route_id = route.stable_route_id();
     [
@@ -4840,6 +4859,13 @@ async fn enforce_api_token(
         return Ok(root_scope_unavailable_response(req.headers()));
     }
     if !app.is_private_root() && is_public_sorafs_gateway_route(&req) {
+        return Ok(next.run(req).await);
+    }
+    // A signerless ballot is admitted by its own stamp and proof on a global root. The
+    // deployment token would be an identifying credential, which a ballot never carries
+    // (`specs/parliament_private_ballot_design.md` section 6); the handler has bounds of
+    // its own. A private root carries no ballot and keeps its listener gate.
+    if !app.is_private_root() && is_anonymous_ballot_submission_route(&req) {
         return Ok(next.run(req).await);
     }
     let api_token_required = app.requires_api_token();
@@ -29887,6 +29913,18 @@ async fn handler_post_transaction_entrypoint(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
+    // A signerless ballot has an account- and session-free route with bounds of its own
+    // (`handler_gov_anonymous_ballot_submit`); this account-authenticated route never
+    // carries one, so no token or transaction permit is ever spent on a ballot.
+    if matches!(transaction, TransactionEntrypoint::AnonymousBallot(_)) {
+        return Err(Error::AppQueryValidation {
+            code: "anonymous_ballot_route_required",
+            message: format!(
+                "submit an anonymous ballot to {}",
+                route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT.path()
+            ),
+        });
+    }
     let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token_hdr, 1).await?;
     let compute_permit =
@@ -29911,6 +29949,259 @@ async fn handler_post_transaction_entrypoint(
         format,
     )
     .await
+}
+
+/// A public anonymous-family projection: canonical Norito bytes that no cache may keep,
+/// because the board and the attempt change with every block.
+#[cfg(feature = "app_api")]
+fn anonymous_family_projection_response(bytes: Vec<u8>) -> Response {
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static(utils::NORITO_MIME_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// GET `/v1/gov/anonymous-ballots/boards/{scope}` — the public board of one ballot scope
+/// (`gov::handle_gov_anonymous_ballot_board_read`).
+#[cfg(feature = "app_api")]
+async fn handler_gov_anonymous_ballot_board_read(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(scope): AxPath<String>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/anonymous-ballots/boards/{scope}",
+    )
+    .await?;
+    crate::gov::handle_gov_anonymous_ballot_board_read(&app.state, &scope)
+        .map(anonymous_family_projection_response)
+}
+
+/// GET `/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}` — one attempt of the
+/// anonymous Parliament family (`gov::handle_gov_anonymous_parliament_attempt_read`).
+#[cfg(feature = "app_api")]
+async fn handler_gov_anonymous_parliament_attempt_read(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(governance_attempt_id): AxPath<String>,
+) -> Result<Response, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/anonymous-ballots/attempts/{governance_attempt_id}",
+    )
+    .await?;
+    crate::gov::handle_gov_anonymous_parliament_attempt_read(&app.state, &governance_attempt_id)
+        .map(anonymous_family_projection_response)
+}
+
+/// Stable endpoint label of anonymous-ballot ingress throttling.
+#[cfg(feature = "app_api")]
+const ANONYMOUS_BALLOT_INGRESS_ENDPOINT: &str = "gov/anonymous-ballots";
+/// The one key of the global anonymous-ballot submission rate: no caller attribute keys it.
+#[cfg(feature = "app_api")]
+const ANONYMOUS_BALLOT_INGRESS_RATE_KEY: &str = "anonymous-ballot-ingress";
+
+/// The stable public code of a ballot the admission checks or the proof rejected. Only these
+/// codes leave the node: the queue's reason text is never echoed to a submitter.
+#[cfg(feature = "app_api")]
+fn anonymous_ballot_rejection_code(reason: &str) -> &'static str {
+    const CODES: [&str; 10] = [
+        "anonymous_ballot_oversize",
+        "anonymous_ballot_malformed",
+        "anonymous_ballot_wrong_network",
+        "anonymous_ballot_unknown_scope",
+        "anonymous_ballot_casting_not_open",
+        "anonymous_ballot_casting_closed",
+        "anonymous_ballot_unknown_profile",
+        "anonymous_ballot_insufficient_stamp",
+        "anonymous_ballot_proof_rejected",
+        "anonymous_ballot_not_admitted",
+    ];
+    let code = reason.split(':').next().unwrap_or_default();
+    CODES
+        .into_iter()
+        .find(|known| *known == code)
+        .unwrap_or("anonymous_ballot_not_admitted")
+}
+
+/// What the ingress worker made of one submitted body.
+#[cfg(feature = "app_api")]
+enum AnonymousBallotIngressOutcome {
+    /// The queue keeps the ballot, or committed State or the queue already holds its
+    /// nullifier: the three are one answer, so a submitter learns no ballot's status.
+    Handled,
+    /// The body is not one canonical envelope frame.
+    Malformed,
+    /// The node could not decode the body with its own resources.
+    Unavailable,
+    /// The queue refused the ballot.
+    Refused(queue::Error),
+}
+
+#[cfg(feature = "app_api")]
+fn anonymous_ballot_refusal(
+    format: ResponseFormat,
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+) -> Response {
+    let mut response =
+        utils::respond_with_status_and_format(status, &ErrorEnvelope::new(code, message), format);
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// POST `/v1/gov/anonymous-ballots` — submit one canonical signerless anonymous-ballot
+/// envelope (`specs/parliament_private_ballot_design.md` sections 3.6 and 6).
+///
+/// The route is account- and session-free. It reads no token, account, cookie or caller
+/// address; its permits and its one global rate are its own, taken before any body byte is
+/// buffered, and no ordinary transaction permit is spent. The ballot's admission stamp and
+/// membership proof alone decide whether the queue keeps it. The answer never reveals a
+/// ballot's status: an admitted ballot, a pending nullifier and a committed nullifier are the
+/// same empty `202`, which acknowledges handling and not finalized acceptance. Acceptance is
+/// confirmed from the scope's public corpus.
+///
+/// # Errors
+/// Throttling (`429`), a local inability to decide (`429` or `503`) and worker failure.
+#[cfg(feature = "app_api")]
+async fn handler_gov_anonymous_ballot_submit(
+    State(app): State<SharedAppState>,
+    request: axum::http::Request<Body>,
+) -> Result<Response, Error> {
+    let format = early_rejection_response_format(request.headers());
+    let throttled = || Error::ProofRateLimited {
+        endpoint: ANONYMOUS_BALLOT_INGRESS_ENDPOINT,
+        retry_after_secs: 1,
+    };
+    if !app
+        .anonymous_ballot_rate_limiter
+        .allow(ANONYMOUS_BALLOT_INGRESS_RATE_KEY)
+        .await
+    {
+        return Err(throttled());
+    }
+    let permit = app
+        .anonymous_ballot_ingress_inflight
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| throttled())?;
+    let norito = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case(utils::NORITO_MIME_TYPE));
+    if !norito {
+        return Ok(anonymous_ballot_refusal(
+            format,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "anonymous_ballot_unsupported_media_type",
+            "an anonymous ballot is one application/x-norito canonical envelope frame",
+        ));
+    }
+    // The body limit is the route's own. A body that cannot be read within it is refused
+    // the same way: an interrupted request has no reader left to tell apart.
+    let Ok(body) =
+        axum::body::to_bytes(request.into_body(), app.anonymous_ballot_max_body_bytes).await
+    else {
+        return Ok(anonymous_ballot_refusal(
+            format,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "anonymous_ballot_oversize",
+            "the body exceeds one canonical anonymous-ballot envelope frame",
+        ));
+    };
+    let worker_app = app.clone();
+    let (outcome, permit) = run_transaction_ingress_compute_job(
+        permit,
+        "anonymous_ballot_admission_worker_failed",
+        move || {
+            use iroha_data_model::governance::anonymous_ballot::{
+                AnonymousBallotCodecErrorV1, CanonicalAnonymousBallotEnvelopeV1,
+            };
+            let envelope =
+                match CanonicalAnonymousBallotEnvelopeV1::from_canonical_bytes(body.to_vec()) {
+                    Ok(envelope) => envelope,
+                    Err(AnonymousBallotCodecErrorV1::DecodeUnavailable(_)) => {
+                        return Ok(AnonymousBallotIngressOutcome::Unavailable);
+                    }
+                    Err(_) => return Ok(AnonymousBallotIngressOutcome::Malformed),
+                };
+            let accepted = routing::accept_transaction_for_ingress(
+                &worker_app.state,
+                TransactionEntrypoint::AnonymousBallot(envelope),
+                &worker_app.telemetry,
+            )?;
+            Ok(
+                match worker_app
+                    .queue
+                    .push(accepted, worker_app.state.view())
+                    .map_err(|failure| failure.err)
+                {
+                    Ok(()) | Err(queue::Error::InBlockchain | queue::Error::IsInQueue) => {
+                        AnonymousBallotIngressOutcome::Handled
+                    }
+                    Err(refused) => AnonymousBallotIngressOutcome::Refused(refused),
+                },
+            )
+        },
+    )
+    .await?;
+    drop(permit);
+    match outcome {
+        AnonymousBallotIngressOutcome::Handled => {
+            let mut response = StatusCode::ACCEPTED.into_response();
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            Ok(response)
+        }
+        AnonymousBallotIngressOutcome::Malformed => Ok(anonymous_ballot_refusal(
+            format,
+            StatusCode::BAD_REQUEST,
+            "anonymous_ballot_malformed",
+            "the body is not one canonical anonymous-ballot envelope frame",
+        )),
+        AnonymousBallotIngressOutcome::Refused(queue::Error::UnsupportedTransactionAdmission {
+            reason,
+        }) => Ok(anonymous_ballot_refusal(
+            format,
+            StatusCode::BAD_REQUEST,
+            anonymous_ballot_rejection_code(&reason),
+            "the anonymous ballot was not admitted",
+        )),
+        AnonymousBallotIngressOutcome::Refused(queue::Error::Full) => Err(throttled()),
+        AnonymousBallotIngressOutcome::Refused(deferred @ queue::Error::Deferred(_)) => {
+            Err(Error::PushIntoQueue {
+                source: Box::new(deferred),
+                backpressure: current_torii_backpressure(app.as_ref()),
+            })
+        }
+        AnonymousBallotIngressOutcome::Unavailable | AnonymousBallotIngressOutcome::Refused(_) => {
+            Err(Error::AppServiceUnavailable {
+                code: "anonymous_ballot_ingress_unavailable",
+                message: "the node cannot decide this anonymous ballot now; retry later".to_owned(),
+            })
+        }
+    }
 }
 
 // Programmatic routes re-decode the original signed bytes under the same local
@@ -35847,6 +36138,7 @@ pub struct Torii {
     transaction_max_content_len: usize,
     iso_bridge_max_body_bytes: ConfigBytes,
     transaction_ingress_max_concurrent_compute_jobs: usize,
+    anonymous_ballot_ingress: iroha_config::parameters::actual::AnonymousBallotIngress,
     #[cfg(feature = "app_api")]
     verified_source_max_concurrent_compiles: usize,
     #[cfg(feature = "app_api")]
@@ -37589,6 +37881,12 @@ define_catalog_route_policies! {
     };
     limited_public_post ($handler:path, $limit:expr) => {
         catalog_post($handler).layer(DefaultBodyLimit::max($limit))
+    };
+    #[cfg(feature = "app_api")]
+    limited_unauthenticated_post ($handler:path, $limit:expr) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .unauthenticated()
     };
     private_root_owner_get ($handler:path) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::PrivateRootOwnerToken)
@@ -39485,6 +39783,8 @@ impl Torii {
         let app_state = builder.state().clone();
         #[cfg(feature = "app_api")]
         let runtime_governance_body_limit = self.transaction_max_content_len;
+        #[cfg(feature = "app_api")]
+        let anonymous_ballot_body_limit = app_state.anonymous_ballot_max_body_bytes;
         let proof_body_limit = app_state.proof_limits.max_body_bytes;
         mount_local_catalog_route_rows!(
             builder, routes;
@@ -39557,6 +39857,9 @@ impl Torii {
                 GOV_PARLIAMENT_ATTEMPT_READ => canonical_account_get(handler_gov_parliament_attempt_read, app_state, 0);
                 GOV_PARLIAMENT_ATTEMPT_PLAN => canonical_account_get(handler_gov_parliament_attempt_plan, app_state, 0);
                 GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
+                GOV_ANONYMOUS_BALLOT_SUBMIT => limited_unauthenticated_post(handler_gov_anonymous_ballot_submit, anonymous_ballot_body_limit);
+                GOV_ANONYMOUS_BALLOT_BOARD_READ => public_get(handler_gov_anonymous_ballot_board_read);
+                GOV_ANONYMOUS_BALLOT_ATTEMPT_READ => public_get(handler_gov_anonymous_parliament_attempt_read);
                 VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_RETAIL_QUOTE => canonical_account_post(validation_fee_api::handler_retail_quote, app_state, 256 * 1024);
                 VALIDATION_FEE_RETAIL_STATUS => canonical_account_get(validation_fee_api::handler_retail_status, app_state, 0);
@@ -41267,6 +41570,7 @@ ingress,
                 .transaction_ingress
                 .max_concurrent_compute_jobs
                 .get(),
+            anonymous_ballot_ingress: config.anonymous_ballot_ingress,
             #[cfg(feature = "app_api")]
             verified_source_max_concurrent_compiles: config
                 .transaction_ingress
@@ -41600,6 +41904,12 @@ ingress,
         validate_semaphore_permits(
             "transaction_ingress.max_concurrent_compute_jobs",
             self.transaction_ingress_max_concurrent_compute_jobs,
+        )?;
+        validate_semaphore_permits(
+            "anonymous_ballot_ingress.max_concurrent_compute_jobs",
+            self.anonymous_ballot_ingress
+                .max_concurrent_compute_jobs
+                .get(),
         )?;
         #[cfg(feature = "app_api")]
         validate_semaphore_permits(
@@ -42113,6 +42423,20 @@ ingress,
         let transaction_ingress_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
             transaction_ingress_max_concurrent_compute_jobs,
         ));
+        // The ballot ingress has permits of its own and one global rate: no ordinary
+        // transaction permit funds it, and no token, address or account keys it.
+        let anonymous_ballot_ingress_inflight =
+            Arc::new(tokio::sync::Semaphore::new(validate_semaphore_permits(
+                "anonymous_ballot_ingress.max_concurrent_compute_jobs",
+                self.anonymous_ballot_ingress
+                    .max_concurrent_compute_jobs
+                    .get(),
+            )?));
+        let anonymous_ballot_rate_limiter = limits::RateLimiter::new(
+            Some(self.anonymous_ballot_ingress.submissions_per_sec.get()),
+            Some(self.anonymous_ballot_ingress.submission_burst.get()),
+        );
+        let anonymous_ballot_max_body_bytes = self.anonymous_ballot_ingress.max_body_bytes.get();
         #[cfg(feature = "app_api")]
         let verified_source_max_concurrent_compiles = validate_semaphore_permits(
             "verified_source.max_concurrent_compiles",
@@ -42193,6 +42517,9 @@ ingress,
             app_api_routed_read_body_read_timeout: self.app_api_routed_read_body_read_timeout,
             ordinary_query_policy,
             transaction_ingress_compute_inflight,
+            anonymous_ballot_ingress_inflight,
+            anonymous_ballot_rate_limiter,
+            anonymous_ballot_max_body_bytes,
             #[cfg(feature = "app_api")]
             verified_source_compile_inflight,
             #[cfg(feature = "app_api")]
@@ -44781,14 +45108,6 @@ impl IntoResponse for Error {
                 }
                 response
             }
-            Self::AcceptTransaction(err @ AcceptTransactionFail::AnonymousBallotUnavailable) => {
-                let (code, detail) = accept_transaction_metadata(&err);
-                utils::respond_with_status_and_format(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    &(ErrorEnvelope::new(code, detail)),
-                    format,
-                )
-            }
             Self::AcceptTransaction(err) => {
                 let (code, detail) = accept_transaction_metadata(&err);
                 let details = ErrorDetails {
@@ -44992,9 +45311,6 @@ impl Error {
         match self {
             Query(e) => Self::query_status_code(e),
             NativeEvidenceDecode(_) => StatusCode::TOO_MANY_REQUESTS,
-            AcceptTransaction(AcceptTransactionFail::AnonymousBallotUnavailable) => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
             AcceptTransaction(error)
                 if error.local_refusal().is_some()
                     || matches!(

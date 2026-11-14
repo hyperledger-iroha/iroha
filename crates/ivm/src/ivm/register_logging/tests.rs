@@ -60,7 +60,7 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
         .with_deferred_refund_notifications(|scope| vm.pc_trace.prepare(1, Some(scope)))
         .unwrap();
     vm.pc_trace.record_reserved(7);
-    let before = vm.execution_summary();
+    let before = vm.execution_summary().unwrap();
     let previous_events = previous.lock().as_slice().to_vec();
     let baseline = budget.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
@@ -69,7 +69,7 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
         Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
         if requested_bytes == shell));
     assert_eq!(budget.reserved_bytes(), baseline);
-    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(vm.execution_summary().unwrap(), before);
     assert_eq!(vm.input_bump_next, 8);
     assert_eq!(
         vm.memory
@@ -92,7 +92,7 @@ fn original_logger_admission_refusal_leaves_the_whole_run_unchanged() {
         ));
     });
     assert_eq!(budget.reserved_bytes(), baseline);
-    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(vm.execution_summary().unwrap(), before);
     assert_eq!(previous.lock().as_slice(), previous_events);
     vm.run_with_host(&mut DefaultHost::default()).unwrap();
     assert!(
@@ -146,7 +146,7 @@ fn detached_invalid_vm_severs_foreign_loggers_without_allocating_or_scrubbing_th
     });
     assert_eq!(budget.reserved_bytes(), baseline);
     assert_eq!(invocation.lock().as_slice(), events);
-    assert_eq!(vm.execution_summary().register_log_len, 0);
+    assert_eq!(vm.execution_summary().unwrap().register_log_len, 0);
     assert!(matches!(
         vm.run_with_host(&mut DefaultHost::default()),
         Err(VMError::AllocationDeferred(_))

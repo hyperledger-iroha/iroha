@@ -388,7 +388,7 @@ fn memory_template_partitions_its_nonempty_read_plan_into_the_actual_copied_owne
     assert_eq!(copy.read_log.lock().capacity(), 1);
     assert_ne!(copy.read_log.lock().as_ptr(), source_rows);
     assert_eq!(&**copy.read_log.lock(), &**source.read_log.lock());
-    assert_eq!(copy.current_root(), source.current_root());
+    assert_eq!(copy.root().unwrap(), source.root().unwrap());
     drop(parent);
     let owner = Arc::new(copy);
     let borrower = Arc::clone(&owner);

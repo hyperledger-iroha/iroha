@@ -687,6 +687,9 @@ mod effects;
 #[path = "output_network_quarantine_tests.rs"]
 mod quarantine;
 
+#[path = "output_network_ballot_tests.rs"]
+mod ballots;
+
 #[test]
 fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_execution() {
     for missing_assessment_permitted in [false, true] {

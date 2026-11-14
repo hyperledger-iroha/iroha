@@ -305,10 +305,14 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
 /// their boards. Until a change set activates it the instructions stay inactive and the
 /// tables stay empty and out of snapshots. Its dependencies are exactly the frozen baseline.
 ///
-/// TODO(`specs/parliament_private_ballot_design.md` §12.3): the family is activatable only
-/// after its fourth slice (the positioned block-start pass and signerless ballots), and on a
-/// root that runs the kernel's lifecycle services profile only with a composition for it.
-/// Governance must not activate it on a network before then.
+/// Its services (the positioned block-start pass, the signerless ballot entrypoint and the
+/// committed outputs) run on a root whose selection installs its tables.
+///
+/// TODO(`specs/parliament_private_ballot_design.md` §12.2, §12.3): the proof profile is not
+/// qualified, so every attempt has the candidate-testing purpose and governance must not
+/// activate the family for binding production use. A root that runs the kernel's lifecycle
+/// services profile needs a composition for it first, and the real-peer corridor of the
+/// signerless path is still open.
 pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
     module: "iroha.governance.parliament.anonymous.v1",
     instructions: &[

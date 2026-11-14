@@ -24,6 +24,37 @@ fn duplicate_indices_iterate_once_in_order_and_clear_keeps_backing() {
 }
 
 #[test]
+fn union_adds_the_other_set_in_place_and_recounts_shared_bits() {
+    for chunks in [1, 63, 64, 65, 129] {
+        let mut set = DirtyChunks::new(chunks, None).unwrap();
+        let mut other = DirtyChunks::new(chunks, None).unwrap();
+        let original = set.words().as_ptr();
+        set.extend([0, chunks - 1]);
+        other.extend([chunks - 1, chunks / 2]);
+        let mut expected: Vec<usize> = vec![0, chunks / 2, chunks - 1];
+        expected.sort_unstable();
+        expected.dedup();
+        set.union_with(&other);
+        assert_eq!(set.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(set.len(), expected.len());
+        assert_eq!(set.words().as_ptr(), original);
+        // A second union and an empty operand change nothing.
+        set.union_with(&other);
+        set.union_with(&DirtyChunks::new(chunks, None).unwrap());
+        assert_eq!(set.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(set.len(), expected.len());
+        assert_eq!(other.len(), if chunks == 1 { 1 } else { 2 });
+    }
+}
+
+#[test]
+#[should_panic(expected = "dirty-leaf geometry mismatch")]
+fn union_refuses_a_different_geometry() {
+    let mut set = DirtyChunks::new(64, None).unwrap();
+    set.union_with(&DirtyChunks::new(65, None).unwrap());
+}
+
+#[test]
 fn funded_bitmap_keeps_original_credit_through_shrink_and_final_borrower() {
     let plan = DirtyChunks::memory_plan(65).unwrap();
     assert_eq!(plan.requested_bytes(), 16);

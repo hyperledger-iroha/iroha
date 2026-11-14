@@ -1,8 +1,19 @@
 //! Benchmarks for IVM memory commit performance and memory operations.
 use criterion::{BatchSize, Criterion};
 use ivm::Memory;
+/// An image whose writes are pending against Merkle storage it has not allocated.
+fn deferred_dirty_memory() -> Memory {
+    let mut mem = Memory::new();
+    for i in 0..1024u64 {
+        mem.store_u8(Memory::HEAP_START + i, (i & 0xff) as u8)
+            .unwrap();
+    }
+    mem
+}
 fn dirty_memory() -> Memory {
     let mut mem = Memory::new();
+    // Allocate the Merkle storage first so the benchmark times only the commit.
+    mem.root().expect("allocate Merkle storage");
     for i in 0..1024u64 {
         mem.store_u8(Memory::HEAP_START + i, (i & 0xff) as u8)
             .unwrap();
@@ -11,6 +22,7 @@ fn dirty_memory() -> Memory {
 }
 fn dirty_memory_large() -> Memory {
     let mut mem = Memory::new();
+    mem.root().expect("allocate Merkle storage");
     // Expand the heap to its maximum size so large writes do not violate
     // memory permissions.
     mem.grow_heap(Memory::HEAP_MAX_SIZE - Memory::HEAP_SIZE)
@@ -33,6 +45,19 @@ fn bench_memory_commit(c: &mut Criterion) {
         )
     });
 }
+/// The first root request: allocate the Merkle storage and hash the pending leaves.
+fn bench_memory_first_root(c: &mut Criterion) {
+    c.bench_function("memory_first_root", |b| {
+        b.iter_batched(
+            deferred_dirty_memory,
+            |mut mem| {
+                let root = mem.root().expect("allocate Merkle storage");
+                std::hint::black_box((root, mem))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
 fn bench_memory_commit_large(c: &mut Criterion) {
     c.bench_function("memory_commit_large", |b| {
         b.iter_batched(
@@ -49,6 +74,7 @@ fn bench_memory_commit_large(c: &mut Criterion) {
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_memory_commit(&mut c);
+    bench_memory_first_root(&mut c);
     bench_memory_commit_large(&mut c);
     c.final_summary();
 }

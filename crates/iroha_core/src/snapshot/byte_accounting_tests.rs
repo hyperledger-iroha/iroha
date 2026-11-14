@@ -248,10 +248,17 @@ fn snapshot_accounting_keeps_release_wire_and_abi_pins() {
     let wire = hex::encode(crate::release_identity::wire_schema_hash());
     let abi = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
     // The execution commitment's World roots are `KeyedStateRoot` since 86b691f465
-    // (`sumeragi.md` §16.6), which moved the wire identity from 8c6e5380. LtHash roots keep
-    // their bytes; a reader built before it refuses a keyed root whose marker bit is clear.
-    assert!(wire.starts_with("072924c3"), "wire={wire}");
-    assert!(abi.starts_with("7531b45d"), "abi={abi}");
+    // (`sumeragi.md` §16.6), which moved the wire identity from 8c6e5380 to 072924c3. LtHash
+    // roots keep their bytes; a reader built before it refuses a keyed root whose marker bit
+    // is clear.
+    //
+    // The IVM ABI consolidation (roadmap C10; `specs/ivm_header.md`, golden
+    // `iroha_data_model/tests/fixtures/abi_v1_hash.rs`) then replaced ABI V1 7531b45d with
+    // bdd5188f. The wire identity binds that hash (`release_identity::wire_schema_hash`), so it
+    // moved with it from 072924c3 to b2d6d37f. A network that still runs 072924c3/7531b45d
+    // does not accept this release's frames or programs.
+    assert!(wire.starts_with("b2d6d37f"), "wire={wire}");
+    assert!(abi.starts_with("bdd5188f"), "abi={abi}");
     eprintln!("snapshot-byte-accounting: wire={wire} abi={abi}");
 }
 

@@ -301,7 +301,8 @@ fn test_verify_proof_syscall() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF);
     vm.load_program(&prog).unwrap();
-    let summary = norito::to_bytes(&vm.execution_summary()).expect("encode execution summary");
+    let summary =
+        norito::to_bytes(&vm.execution_summary().unwrap()).expect("encode execution summary");
     let proof_tlv = make_tlv(PointerType::NoritoBytes as u16, &summary);
     let proof_pointer = vm
         .alloc_input_tlv(&proof_tlv)
@@ -433,7 +434,7 @@ fn test_get_merkle_path_with_root_syscall() {
     vm.set_register(12, root_out);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH);
     vm.load_program(&prog).unwrap();
-    let expected_root = vm.memory.current_root();
+    let expected_root = vm.memory.root().unwrap();
     vm.run().expect("merkle path syscall failed");
     let mut out_root = [0u8; 32];
     vm.memory.load_bytes(root_out, &mut out_root).unwrap();
@@ -454,7 +455,7 @@ fn test_get_merkle_compact_syscall() {
     let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT);
     vm.load_program(&prog).unwrap();
     let path = vm.memory.merkle_path(addr).unwrap();
-    let root = vm.memory.current_root();
+    let root = vm.memory.root().unwrap();
     vm.run().expect("merkle compact syscall failed");
     // Parse header
     let mut hdr = [0u8; 1 + 4 + 4];

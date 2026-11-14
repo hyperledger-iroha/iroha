@@ -2763,6 +2763,15 @@ fn mk_app_state_for_tests_with_native_scope(
         transaction_ingress_compute_inflight: Arc::new(tokio::sync::Semaphore::new(
             defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS.get(),
         )),
+        anonymous_ballot_ingress_inflight: Arc::new(tokio::sync::Semaphore::new(
+            defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS.get(),
+        )),
+        anonymous_ballot_rate_limiter: limits::RateLimiter::new(
+            Some(defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSIONS_PER_SEC.get()),
+            Some(defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSION_BURST.get()),
+        ),
+        anonymous_ballot_max_body_bytes: defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES
+            .get(),
         #[cfg(feature = "app_api")]
         verified_source_compile_inflight: Arc::new(tokio::sync::Semaphore::new(
             defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES.get(),

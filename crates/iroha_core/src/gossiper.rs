@@ -2079,9 +2079,6 @@ impl TransactionGossiper {
                         }
                     }
                 }
-                Err(AcceptTransactionFail::AnonymousBallotUnavailable) => {
-                    iroha_logger::debug!("anonymous ballot verification is locally unavailable");
-                }
                 Err(err) => match err.into_execution_deferred() {
                     Ok(original) => return Err(original),
                     Err(completed) => iroha_logger::error!(%completed, "Transaction rejected"),

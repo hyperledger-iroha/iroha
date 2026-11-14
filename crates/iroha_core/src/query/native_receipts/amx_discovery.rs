@@ -236,6 +236,21 @@ impl<V: StateReadOnly> NativeAmxRelayDiscoveryReadV1<'_, V> {
             }
         }
     }
+
+    /// First height of the epoch whose authority certified this discovery's height.
+    ///
+    /// Drives only the original source witness to completion, then reads the authenticated
+    /// schedule of that certified carrier. The height before the returned one is the epoch
+    /// boundary that installed this authority, so a relay can walk its source root's
+    /// boundaries backwards without discovering the ordinary heights between them. The
+    /// value orders discovery only: every handoff is still authenticated by the discovery
+    /// of its own height, and the same job can go on to deliver this height's intents.
+    ///
+    /// # Errors
+    /// The same precise refusal as [`Self::poll`]; the job is retained for a retry.
+    pub fn complete_epoch_first_height(&mut self) -> Result<u64, NativeAmxRelayDiscoveryErrorV1> {
+        self.original.as_mut_slice()[0].complete_epoch_first_height()
+    }
 }
 
 impl<V: StateReadOnly> Discovery<'_, V> {
@@ -287,6 +302,21 @@ impl<V: StateReadOnly> Discovery<'_, V> {
             ));
         }
         Ok(())
+    }
+    fn complete_epoch_first_height(&mut self) -> Result<u64, NativeAmxRelayDiscoveryErrorV1> {
+        use NativeAmxPreparedRelayErrorV1 as Error;
+        // Until the record count is authenticated, a poll advances only the source witness.
+        while self.count.is_none() {
+            self.poll()?;
+        }
+        self.recheck()?;
+        let original = self.source.completed_original().map_err(Error::Proof)?;
+        Ok(original
+            .commitment()
+            .schedule
+            .current
+            .authorization
+            .first_height)
     }
     fn finish_row(&mut self) {
         let (row, next) = self.row.take().expect("verified original row");

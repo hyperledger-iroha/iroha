@@ -4,6 +4,7 @@
 //! updates. Lane/dataspace routing is delegated to a pluggable router so the
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
+mod anonymous_ballots;
 mod payload_leases;
 mod pending_order;
 mod sumeragi_wake;
@@ -444,6 +445,16 @@ pub struct Queue {
     /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
     /// maintained atomically with `txs` under `push_remove_lock`.
     pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
+    /// `(scope, nullifier)` of every resident signerless ballot: the verified pending holders
+    /// of the ballot partition (`specs/parliament_private_ballot_design.md` §3.6). Claimed
+    /// after a ballot verified and released when its carrier leaves the queue.
+    pending_ballots: parking_lot::Mutex<anonymous_ballots::PendingBallotIndexV1>,
+    /// Ballot proofs being verified now, bounded by the partition's verifier concurrency.
+    ballot_verifications: AtomicUsize,
+    /// Node-local bounds of the ballot partition (`[queue.anonymous_ballots]`).
+    ballot_bounds: iroha_config::parameters::actual::QueueAnonymousBallots,
+    /// The verification-rate bucket of the ballot partition, filled at its first use.
+    ballot_verification_rate: parking_lot::Mutex<Option<anonymous_ballots::VerificationRateV1>>,
     /// Node-wide SCCP forgery repeat cache (pairings in flight and refused signatures) and
     /// pairing bucket, shared by every ingress handle.
     forgery_ingress: parking_lot::Mutex<Option<forgery_ingress::ForgeryIngressState>>,
@@ -546,6 +557,7 @@ impl fmt::Debug for Queue {
             .field("tx_time_to_live", &self.tx_time_to_live)
             .field("expired_cull_interval", &self.expired_cull_interval)
             .field("expired_cull_batch", &self.expired_cull_batch)
+            .field("ballot_bounds", &self.ballot_bounds)
             .field(
                 "pressure_age_budget_ms",
                 &self.pressure_age_budget_ms.load(Ordering::Relaxed),
@@ -1598,6 +1610,7 @@ impl Queue {
             self.remove_pending_order_locked(tx.incarnation());
         }
         self.remove_pending_sccp_exempt_locked(hash);
+        self.pending_ballots.lock().release(&hash);
         self.fee_admission_reservations.lock().release(&hash);
         self.routing_plans.remove(&hash);
         #[cfg(all(test, sumeragi_core_mutation = "HC137"))]
@@ -1741,13 +1754,6 @@ impl Queue {
                             err: Error::Deferred(original),
                         });
                     }
-                    if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-                        return Err(Failure {
-                            tx: Box::new(tx),
-                            err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-                        });
-                    }
-
                     let plan =
                         match self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan) {
                             Ok(plan) => plan,
@@ -1799,7 +1805,9 @@ impl Queue {
         self.publish_backpressure_state(self.active_len(), telemetry);
     }
     fn pending_status(&self, tx: &CheckedTransaction<'static>, state_view: &StateView<'_>) -> bool {
-        !tx.is_in_blockchain(state_view) && !self.is_expired(tx.as_accepted())
+        !tx.is_in_blockchain(state_view)
+            && !self.is_expired(tx.as_accepted())
+            && !self.anonymous_ballot_decided(&tx.hash_as_entrypoint(), state_view)
     }
 
     /// The signed transaction whose SCCP exemption admission classifies: the transaction of an
@@ -1989,11 +1997,10 @@ impl Queue {
         zk_gas: &ConfidentialGas,
     ) -> Result<u64, crate::execution_attempt::ExecutionAttemptError<ProposalGasCostError>> {
         match tx.entrypoint() {
-            TransactionEntrypoint::AnonymousBallot(_) => {
-                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ))
-            }
+            // A signerless ballot pays no fee and spends no ordinary gas: the per-block ballot
+            // budget (`B_work` reservations, `B_bytes` verifier-input bytes) bounds it instead
+            // (`specs/parliament_private_ballot_design.md` §3.6).
+            TransactionEntrypoint::AnonymousBallot(_) => Ok(0),
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 Self::signed_executable_proposal_gas_cost(signed, zk_gas)
             }
@@ -2860,6 +2867,7 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            anonymous_ballots,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -2874,6 +2882,7 @@ impl Queue {
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
+                anonymous_ballots,
             },
             events_sender,
             router,
@@ -2892,6 +2901,7 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            anonymous_ballots,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -2908,6 +2918,7 @@ impl Queue {
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
+                anonymous_ballots,
             },
             events_sender,
             router,
@@ -2926,6 +2937,7 @@ impl Queue {
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
+            anonymous_ballots,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -2954,6 +2966,12 @@ impl Queue {
                 pending_order: parking_lot::Mutex::new(PendingOrderIndex::default()),
                 txs: DashMap::new(),
                 pending_sccp_exempt: parking_lot::Mutex::new(SccpPendingIndexV1::default()),
+                pending_ballots: parking_lot::Mutex::new(
+                    anonymous_ballots::PendingBallotIndexV1::default(),
+                ),
+                ballot_verifications: AtomicUsize::new(0),
+                ballot_bounds: anonymous_ballots,
+                ballot_verification_rate: parking_lot::Mutex::new(None),
                 forgery_ingress: parking_lot::Mutex::new(None),
                 txs_per_user: DashMap::new(),
                 routing_plans: DashMap::new(),
@@ -3141,14 +3159,16 @@ impl Queue {
     }
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
-        let enqueue_timestamp_ms =
-            if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
-                self.tx_enqueued_at_ms
-                    .get(&tx.hash_as_entrypoint())
-                    .map(|entry| *entry.value())
-            } else {
-                None
-            };
+        let enqueue_timestamp_ms = if matches!(
+            tx.entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_)
+        ) {
+            self.tx_enqueued_at_ms
+                .get(&tx.hash_as_entrypoint())
+                .map(|entry| *entry.value())
+        } else {
+            None
+        };
         self.is_expired_at_with_enqueue_timestamp(tx, now, enqueue_timestamp_ms)
     }
     /// Check expiry against an explicitly bound queue-admission timestamp.
@@ -3171,14 +3191,19 @@ impl Queue {
     /// residence expires once the integer millisecond age since the bound admission timestamp
     /// exceeds the queue TTL. Reveal-height validation remains the consensus rule after
     /// inclusion, but cannot reclaim a commitment that never reaches a block; a commitment
-    /// checked before admission has no residence yet. The expiry index, payload leases and
-    /// [`Self::is_expired_at`] all use this one deadline.
+    /// checked before admission has no residence yet. A signerless ballot carries no creation
+    /// time or TTL either and resides by the same rule; its casting window, not this
+    /// deadline, decides it. The expiry index, payload leases and [`Self::is_expired_at`] all
+    /// use this one deadline.
     fn expiry_deadline_with_enqueue_timestamp(
         &self,
         tx: &AcceptedTransaction<'_>,
         enqueue_timestamp_ms: Option<u64>,
     ) -> Option<Duration> {
-        if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
+        if matches!(
+            tx.entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_)
+        ) {
             return enqueue_timestamp_ms?
                 .checked_add(Self::duration_to_millis(self.tx_time_to_live))?
                 .checked_add(1)
@@ -3501,6 +3526,9 @@ impl Queue {
         let (window, more) = self.pending_order.lock().next_window(max_scan.get());
         let mut sccp_budget = SccpExemptBlockBudgetV1::new(state_view.world());
         let mut sccp_committed_time_ms = None;
+        let mut ballots = anonymous_ballots::BallotOfferV1::at(Self::duration_to_millis(
+            self.time_source.get_unix_time(),
+        ));
         let mut pending = Vec::with_capacity(window.len());
         for (incarnation, hash) in window {
             let Some(tx) = self.txs.get(&hash) else {
@@ -3510,6 +3538,15 @@ impl Queue {
                 || tx.is_in_blockchain(state_view)
                 || self.is_expired(tx.as_accepted())
             {
+                continue;
+            }
+            // A signerless ballot is offered only while committed State keeps its casting
+            // window open and the block's ballot budget has room; any other stays resident.
+            if let TransactionEntrypoint::AnonymousBallot(envelope) = tx.as_accepted().entrypoint()
+            {
+                if self.offer_anonymous_ballot(&hash, envelope, state_view, &mut ballots) {
+                    pending.push(tx.value().clone());
+                }
                 continue;
             }
             // Ordinary work and sealed commitments cannot claim this exemption.
@@ -3576,10 +3613,12 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         self.gossip_batch_inner(
             n,
-            |_, tracked| {
+            |hash, tracked| {
                 if self.is_expired(tracked.as_accepted()) {
                     GossipEntryState::Other
-                } else if tracked.is_in_blockchain(state_view) {
+                } else if tracked.is_in_blockchain(state_view)
+                    || self.anonymous_ballot_decided(&hash, state_view)
+                {
                     GossipEntryState::Committed
                 } else {
                     GossipEntryState::Pending
@@ -4000,12 +4039,6 @@ impl Queue {
                 if local.plan != *advertised {
                     return GossipAdmission::PlanMismatch(local.plan);
                 }
-                if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-                    return GossipAdmission::Pushed(Err(Failure {
-                        tx: Box::new(tx),
-                        err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-                    }));
-                }
                 GossipAdmission::Pushed(self.push_in_fenced_view(
                     tx,
                     &view,
@@ -4061,9 +4094,11 @@ impl Queue {
         }
         let view = state.view();
         let _guard = self.push_remove_lock.lock();
-        self.txs
-            .get(&hash)
-            .is_some_and(|tx| !tx.is_in_blockchain(&view) && !self.is_expired(tx.as_accepted()))
+        self.txs.get(&hash).is_some_and(|tx| {
+            !tx.is_in_blockchain(&view)
+                && !self.is_expired(tx.as_accepted())
+                && !self.anonymous_ballot_decided(&hash, &view)
+        })
     }
     /// Whether the byte-identical input still has healthy local pending custody.
     ///
@@ -4084,6 +4119,7 @@ impl Queue {
                     tracked.as_accepted().entrypoint_bytes() == transaction.entrypoint_bytes()
                         && !tracked.is_in_blockchain(&view)
                         && !self.is_expired(tracked.as_accepted())
+                        && !self.anonymous_ballot_decided(&transaction.hash_as_entrypoint(), &view)
                 })
     }
     /// Return transactions back to the gossip backlog by their hashes.
@@ -4125,12 +4161,6 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, Failure> {
         let mut retired = QueuePrivacyRetirements::default();
-        if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-            return Err(Failure {
-                tx: Box::new(tx),
-                err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-            });
-        }
         if let Err(err) = self.check_startup_admission() {
             return Err(Failure {
                 tx: Box::new(tx),
@@ -4177,12 +4207,6 @@ impl Queue {
         state
             .ivm_execution_budget()
             .with_deferred_refund_notifications(|_| {
-                if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-                    return Err(Failure {
-                        tx: Box::new(tx),
-                        err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-                    });
-                }
                 let _lifecycle = state.lock_lane_lifecycle_work_admission();
                 let view = state.view();
                 let routing_plan = routing_plan.map(|plan| LocalRoutingPlan {
@@ -4262,11 +4286,10 @@ impl Queue {
         // Preacceptance belongs to the original signed security domain. It cannot
         // authorize another State's queue, fee reservations, indexes or gossip.
         let actual = match tx.entrypoint() {
+            // A signerless ballot has no signed domain, authority, fee or manifest step:
+            // its own partition admits it by its proof, against its scope's board.
             TransactionEntrypoint::AnonymousBallot(_) => {
-                return Err(Failure {
-                    tx: Box::new(tx),
-                    err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-                });
+                return self.admit_anonymous_ballot_in_view(tx, routing_plan, view, teu_backlog);
             }
             TransactionEntrypoint::External(signed) => *signed.domain(),
             TransactionEntrypoint::SealedCommitment(commitment) => {
@@ -4388,8 +4411,9 @@ impl Queue {
             })
         } else if self.txs.contains_key(&hash) {
             Some(Error::IsInQueue)
-        } else if self.active_len() >= self.capacity.get()
-            || self.retained_bytes().saturating_add(retained_cost) > self.max_retained_bytes.get()
+        } else if self.ordinary_active_len() >= self.capacity.get()
+            || self.ordinary_retained_bytes().saturating_add(retained_cost)
+                > self.max_retained_bytes.get()
         {
             Some(Error::Full)
         } else {
@@ -4855,11 +4879,13 @@ impl Queue {
                 if self.is_expired(checked.as_accepted()) {
                     return Err((notifications, Self::refused(Error::Expired, checked)));
                 }
-                if self.active_len() >= self.capacity.get()
-                    || self
-                        .retained_bytes()
-                        .saturating_add(Self::retained_byte_cost(encoded_len))
-                        > self.max_retained_bytes.get()
+                // A signerless ballot was admitted against its partition's own budget.
+                if !checked.as_accepted().is_anonymous_ballot()
+                    && (self.ordinary_active_len() >= self.capacity.get()
+                        || self
+                            .ordinary_retained_bytes()
+                            .saturating_add(Self::retained_byte_cost(encoded_len))
+                            > self.max_retained_bytes.get())
                 {
                     return Err((notifications, Self::refused(Error::Full, checked)));
                 }
@@ -5273,10 +5299,13 @@ impl Queue {
         )
     }
     fn oldest_queued_tx_age_ms(&self) -> u64 {
+        // A resident ballot waits for its window and its block budget, not for ordinary
+        // capacity: its age never saturates ordinary admission. Lock order: the pending
+        // order, then the ballot partition.
         let Some(enqueued_at_ms) = self
             .pending_order
             .lock()
-            .front()
+            .front_where(|hash| !self.is_resident_ballot(hash))
             .map(|entry| entry.enqueued_at_ms)
         else {
             return 0;
@@ -5292,10 +5321,14 @@ impl Queue {
         let max_retained_bytes = self.max_retained_bytes;
         let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         // An inconsistent original admission index remains unavailable until recovery.
-        let saturated_by_count =
-            self.admission_faulted() || tracked_tx_count >= self.capacity.get();
-        let saturated_by_bytes =
-            retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
+        // The ballot partition has its own count and byte budget.
+        let (ballots, ballot_bytes) = self.ballot_residents();
+        let saturated_by_count = self.admission_faulted()
+            || tracked_tx_count.saturating_sub(ballots) >= self.capacity.get();
+        let saturated_by_bytes = retained_bytes
+            .saturating_sub(ballot_bytes)
+            .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
+            > max_retained_bytes.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
         let saturated_by_age =
             queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
@@ -9550,7 +9583,7 @@ pub mod tests {
         }
     }
     #[test]
-    fn anonymous_ballot_cannot_enter_account_queue_without_the_state_adapter() {
+    fn an_anonymous_ballot_is_refused_where_the_root_carries_none() {
         let state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -9566,14 +9599,21 @@ pub mod tests {
                 .expiry_deadline_with_enqueue_timestamp(&accepted, None)
                 .is_none()
         );
+        // This World commits no global root scope and installs no ballot entrypoint: the
+        // submission is refused with a verdict before any ballot work, and nothing is kept.
         let failure = queue
             .push(accepted, state.view())
-            .expect_err("the State adapter is locally unavailable");
-        assert!(matches!(failure.err, Error::Deferred(reason)
-            if reason.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable));
+            .expect_err("this root carries no anonymous ballots");
+        assert!(
+            matches!(&failure.err, Error::UnsupportedTransactionAdmission { reason }
+                if reason.starts_with("anonymous_ballot_not_admitted")),
+            "{:?}",
+            failure.err
+        );
         assert_eq!(failure.tx.entrypoint(), &entry);
         assert_eq!(queue.active_len(), 0);
         assert!(queue.txs_per_user.is_empty());
+        assert_eq!(queue.pending_ballots.lock().len(), 0);
     }
 
     fn register_accepted_tx_authority_for_queue_test(

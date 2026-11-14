@@ -8,6 +8,7 @@
 use super::*;
 
 pub mod finality_custody;
+mod leg_fanout;
 mod operation;
 mod verified;
 mod verified_abort;
@@ -61,6 +62,7 @@ use iroha_torii_shared::private_settlement_api::{
     validate_private_settlement_auditor_identity_v1,
     validate_private_settlement_committee_proof_response_v1,
 };
+use leg_fanout::{collect_private_settlement_leg_results_v1, collect_private_settlement_legs_v1};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Maximum decoded HTTP response size for private-settlement certificate and carrier reads.
@@ -1909,6 +1911,10 @@ impl Client {
 
     /// Prepare every canonical participant leg and construct the complete barrier.
     ///
+    /// The whole matrix is checked before any request. Legs are then certified within the
+    /// bounded leg fan-out (at most four committees together); every started leg joins
+    /// before the first failure in leg order is returned.
+    ///
     /// # Errors
     ///
     /// Fails on incomplete endpoint/authority/delta matrices or any per-leg
@@ -1926,13 +1932,8 @@ impl Client {
         {
             return Err(eyre!("private-settlement Prepare matrix is incomplete"));
         }
-        let mut certificates = Vec::with_capacity(manifest.legs.len());
-        for (index, ((endpoints, authority), delta)) in committee_endpoints
-            .iter()
-            .zip(authority_catalog)
-            .zip(deltas)
-            .enumerate()
-        {
+        // The whole matrix is checked before any committee is asked to stage or vote.
+        for (index, delta) in deltas.iter().enumerate() {
             if usize::from(delta.leg_ordinal) != index
                 || delta
                     .digest()
@@ -1941,13 +1942,15 @@ impl Client {
             {
                 return Err(eyre!("private-settlement Prepare matrix is substituted"));
             }
-            certificates.push(self.certify_private_settlement_prepare_v1(
-                endpoints,
+        }
+        let certificates = collect_private_settlement_legs_v1(manifest.legs.len(), |index| {
+            self.certify_private_settlement_prepare_v1(
+                &committee_endpoints[index],
                 manifest,
                 manifest.legs[index].payload_digest,
-                authority,
-            )?);
-        }
+                &authority_catalog[index],
+            )
+        })?;
         Self::build_private_settlement_prepare_barrier_v1(
             manifest.clone(),
             authority_catalog,
@@ -1961,6 +1964,8 @@ impl Client {
     /// Every committee is queried to quorum for an orphaned valid Prepare QC
     /// before fresh certification. Quorum-equivalent signer subsets reconstruct
     /// the same normalized prepared-bundle digest after a coordinator restart.
+    /// Legs run within the bounded leg fan-out, as in
+    /// [`Self::prepare_private_settlement_bundle_v1`].
     ///
     /// # Errors
     ///
@@ -1979,13 +1984,8 @@ impl Client {
         {
             return Err(eyre!("private-settlement Prepare matrix is incomplete"));
         }
-        let mut certificates = Vec::with_capacity(manifest.legs.len());
-        for (index, ((endpoints, authority), delta)) in committee_endpoints
-            .iter()
-            .zip(authority_catalog)
-            .zip(deltas)
-            .enumerate()
-        {
+        // The whole matrix is checked before any committee is asked to stage or vote.
+        for (index, delta) in deltas.iter().enumerate() {
             if usize::from(delta.leg_ordinal) != index
                 || delta
                     .digest()
@@ -1994,13 +1994,15 @@ impl Client {
             {
                 return Err(eyre!("private-settlement Prepare matrix is substituted"));
             }
-            certificates.push(self.recover_or_certify_private_settlement_prepare_v1(
-                endpoints,
+        }
+        let certificates = collect_private_settlement_legs_v1(manifest.legs.len(), |index| {
+            self.recover_or_certify_private_settlement_prepare_v1(
+                &committee_endpoints[index],
                 manifest,
                 manifest.legs[index].payload_digest,
-                authority,
-            )?);
-        }
+                &authority_catalog[index],
+            )
+        })?;
         Self::build_private_settlement_prepare_barrier_v1(
             manifest.clone(),
             authority_catalog,
@@ -2204,6 +2206,10 @@ impl Client {
 
     /// Commit every participant leg against one exact complete Prepare barrier.
     ///
+    /// Every leg's authority resolves before any request. Legs are then certified within
+    /// the bounded leg fan-out (at most four committees together); every started leg joins
+    /// before the first failure in leg order is returned.
+    ///
     /// # Errors
     ///
     /// Fails on an incomplete endpoint matrix or any per-leg Commit quorum or persistence error.
@@ -2216,28 +2222,30 @@ impl Client {
         if committee_endpoints.len() != barrier.manifest.legs.len() {
             return Err(eyre!("private-settlement Commit matrix is incomplete"));
         }
-        committee_endpoints
-            .iter()
-            .enumerate()
-            .map(|(index, endpoints)| {
-                let authority = barrier
+        // Every leg's authority resolves before any committee is asked for a Commit vote.
+        let authorities = (0..committee_endpoints.len())
+            .map(|index| {
+                barrier
                     .authority_catalog
                     .authority_for_leg(&barrier.manifest, index)
-                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
-                self.certify_private_settlement_commit_v1(
-                    endpoints,
-                    barrier.manifest.legs[index].payload_digest,
-                    barrier,
-                    &authority,
-                )
+                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        collect_private_settlement_legs_v1(committee_endpoints.len(), |index| {
+            self.certify_private_settlement_commit_v1(
+                &committee_endpoints[index],
+                barrier.manifest.legs[index].payload_digest,
+                barrier,
+                &authorities[index],
+            )
+        })
     }
 
     /// Restart-safe Commit certification for every participant leg.
     ///
     /// Every four-validator committee is queried to quorum for orphaned durable
-    /// QCs before any fresh Commit certificate is created.
+    /// QCs before any fresh Commit certificate is created. Legs run within the
+    /// bounded leg fan-out, as in [`Self::commit_private_settlement_bundle_v1`].
     ///
     /// # Errors
     ///
@@ -2252,22 +2260,23 @@ impl Client {
         if committee_endpoints.len() != barrier.manifest.legs.len() {
             return Err(eyre!("private-settlement Commit matrix is incomplete"));
         }
-        committee_endpoints
-            .iter()
-            .enumerate()
-            .map(|(index, endpoints)| {
-                let authority = barrier
+        // Every leg's authority resolves before any committee is asked for a Commit vote.
+        let authorities = (0..committee_endpoints.len())
+            .map(|index| {
+                barrier
                     .authority_catalog
                     .authority_for_leg(&barrier.manifest, index)
-                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
-                self.recover_or_certify_private_settlement_commit_v1(
-                    endpoints,
-                    barrier.manifest.legs[index].payload_digest,
-                    barrier,
-                    &authority,
-                )
+                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        collect_private_settlement_legs_v1(committee_endpoints.len(), |index| {
+            self.recover_or_certify_private_settlement_commit_v1(
+                &committee_endpoints[index],
+                barrier.manifest.legs[index].payload_digest,
+                barrier,
+                &authorities[index],
+            )
+        })
     }
 
     /// Construct the exact sponsor-signed global all-Prepare registration request.
@@ -2627,6 +2636,10 @@ impl Client {
     /// ordinal and that leg's four-validator authority roster. Exactly three
     /// shares per leg are aggregated after all four endpoints have been tried;
     /// the completed sidecar is then submitted to every available responder.
+    /// The leg set is checked before any request. Legs are certified, and then
+    /// promoted, within the bounded leg fan-out (at most four committees
+    /// together): every certificate exists before any promotion, and every
+    /// started leg joins before the first failure in leg order is returned.
     ///
     /// # Errors
     ///
@@ -2653,9 +2666,8 @@ impl Client {
             .manifest
             .validate_provisional()
             .map_err(|_| eyre!("private-settlement provisional manifest is invalid"))?;
-        let mut certificates = Vec::with_capacity(materials.len());
-        for (index, (material, endpoints)) in materials.iter().zip(committee_endpoints).enumerate()
-        {
+        // The whole leg set is consistent before any committee receives provisional material.
+        for (index, material) in materials.iter().enumerate() {
             if material.manifest != first.manifest
                 || usize::from(material.statement.leg_ordinal) != index
             {
@@ -2663,9 +2675,14 @@ impl Client {
                     "private-settlement provisional leg set is inconsistent"
                 ));
             }
-            certificates
-                .push(self.certify_private_settlement_leg_availability_v1(endpoints, material)?);
         }
+        // Every leg's certificate is complete before any leg is promoted.
+        let certificates = collect_private_settlement_legs_v1(materials.len(), |index| {
+            self.certify_private_settlement_leg_availability_v1(
+                &committee_endpoints[index],
+                &materials[index],
+            )
+        })?;
         self.promote_private_settlement_legs_v1(materials, &certificates, committee_endpoints)
     }
 
@@ -2700,10 +2717,15 @@ impl Client {
                 ));
             }
         }
-        let mut responses = Vec::new();
-        for ((material, certificate), endpoints) in
-            materials.iter().zip(certificates).zip(committee_endpoints)
-        {
+        // Each leg promotes to its own committee; legs overlap within the bounded leg
+        // fan-out, and every started leg joins before any acknowledgement is returned.
+        let acknowledged = collect_private_settlement_legs_v1(materials.len(), |leg| {
+            let (material, certificate, endpoints) = (
+                &materials[leg],
+                &certificates[leg],
+                &committee_endpoints[leg],
+            );
+            let mut responses = Vec::new();
             let request = PrivateSettlementLegUploadRequestV1 {
                 manifest: final_manifest.clone(),
                 audit_policy: material.audit_policy.clone(),
@@ -2758,8 +2780,9 @@ impl Client {
                     .unwrap_or_else(|| eyre!("private-settlement promotion has no quorum"));
                 return Err(error).wrap_err(format!("private-settlement promotion acknowledgements unavailable ({promoted}/{required})"));
             }
-        }
-        Ok(responses)
+            Ok(responses)
+        })?;
+        Ok(acknowledged.into_iter().flatten().collect())
     }
 
     /// Read one account-authenticated, redacted leg lifecycle projection.

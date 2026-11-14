@@ -42,6 +42,10 @@ host-side helpers; the instruction set has no vector or cryptographic opcodes.
   reducing commit time on large memories.
 - **Incremental hashing** – *done.* `commit()` re-hashes only subtrees for
   chunks marked dirty since the last commit.
+- **Lazy Merkle storage** – *done.* Leaf digests and canonical nodes are
+  allocated by the first root or path request, so an ordinary (non-ZK)
+  invocation allocates and hashes none. Their prepaid credit is still admitted
+  with the image.
 - **CPU-accelerated leaf hashing** – *done.* Merkle leaf digests for 32‑byte
   chunks use the VM’s accelerated `sha256_compress` (Metal/CUDA/ARMv8 SHA2/x86
   SHA‑NI/scalar fallback) via a single padded block, speeding up CPU paths and

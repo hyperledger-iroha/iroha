@@ -27,9 +27,6 @@ pub(super) fn pulse_context(
 /// Only a transaction-specific validation failure can authorize removing a queued transaction.
 pub(super) fn transaction_rejection(error: &BlockValidationError) -> bool {
     match error {
-        BlockValidationError::TransactionAccept(
-            crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
-        ) => false,
         BlockValidationError::TransactionAccept(_)
         | BlockValidationError::TransactionInTheFuture => true,
         _ => false,
@@ -246,11 +243,12 @@ mod tests {
     #[test]
     fn control_and_local_source_failures_never_authorize_transaction_quarantine() {
         for error in [
-            BlockValidationError::from(
-                crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
+            // A ballot input the node cannot decide, and one that invalidates its block.
+            BlockValidationError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
             ),
-            BlockValidationError::TransactionAccept(
-                crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
+            BlockValidationError::ExecutionContextInvalid(
+                "the block carries more than 2 anonymous ballots".into(),
             ),
             BlockValidationError::ExecutionContextInvalid("missing or invalid pulse".into()),
             BlockValidationError::NposEffectsInvalid("wrong generation".into()),

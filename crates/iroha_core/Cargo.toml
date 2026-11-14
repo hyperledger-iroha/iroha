@@ -245,6 +245,8 @@ iroha_pasta = { workspace = true }
 mv = { workspace = true, features = ["test"] }
 iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
+# Fixed-tape ballots with pinned stamps for the signerless-execution tests.
+iroha_parliament_ballot = { workspace = true, features = ["test-fixtures"] }
 kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }

@@ -1,13 +1,17 @@
 # Dirty-leaf allocation ownership
 
-`Memory` owns a pending-commit bitmap and a since-baseline bitmap. Each backing
-contains `ceil(leaf_count / 64)` initialized `u64` words. `insert` validates the
+`Memory` owns a pending-leaf bitmap and a since-baseline bitmap. Each backing
+contains `ceil(leaf_count / 64)` initialized `u64` words. Until the first root
+or path request allocates the Merkle storage nothing commits, so the pending
+bitmap holds every leaf written since the zero image. `insert` validates the
 index before mutation, duplicate inserts do not change the count, and iteration
 visits each set bit once in ascending leaf order. Unused final-word bits are
 always zero. Clearing or copying same-geometry words cannot allocate.
 
-The funded constructor admits the image, fixed leaf array, and both complete
-bitmap layouts before allocating them. Each bitmap consumes original
+The funded constructor admits the image, the Merkle storage, and both complete
+bitmap layouts before allocating the image and the bitmaps; the Merkle storage's
+credit stays with the image, unspent, until its first root or path request. Each
+bitmap consumes original
 `ExecutionMemoryLease` credit into its `ExecutionBuffer`; no replacement budget
 or unchecked capacity growth exists. A local image instead uses the existing
 `OwnedAllocation` cache owner. Both variants retain and activate their original
@@ -21,12 +25,15 @@ rebuild lock order. Sparse work hashes set indices directly; larger bitmap
 updates split fixed leaf backing into disjoint 64-leaf groups and borrow the
 corresponding original words. The canonical tree then receives exact ascending
 leaf updates. The pending bitmap clears after successful root computation;
-the since-baseline bitmap survives commits for warm reset. Large commits retain
+the since-baseline bitmap survives commits for warm reset. `union_with` merges
+a same-geometry bitmap in place and recounts, without allocating. Large commits retain
 the existing full-rebuild and hardware-selection paths.
 
 A warm reset checks geometry before modifying memory, restores only the
-since-baseline leaves, copies the template's pending bitmap into existing
-backing, and clears the since-baseline bitmap. There is no warm dirty-tracking
+since-baseline leaves, rewrites the pending bitmap in existing backing, and
+clears the since-baseline bitmap. The pending bitmap becomes the template's when
+both images have, or both lack, allocated Merkle storage; otherwise the worker
+keeps its own pending leaves and adds the restored ones. There is no warm dirty-tracking
 reservation or allocation-refusal hook. IVM still refuses unrelated private
 range copies before mutation and preserves program, lineage, and geometry checks.
 

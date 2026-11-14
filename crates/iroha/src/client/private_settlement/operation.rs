@@ -323,8 +323,11 @@ fn transcript<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'d
 /// carrier phases. Restricted proofs, plaintext witnesses, capsules and secret handles
 /// remain in the external prepared-artifact owner. Committee
 /// methods run on one bounded blocking worker per operation, preserving their existing
-/// four-endpoint fanout and transport deadlines. A durable request lease excludes phases
-/// in reopened operations until the original worker and its thread-local cleanup exit.
+/// four-endpoint fanout and transport deadlines. Inside that worker one phase dispatches
+/// at most four legs together and joins every started leg before reading a result in leg
+/// order, so each round records the transcript a leg-by-leg loop would. A durable request
+/// lease excludes phases in reopened operations until the original worker and its
+/// thread-local cleanup exit.
 /// Cancellation retains that lease and its permit; recovery reads the original state first.
 pub struct PrivateSettlementOperation {
     handle: WorkflowHandle,

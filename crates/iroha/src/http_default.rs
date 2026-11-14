@@ -186,6 +186,63 @@ pub fn request_deadline_elapsed() -> Error {
     )
     .into()
 }
+
+/// Report whether an HTTP exchange failed at the connection level, before a complete
+/// response arrived, so that a fresh dispatch of the same idempotent read may succeed.
+///
+/// Transient causes are a refused, reset, aborted, unconnected or broken connection; a
+/// connection that closed before the response completed, including a request canceled
+/// because its connection closed; and transport timeouts. A received response of any
+/// status, and TLS, DNS, protocol, response-bound and decoding failures are not
+/// transient. Injected transports opt in by reporting these causes as [`std::io::Error`]
+/// kinds accepted by [`io_failure_is_transient`].
+///
+/// This transport never repeats a request itself: hyper re-sends only a request that was
+/// never written to a reused pooled connection, because the same pools carry one-shot
+/// signed requests. Whether a request may be repeated belongs to the caller, such as the
+/// transaction finality wait, and so does bounding the repeats: an elapsed operation
+/// deadline ([`request_deadline_elapsed`]) is also a `TimedOut` cause.
+pub(crate) fn transport_failure_is_transient(error: &eyre::Report) -> bool {
+    error.chain().any(cause_is_transient)
+}
+
+/// Connection-level I/O failure kinds after which a fresh connection may succeed: a
+/// refused, reset, aborted, unconnected or broken connection, an early end of stream, or
+/// a timeout.
+pub(crate) const fn io_failure_is_transient(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        kind,
+        ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::NotConnected
+            | ErrorKind::BrokenPipe
+            | ErrorKind::UnexpectedEof
+            | ErrorKind::TimedOut
+    )
+}
+
+fn cause_is_transient(cause: &(dyn std::error::Error + 'static)) -> bool {
+    if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+        // `io::Error::source` skips a custom payload, so inspect the payload itself.
+        return io_failure_is_transient(error.kind())
+            || error
+                .get_ref()
+                .is_some_and(|payload| cause_is_transient(payload));
+    }
+    if let Some(error) = cause.downcast_ref::<hyper::Error>() {
+        return error.is_incomplete_message()
+            || error.is_canceled()
+            || error.is_closed()
+            || error.is_timeout();
+    }
+    // reqwest's own timeout marker is private; everything else it reports is typed above.
+    cause
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(reqwest::Error::is_timeout)
+}
+
 fn header_name_from_str(str: &str) -> Result<HeaderName> {
     str.parse::<HeaderName>()
         .wrap_err_with(|| format!("Failed to parse header name {str}"))
@@ -332,7 +389,7 @@ pub struct RequestSnapshot {
 }
 #[cfg(test)]
 impl DefaultRequest {
-    fn snapshot(&self) -> RequestSnapshot {
+    pub(crate) fn snapshot(&self) -> RequestSnapshot {
         let headers_vec = self
             .prepared
             .headers
@@ -1281,6 +1338,217 @@ mod tests {
             !server.join().expect("test server"),
             "signed body was retried"
         );
+    }
+
+    /// Accept one connection within `bound`, so a client that never connects cannot hang a test.
+    fn accept_within(listener: &TcpListener, bound: Duration) -> Option<std::net::TcpStream> {
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let deadline = Instant::now() + bound;
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    // Accepted sockets can inherit the listener's nonblocking mode.
+                    stream.set_nonblocking(false).expect("blocking stream");
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(30)))
+                        .expect("read timeout");
+                    return Some(stream);
+                }
+                Err(error)
+                    if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn read_request_head(stream: &mut std::net::TcpStream) {
+        let mut head = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut buffer).expect("request head");
+            assert!(read > 0, "connection closed inside the request head");
+            head.extend_from_slice(&buffer[..read]);
+        }
+    }
+
+    fn loopback_get(asynchronous: bool, url: &str, timeout: Duration) -> Result<Response<Bytes>> {
+        let request = owned_request_builder(Method::GET, Url::parse(url).expect("loopback URL"))
+            .direct_loopback()
+            .timeout(timeout)
+            .build()
+            .expect("loopback request");
+        if asynchronous {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("loopback runtime")
+                .block_on(request.send())
+        } else {
+            request.send_blocking()
+        }
+    }
+
+    /// Send one direct-loopback GET whose single connection `serve` handles.
+    fn loopback_exchange(
+        asynchronous: bool,
+        timeout: Duration,
+        serve: impl FnOnce(std::net::TcpStream) + Send + 'static,
+    ) -> Result<Response<Bytes>> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let address = listener.local_addr().expect("loopback address");
+        let server = thread::spawn(move || {
+            if let Some(stream) = accept_within(&listener, Duration::from_secs(60)) {
+                serve(stream);
+            }
+        });
+        let result = loopback_get(
+            asynchronous,
+            &format!("http://{address}/v1/status"),
+            timeout,
+        );
+        server.join().expect("loopback server");
+        result
+    }
+
+    fn has_cause<E: std::error::Error + 'static>(
+        error: &Error,
+        matches: impl Fn(&E) -> bool,
+    ) -> bool {
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<E>().is_some_and(&matches))
+    }
+
+    #[test]
+    fn real_connection_failures_are_transient_and_protocol_failures_are_not() {
+        let patient = Duration::from_secs(30);
+        for asynchronous in [false, true] {
+            // Unread request bytes make the kernel answer the close with a reset.
+            let reset = loopback_exchange(asynchronous, patient, |mut stream| {
+                let mut method = [0_u8; 3];
+                stream.read_exact(&mut method).expect("request method");
+            })
+            .expect_err("reset exchange");
+            assert!(
+                has_cause::<std::io::Error>(&reset, |cause| cause.kind()
+                    == ErrorKind::ConnectionReset),
+                "{reset:#}"
+            );
+            assert!(transport_failure_is_transient(&reset), "{reset:#}");
+
+            // A peer that reads the request and closes leaves hyper an incomplete message.
+            let closed = loopback_exchange(asynchronous, patient, |mut stream| {
+                read_request_head(&mut stream);
+            })
+            .expect_err("closed exchange");
+            assert!(
+                has_cause::<hyper::Error>(&closed, hyper::Error::is_incomplete_message),
+                "{closed:#}"
+            );
+            assert!(transport_failure_is_transient(&closed), "{closed:#}");
+
+            // The transport's own timeout ends a read whose peer never answers.
+            let silent =
+                loopback_exchange(asynchronous, Duration::from_millis(300), |mut stream| {
+                    // Hold the connection until the client gives up and closes it.
+                    let mut sink = [0_u8; 1024];
+                    while matches!(stream.read(&mut sink), Ok(read) if read > 0) {}
+                })
+                .expect_err("silent exchange");
+            assert!(
+                has_cause::<reqwest::Error>(&silent, reqwest::Error::is_timeout),
+                "{silent:#}"
+            );
+            assert!(transport_failure_is_transient(&silent), "{silent:#}");
+
+            // Nothing listens on a released port.
+            let address = TcpListener::bind("127.0.0.1:0")
+                .expect("released listener")
+                .local_addr()
+                .expect("released address");
+            let refused = loopback_get(
+                asynchronous,
+                &format!("http://{address}/v1/status"),
+                patient,
+            )
+            .expect_err("refused exchange");
+            assert!(
+                has_cause::<std::io::Error>(&refused, |cause| cause.kind()
+                    == ErrorKind::ConnectionRefused),
+                "{refused:#}"
+            );
+            assert!(transport_failure_is_transient(&refused), "{refused:#}");
+
+            // A peer that does not speak HTTP is a protocol failure, never repeated.
+            let garbage = loopback_exchange(asynchronous, patient, |mut stream| {
+                read_request_head(&mut stream);
+                stream
+                    .write_all(b"NOT-HTTP\r\n\r\n")
+                    .expect("write garbage");
+            })
+            .expect_err("garbage exchange");
+            assert!(
+                has_cause::<hyper::Error>(&garbage, hyper::Error::is_parse),
+                "{garbage:#}"
+            );
+            assert!(!transport_failure_is_transient(&garbage), "{garbage:#}");
+        }
+    }
+
+    #[test]
+    fn transient_transport_classification_reads_typed_causes_only() {
+        let dispatch = |cause: std::io::Error| {
+            eyre::Report::new(cause)
+                .wrap_err("Failed to send http GET request to http://localhost/status")
+        };
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::NotConnected,
+            ErrorKind::BrokenPipe,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::TimedOut,
+        ] {
+            assert!(
+                transport_failure_is_transient(&dispatch(std::io::Error::from(kind))),
+                "{kind:?}"
+            );
+            // A blocking body reader hides the transport's error inside an opaque payload.
+            let nested = std::io::Error::other(std::io::Error::from(kind));
+            assert!(
+                transport_failure_is_transient(&dispatch(nested)),
+                "nested {kind:?}"
+            );
+        }
+        for kind in [
+            ErrorKind::InvalidData,
+            ErrorKind::InvalidInput,
+            ErrorKind::PermissionDenied,
+            ErrorKind::AddrNotAvailable,
+            ErrorKind::Other,
+        ] {
+            assert!(
+                !transport_failure_is_transient(&dispatch(std::io::Error::from(kind))),
+                "{kind:?}"
+            );
+        }
+        assert!(
+            !transport_failure_is_transient(&eyre!("Connection reset by peer (os error 54)")),
+            "display text is never classified"
+        );
+        assert!(!transport_failure_is_transient(
+            &crate::Error::ResponseTooLarge {
+                maximum: 1,
+                actual: Some(2),
+            }
+            .into()
+        ));
     }
     #[test]
     fn blocking_send_rejects_tokio_multi_thread_runtime() {

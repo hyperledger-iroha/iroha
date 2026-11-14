@@ -146,6 +146,37 @@ pub fn due(
     )
 }
 
+/// [`due`] on a committed World its caller has already authenticated as the global chain's.
+///
+/// The governance pass of a block runs Parliament's items on the root scope authenticated
+/// for that execution (`specs/sccp.md` §4.7.2), so an executor that holds that scope asks
+/// Parliament on that root directly. The committed scope metadata is not decoded again: the
+/// observation charges the caller's decode budget nothing for it, and a refused scope read
+/// cannot be taken for a root without Parliament work.
+/// # Errors
+/// As [`due`].
+pub(crate) fn due_on_global_root(
+    world: &impl WorldReadOnly,
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+    time_ms: u64,
+) -> Result<bool, DueWorkUnavailable> {
+    due_from(
+        &Current(world),
+        committed_time_ms,
+        next_height,
+        time_ms,
+        || {
+            super::parliament_iface::governance_due_on_global_root(
+                world,
+                committed_time_ms,
+                next_height,
+                time_ms,
+            )
+        },
+    )
+}
+
 /// Original current SCCP heartbeat deadline, when repeated degraded heights permit it.
 #[must_use]
 pub fn next_heartbeat_at_ms(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
@@ -289,17 +320,44 @@ pub(crate) struct ProgressClock {
 }
 
 impl ProgressClock {
+    /// Observe the committed parent `world`, whose root scope [`due`] reads from its
+    /// committed metadata.
     pub(crate) fn capture(
         world: &impl WorldReadOnly,
         committed_time_ms: Option<u64>,
         next_height: u64,
         time_ms: u64,
     ) -> Result<Self, DueWorkUnavailable> {
+        Self::observe(world, time_ms, || {
+            due(world, committed_time_ms, next_height, time_ms)
+        })
+    }
+
+    /// [`Self::capture`] for an executor that already authenticated `world` as the global
+    /// chain's committed parent ([`due_on_global_root`]): its pre-validation reads decode the
+    /// committed root scope once, in routing, where a refusal keeps its typed owner.
+    pub(crate) fn capture_on_global_root(
+        world: &impl WorldReadOnly,
+        committed_time_ms: Option<u64>,
+        next_height: u64,
+        time_ms: u64,
+    ) -> Result<Self, DueWorkUnavailable> {
+        Self::observe(world, time_ms, || {
+            due_on_global_root(world, committed_time_ms, next_height, time_ms)
+        })
+    }
+
+    /// Read the committed clock parameters of `world`, then make its due `observation`.
+    fn observe(
+        world: &impl WorldReadOnly,
+        time_ms: u64,
+        observation: impl FnOnce() -> Result<bool, DueWorkUnavailable>,
+    ) -> Result<Self, DueWorkUnavailable> {
         let clock = clock_parameters(world).map_err(|_| DueWorkUnavailable)?;
         Ok(Self {
             time_ms,
             maximum_lag_ms: clock.due_work_max_lag_ms,
-            due: due(world, committed_time_ms, next_height, time_ms),
+            due: observation(),
         })
     }
 

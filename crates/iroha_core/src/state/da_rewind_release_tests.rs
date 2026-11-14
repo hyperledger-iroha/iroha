@@ -33,6 +33,93 @@ fn observe_rewind_source(
     (wait, original)
 }
 
+// A replacement block is over 70 KiB and starts under a deep World acquisition. Each exit
+// below therefore keeps its owner in its own frame: the test's frame then holds none of
+// them, and every exit runs on the default test stack.
+
+/// Exits 4 and 5: the pristine stage refuses or unwinds before any owner is handed out.
+#[inline(never)]
+fn pristine_stage_refuses_or_unwinds(
+    state: &State,
+    proposal: &SignedBlock,
+    callback: &impl MembershipProbeWitness,
+    unwind: bool,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state
+            .block_and_revert_with_pristine_stage(proposal.header(), |_| {
+                assert_eq!(callback.observations(), [0; 5]);
+                assert!(!unwind, "original replacement pristine-stage unwind");
+                Err::<(), _>("original replacement pristine-stage refusal")
+            })
+            // A completed owner fails the refusal assertion below either way. Only its
+            // verdict crosses the unwind boundary, never a copy of the complete block.
+            .map(drop)
+    }));
+    if unwind {
+        assert!(result.is_err());
+    } else {
+        assert!(matches!(
+            result.unwrap(),
+            Err(StateBlockStartError::Stage(_))
+        ));
+    }
+}
+
+/// Exits 1 and 2: the completed replacement owner is dropped, or direct commit refuses it.
+#[inline(never)]
+fn replacement_owner_drops_or_refuses_commit(
+    state: &State,
+    proposal: &SignedBlock,
+    callback: &impl MembershipProbeWitness,
+    release: &mut (impl Future + Unpin),
+    task: &mut Context<'_>,
+    commit: bool,
+) {
+    let block = state
+        .block_and_revert_with_pristine_stage(proposal.header(), |_| {
+            assert_eq!(callback.observations(), [0; 5]);
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .expect("actual fully initialized replacement owner");
+    assert_eq!(callback.observations(), [0; 5]);
+    assert!(Pin::new(&mut *release).poll(task).is_pending());
+    if commit {
+        assert!(matches!(
+            block.commit(),
+            Err(TransactionsBlockError::MissingInsertBlock)
+        ));
+    } else {
+        drop(block);
+    }
+}
+
+/// Exits 0 and 3: the acquired owner rewinds, or refuses a missing body, and retires.
+#[inline(never)]
+fn acquired_owner_rewinds_and_retires(
+    state: &State,
+    callback: &impl MembershipProbeWitness,
+    release: &mut (impl Future + Unpin),
+    task: &mut Context<'_>,
+    missing_body: bool,
+) {
+    let mut acquired = state.acquire_canonical_runtime_block(true).unwrap();
+    let result = acquired.rewind_da_indexes_to_height(u64::from(missing_body));
+    if missing_body {
+        assert!(matches!(
+            result,
+            Err(da_hydration::DaIndexHydrationError::Completed(
+                da_hydration::DaIndexHydrationFailure::MissingBlock { .. }
+            ))
+        ));
+    } else {
+        assert!(matches!(result, Ok(())));
+    }
+    assert_eq!(callback.observations(), [0; 5]);
+    assert!(Pin::new(&mut *release).poll(task).is_pending());
+    drop(acquired);
+}
+
 #[test]
 fn replacement_rewind_retains_notifications_through_acquisition_execution_and_refusal() {
     // Cover the actual replacement constructor before-start exits, the common
@@ -53,54 +140,24 @@ fn replacement_rewind_retains_notifications_through_acquisition_execution_and_re
         let mut future = wait.clone().wait_for_release(&mut registration);
         assert!(Pin::new(&mut future).poll(&mut context).is_pending());
         if exit >= 4 {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                state.block_and_revert_with_pristine_stage(proposal.header(), |_| {
-                    assert_eq!(callback.observations(), [0; 5]);
-                    assert!(exit != 5, "original replacement pristine-stage unwind");
-                    Err::<(), _>("original replacement pristine-stage refusal")
-                })
-            }));
-            if exit == 5 {
-                assert!(result.is_err());
-            } else {
-                assert!(matches!(
-                    result.unwrap(),
-                    Err(StateBlockStartError::Stage(_))
-                ));
-            }
+            pristine_stage_refuses_or_unwinds(&state, &proposal, &*callback, exit == 5);
         } else if exit == 1 || exit == 2 {
-            let block = state
-                .block_and_revert_with_pristine_stage(proposal.header(), |_| {
-                    assert_eq!(callback.observations(), [0; 5]);
-                    Ok::<_, std::convert::Infallible>(())
-                })
-                .expect("actual fully initialized replacement owner");
-            assert_eq!(callback.observations(), [0; 5]);
-            assert!(Pin::new(&mut future).poll(&mut context).is_pending());
-            if exit == 1 {
-                drop(block);
-            } else {
-                assert!(matches!(
-                    block.commit(),
-                    Err(TransactionsBlockError::MissingInsertBlock)
-                ));
-            }
+            replacement_owner_drops_or_refuses_commit(
+                &state,
+                &proposal,
+                &*callback,
+                &mut future,
+                &mut context,
+                exit == 2,
+            );
         } else {
-            let mut acquired = state.acquire_canonical_runtime_block(true).unwrap();
-            let result = acquired.rewind_da_indexes_to_height(u64::from(exit == 3));
-            if exit == 3 {
-                assert!(matches!(
-                    result,
-                    Err(da_hydration::DaIndexHydrationError::Completed(
-                        da_hydration::DaIndexHydrationFailure::MissingBlock { .. }
-                    ))
-                ));
-            } else {
-                assert!(matches!(result, Ok(())));
-            }
-            assert_eq!(callback.observations(), [0; 5]);
-            assert!(Pin::new(&mut future).poll(&mut context).is_pending());
-            drop(acquired);
+            acquired_owner_rewinds_and_retires(
+                &state,
+                &*callback,
+                &mut future,
+                &mut context,
+                exit == 3,
+            );
         }
         assert!(Pin::new(&mut future).poll(&mut context).is_ready());
         assert!(!wait.is_poisoned());

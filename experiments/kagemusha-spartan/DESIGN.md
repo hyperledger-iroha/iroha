@@ -20,6 +20,53 @@ file explains how the design works and where each part stands.
 - **In progress:** uncommitted work by the experiment's active writer (the Codex takeover of 2026-11-12).
 - **Open:** not built yet, or waiting on a decision.
 
+## 0. Status at iroha `optimizations` 79d42d60da (2026-11-15)
+
+This section supersedes the dated status statements later in this file (§1 "Where it stands", and the notes on the
+128 MiB stop, native rejection of invalid Payments, the unmeasured Payment and "uncommitted" work). The rest of the
+design text is unchanged. Everything below was read from committed source and the run logs in `output/`.
+
+- **Committed.** The 11-13 and 11-14 work, including the SDK surface and the device fixtures, was swept into
+  1f9a8fc086, 105b96b8a7 and 14e5a5e1f4. Nothing here is "in progress (uncommitted)" any more.
+- **Complete chain on the Mac (run5, `output/full-backend-chain-run-20261113-5.log`).** All eight programs are stable
+  at generation 6 (log lines 384-391). Fresh chain, linked pairs verified: Receive 32.95 s, Send 23.13 s, Bootstrap
+  about 20 s, Load 84.45 s (outlier on a loaded Mac); every pair 4,832 + 4,704 B. Peak RSS 6.64 GB (footprint
+  7.88 GB). The 128 MiB program-serialization stop of run1 is gone (packed program artifact, 1f9a8fc086). Run5 then
+  panicked in the native Send/Receive flow with "malformed program bundle frame"; that is fixed in 14e5a5e1f4
+  (`native.rs`), and the focused bundle test passes. **No complete-chain run since that fix.**
+- **Complete Payment size (Mac, host software signatures).** Run5's IPM1 Payment: **12,050 B, 50 B over the
+  12,000 B carrier budget** (pair 9,610, envelope 11,100, companion 850; `output/full-backend-chain/payment-size.txt`).
+  The fresh native Send in `output/native-containment-20261114-2.log` wrote 11,698 B
+  (`output/native-baseline-h2/complete-payment-11698.json`). The companion compaction committed in 14e5a5e1f4 has no
+  complete-Payment re-measurement. This 12,000 B budget is the experiment's; the production 10,034 B envelope limit
+  is unchanged.
+- **Native admission now derives Burn.** `engine.rs` (around line 786) computes `valid` from parsing plus the exact
+  full verifier and continues with `valid = false` instead of rejecting; resource and availability errors still
+  return. Run5 verified a malformed-R Receive Burn (adjusted burn 10). Containment-2 finalized the invalid
+  Request-signature and P-matrix Burns.
+- **Post-Burn successor: fixture defect found 2026-11-15.** The Send10 after a Burn failed "native monetary
+  preparation constraints", and its focused relation test failed at a completed-Request row with left 1, right 0.
+  Cause: the fixture built the successor Request with `request_self`, which copies the payer's wallet and account
+  into the receiver words. `request::append_completed` refuses payer == receiver (`equal[0]·equal[1] = 0`, since
+  441496899d). The successor now pays the sender's wallet (`device_fixture::request_to`/`send10_to`). The phone
+  fixture's Bootstrap → Load100 → Send10 → `receive_self` flow is the same self-transfer and is refused at Send10;
+  a device run needs a two-wallet fixture first.
+- **Full library suite** (`output/fixed-tail-full-lib-suite.log`, before 14e5a5e1f4): 191 passed, 3 failed
+  (`bootstrap::tests::recursive_natural_layout_profiles`, `full::tests::bootstrap_pair_carries_the_empty_claim`,
+  `points::tests::points_side_holds_proves_and_refuses`), 10 ignored.
+- **Absent:** Unload and RefreshTimeAnchor have statement tags only (`statement.rs`), with no recursive kind and no
+  native transition. The fee-schedule signer is assumed checked "when installed" (`fee_schedule.rs`), and no check
+  exists. The written recursive soundness argument and an independent review are still open.
+- **Devices.** Hardware probes only (11-13): Android StrongBox key and iOS Secure Enclave key, neither requiring user
+  confirmation. Five Swift SDK tests passed on an iPhone 17 Pro Max. The iOS runtime fixture installed but did not
+  launch (phone locked); Android only built. No device proving or payment run exists. The planned confirmation prompts
+  (`LAContext`, `BiometricPrompt` without a CryptoObject) are not bound to the key.
+- **Linked into the HEAD bridge, not into any shipped app.** Since c5511ebfc4, `crates/iroha_core_zk` depends on this
+  crate with no feature gate, `connect_norito_bridge` compiles its Spartan module, and
+  `check_native_sdk_artifact.py` requires the eight `connect_norito_kagemusha_spartan_*_v1` exports. The released
+  Native (8df03eb77a: Android v88, iOS 20261110141615) has no such edge. A wallet switches to this generation only
+  through an explicit Install with a root-signed manifest (`open.rs`); nothing switches by default.
+
 ## 1. Summary
 
 **Goal.** An offline Receive in about 3 s on a Pixel 6, against about 300 s with today's prover. Payments still travel

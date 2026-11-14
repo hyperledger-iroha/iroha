@@ -447,70 +447,193 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
         }
     }
 
+    /// Smallest gas cap in `charged..=sufficient` under which `completes` holds.
+    ///
+    /// Completion is monotone in the cap, `sufficient` is known to complete, and no cap below
+    /// the gas a completed run is charged can.
+    pub(super) fn minimal_sufficient_gas_cap(
+        mut completes: impl FnMut(u64) -> bool,
+        charged: u64,
+        sufficient: u64,
+    ) -> u64 {
+        let (mut low, mut high) = (charged, sufficient);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if completes(middle) {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        low
+    }
+
+    #[test]
+    fn minimal_sufficient_gas_cap_finds_the_first_completing_cap() {
+        for boundary in [5, 6, 37, 99, 100] {
+            let mut probes = 0;
+            assert_eq!(
+                minimal_sufficient_gas_cap(
+                    |cap| {
+                        probes += 1;
+                        cap >= boundary
+                    },
+                    5,
+                    100
+                ),
+                boundary
+            );
+            assert!(probes <= 7, "bisection over 96 caps");
+        }
+        assert_eq!(minimal_sufficient_gas_cap(|_| unreachable!(), 9, 9), 9);
+    }
+
+    /// Outcome of one quarantine root executed in a disposable transaction of a fresh block.
+    struct QuarantineAttempt {
+        result: Result<(), ValidationFail>,
+        gas_used: u64,
+        /// Presence of `effect_authored`, `effect_first` and `effect_second` before rollback.
+        effects: [bool; 3],
+    }
+
+    const EFFECT_KEYS: [&str; 3] = ["effect_authored", "effect_first", "effect_second"];
+
+    /// Execute `source` under the quarantine gas `cap` and discard the transaction.
+    fn attempt_quarantine_root(
+        state: &State,
+        address: &ContractAddress,
+        source: &SignedTransaction,
+        cache: &mut IvmCache,
+        cap: u64,
+    ) -> QuarantineAttempt {
+        let mut block = next_block(state);
+        grant_entrypoints(&mut block, address);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.pipeline.quarantine_tx_max_gas = cap;
+        tx.pipeline.overlay_max_instructions = 0;
+        tx.pipeline.overlay_max_bytes = 0;
+        let result = Executor::Initial
+            .execute_transaction(&mut tx, &ALICE_ID, source, cache)
+            .map(|_| ())
+            .map_err(crate::execution_attempt::expect_completed_rejection);
+        assert!(!tx.execution_effect_limit_exceeded());
+        let effects = EFFECT_KEYS.map(|key| {
+            tx.world
+                .account(&ALICE_ID)
+                .unwrap()
+                .metadata()
+                .get(key)
+                .is_some()
+        });
+        QuarantineAttempt {
+            result,
+            gas_used: tx.last_tx_gas_used,
+            effects,
+        }
+    }
+
     #[test]
     fn signed_mixed_batch_contract_runs_share_one_quarantine_gas_cap() {
         let mut cache = IvmCache::new();
-        let mut segment_gas = Vec::new();
-        let mut successful_batch_gas = None;
+        let authored: InstructionBox = SetKeyValue::account(
+            ALICE_ID.clone(),
+            "effect_authored".parse().unwrap(),
+            Json::new(true),
+        )
+        .into();
         let authored_gas = isi_gas::meter_instructions(
-            &[SetKeyValue::account(
-                ALICE_ID.clone(),
-                "effect_authored".parse().unwrap(),
-                Json::new(true),
-            )
-            .into()],
+            std::slice::from_ref(&authored),
             &crate::gas::DEFAULT_ZK_GAS,
         )
         .expect("gas quote must complete for this fixture");
         assert!(authored_gas > 0);
-        for case in 0..5 {
-            let (state, _program, address, hash) = contract_fixture();
-            let call = |entrypoint: &str| ContractInvocation {
-                contract_address: address.clone(),
-                expected_code_hash: hash,
-                entrypoint: entrypoint.to_owned(),
-                arguments: None,
-            };
-            let executable = if case < 2 {
-                Executable::ContractCall(call(if case == 0 { "first" } else { "second" }))
-            } else {
-                Executable::Batch(
-                    vec![
-                        ExecutableBatchItem::Instruction(
-                            SetKeyValue::account(
-                                ALICE_ID.clone(),
-                                "effect_authored".parse().unwrap(),
-                                Json::new(true),
-                            )
-                            .into(),
-                        ),
-                        ExecutableBatchItem::ContractCall(call("first")),
-                        ExecutableBatchItem::ContractCall(call("second")),
-                    ]
-                    .into(),
-                )
-            };
-            // The quarantine cap narrows the one signed gas limit that the authored
-            // instructions and both contract runs of the batch draw from.
-            let total = authored_gas + segment_gas.iter().sum::<u64>();
-            let cap = match case {
-                0..=2 => GAS,
-                3 => total,
-                _ => total - 1,
-            };
+        let (state, _program, address, hash) = contract_fixture();
+        let call = |entrypoint: &str| ContractInvocation {
+            contract_address: address.clone(),
+            expected_code_hash: hash,
+            entrypoint: entrypoint.to_owned(),
+            arguments: None,
+        };
+        let quarantined = |executable: Executable| {
             let mut metadata = iroha_model_base::metadata::Metadata::default();
             metadata.insert(
                 crate::tx::QUARANTINE_METADATA_KEY.parse().unwrap(),
                 Json::new(true),
             );
-            let source = TransactionBuilder::new(
+            TransactionBuilder::new(
                 state.network_id,
                 ALICE_ID.clone(),
                 FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(GAS)),
             )
             .with_metadata(metadata)
             .with_executable(executable)
-            .sign(ALICE_KEYPAIR.private_key());
+            .sign(ALICE_KEYPAIR.private_key())
+        };
+        // The cap is a gas limit: a reserved syscall quote must be affordable before its unused
+        // part is refunded, so the smallest sufficient cap can exceed the gas finally charged.
+        let [(first_gas, first_minimal), (second_gas, second_minimal)] =
+            ["first", "second"].map(|entrypoint| {
+                let source = quarantined(Executable::ContractCall(call(entrypoint)));
+                let uncapped = attempt_quarantine_root(&state, &address, &source, &mut cache, GAS);
+                uncapped.result.unwrap();
+                assert!(uncapped.gas_used > 0);
+                let minimal = minimal_sufficient_gas_cap(
+                    |cap| {
+                        attempt_quarantine_root(&state, &address, &source, &mut cache, cap)
+                            .result
+                            .is_ok()
+                    },
+                    uncapped.gas_used,
+                    GAS,
+                );
+                assert!(minimal >= uncapped.gas_used);
+                (uncapped.gas_used, minimal)
+            });
+        let source = quarantined(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(authored.clone()),
+                ExecutableBatchItem::ContractCall(call("first")),
+                ExecutableBatchItem::ContractCall(call("second")),
+            ]
+            .into(),
+        ));
+        let total = authored_gas + first_gas + second_gas;
+        let uncapped = attempt_quarantine_root(&state, &address, &source, &mut cache, GAS);
+        uncapped.result.unwrap();
+        assert_eq!(
+            uncapped.gas_used, total,
+            "successful batch adds only the authored native instruction gas to its two VM runs"
+        );
+        assert_eq!(uncapped.effects, [true; 3]);
+        // The quarantine cap narrows the one signed gas limit that the authored instruction and
+        // both contract runs of the batch draw from: each run meets what the earlier work left.
+        let minimal = minimal_sufficient_gas_cap(
+            |cap| {
+                attempt_quarantine_root(&state, &address, &source, &mut cache, cap)
+                    .result
+                    .is_ok()
+            },
+            total,
+            GAS,
+        );
+        let measured = format!(
+            "minimal={minimal} total={total} authored={authored_gas} first=({first_gas}, {first_minimal}) second=({second_gas}, {second_minimal})"
+        );
+        assert_eq!(
+            minimal,
+            authored_gas + first_minimal.max(first_gas + second_minimal),
+            "{measured}"
+        );
+        // One allowance, not one per run: the last insufficient cap covers either run alone, and
+        // the first run alone after the authored instruction.
+        assert!(
+            minimal - 1 >= authored_gas + first_minimal.max(second_minimal),
+            "{measured}"
+        );
+        for cap in [minimal, minimal - 1] {
+            let completes = cap == minimal;
             let mut block = next_block(&state);
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
@@ -523,32 +646,24 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, &source, &mut cache)
+                .map(|_| ())
                 .map_err(crate::execution_attempt::expect_completed_rejection);
             assert!(!tx.execution_effect_limit_exceeded());
-            if case < 2 {
+            let effects = EFFECT_KEYS.map(|key| {
+                tx.world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get(key)
+                    .is_some()
+            });
+            // The authored instruction and the first run complete under either cap.
+            assert_eq!(effects, [true, true, completes], "{measured}");
+            if completes {
                 result.unwrap();
-                assert!(tx.last_tx_gas_used > 0);
-                segment_gas.push(tx.last_tx_gas_used);
-                drop(tx);
-                continue;
-            }
-            assert!(
-                tx.world
-                    .account(&ALICE_ID)
-                    .unwrap()
-                    .metadata()
-                    .get("effect_authored")
-                    .is_some()
-            );
-            assert!(
-                tx.world
-                    .account(&ALICE_ID)
-                    .unwrap()
-                    .metadata()
-                    .get("effect_first")
-                    .is_some()
-            );
-            if case == 4 {
+                assert_eq!(tx.last_tx_gas_used, total);
+                tx.apply();
+            } else {
                 let error = result.unwrap_err();
                 assert!(
                     matches!(&error, ValidationFail::IvmFault(fault)
@@ -556,35 +671,16 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                     "{error:?}"
                 );
                 // The second run exhausts the capped allowance after the authored
-                // instructions and the first run; its consumed work stays charged.
-                assert!(tx.last_tx_gas_used > authored_gas + segment_gas[0]);
+                // instruction and the first run; its consumed work stays charged.
+                assert!(tx.last_tx_gas_used > authored_gas + first_gas);
                 assert!(tx.last_tx_gas_used <= cap);
-                assert!(
-                    tx.world
-                        .account(&ALICE_ID)
-                        .unwrap()
-                        .metadata()
-                        .get("effect_second")
-                        .is_none()
-                );
                 drop(tx);
-            } else {
-                result.unwrap();
-                if case == 2 {
-                    successful_batch_gas = Some(tx.last_tx_gas_used);
-                }
-                assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
-                assert_eq!(
-                    tx.last_tx_gas_used, total,
-                    "successful batch adds only the authored native instruction gas to its two VM runs"
-                );
-                tx.apply();
             }
             assert_eq!(
                 block.committed_fragment_count(),
-                fragments + usize::from(case != 4)
+                fragments + usize::from(completes)
             );
-            for key in ["effect_authored", "effect_first", "effect_second"] {
+            for key in EFFECT_KEYS {
                 assert_eq!(
                     block
                         .world
@@ -593,7 +689,7 @@ seiyaku ActualEffectGroups { permission CanInvokeContractEntrypoint;
                         .metadata()
                         .get(key)
                         .is_some(),
-                    case != 4,
+                    completes,
                     "rejected Batch rolls back its earlier authored and contract effects"
                 );
             }

@@ -1,4 +1,6 @@
 //! Consolidated integration-test harness for `iroha_config`.
+#[path = "anonymous_ballot_bounds.rs"]
+mod anonymous_ballot_bounds;
 #[path = "autoscale_config.rs"]
 mod autoscale_config;
 #[path = "checked_in_profiles_parse.rs"]

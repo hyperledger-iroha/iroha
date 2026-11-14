@@ -889,6 +889,94 @@ pub async fn handle_gov_parliament_attempt_plan(
     }))
 }
 
+/// Largest anonymous-ballot board projection: the scope's authenticated context (at most
+/// `BALLOT_CONTEXT_MAX_BYTES_V1`) with its window facts and its corpus.
+pub const MAX_ANONYMOUS_BALLOT_BOARD_READ_BYTES_V1: usize = 1024 * 1024;
+/// Largest anonymous-attempt projection: every election, assignment and body of the attempt.
+pub const MAX_ANONYMOUS_PARLIAMENT_ATTEMPT_READ_BYTES_V1: usize = 16 * 1024 * 1024;
+
+/// GET `/v1/gov/anonymous-ballots/boards/{scope}` — the public board of one ballot scope.
+///
+/// The canonical Norito bytes of the board World keeps for `scope`, from one committed
+/// query view: its sealed context, its casting window and its whole corpus. Nothing in it is
+/// secret, and nothing in the request selects a credential or a nullifier.
+///
+/// # Errors
+/// A conversion error for a scope that is not 128 lowercase hexadecimal characters, a
+/// not-found error while no sealed board has the scope, and an internal error for a record
+/// above the defensive response bound.
+pub fn handle_gov_anonymous_ballot_board_read(
+    state: &iroha_core::state::State,
+    scope: &str,
+) -> Result<Vec<u8>, crate::Error> {
+    let mut bytes = [0_u8; 64];
+    if scope.len() != 128
+        || !scope
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || hex::decode_to_slice(scope, &mut bytes).is_err()
+    {
+        return Err(crate::routing::conversion_error(
+            "scope must be exactly 128 lowercase hexadecimal characters".to_owned(),
+        ));
+    }
+    let scope = iroha_data_model::governance::anonymous_ballot::BallotScopeV1::new(bytes);
+    let view = state.query_view();
+    let board = view
+        .world()
+        .parliament_anonymous_boards()
+        .get(&scope)
+        .ok_or_else(|| crate::Error::AppNotFound {
+            code: "anonymous_ballot_board_not_found",
+            message: "no sealed anonymous-ballot board has this scope".to_owned(),
+        })?;
+    norito::core::to_bytes_bounded(board, MAX_ANONYMOUS_BALLOT_BOARD_READ_BYTES_V1).map_err(|_| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+            "anonymous-ballot board projection exceeds its framed Norito bound".into(),
+        ))
+    })
+}
+
+/// GET `/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}` — one attempt of the
+/// anonymous Parliament family.
+///
+/// The canonical Norito bytes of the attempt's reducer state, from one committed query
+/// view: its elections and assignments, the bodies with their phases and the committed
+/// schedule a client plans against. It never includes credential secrets or a ballot.
+///
+/// # Errors
+/// A conversion error for a noncanonical identifier, a not-found error for an unknown
+/// attempt, and an internal error for a state above the defensive response bound.
+pub fn handle_gov_anonymous_parliament_attempt_read(
+    state: &iroha_core::state::State,
+    governance_attempt_id: &str,
+) -> Result<Vec<u8>, crate::Error> {
+    let governance_attempt_id = governance_attempt_id
+        .parse::<iroha_data_model::governance::types::GovernanceAttemptId>()
+        .map_err(|_| {
+            crate::routing::conversion_error(
+                "governance_attempt_id must be exactly 64 lowercase hexadecimal characters"
+                    .to_owned(),
+            )
+        })?;
+    let view = state.query_view();
+    let attempt = view
+        .world()
+        .parliament_anonymous_attempts()
+        .get(&governance_attempt_id)
+        .ok_or_else(|| crate::Error::AppNotFound {
+            code: "anonymous_parliament_attempt_not_found",
+            message: "no anonymous Parliament attempt has this identifier".to_owned(),
+        })?;
+    norito::core::to_bytes_bounded(attempt, MAX_ANONYMOUS_PARLIAMENT_ATTEMPT_READ_BYTES_V1).map_err(
+        |_| {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "anonymous Parliament attempt projection exceeds its framed Norito bound".into(),
+            ))
+        },
+    )
+}
+
 /// GET `/v1/gov/parliament/attempts/{governance_attempt_id}` — read one attempt.
 ///
 /// The typed summary and complete reducer bytes come from one committed query

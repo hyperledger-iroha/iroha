@@ -2013,24 +2013,6 @@ impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
 
 #[cfg(test)]
 #[test]
-fn anonymous_ballot_unavailable_has_no_block_rejection_reason() {
-    let error = BlockValidationError::from(AcceptTransactionFail::AnonymousBallotUnavailable);
-    assert!(
-        matches!(&error, BlockValidationError::ExecutionDeferred(reason)
-        if reason.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable)
-    );
-    assert_eq!(event::map_block_err_to_reason(&error), None);
-    // Defensive classification also covers explicitly constructed public variants.
-    assert_eq!(
-        event::map_block_err_to_reason(&BlockValidationError::TransactionAccept(
-            AcceptTransactionFail::AnonymousBallotUnavailable,
-        )),
-        None
-    );
-}
-
-#[cfg(test)]
-#[test]
 fn unavailable_crypto_admission_preserves_original_without_block_rejection() {
     let original = iroha_crypto::UnsupportedImplementation {
         algorithm: iroha_crypto::Algorithm::Secp256k1,
@@ -5954,6 +5936,50 @@ pub(crate) mod valid {
                 state_block.governance_due_applied(),
             )
         }
+        /// Reject a block whose anonymous-ballot inputs exceed the per-block ballot budget
+        /// (`B_work` reservations and `B_bytes` verifier-input bytes of the
+        /// `gov.parliament_ballot` value its parent commits), name a scope without a sealed
+        /// board, or repeat one carrier (`specs/parliament_private_ballot_design.md` §3.6,
+        /// §3.10). Every ballot input is charged, whatever execution then records for it, and
+        /// the proposer's selection counts with the same budget against the same parent, so a
+        /// block its proposer built always passes. A block without ballots reads nothing.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
+        fn validate_anonymous_ballot_budget(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+        ) -> Result<(), BlockValidationError> {
+            use crate::governance::parliament_anonymous::ballot_input::check_block_ballot_budget;
+            let ballots = block
+                .network_entrypoints()
+                .filter_map(|entrypoint| match entrypoint {
+                    TransactionEntrypoint::AnonymousBallot(envelope) => Some(envelope),
+                    TransactionEntrypoint::External(_)
+                    | TransactionEntrypoint::SealedCommitment(_)
+                    | TransactionEntrypoint::SealedReveal(_) => None,
+                });
+            check_block_ballot_budget(
+                state_block.world.parameters.get_before_block(),
+                |scope| {
+                    state_block
+                        .world
+                        .parliament_anonymous_boards
+                        .get_before_block(scope)
+                },
+                ballots,
+            )
+            .map_err(|error| {
+                if error.is_local() {
+                    BlockValidationError::ExecutionDeferred(
+                        ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+                    )
+                } else {
+                    Self::execution_context_error(error.to_string())
+                }
+            })
+        }
         /// Check the per-block SCCP exemption caps of `block` against the `parent` World.
         #[expect(
             clippy::result_large_err,
@@ -6355,10 +6381,14 @@ pub(crate) mod valid {
             let mut prepared_signed_idx = 0usize;
             for entrypoint in block.external_entrypoints_slice() {
                 match entrypoint {
+                    // A signerless ballot has no static verdict: it is identified by
+                    // `(scope, nullifier)`, joins no committed carrier membership and is
+                    // decided completely against its board at execution, where an invalid
+                    // one invalidates this block (`specs/parliament_private_ballot_design.md`
+                    // §3.6). Its budget and its one-carrier rule are checked against the
+                    // parent State before execution (`validate_anonymous_ballot_budget`).
                     TransactionEntrypoint::AnonymousBallot(_) => {
-                        return Err(BlockValidationError::ExecutionDeferred(
-                            crate::tx::anonymous_ballot_unavailable(),
-                        ));
+                        entrypoint_hashes.push(entrypoint.hash());
                     }
                     TransactionEntrypoint::External(_) => {
                         let prepared = prepared_txs
@@ -6764,6 +6794,7 @@ pub(crate) mod valid {
                 });
             };
             Self::validate_sccp_exempt_cap(block, state_block)?;
+            Self::validate_anonymous_ballot_budget(block, state_block)?;
             let advertised_fragments = block.committed_fragment_count();
             let advertised_policy = block.axt_policy_snapshot().cloned();
             let advertised_transitions = block.axt_transitioned_dataspaces().cloned();
@@ -7424,6 +7455,7 @@ pub(crate) mod valid {
         }
         include!("block/post_execution_tail_tests.rs");
         include!("block/sccp_call_site_tests.rs");
+        include!("block/anonymous_ballot_budget_tests.rs");
         #[test]
         fn amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection() {
             use iroha_data_model::sumeragi_amx::AmxError;
@@ -9504,8 +9536,7 @@ mod event {
                 return None;
             }
             BlockValidationError::TransactionAccept(fail) => match fail {
-                AcceptTransactionFail::AnonymousBallotUnavailable
-                | AcceptTransactionFail::CryptoImplementationUnavailable(_) => return None,
+                AcceptTransactionFail::CryptoImplementationUnavailable(_) => return None,
                 AcceptTransactionFail::TransactionLimit(_)
                 | AcceptTransactionFail::SignedAttachments(_)
                 | AcceptTransactionFail::SignatureVerification(_)

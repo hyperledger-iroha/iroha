@@ -279,7 +279,7 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
         assert_eq!(vm.strict_return_integrity, control.strict_return_integrity);
         assert_eq!(vm.input_bump_next, control.input_bump_next);
         assert_eq!(vm.memory.template_generation(), generation + 1);
-        assert_eq!(vm.memory.current_root(), control.memory.current_root());
+        assert_eq!(vm.memory.root().unwrap(), control.memory.root().unwrap());
         let next = vm.alloc_input_tlv(&tlv).unwrap();
         assert_eq!(
             next,
@@ -294,7 +294,7 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
         vm.run().unwrap();
         control.run().unwrap();
         assert_eq!(vm.remaining_gas(), control.remaining_gas());
-        assert_eq!(vm.memory.current_root(), control.memory.current_root());
+        assert_eq!(vm.memory.root().unwrap(), control.memory.root().unwrap());
         match (
             vm.call_result_word_count(),
             control.call_result_word_count(),

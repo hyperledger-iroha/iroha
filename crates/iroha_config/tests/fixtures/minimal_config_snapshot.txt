@@ -822,6 +822,13 @@ Root {
         transaction_time_to_live: 86400s,
         expired_cull_interval: 1s,
         expired_cull_batch: 256,
+        anonymous_ballots: QueueAnonymousBallots {
+            pending_limit: 1024,
+            max_retained_bytes: 335544320,
+            verifier_concurrency: 2,
+            verification_rate_per_sec: 8,
+            verification_burst: 16,
+        },
     },
     nexus: Nexus {
         storage: NexusStorage {

@@ -156,6 +156,14 @@ pub(crate) fn for_each_canonical_carrier_membership_hash(
     mut visit: impl FnMut(HashOf<TransactionEntrypoint>),
 ) {
     for entrypoint in entrypoints {
+        // A signerless ballot is identified by `(scope, nullifier)`, never by its carrier
+        // hash: the same bytes may be relayed by anyone and may reach a later block, where
+        // the casting window and the corpus decide them again
+        // (`specs/parliament_private_ballot_design.md` §3.5, §5 item 3). Its carrier
+        // therefore joins no committed replay membership.
+        if matches!(entrypoint, TransactionEntrypoint::AnonymousBallot(_)) {
+            continue;
+        }
         let carrier_hash = entrypoint.hash();
         visit(carrier_hash);
         if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint)
@@ -202,12 +210,23 @@ pub(crate) fn rejected_transaction_gas_is_accountable(
         )
 }
 
-/// The anonymous ballot State/context adapter is not yet available locally.
+/// A signerless ballot reached the instruction executor, which never runs one: the Network
+/// output owner decides it against its board. A local invariant failure, never a verdict.
+pub(crate) fn anonymous_ballot_outside_its_owner() -> ExecutionDeferred {
+    ivm::error::ExecutionDeferral::LocalInvariantViolation.into()
+}
+
+/// Whether the root of `world` admits signerless ballot inputs: its selection installs the
+/// definition family that owns the entrypoint
+/// (`specs/parliament_private_ballot_design.md` §12.3 "Inactive means absent"). A selection
+/// this release cannot resolve installs nothing.
 ///
-/// TODO(E2): replace this boundary with authenticated context and ballot execution.
-/// This is never a committed transaction rejection.
-pub(crate) fn anonymous_ballot_unavailable() -> ExecutionDeferred {
-    ivm::error::ExecutionDeferral::VerifierInitializationUnavailable.into()
+/// Routing asks this and nothing more: it reads the root's selection, never the governance
+/// State a ballot is decided on, so no consensus path depends on that State.
+pub(crate) fn anonymous_ballot_entrypoint_installed(
+    world: &(impl crate::state::WorldReadOnly + ?Sized),
+) -> bool {
+    crate::runtime::parliament_anonymous_installed(world.runtime_selection()).unwrap_or(false)
 }
 
 /// Preserve unfinished admission attempts before projecting completed Network rejections.
@@ -219,9 +238,6 @@ pub(crate) fn execution_attempt_from_admission_failure(
         Err(completed) => completed,
     };
     ExecutionAttemptError::Rejected(match fail {
-        AcceptTransactionFail::AnonymousBallotUnavailable => {
-            return ExecutionAttemptError::Deferred(anonymous_ballot_unavailable());
-        }
         AcceptTransactionFail::CryptoImplementationUnavailable(original) => {
             return ExecutionAttemptError::Deferred(
                 ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original).into(),
@@ -1045,8 +1061,6 @@ impl SignatureVerificationFail {
 /// Error type for transaction from [`SignedTransaction`] to [`AcceptedTransaction`]
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, FromVariant, thiserror::Error)]
 pub enum AcceptTransactionFail {
-    /// Anonymous ballot State/context verification is locally unavailable
-    AnonymousBallotUnavailable,
     /// Failure during limits check
     TransactionLimit(#[source] TransactionLimitError),
     /// Signed attachment schema violation: {0}
@@ -1099,7 +1113,6 @@ impl AcceptTransactionFail {
     /// Returns the entire unchanged admission failure when it is a completed verdict.
     pub fn into_execution_deferred(self) -> Result<ExecutionDeferred, Self> {
         match self {
-            Self::AnonymousBallotUnavailable => Ok(anonymous_ballot_unavailable()),
             Self::SignedAttachments(error) => error
                 .into_local_refusal()
                 .map(ExecutionDeferred::from)
@@ -1405,9 +1418,9 @@ fn enforce_nts_health_for_entrypoint(
         TransactionEntrypoint::SealedReveal(reveal) => {
             enforce_nts_health_for_time_sensitive(reveal.signed_transaction(), snapshot)
         }
-        TransactionEntrypoint::SealedCommitment(_) => Ok(()),
-        TransactionEntrypoint::AnonymousBallot(_) => {
-            Err(AcceptTransactionFail::AnonymousBallotUnavailable)
+        // A ballot carries no creation time or TTL and cannot move the clock (design §3.4).
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => {
+            Ok(())
         }
     }
 }
@@ -1570,6 +1583,19 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
     fn signed_encoded_len(tx: &SignedTransaction) -> usize {
         Self::framed_encoded_len(tx)
+    }
+    /// The complete entrypoint frame of an anonymous ballot is at most `E_wire` bytes
+    /// (`ANONYMOUS_BALLOT_ENTRYPOINT_WIRE_MAX_BYTES_V1`): a longer frame is refused like any
+    /// transaction above its wire bound, and in a block it invalidates the block.
+    fn anonymous_ballot_wire_within_cap(wire_len: usize) -> Result<(), AcceptTransactionFail> {
+        iroha_data_model::governance::anonymous_ballot::check_anonymous_ballot_entrypoint_wire_len_v1(
+            wire_len,
+        )
+        .map_err(|error| {
+            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                reason: error.to_string(),
+            })
+        })
     }
     fn entrypoint_encoded_len(tx: &TransactionEntrypoint) -> usize {
         match tx {
@@ -2750,8 +2776,13 @@ impl AcceptedTransaction<'static> {
             }
         };
         match tx {
+            // A signerless ballot has no stateless verdict but its wire bound `E_wire`. Its
+            // framing, network, scope, stamp and proof are decided against its scope's board:
+            // by the ordered admission checks before it enters a queue, and by block
+            // execution, where an invalid ballot invalidates its block and is never committed
+            // as a rejection (`specs/parliament_private_ballot_design.md` §3.6).
             TransactionEntrypoint::AnonymousBallot(_) => {
-                return Err(AcceptTransactionFail::AnonymousBallotUnavailable);
+                Self::anonymous_ballot_wire_within_cap(Self::entrypoint_encoded_len(tx))?;
             }
             TransactionEntrypoint::External(signed) => {
                 Self::validate_with_now_and_signature_check(
@@ -3305,7 +3336,7 @@ impl StateBlock<'_> {
             .map_err(ExecutionAttemptError::Deferred)?;
         if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
             return Err(ExecutionAttemptError::Deferred(
-                anonymous_ballot_unavailable(),
+                anonymous_ballot_outside_its_owner(),
             ));
         }
         state_transaction.genesis_execution_scope = None;
@@ -3330,7 +3361,7 @@ impl StateBlock<'_> {
             TransactionEntrypoint::External(signed) => signed,
             TransactionEntrypoint::AnonymousBallot(_) => {
                 return Err(ExecutionAttemptError::Deferred(
-                    anonymous_ballot_unavailable(),
+                    anonymous_ballot_outside_its_owner(),
                 ));
             }
         };
@@ -10955,10 +10986,10 @@ pub mod tests {
     fn ivm_bytecode_at_limit_is_accepted_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use std::time::Duration;
-        const BYTECODE_LIMIT: u64 = 1021;
+        // The 48-byte header, the literal section padded to four bytes and the code make an
+        // artifact of this shape a multiple of four bytes long, so the exact limit is one too.
+        const BYTECODE_LIMIT: u64 = 1024;
         let (authority_id, kp) = gen_account_in("wonderland");
-        // Use an exact bytecode-size limit that can be represented by the 17-byte
-        // IVM metadata header plus a valid literal-prefix alignment.
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
@@ -12318,20 +12349,7 @@ pub mod tests {
         retained.verify_signature().unwrap();
     }
     #[test]
-    fn anonymous_admission_union_preserves_unfinished_attempt() {
-        let expected = ivm::error::ExecutionDeferral::VerifierInitializationUnavailable;
-        let direct = AcceptTransactionFail::AnonymousBallotUnavailable
-            .into_execution_deferred()
-            .expect("anonymous admission remains unfinished");
-        assert_eq!(direct.reason(), expected);
-        assert!(direct.allocation_refusal().is_none());
-        assert!(matches!(
-            execution_attempt_from_admission_failure(
-                AcceptTransactionFail::AnonymousBallotUnavailable
-            ),
-            ExecutionAttemptError::Deferred(original)
-                if original.reason() == expected && original.allocation_refusal().is_none()
-        ));
+    fn a_completed_admission_verdict_stays_a_rejection() {
         assert!(matches!(
             execution_attempt_from_admission_failure(
                 AcceptTransactionFail::TransactionLimit(TransactionLimitError {
@@ -12342,7 +12360,6 @@ pub mod tests {
                 if error.reason == "completed limit verdict"
         ));
     }
-
     #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
@@ -12744,9 +12761,13 @@ pub mod tests {
             other => panic!("committed cycle ceiling must reject the program, got {other:?}"),
         }
     }
+    /// `max_cycles` is the ZK trace bound and nothing else. The committed ceiling admits a ZK
+    /// program whose bound it covers, inclusively, whatever the retired custom parameter says,
+    /// and the ordinary path runs that program only when a ZK backend is enabled locally.
     #[test]
     fn committed_ivm_cycle_ceiling_accepts_within_bound_despite_custom_parameter() {
         use iroha_data_model::{
+            executor::IvmAdmissionError,
             parameter::{
                 Parameter,
                 custom::{CustomParameter, CustomParameterId},
@@ -12755,52 +12776,84 @@ pub mod tests {
         };
         use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(world, kura, query_handle);
-        let mut pipeline = state.installed_pipeline().clone();
-        pipeline.ivm_max_cycles_upper_bound =
-            std::num::NonZeroU64::new(4_000).expect("test ceiling is non-zero");
-        let policy = crate::pipeline_validity_policy::policy_of(&pipeline);
-        state.set_pipeline(pipeline);
-        let chain = crate::block::tests::component_chain_with_genesis_parameters(
-            state,
-            vec![Parameter::Custom(policy.into_custom_parameter())],
+        const CEILING: u64 = 4_000;
+        // Execute one ZK program declaring `trace_bound` on a fresh chain whose committed
+        // ceiling is `CEILING`, with or without a locally enabled ZK backend.
+        let outcome = |trace_bound: u64, local_backend: bool| {
+            let (world, authority_id, kp) = world_with_authority("wonderland");
+            let kura = crate::kura::Kura::blank_kura_for_testing();
+            let query_handle = crate::query::store::LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            let mut pipeline = state.installed_pipeline().clone();
+            pipeline.ivm_max_cycles_upper_bound =
+                std::num::NonZeroU64::new(CEILING).expect("test ceiling is non-zero");
+            let policy = crate::pipeline_validity_policy::policy_of(&pipeline);
+            state.set_pipeline(pipeline);
+            let chain = crate::block::tests::component_chain_with_genesis_parameters(
+                state,
+                vec![Parameter::Custom(policy.into_custom_parameter())],
+            );
+            let state = chain.state();
+            let header = original_component_successor_header(state);
+            let mut block = state.block(header);
+            // The retired custom parameter cannot lower the committed ceiling.
+            let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
+            let custom = CustomParameter::new(id, Json::new(1_u64));
+            block
+                .world
+                .set_parameter_for_testing(Parameter::Custom(custom))
+                .expect("valid fixture parameters");
+            assert!(
+                block.zk.pipa_r.enabled || block.zk.stark.enabled,
+                "the default fixture enables a local ZK backend"
+            );
+            if !local_backend {
+                block.zk.pipa_r.enabled = false;
+                block.zk.stark.enabled = false;
+            }
+            let prog = minimal_zk_ivm_program(1, trace_bound);
+            let tx = TransactionBuilder::new(
+                chain.network_id(),
+                authority_id.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            )
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+            let mut ivm_cache = IvmCache::new();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None)
+                .map(|_| ())
+        };
+        let within = outcome(2_000, true);
+        assert!(
+            within.is_ok(),
+            "a trace bound within the committed ceiling is admitted and run: {within:?}"
         );
-        let state = chain.state();
-        let header = original_component_successor_header(state);
-        let mut block = state.block(header);
-        // The retired custom parameter cannot lower the committed ceiling.
-        let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
-        let custom = CustomParameter::new(id, Json::new(1_u64));
-        block
-            .world
-            .set_parameter_for_testing(Parameter::Custom(custom))
-            .expect("valid fixture parameters");
-        // Build a ZK program with the trace bound 2000, below the committed ceiling.
-        let prog = minimal_zk_ivm_program(1, 2_000);
-        let tx = TransactionBuilder::new(
-            chain.network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let result =
-            execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
-        // The committed ceiling admits the trace bound; execution then requires a locally
-        // enabled ZK backend, which this fixture does not configure.
+        let at_ceiling = outcome(CEILING, true);
+        assert!(
+            at_ceiling.is_ok(),
+            "the committed ceiling is inclusive: {at_ceiling:?}"
+        );
+        match outcome(CEILING + 1, true) {
+            Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                IvmAdmissionError::MaxCyclesExceedsUpperBound(info),
+            ))) => {
+                assert_eq!(info.max_cycles, CEILING + 1);
+                assert_eq!(info.upper_bound, CEILING);
+            }
+            other => panic!("the committed ceiling alone bounds the trace, got {other:?}"),
+        }
+        // The ordinary path executes a ZK-mode program only with a locally enabled backend; a
+        // trace bound within the ceiling does not replace one.
+        let no_backend = outcome(2_000, false);
         assert!(
             matches!(
-                &result,
+                &no_backend,
                 Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(bits),
+                    IvmAdmissionError::UnsupportedFeatureBits(bits),
                 ))) if *bits == ivm::ivm_mode::ZK
             ),
-            "a trace bound within the committed ceiling passes admission: {result:?}"
+            "ZK-mode execution without a local ZK backend is refused: {no_backend:?}"
         );
     }
     mod time_trigger {

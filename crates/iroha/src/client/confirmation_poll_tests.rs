@@ -265,3 +265,45 @@ fn short_context_rejects_late_state_applied_after_one_submission() {
         assert_one_submit_and_global_reads(&snapshots, hash);
     }
 }
+
+#[test]
+fn confirmation_repeats_a_reset_status_read_without_replaying_the_submission() {
+    for asynchronous in [false, true] {
+        let mut client = client_with_base_url(base_url());
+        let transaction = transaction(&client);
+        let hash = transaction.hash();
+        let snapshots = Arc::new(Mutex::new(Vec::new()));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let transport = {
+            let snapshots = Arc::clone(&snapshots);
+            let polls = Arc::clone(&polls);
+            DefaultHttpTransport::mock(Arc::new(move |request| {
+                let path = request.url.path().to_owned();
+                snapshots.lock().expect("requests").push(request);
+                match path.as_str() {
+                    "/v1/pipeline/transactions" => Ok(empty_response(StatusCode::ACCEPTED)),
+                    "/v1/pipeline/transactions/status" => {
+                        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            // The qualification failure: the peer reset the pooled read.
+                            Err(eyre::Report::new(std::io::Error::from(
+                                std::io::ErrorKind::ConnectionReset,
+                            ))
+                            .wrap_err("Failed to send http GET request"))
+                        } else {
+                            Ok(applied(hash, "state"))
+                        }
+                    }
+                    other => panic!("unexpected request: {other}"),
+                }
+            }))
+        };
+        client = client.with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        assert_eq!(
+            submit(client, &transaction, asynchronous).expect("finality after a reset read"),
+            hash
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+        assert_one_submit_and_global_reads(&snapshots.lock().expect("requests"), hash);
+    }
+}

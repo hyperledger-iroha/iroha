@@ -36,7 +36,7 @@ fn memory_merkle_compact_proofs_verify_for_deterministic_chunks() {
                 .load_bytes((addr / CHUNK_BYTES as u64) * CHUNK_BYTES as u64, &mut chunk)
                 .expect("load proof chunk");
             let leaf = leaf_hash(&chunk);
-            let commitment = memory.merkle_commitment();
+            let commitment = memory.merkle_commitment().unwrap();
             assert_eq!(commitment.root(), &root);
             assert!(
                 proof.verify_sha256(&leaf, &commitment),

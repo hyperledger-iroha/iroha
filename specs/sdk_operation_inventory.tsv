@@ -420,6 +420,9 @@ game_partition.export_proof.read	GET	/v1/game-partitions/{world}/exports/{receip
 game_partition.state.read	GET	/v1/game-partitions/{world}/state	public	torii_default	public	read	http	always	true	false	false	false
 game_partition.transfer.read	GET	/v1/game-partitions/{world}/transfers/{transfer}/state	public	torii_default	public	read	http	always	true	false	false	false
 game_partition.transfer_proof.read	GET	/v1/game-partitions/{world}/transfers/{transfer}/proof/{kind}	public	torii_default	public	read	http	always	true	false	false	false
+governance.anonymous_ballot.attempt.read	GET	/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
+governance.anonymous_ballot.board.read	GET	/v1/gov/anonymous-ballots/boards/{scope}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
+governance.anonymous_ballot.submit	POST	/v1/gov/anonymous-ballots	public	unauthenticated	anonymous_ballot_proof	mutation	http	feature(app_api)	true	true	false	false
 governance.ballot.plain	POST	/v1/gov/ballots/plain	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1	POST	/v1/gov/ballots/zk-v1	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1_proof	POST	/v1/gov/ballots/zk-v1/ballot-proof	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true

@@ -224,6 +224,15 @@ expected_hash_file = "genesis.expected_hash"
 # capacity_per_user = 16384
 # transaction_time_to_live_ms = 86_400_000 # 1 day
 
+## Signerless anonymous ballots (Parliament) have their own queue partition. These bounds are
+## local back-pressure only and are separate from `capacity` and `max_retained_bytes` above.
+# [queue.anonymous_ballots]
+# pending_limit = 1024                 # verified ballots kept resident
+# max_retained_bytes = 335_544_320     # retained memory budget of resident ballots (320 MiB)
+# verifier_concurrency = 2             # ballot proofs verified at once
+# verification_rate_per_sec = 8        # proof verifications started per second, all sources
+# verification_burst = 16              # proof verifications started in one burst
+
 # Local diagnostic resources only. Native proof limits are chain policy
 # (the committed `zk_validity_policy_v1` parameter).
 [zk.trace]

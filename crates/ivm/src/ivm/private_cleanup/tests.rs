@@ -99,7 +99,10 @@ fn exhausted_write_credit_does_not_block_private_reset_or_mode_transition() {
         let gas = funded.remaining_gas();
         transition(&mut funded, action).unwrap();
         transition(&mut ordinary, action).unwrap();
-        assert_eq!(funded.memory.root(), ordinary.memory.root());
+        assert_eq!(
+            funded.memory.root().unwrap(),
+            ordinary.memory.root().unwrap()
+        );
         assert_eq!(funded.registers.snapshot(), ordinary.registers.snapshot());
         assert_eq!(
             funded.registers.snapshot_tags(),
@@ -139,7 +142,7 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
     ] {
         let mut vm = local_vm();
         let ranges = vm.private_memory_bytes.try_clone().unwrap();
-        let root = vm.memory.root();
+        let root = vm.memory.root().unwrap();
         let registers = vm.registers.snapshot();
         let tags = vm.registers.snapshot_tags();
         let gas = vm.remaining_gas();
@@ -158,7 +161,7 @@ fn diagnostic_refusal_precedes_every_lifecycle_mutation_and_retry() {
         );
         assert_eq!(diagnostic.len(), 0);
         assert_eq!(vm.private_memory_bytes, ranges);
-        assert_eq!(vm.memory.root(), root);
+        assert_eq!(vm.memory.root().unwrap(), root);
         assert_eq!(vm.registers.snapshot(), registers);
         assert_eq!(vm.registers.snapshot_tags(), tags);
         assert_eq!(vm.remaining_gas(), gas);
@@ -191,7 +194,7 @@ fn invalid_range_rejects_before_zeroing_an_earlier_valid_range() {
         let ranges = vm.private_memory_bytes.try_clone().unwrap();
         let registers = vm.registers.snapshot();
         let tags = vm.registers.snapshot_tags();
-        let root = vm.memory.root();
+        let root = vm.memory.root().unwrap();
         assert!(matches!(
             transition(&mut vm, action),
             Err(VMError::ExecutionDeferred(
@@ -202,7 +205,7 @@ fn invalid_range_rejects_before_zeroing_an_earlier_valid_range() {
         assert_eq!(vm.private_memory_bytes, ranges);
         assert_eq!(vm.registers.snapshot(), registers);
         assert_eq!(vm.registers.snapshot_tags(), tags);
-        assert_eq!(vm.memory.root(), root);
+        assert_eq!(vm.memory.root().unwrap(), root);
         assert!(vm.zk_mode_enabled());
     }
 }
@@ -217,7 +220,7 @@ fn successful_scrub_records_complete_zero_rows_and_preserves_commitment() {
         .unwrap();
     vm.set_zk_mode(false).unwrap();
     ordinary.set_zk_mode(false).unwrap();
-    assert_eq!(vm.memory.root(), ordinary.memory.root());
+    assert_eq!(vm.memory.root().unwrap(), ordinary.memory.root().unwrap());
     diagnostic.with_records(|rows| {
         assert_eq!(rows.len(), 16);
         for (index, row) in rows.iter().enumerate() {
@@ -259,9 +262,9 @@ fn owner_cleanup_keeps_shared_private_template_and_restores_dirty_chunks() {
     let mut vm = local_vm();
     let template = vm.try_runtime_template().unwrap();
     let borrower = template.clone();
-    let initial_root = vm.memory.root();
+    let initial_root = vm.memory.root().unwrap();
     vm.set_zk_mode(false).unwrap();
-    assert_ne!(vm.memory.root(), initial_root);
+    assert_ne!(vm.memory.root().unwrap(), initial_root);
     assert_eq!(
         borrower
             .data()
@@ -271,7 +274,7 @@ fn owner_cleanup_keeps_shared_private_template_and_restores_dirty_chunks() {
         SECRET.to_le_bytes()
     );
     vm.reset_from_runtime_template(&borrower).unwrap();
-    assert_eq!(vm.memory.root(), initial_root);
+    assert_eq!(vm.memory.root().unwrap(), initial_root);
     assert_secret_bytes(&vm);
     assert!(vm.registers.tag(2));
     assert_eq!(vm.register(2), SECRET);

@@ -374,6 +374,11 @@ exact original ordinary-write inclusion. Permanent export tombstones, import rec
 identities prevent replay and duplicate custody. The native service retains no unrelated IVM host
 profile. Source export is a continuation; cancellation, import and acknowledgement are completions.
 
+Every record a step publishes or compares is one counted canonical frame, charged to the caller's
+allocation allowance and reserved fallibly before any witness or State write. A local codec or
+allocation refusal keeps its typed owner, publishes nothing and leaves the same step retryable.
+The published witness bytes are not yet retained in the transaction's finite pool.
+
 Before export, the owner can cancel the original locked request. Its certified cancellation is the
 only cancellation authority for the destination reservation. A new request needs a fresh nonce;
 there is no timeout or owner refund after irreversible source removal. Partition mutations preserve

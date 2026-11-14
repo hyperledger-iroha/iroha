@@ -1,4 +1,5 @@
 //! Governance helpers (app API convenience). Build/submit governance transactions.
+mod anonymous_ballot;
 mod audit;
 mod deploy;
 pub mod parliament;
@@ -44,6 +45,9 @@ pub enum Command {
     /// Attempt-based private SORA Parliament helpers.
     #[command(subcommand)]
     Parliament(ParliamentCommand),
+    /// Anonymous Parliament ballots: credential-free submission and public board/attempt reads.
+    #[command(subcommand)]
+    AnonymousBallot(anonymous_ballot::AnonymousBallotCommand),
     /// Exact Parliament-voted SoraFS operating-authority drafts and reads.
     #[command(subcommand)]
     SorafsAuthority(sorafs_authority::Command),
@@ -60,6 +64,7 @@ impl Run for Command {
             Command::Tally(cmd) => cmd.run(context),
             Command::Protected(cmd) => cmd.run(context),
             Command::Parliament(cmd) => cmd.run(context),
+            Command::AnonymousBallot(cmd) => cmd.run(context),
             Command::SorafsAuthority(cmd) => cmd.run(context),
         }
     }

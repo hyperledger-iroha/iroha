@@ -8268,6 +8268,41 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
+    /// Node-local bounds of the partition of signerless anonymous ballots.
+    #[config(nested)]
+    pub anonymous_ballots: QueueAnonymousBallots,
+}
+/// User-level bounds of the queue's partition of signerless anonymous ballots.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct QueueAnonymousBallots {
+    /// Most verified ballots kept resident. The partition never consumes `queue.capacity`.
+    #[config(default = "defaults::queue::ANONYMOUS_BALLOT_PENDING_LIMIT")]
+    pub pending_limit: NonZeroUsize,
+    /// Estimated retained memory budget of the resident ballots in bytes, separate from
+    /// `queue.max_retained_bytes`.
+    #[config(default = "defaults::queue::ANONYMOUS_BALLOT_MAX_RETAINED_BYTES")]
+    pub max_retained_bytes: NonZeroU64,
+    /// Most ballot proofs verified at once.
+    #[config(default = "defaults::queue::ANONYMOUS_BALLOT_VERIFIER_CONCURRENCY")]
+    pub verifier_concurrency: NonZeroUsize,
+    /// Ballot proof verifications started per second, over every local source.
+    #[config(default = "defaults::queue::ANONYMOUS_BALLOT_VERIFICATION_RATE_PER_SEC")]
+    pub verification_rate_per_sec: NonZeroU32,
+    /// Ballot proof verifications started in one burst.
+    #[config(default = "defaults::queue::ANONYMOUS_BALLOT_VERIFICATION_BURST")]
+    pub verification_burst: NonZeroU32,
+}
+impl QueueAnonymousBallots {
+    /// Convert this user configuration into the runtime representation.
+    pub fn parse(self) -> actual::QueueAnonymousBallots {
+        actual::QueueAnonymousBallots {
+            pending_limit: self.pending_limit,
+            max_retained_bytes: self.max_retained_bytes,
+            verifier_concurrency: self.verifier_concurrency,
+            verification_rate_per_sec: self.verification_rate_per_sec,
+            verification_burst: self.verification_burst,
+        }
+    }
 }
 impl Queue {
     /// Convert this user configuration into the runtime representation.
@@ -8279,6 +8314,7 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
+            anonymous_ballots,
         } = self;
         actual::Queue {
             capacity,
@@ -8287,6 +8323,7 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
+            anonymous_ballots: anonymous_ballots.parse(),
         }
     }
 }
@@ -13699,6 +13736,9 @@ pub struct Torii {
     /// Transaction-ingress compute and HTTP batch limits.
     #[config(nested)]
     pub transaction_ingress: TransactionIngress,
+    /// Isolated ingress bounds of signerless anonymous-ballot submissions.
+    #[config(nested)]
+    pub anonymous_ballot_ingress: AnonymousBallotIngress,
     /// Data-availability ingest configuration.
     #[config(nested)]
     pub da_ingest: DaIngest,
@@ -15042,6 +15082,7 @@ impl Torii {
             connect: self.connect.parse(emitter),
             iso_bridge: self.iso_bridge.parse(),
             transaction_ingress: self.transaction_ingress.parse(emitter),
+            anonymous_ballot_ingress: self.anonymous_ballot_ingress.parse(emitter),
             da_ingest: self.da_ingest.parse(emitter),
             sorafs_discovery,
             sorafs_storage,
@@ -18749,6 +18790,52 @@ pub struct IsoCurrencyMinorUnit {
     pub currency: String,
     /// Number of permitted fractional decimal places.
     pub minor_units: u8,
+}
+/// User-level bounds of Torii's isolated anonymous-ballot ingress.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct AnonymousBallotIngress {
+    /// Maximum number of concurrent ingress jobs (body read, decode, admission, proof).
+    #[config(default = "defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS")]
+    pub max_concurrent_compute_jobs: NonZeroUsize,
+    /// Largest accepted submission body in bytes; at most one canonical envelope frame.
+    #[config(default = "defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES")]
+    pub max_body_bytes: NonZeroUsize,
+    /// Submissions admitted per second over all callers together.
+    #[config(default = "defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSIONS_PER_SEC")]
+    pub submissions_per_sec: NonZeroU32,
+    /// Submissions admitted in one burst over all callers together.
+    #[config(default = "defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSION_BURST")]
+    pub submission_burst: NonZeroU32,
+}
+impl Default for AnonymousBallotIngress {
+    fn default() -> Self {
+        Self {
+            max_concurrent_compute_jobs:
+                defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
+            max_body_bytes: defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES,
+            submissions_per_sec: defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSIONS_PER_SEC,
+            submission_burst: defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSION_BURST,
+        }
+    }
+}
+impl AnonymousBallotIngress {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::AnonymousBallotIngress {
+        if self.max_body_bytes.get() > defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.anonymous_ballot_ingress.max_body_bytes must be within 1..={}: a submission is one canonical anonymous-ballot envelope frame",
+                    defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1
+                ),
+            );
+        }
+        actual::AnonymousBallotIngress {
+            max_concurrent_compute_jobs: self.max_concurrent_compute_jobs,
+            max_body_bytes: self.max_body_bytes,
+            submissions_per_sec: self.submissions_per_sec,
+            submission_burst: self.submission_burst,
+        }
+    }
 }
 /// User-level Torii transaction-ingress resource corridor.
 #[derive(Debug, ReadConfig, Clone, Copy)]

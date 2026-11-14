@@ -1786,7 +1786,7 @@ mod tests {
     // Strict reuse positives own the canonical configuration writer for their
     // complete cache lifetime. Parallel zero-retention tests may otherwise
     // legitimately evict every registered cache between two assertions.
-    fn default_retention() -> ivm::ivm_cache::CacheLimitsGuard {
+    pub(super) fn default_retention() -> ivm::ivm_cache::CacheLimitsGuard {
         ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
             capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
             max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
@@ -3174,6 +3174,8 @@ mod named_profile_tests {
         use iroha_data_model::runtime::definition::{
             DefinitionDescriptorV1, RestrictionEntryV1, RestrictionV1,
         };
+        // The cache hit below needs enabled retention for the whole lifetime of `cache`.
+        let _retention = super::tests::default_retention();
         let world = crate::state::World::new();
         for module in [
             crate::runtime::catalog::additions::RUNTIME_LIFECYCLE.module,
@@ -3236,6 +3238,8 @@ mod named_profile_tests {
     }
     #[test]
     fn named_profile_warm_cache_never_borrows_another_roots_authority() {
+        // The warm hits below need enabled retention for the whole lifetime of both caches.
+        let _retention = super::tests::default_retention();
         let baseline = crate::state::World::new();
         let selected = crate::state::World::new();
         crate::runtime::activate_additions_for_testing(

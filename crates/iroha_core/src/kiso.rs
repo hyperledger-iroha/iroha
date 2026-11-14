@@ -1161,6 +1161,8 @@ mod tests {
                     iroha_config::parameters::defaults::torii::IVM_TOOLING_TIMEOUT_MS,
                 transaction_ingress:
                     iroha_config::parameters::actual::TransactionIngress::default(),
+                anonymous_ballot_ingress:
+                    iroha_config::parameters::actual::AnonymousBallotIngress::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {
                     enabled: false,

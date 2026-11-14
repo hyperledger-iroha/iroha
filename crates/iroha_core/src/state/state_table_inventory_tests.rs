@@ -78,6 +78,17 @@
 //! and review the difference. The tracked file describes the shipping `node` feature set,
 //! whose `State` has the `state.telemetry` field.
 //!
+//! The classification tables are compiled into the test executable, while every scanned
+//! source is read from disk when it runs. An executable older than its sources would
+//! therefore write its older tables over a newer inventory, so a stale generator refuses
+//! to write ([`generator_staleness`]): the three generator sources ([`GENERATOR_SOURCES`])
+//! must be, byte for byte, the text this executable was compiled from, and no source of
+//! [`SCAN_SCOPE`] may have been modified after the executable was built. The first rule is
+//! exact and the comparison test applies it as well. The second is Cargo's own timestamp
+//! rule: it does not see an edit made while the executable was being built, nor a copied
+//! executable or a tree copied with its timestamps. Running the command above always
+//! rebuilds first.
+//!
 //! The contract these facts are measured against is `specs/sumeragi.md` §16. The tests
 //! below also pin the as-built premises of its §16.5 and §16.6, and they are the evidence
 //! for "every table mutation affects the appropriate root": each inventoried field is
@@ -7746,12 +7757,285 @@ fn without_line_numbers(text: &str) -> String {
     out
 }
 
+/// The generator's own sources, each with the text this executable was compiled from.
+/// Their tables ([`ROOTS`], [`CARRIERS`], [`OTHER_DOMAINS`], [`STATE_HASH_FUNCTIONS`] and
+/// the classification rules) are compiled in, so the inventory is only as current as they
+/// were at build time.
+const GENERATOR_SOURCES: &[(&str, &str)] = &[
+    (
+        "crates/iroha_core/src/state/state_table_inventory_tests.rs",
+        include_str!("state_table_inventory_tests.rs"),
+    ),
+    (
+        "crates/iroha_core/src/state/state_table_inventory_domains.rs",
+        include_str!("state_table_inventory_domains.rs"),
+    ),
+    (
+        "crates/iroha_core/src/state/state_table_inventory_functions.rs",
+        include_str!("state_table_inventory_functions.rs"),
+    ),
+];
+
+/// One reason per source of `compiled` whose text under `read` is not the text the
+/// executable was compiled from. A source that cannot be read is stale as well: the
+/// executable cannot show that it was built from it.
+fn changed_generator_sources(
+    compiled: &[(&str, &str)],
+    read: impl Fn(&str) -> std::io::Result<String>,
+) -> Vec<String> {
+    compiled
+        .iter()
+        .filter_map(|(path, built)| match read(path) {
+            Ok(current) if current == *built => None,
+            Ok(_) => Some(format!(
+                "{path} is not the text this executable was compiled from"
+            )),
+            Err(error) => Some(format!("{path} cannot be read: {error}")),
+        })
+        .collect()
+}
+
+/// One reason per source modified after the executable was built at `built`.
+fn sources_modified_after(
+    built: std::time::SystemTime,
+    sources: impl IntoIterator<Item = (String, std::io::Result<std::time::SystemTime>)>,
+) -> Vec<String> {
+    sources
+        .into_iter()
+        .filter_map(|(path, modified)| match modified {
+            Ok(modified) if modified <= built => None,
+            Ok(_) => Some(format!(
+                "{path} was modified after this executable was built"
+            )),
+            Err(error) => Some(format!(
+                "the modification time of {path} is unknown: {error}"
+            )),
+        })
+        .collect()
+}
+
+/// The generator sources on disk that differ from this executable's compiled text.
+fn generator_source_drift() -> Vec<String> {
+    let root = repository();
+    changed_generator_sources(GENERATOR_SOURCES, |path| {
+        std::fs::read_to_string(root.join(path))
+    })
+}
+
+/// Why this executable is a stale generator; empty when it may write the inventory.
+///
+/// The exact rule is [`generator_source_drift`]. The timestamp rule covers what else is
+/// compiled in, the registry and the data model: every Rust source of [`SCAN_SCOPE`], test
+/// sources included, must be no newer than the executable.
+fn generator_staleness() -> Vec<String> {
+    let mut reasons = generator_source_drift();
+    let built = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .and_then(|metadata| metadata.modified());
+    match built {
+        Ok(built) => {
+            let root = repository();
+            reasons.extend(sources_modified_after(
+                built,
+                rust_sources(SCAN_SCOPE).into_iter().map(|path| {
+                    let modified = std::fs::metadata(root.join(&path))
+                        .and_then(|metadata| metadata.modified());
+                    (path, modified)
+                }),
+            ));
+        }
+        Err(error) => reasons.push(format!(
+            "the build time of this executable is unknown: {error}"
+        )),
+    }
+    reasons
+}
+
+/// The refusal of a stale executable, naming every reason and the remedy.
+fn stale_generator_refusal(action: &str, reasons: &[String]) -> String {
+    format!(
+        "this test executable is older than its sources and must not {action}:\n  {}\n\
+         Rebuild it from the current sources by running\n\
+         cargo test -p iroha_core --lib regenerate_state_table_inventory -- --ignored",
+        reasons.join("\n  ")
+    )
+}
+
+/// The refusal of a stale executable to write the tracked inventory.
+fn inventory_write_refusal(reasons: &[String]) -> String {
+    stale_generator_refusal(&format!("write {INVENTORY_PATH}"), reasons)
+}
+
+/// Write `generated` to the tracked inventory at `path` unless the generator is stale.
+/// Returns whether the file was rewritten; a stale generator changes nothing.
+fn write_inventory(path: &Path, generated: &str, staleness: &[String]) -> Result<bool, String> {
+    if !staleness.is_empty() {
+        return Err(inventory_write_refusal(staleness));
+    }
+    // A canonical no-op must preserve the fixture timestamp and Cargo's input
+    // identity; only an actual inventory change needs to rewrite the fixture.
+    if std::fs::read(path).ok().as_deref() == Some(generated.as_bytes()) {
+        return Ok(false);
+    }
+    std::fs::write(path, generated)
+        .map_err(|error| format!("write the tracked inventory: {error}"))?;
+    Ok(true)
+}
+
+#[test]
+fn generator_sources_are_the_text_this_executable_was_compiled_from() {
+    // Every module of the generator is pinned: this file and the two tables it includes.
+    let pinned: Vec<&str> = GENERATOR_SOURCES.iter().map(|(path, _)| *path).collect();
+    assert_eq!(
+        pinned,
+        [
+            "crates/iroha_core/src/state/state_table_inventory_tests.rs",
+            "crates/iroha_core/src/state/state_table_inventory_domains.rs",
+            "crates/iroha_core/src/state/state_table_inventory_functions.rs",
+        ]
+    );
+    for path in SELF_PATHS {
+        assert!(pinned.contains(path), "{path} is not pinned");
+    }
+    let included: Vec<String> = GENERATOR_SOURCES[0]
+        .1
+        .lines()
+        .filter_map(|line| line.strip_prefix("#[path = \""))
+        .filter_map(|rest| rest.strip_suffix("\"]"))
+        .map(|file| format!("crates/iroha_core/src/state/{file}"))
+        .collect();
+    assert_eq!(included, pinned[1..]);
+    // A current executable finds its own sources on disk unchanged.
+    let drift = generator_source_drift();
+    assert!(
+        drift.is_empty(),
+        "{}",
+        stale_generator_refusal("check the inventory", &drift)
+    );
+}
+
+#[test]
+fn changed_or_unreadable_generator_sources_are_stale() {
+    let compiled = &[("tables.rs", "old order\n"), ("rules.rs", "rules\n")];
+    let current = |path: &str| -> std::io::Result<String> {
+        Ok(compiled
+            .iter()
+            .find(|(name, _)| *name == path)
+            .expect("a pinned source")
+            .1
+            .to_owned())
+    };
+    assert!(changed_generator_sources(compiled, current).is_empty());
+    // The executable was built before `tables.rs` was corrected.
+    let corrected = |path: &str| -> std::io::Result<String> {
+        if path == "tables.rs" {
+            Ok("new order\n".to_owned())
+        } else {
+            current(path)
+        }
+    };
+    assert_eq!(
+        changed_generator_sources(compiled, corrected),
+        ["tables.rs is not the text this executable was compiled from"]
+    );
+    // A single changed byte counts, and so does a source that is gone.
+    let trailing = |path: &str| current(path).map(|text| text + " ");
+    assert_eq!(changed_generator_sources(compiled, trailing).len(), 2);
+    let missing = |path: &str| -> std::io::Result<String> {
+        if path == "rules.rs" {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"))
+        } else {
+            current(path)
+        }
+    };
+    assert_eq!(
+        changed_generator_sources(compiled, missing),
+        ["rules.rs cannot be read: gone"]
+    );
+}
+
+#[test]
+fn sources_modified_after_the_build_are_stale() {
+    use std::time::{Duration, SystemTime};
+    let built = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let at = |seconds| Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+    assert!(
+        sources_modified_after(
+            built,
+            [
+                ("older.rs".to_owned(), at(999)),
+                ("same.rs".to_owned(), at(1_000))
+            ]
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        sources_modified_after(
+            built,
+            [
+                ("older.rs".to_owned(), at(1)),
+                ("newer.rs".to_owned(), at(1_001)),
+                (
+                    "unknown.rs".to_owned(),
+                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"))
+                ),
+            ]
+        ),
+        [
+            "newer.rs was modified after this executable was built",
+            "the modification time of unknown.rs is unknown: gone",
+        ]
+    );
+}
+
+#[test]
+fn a_stale_generator_leaves_the_tracked_inventory_untouched() {
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    let path = directory.path().join("inventory.json");
+    std::fs::write(&path, "tracked\n").expect("write the tracked text");
+    let before = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .expect("the tracked timestamp");
+
+    let stale = ["tables.rs is not the text this executable was compiled from".to_owned()];
+    let refusal = write_inventory(&path, "older tables\n", &stale)
+        .expect_err("a stale generator must not write");
+    assert!(refusal.contains("must not write specs/state_table_inventory.json"));
+    assert!(refusal.contains(&stale[0]));
+    assert!(refusal.contains("cargo test -p iroha_core --lib regenerate_state_table_inventory"));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read the tracked text"),
+        "tracked\n"
+    );
+    // Not even the tracked bytes it already agrees with are rewritten or approved.
+    write_inventory(&path, "tracked\n", &stale).expect_err("stale whatever it would write");
+    let after = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .expect("the tracked timestamp");
+    assert_eq!(before, after);
+
+    // A current generator keeps an unchanged fixture and rewrites a changed one.
+    assert_eq!(write_inventory(&path, "tracked\n", &[]), Ok(false));
+    assert_eq!(write_inventory(&path, "current tables\n", &[]), Ok(true));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read the tracked text"),
+        "current tables\n"
+    );
+}
+
 #[test]
 #[cfg_attr(
     not(feature = "telemetry"),
     ignore = "the tracked inventory describes the node feature set, which has state.telemetry"
 )]
 fn tracked_inventory_matches_the_source() {
+    // A comparison by an executable built from other tables says nothing about the source.
+    let drift = generator_source_drift();
+    assert!(
+        drift.is_empty(),
+        "{}",
+        stale_generator_refusal(&format!("check {INVENTORY_PATH}"), &drift)
+    );
     let generated = generate();
     let parsed = norito::json::from_str::<norito::json::Value>(&generated)
         .expect("the generated inventory is JSON");
@@ -7796,12 +8080,22 @@ fn regenerate_state_table_inventory() {
             "regenerate with the node feature set: the tracked inventory lists state.telemetry"
         );
     }
-    let path = repository().join(INVENTORY_PATH);
+    // Decide staleness before generating: a stale executable can also fail `generate` on
+    // evidence its tables no longer cite, which would hide the actual cause.
+    let staleness = generator_staleness();
+    assert!(
+        staleness.is_empty(),
+        "{}",
+        inventory_write_refusal(&staleness)
+    );
     let generated = generate();
-    // A canonical no-op must preserve the fixture timestamp and Cargo's input
-    // identity; only an actual inventory change needs to rewrite the fixture.
-    if std::fs::read(&path).ok().as_deref() != Some(generated.as_bytes()) {
-        std::fs::write(path, generated).expect("write the tracked inventory");
+    // A source that changed while the inventory was generated belongs to no single text.
+    if let Err(refusal) = write_inventory(
+        &repository().join(INVENTORY_PATH),
+        &generated,
+        &generator_staleness(),
+    ) {
+        panic!("{refusal}");
     }
 }
 

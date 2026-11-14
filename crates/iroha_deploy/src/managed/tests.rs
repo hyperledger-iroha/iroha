@@ -1081,7 +1081,11 @@ fn retained_generation_refuses_other_binaries_and_says_how_to_recover() {
         .unwrap();
     std::io::Write::write_all(&mut appended, b"\0").unwrap();
     drop(appended);
-    let request = LocalnetRequest::new(rebuilt.clone(), rebuilt);
+    let mut request = LocalnetRequest::new(rebuilt.clone(), rebuilt);
+    // Program admission streams both copied debug test executables (about 1 GB each) through
+    // BLAKE3 and SHA-256 before this refusal. The default 30-second readiness budget is not
+    // under test here (it is pinned above); allow the longest startup a request may select.
+    request.startup_timeout = WORKER_STARTUP_MAXIMUM;
     let message = match store.up(&request) {
         Err(Error::RuntimeMismatch(message)) => message,
         Err(other) => panic!("expected the installation refusal, got: {other}"),

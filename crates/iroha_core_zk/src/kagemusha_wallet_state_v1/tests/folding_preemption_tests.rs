@@ -4,8 +4,13 @@
 use super::*;
 use crate::kagemusha_wallet_advance_v1::KagemushaWalletStorageCountersV1 as Counters;
 use std::ops::ControlFlow;
-use std::sync::{atomic::AtomicBool, mpsc};
+use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
 use std::time::Instant;
+
+/// How long a paused proof may keep running after its fold was asked to stop.
+const PREEMPTION_BOUND: Duration = Duration::from_secs(5);
+/// Harness hang guard only: a pause nobody releases fails instead of spinning forever.
+const UNRELEASED_PAUSE_GUARD: Duration = Duration::from_secs(600);
 
 /// Holds the next mock proof, which runs without the wallet owner, until a cancelling signal
 /// or until `finish` lets it complete.
@@ -15,6 +20,10 @@ pub(super) struct Pause {
     released: Arc<AtomicUsize>,
     expected_checkpoint: PrivateArchiveBytes,
     finish: Arc<AtomicBool>,
+    // Set by the canceller immediately before it asks the fold to stop. Preemption is timed
+    // from that request, never from the proof's entry: the canceller's own wake-up is not
+    // part of the fold's preemption.
+    stop_requested: Arc<OnceLock<Instant>>,
 }
 impl Pause {
     pub(super) fn run(
@@ -38,14 +47,54 @@ impl Pause {
         );
         let _workspace = Workspace(self.released.clone(), vec![0; 1024]);
         self.entered.send(()).expect("announce active fold");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let entered = Instant::now();
         loop {
             cancellation.check()?;
             if self.finish.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            assert!(Instant::now() < deadline, "fold was not preempted");
+            if let Some(requested) = self.stop_requested.get() {
+                assert!(
+                    requested.elapsed() < PREEMPTION_BOUND,
+                    "fold was not preempted"
+                );
+            }
+            assert!(
+                entered.elapsed() < UNRELEASED_PAUSE_GUARD,
+                "paused proof was never released"
+            );
             std::thread::yield_now();
+        }
+    }
+}
+
+/// Wait until the paused proof announces itself. The fold's own work before its proof spends
+/// no wall-clock budget here; a fold that returns without reaching the pause fails.
+fn await_pause<T>(active: &mpsc::Receiver<()>, fold: &std::thread::JoinHandle<T>) {
+    loop {
+        match active.recv_timeout(Duration::from_millis(10)) {
+            Ok(()) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) if !fold.is_finished() => {}
+            Err(_) => {
+                assert!(
+                    active.try_recv().is_ok(),
+                    "the fold returned before its paused proof ran"
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Wait until the paused proof announces itself while this thread's counterpart runs it.
+/// `proved` is set once that proof returned, so a proof that never pauses fails here.
+fn await_held_pause(active: &mpsc::Receiver<()>, proved: &AtomicBool) {
+    loop {
+        let finished = proved.load(Ordering::SeqCst);
+        match active.recv_timeout(Duration::from_millis(10)) {
+            Ok(()) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) if !finished => {}
+            Err(_) => panic!("the proof returned before its pause ran"),
         }
     }
 }
@@ -78,19 +127,22 @@ fn cancel_and_resume(payment: bool) {
     assert_eq!(before.folded_balance, None);
     let (entered, active) = mpsc::channel();
     let released = Arc::new(AtomicUsize::new(0));
+    let stop_requested = Arc::new(OnceLock::new());
     wallet.proofs.fold_pause = Some(Arc::new(Pause {
         armed: AtomicBool::new(true),
         entered,
         released: released.clone(),
         expected_checkpoint: original.proof,
         finish: Arc::default(),
+        stop_requested: stop_requested.clone(),
     }));
     let calls = wallet.proofs.folds.clone();
     let worker = std::thread::spawn(move || {
         let result = wallet.fold_once();
         (wallet, result)
     });
-    active.recv_timeout(Duration::from_secs(5)).unwrap();
+    await_pause(&active, &worker);
+    stop_requested.set(Instant::now()).unwrap();
     let priority = if payment {
         // Production payment admission joins fold_once before returning this guard.
         let priority = scheduler.payment();
@@ -195,19 +247,22 @@ fn interrupt<T>(mut wallet: Wallet, cancel: impl FnOnce(&Scheduler) -> T) -> (Wa
         .unwrap();
     let original: Checkpoint = archive::decode(&retained).unwrap();
     let (entered, active) = mpsc::channel();
+    let stop_requested = Arc::new(OnceLock::new());
     wallet.proofs.fold_pause = Some(Arc::new(Pause {
         armed: AtomicBool::new(true),
         entered,
         released: Arc::new(AtomicUsize::new(0)),
         expected_checkpoint: original.proof,
         finish: Arc::default(),
+        stop_requested: stop_requested.clone(),
     }));
     let scheduler = wallet.scheduler();
     let worker = std::thread::spawn(move || {
         let result = wallet.fold_once();
         (wallet, result)
     });
-    active.recv_timeout(Duration::from_secs(5)).unwrap();
+    await_pause(&active, &worker);
+    stop_requested.set(Instant::now()).unwrap();
     let held = cancel(&scheduler);
     let (wallet, result) = worker.join().unwrap();
     assert!(matches!(result, Err(Error::Cancelled)));
@@ -443,7 +498,10 @@ fn prepared(wallet: &mut Wallet) -> FoldJobV1 {
 
 /// Hold the next proof (ordinal 1) until `finish` or a cancelling signal; the receiver
 /// reports that it started.
-fn hold(wallet: &mut Wallet, finish: Arc<AtomicBool>) -> mpsc::Receiver<()> {
+fn hold(
+    wallet: &mut Wallet,
+    finish: Arc<AtomicBool>,
+) -> (mpsc::Receiver<()>, Arc<OnceLock<Instant>>) {
     let retained = wallet
         .archive
         .get(
@@ -457,14 +515,16 @@ fn hold(wallet: &mut Wallet, finish: Arc<AtomicBool>) -> mpsc::Receiver<()> {
         .unwrap();
     let original: Checkpoint = archive::decode(&retained).unwrap();
     let (entered, active) = mpsc::channel();
+    let stop_requested = Arc::new(OnceLock::new());
     wallet.proofs.fold_pause = Some(Arc::new(Pause {
         armed: AtomicBool::new(true),
         entered,
         released: Arc::new(AtomicUsize::new(0)),
         expected_checkpoint: original.proof,
         finish,
+        stop_requested: stop_requested.clone(),
     }));
-    active
+    (active, stop_requested)
 }
 
 fn receive(previous: &FrozenTransition) -> FrozenTransition {
@@ -495,24 +555,30 @@ fn checkpoint_at(wallet: &mut Wallet, ordinal: u32) -> Option<PrivateArchiveByte
 fn ingests_during_an_unlocked_proof_never_cancel_it_and_its_publication_rebases() {
     let (mut wallet, _, observed) = folding_wallet();
     let finish = Arc::new(AtomicBool::new(false));
-    let active = hold(&mut wallet, finish.clone());
+    let (active, _) = hold(&mut wallet, finish.clone());
     let scheduler = wallet.scheduler();
     let job = prepared(&mut wallet);
+    let returned = Arc::new(AtomicBool::new(false));
     // The job owns its inputs: the wallet serves ingests and reads on another thread while
     // the proof runs on this one.
-    let ingesting = std::thread::spawn(move || {
-        active.recv_timeout(Duration::from_secs(5)).unwrap();
-        scheduler.ingest();
-        let read = wallet.snapshot().unwrap();
-        scheduler.ingest();
-        // An unrelated ingest moves the selected manifest.
-        let (selected, mut manifest) = wallet.sync_manifest().unwrap();
-        manifest.finality_epoch = Some(7);
-        wallet.publish_manifest(selected, &manifest).unwrap();
-        finish.store(true, Ordering::SeqCst);
-        (wallet, read)
-    });
-    let proved = job.prove().expect("ingests never cancel the proof");
+    let ingesting = {
+        let returned = returned.clone();
+        std::thread::spawn(move || {
+            await_held_pause(&active, &returned);
+            scheduler.ingest();
+            let read = wallet.snapshot().unwrap();
+            scheduler.ingest();
+            // An unrelated ingest moves the selected manifest.
+            let (selected, mut manifest) = wallet.sync_manifest().unwrap();
+            manifest.finality_epoch = Some(7);
+            wallet.publish_manifest(selected, &manifest).unwrap();
+            finish.store(true, Ordering::SeqCst);
+            (wallet, read)
+        })
+    };
+    let proved = job.prove();
+    returned.store(true, Ordering::SeqCst);
+    let proved = proved.expect("ingests never cancel the proof");
     let (mut wallet, read) = ingesting.join().unwrap();
     assert_eq!(read.fold_backlog, 1);
     assert_eq!(
@@ -560,15 +626,22 @@ fn ingests_during_an_unlocked_proof_never_cancel_it_and_its_publication_rebases(
 #[test]
 fn an_advance_during_the_unlocked_proof_cancels_it_and_nothing_is_published() {
     let (mut wallet, boot, observed) = folding_wallet();
-    let active = hold(&mut wallet, Arc::default());
+    let (active, stop_requested) = hold(&mut wallet, Arc::default());
     let job = prepared(&mut wallet);
-    let advancing = std::thread::spawn(move || {
-        active.recv_timeout(Duration::from_secs(5)).unwrap();
-        // The Advance takes payment priority: it cancels and joins the proof first.
-        wallet.commit(receive(&boot)).expect("Advance");
-        wallet
-    });
-    assert!(matches!(job.prove(), Err(Error::Cancelled)));
+    let returned = Arc::new(AtomicBool::new(false));
+    let advancing = {
+        let returned = returned.clone();
+        std::thread::spawn(move || {
+            await_held_pause(&active, &returned);
+            // The Advance takes payment priority: it cancels and joins the proof first.
+            stop_requested.set(Instant::now()).unwrap();
+            wallet.commit(receive(&boot)).expect("Advance");
+            wallet
+        })
+    };
+    let proof = job.prove();
+    returned.store(true, Ordering::SeqCst);
+    assert!(matches!(proof, Err(Error::Cancelled)));
     let mut wallet = advancing.join().unwrap();
     let cancelled = *observed.metrics().records().back().unwrap();
     assert_eq!(

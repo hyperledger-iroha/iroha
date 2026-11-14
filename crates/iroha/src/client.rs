@@ -1,5 +1,6 @@
 //! End-point querying logic, including custom public and authenticated routes.
 mod account_alias_readers;
+mod anonymous_ballot;
 mod authority_originals;
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
@@ -16749,7 +16750,10 @@ impl Client {
     /// terminal hints and every non-final status continue polling; callers cannot weaken this
     /// first-release finality rule. HTTP 429 backpressure repeats only the status read within
     /// the original deadline, respecting Torii's delta-seconds `Retry-After` when present.
-    /// It never resubmits the transaction. Other HTTP and malformed-response errors fail.
+    /// A transient transport failure of the read (a refused, reset or prematurely closed
+    /// connection, or a transport timeout) repeats it at the poll interval. Neither resubmits
+    /// the transaction, and an exhausted deadline reports the last read error. Other
+    /// transport, HTTP and malformed-response errors fail at once.
     /// One absolute monotonic deadline bounds every status dispatch, polling sleep and
     /// outcome admission, shortened by any earlier context request deadline. Explicit
     /// zero timeout fails unresolved without a read; use the one-shot status API for
@@ -16771,9 +16775,9 @@ impl Client {
     /// Wait for this configured peer to report the exact transaction as state-resolved `Applied`.
     ///
     /// Every request explicitly uses local scope; no fanout or submission occurs. Cached
-    /// observations remain pending. One absolute deadline includes transport, decoding and
-    /// backpressure waits. A local rejection or expiry fails this peer observation without
-    /// creating an authoritative global [`TransactionFinalityFailure`].
+    /// observations remain pending. One absolute deadline includes transport, decoding,
+    /// backpressure and transient-transport repeats. A local rejection or expiry fails this
+    /// peer observation without creating an authoritative global [`TransactionFinalityFailure`].
     ///
     /// # Errors
     /// Returns binding, transport, malformed status, local terminal observation or deadline errors.

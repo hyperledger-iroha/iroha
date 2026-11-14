@@ -280,7 +280,7 @@ mod tests {
         assert_ne!(released_output(&step).unwrap().original, exact.original);
         assert!(matches!(
             released_operation_output(&mut wallet, &operation),
-            Err(Error::WitnessLost("retry selected completion binding"))
+            Err(Error::WitnessLost("released output selected index"))
         ));
         wallet.custody.replace_retained(*original);
         assert_eq!(

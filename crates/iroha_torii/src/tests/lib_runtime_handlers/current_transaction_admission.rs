@@ -164,20 +164,31 @@ async fn current_http_admission_rejects_actual_multiroute_before_local_custody()
     }
 }
 
+/// Decode the error envelope of `response`, whatever format was negotiated.
+#[cfg(feature = "connect")]
+async fn anonymous_ballot_error_envelope(response: Response) -> iroha_torii_shared::ErrorEnvelope {
+    let is_json = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    if is_json {
+        norito::json::from_slice(&bytes).unwrap()
+    } else {
+        norito::decode_from_bytes(&bytes).unwrap()
+    }
+}
+
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
+async fn the_account_authenticated_entrypoint_route_never_carries_an_anonymous_ballot() {
     use iroha_version::codec::EncodeVersioned as _;
     use tower::ServiceExt as _;
     let (app, _, _, _) = lifecycle_ordinary_fixture(true);
     let entry = crate::anonymous_ballot_test_support::entrypoint(*app.state.network_id_ref());
-    let original =
-        routing::accept_transaction_for_ingress(&app.state, entry.clone(), &app.telemetry)
-            .expect_err("anonymous verifier remains unavailable after ordinary policy admission");
-    assert!(
-        matches!(original, super::Error::TransactionAdmissionDeferred(original)
-        if original.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable)
-    );
     let endpoint = route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path();
     let router = axum::Router::new()
         .route(
@@ -208,27 +219,200 @@ async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
-        assert!(response.headers().get("x-iroha-reject-code").is_none());
+        // The ballot has a route of its own: no token or transaction permit is spent on it.
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(
             response
                 .headers()
                 .get("x-iroha-transactions-accepted")
                 .is_none()
         );
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .unwrap();
-        let envelope: iroha_torii_shared::ErrorEnvelope =
-            norito::decode_from_bytes(&bytes).unwrap();
-        assert_eq!(envelope.code(), "transaction_admission_deferred");
-        assert_eq!(
-            envelope.details.as_ref().unwrap().retry_after_seconds,
-            Some(1)
-        );
+        let envelope = anonymous_ballot_error_envelope(response).await;
+        assert_eq!(envelope.code, "anonymous_ballot_route_required");
+        assert!(envelope.message.contains("/v1/gov/anonymous-ballots"));
         assert_eq!(app.queue.active_len(), 0);
         assert!(lifecycle_pending_wire(&app).is_empty());
+    }
+}
+
+#[cfg(all(feature = "connect", feature = "app_api"))]
+#[tokio::test]
+async fn the_anonymous_ballot_route_decides_a_body_without_any_caller_credential() {
+    use tower::ServiceExt as _;
+    let (app, _, _, _) = lifecycle_ordinary_fixture(true);
+    let submit = route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT;
+    let router = axum::Router::new()
+        .route(
+            submit.path(),
+            axum::routing::post(super::handler_gov_anonymous_ballot_submit),
+        )
+        .with_state(app.clone());
+    let TransactionEntrypoint::AnonymousBallot(envelope) =
+        crate::anonymous_ballot_test_support::entrypoint(*app.state.network_id_ref())
+    else {
+        unreachable!("a ballot entrypoint")
+    };
+    let post = |mime: Option<&'static str>, body: Vec<u8>| {
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri(submit.path());
+        if let Some(mime) = mime {
+            request = request.header(axum::http::header::CONTENT_TYPE, mime);
+        }
+        router
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+    };
+    let norito = Some(crate::utils::NORITO_MIME_TYPE);
+
+    // This root's selection installs no anonymous family: the queue's ballot partition gives
+    // the well-formed envelope no route. Only the stable code leaves the node.
+    let response = post(norito, envelope.as_bytes().to_vec()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store"
+    );
+    let refusal = anonymous_ballot_error_envelope(response).await;
+    assert_eq!(refusal.code, "anonymous_ballot_not_admitted");
+    assert_eq!(refusal.message, "the anonymous ballot was not admitted");
+
+    // A body that is not one canonical envelope frame, another media type, and a body
+    // above the route's own limit.
+    let response = post(norito, vec![0x5a; 512]).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        anonymous_ballot_error_envelope(response).await.code,
+        "anonymous_ballot_malformed"
+    );
+    for mime in [None, Some("application/json")] {
+        let response = post(mime, envelope.as_bytes().to_vec()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            anonymous_ballot_error_envelope(response).await.code,
+            "anonymous_ballot_unsupported_media_type"
+        );
+    }
+    let response = post(norito, vec![0; app.anonymous_ballot_max_body_bytes + 1])
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        anonymous_ballot_error_envelope(response).await.code,
+        "anonymous_ballot_oversize"
+    );
+
+    // Nothing became resident, no ordinary transaction permit was taken, and every ballot
+    // permit came back.
+    assert_eq!(app.queue.active_len(), 0);
+    assert!(lifecycle_pending_wire(&app).is_empty());
+    let defaults = iroha_config::parameters::actual::AnonymousBallotIngress::default();
+    assert_eq!(
+        app.anonymous_ballot_ingress_inflight.available_permits(),
+        defaults.max_concurrent_compute_jobs.get()
+    );
+    assert_eq!(
+        app.anonymous_ballot_max_body_bytes,
+        defaults.max_body_bytes.get()
+    );
+    assert_eq!(
+        app.transaction_ingress_compute_inflight.available_permits(),
+        iroha_config::parameters::actual::TransactionIngress::default()
+            .max_concurrent_compute_jobs
+            .get()
+    );
+}
+
+#[cfg(all(feature = "connect", feature = "app_api"))]
+#[tokio::test]
+async fn anonymous_family_reads_take_one_canonical_key_and_report_absent_records() {
+    let (app, _, _, _) = lifecycle_ordinary_fixture(true);
+    // A scope is exactly 128 lowercase hexadecimal characters; an attempt id exactly 64.
+    for scope in [
+        String::new(),
+        "zz".repeat(64),
+        "AB".repeat(64),
+        "0".repeat(127),
+        "0".repeat(129),
+    ] {
+        let error = crate::gov::handle_gov_anonymous_ballot_board_read(&app.state, &scope)
+            .expect_err("a noncanonical scope");
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::BAD_REQUEST,
+            "{scope}"
+        );
+    }
+    for id in [String::new(), "zz".repeat(32), "0".repeat(63)] {
+        let error = crate::gov::handle_gov_anonymous_parliament_attempt_read(&app.state, &id)
+            .expect_err("a noncanonical attempt identifier");
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::BAD_REQUEST,
+            "{id}"
+        );
+    }
+    // This chain keeps no anonymous-family record: both reads are absent, never empty bytes.
+    assert!(matches!(
+        crate::gov::handle_gov_anonymous_ballot_board_read(&app.state, &"5a".repeat(64)),
+        Err(super::Error::AppNotFound {
+            code: "anonymous_ballot_board_not_found",
+            ..
+        })
+    ));
+    assert!(matches!(
+        crate::gov::handle_gov_anonymous_parliament_attempt_read(&app.state, &"5a".repeat(32)),
+        Err(super::Error::AppNotFound {
+            code: "anonymous_parliament_attempt_not_found",
+            ..
+        })
+    ));
+    // A projection is canonical Norito bytes that no cache keeps.
+    let response = super::anonymous_family_projection_response(vec![1, 2, 3]);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        crate::utils::NORITO_MIME_TYPE
+    );
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store"
+    );
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn anonymous_ballot_refusals_expose_only_allowlisted_stable_codes() {
+    for (reason, code) in [
+        (
+            "anonymous_ballot_insufficient_stamp: the admission stamp does not reach 28 bits",
+            "anonymous_ballot_insufficient_stamp",
+        ),
+        (
+            "anonymous_ballot_proof_rejected: detail of the verifier",
+            "anonymous_ballot_proof_rejected",
+        ),
+        (
+            "anonymous_ballot_casting_closed",
+            "anonymous_ballot_casting_closed",
+        ),
+        // Anything else, including a size refusal of the generic queue and a code that is a
+        // nullifier status, is the one generic refusal: its text never leaves the node.
+        (
+            "transaction of 300000 bytes exceeds the global route",
+            "anonymous_ballot_not_admitted",
+        ),
+        (
+            "anonymous_ballot_nullifier_pending: held",
+            "anonymous_ballot_not_admitted",
+        ),
+        ("", "anonymous_ballot_not_admitted"),
+    ] {
+        assert_eq!(
+            super::anonymous_ballot_rejection_code(reason),
+            code,
+            "{reason}"
+        );
     }
 }
 

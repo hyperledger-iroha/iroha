@@ -88,6 +88,11 @@ pub struct ByteMerkleTree {
     leaves: Mutex<MerkleLeaves>,
     nodes: Mutex<CanonicalNodes>,
 }
+/// Refuse this thread's next canonical-node allocation, after its leaves exist.
+#[cfg(test)]
+pub(crate) fn refuse_next_node_allocation_for_test() {
+    canonical_nodes::REFUSE_NEXT_ALLOCATION.set(true);
+}
 /// Return cumulative completed canonical-node refreshes and incremental leaf updates.
 /// Initial construction and independent template copies do not increment these counters.
 #[cfg(test)]
@@ -103,10 +108,6 @@ impl ByteMerkleTree {
         plan.include_child(CanonicalNodes::memory_plan(leaf_count)?)
             .map_err(VMError::AllocationDeferred)?;
         Ok(plan)
-    }
-
-    pub(crate) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
-        Self::memory_plan(self.leaf_count())
     }
 
     /// Copy leaves and canonical nodes from original prepaid credit when supplied.
@@ -228,6 +229,7 @@ impl ByteMerkleTree {
         self.chunk == other.chunk && self.leaf_count() == other.leaf_count()
     }
     /// Byte width of one Merkle leaf.
+    #[cfg(any(test, all(target_os = "macos", feature = "metal")))]
     pub(crate) fn chunk_size(&self) -> usize {
         self.chunk
     }

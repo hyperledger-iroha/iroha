@@ -7746,6 +7746,7 @@
    "/v1/confidential/",
    "/v1/gov/ballots/",
    "/v1/gov/parliament/",
+   "/v1/gov/anonymous-ballots",
    "/v1/gov/tally/",
    "/v1/debug/axt/",
    "/v1/debug/witness",
@@ -8876,6 +8877,81 @@
      "python": [
       {"path": "python/iroha_torii_client/parliament_api.py", "via": ["route_path"]}
      ],
+     "csharp": []
+    }
+   },
+   {
+    "id": "governance.anonymous_ballot.submit",
+    "method": "POST",
+    "path": "/v1/gov/anonymous-ballots",
+    "surface": "public",
+    "effect": "mutation",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Submit one signerless anonymous Parliament ballot envelope; account- and session-free, admitted by its stamp and membership proof.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_gov_anonymous_ballot_submit("},
+    "sdk_literal": "/v1/gov/anonymous-ballots",
+    "sdk_files": {
+     "rust": [
+      {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
+     ],
+     "kotlin_java_android": [],
+     "swift": [],
+     "javascript": [],
+     "python": [],
+     "csharp": []
+    }
+   },
+   {
+    "id": "governance.anonymous_ballot.board.read",
+    "method": "GET",
+    "path": "/v1/gov/anonymous-ballots/boards/{scope}",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Read the public board of one anonymous-ballot scope: sealed context, casting window and corpus.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_gov_anonymous_ballot_board_read("},
+    "handler_calls": [
+     {"path": "crates/iroha_torii/src/gov.rs", "symbol": "fn handle_gov_anonymous_ballot_board_read("}
+    ],
+    "sdk_literal": "/v1/gov/anonymous-ballots/boards/",
+    "sdk_files": {
+     "rust": [
+      {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
+     ],
+     "kotlin_java_android": [],
+     "swift": [],
+     "javascript": [],
+     "python": [],
+     "csharp": []
+    }
+   },
+   {
+    "id": "governance.anonymous_ballot.attempt.read",
+    "method": "GET",
+    "path": "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "voting",
+    "does": "Read one attempt of the anonymous Parliament family: elections, assignments and schedule.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_gov_anonymous_parliament_attempt_read("},
+    "handler_calls": [
+     {"path": "crates/iroha_torii/src/gov.rs", "symbol": "fn handle_gov_anonymous_parliament_attempt_read("}
+    ],
+    "sdk_literal": "/v1/gov/anonymous-ballots/attempts/",
+    "sdk_files": {
+     "rust": [
+      {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
+     ],
+     "kotlin_java_android": [],
+     "swift": [],
+     "javascript": [],
+     "python": [],
      "csharp": []
     }
    },
@@ -12948,6 +13024,12 @@
    },
    {
     "family": "rust",
+    "path": "crates/iroha/src/client/anonymous_ballot.rs",
+    "product": "voting",
+    "symbols": ["anonymous_ballot_board", "anonymous_ballot_submission_request", "anonymous_parliament_attempt", "submit_anonymous_ballot"]
+   },
+   {
+    "family": "rust",
     "path": "crates/iroha/src/client/private_settlement.rs",
     "product": "atomic_settlement",
     "symbols": [
@@ -13019,6 +13101,12 @@
      "validate_private_settlement_endpoint_v1",
      "validate_private_settlement_sponsor_context_v1"
     ]
+   },
+   {
+    "family": "rust",
+    "path": "crates/iroha/src/client/private_settlement/leg_fanout.rs",
+    "product": "atomic_settlement",
+    "symbols": ["collect_private_settlement_leg_results_v1", "collect_private_settlement_legs_v1"]
    },
    {
     "family": "rust",

@@ -4664,7 +4664,12 @@ mod tests_overlay_manifest {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
+            // Admission requires the interface's ZK feature bit to equal the header's ZK mode.
+            features_bitmap: if meta.mode & ivm::ivm_mode::ZK != 0 {
+                ivm::CONTRACT_FEATURE_BIT_ZK
+            } else {
+                0
+            },
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {

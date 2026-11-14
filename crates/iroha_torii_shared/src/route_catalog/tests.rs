@@ -2705,6 +2705,107 @@ mod tests {
         }
     }
     #[test]
+    fn anonymous_ballot_proof_admission_is_one_unauthenticated_http_post_mutation() {
+        // The ballot route is the admitted shape, and the only route that claims it.
+        let submit = runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT;
+        assert_eq!(
+            submit.stable_route_id(),
+            "governance.anonymous_ballot.submit"
+        );
+        assert_eq!(submit.path(), "/v1/gov/anonymous-ballots");
+        assert_eq!(submit.method(), HttpMethod::Post);
+        assert_eq!(submit.admission(), AdmissionPolicy::AnonymousBallotProof);
+        assert_eq!(submit.admission().as_str(), "anonymous_ballot_proof");
+        assert_eq!(
+            submit.authentication(),
+            AuthenticationPolicy::Unauthenticated
+        );
+        assert_eq!(submit.effect(), RouteEffect::Mutation);
+        validate_catalog(&[submit]).expect("the ballot submission route is valid");
+        assert_eq!(
+            CATALOGED_ROUTE_FAMILIES
+                .iter()
+                .flat_map(|family| family.iter())
+                .filter(|route| route.admission() == AdmissionPolicy::AnonymousBallotProof)
+                .map(|route| route.stable_route_id())
+                .collect::<Vec<_>>(),
+            ["governance.anonymous_ballot.submit"]
+        );
+        // The family's two reads are ordinary public read-only projections of whole records.
+        for (read, id, path) in [
+            (
+                runtime_governance::GOV_ANONYMOUS_BALLOT_BOARD_READ,
+                "governance.anonymous_ballot.board.read",
+                "/v1/gov/anonymous-ballots/boards/{scope}",
+            ),
+            (
+                runtime_governance::GOV_ANONYMOUS_BALLOT_ATTEMPT_READ,
+                "governance.anonymous_ballot.attempt.read",
+                "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}",
+            ),
+        ] {
+            assert_eq!((read.stable_route_id(), read.path()), (id, path));
+            assert_eq!(read.method(), HttpMethod::Get);
+            assert_eq!(read.effect(), RouteEffect::ReadOnly);
+            assert_eq!(read.admission(), AdmissionPolicy::Public);
+            validate_catalog(&[read]).expect("a public read-only projection is valid");
+        }
+        // A mutation without a principal stays refused, and no other shape may claim the
+        // proof admission: a credential, a read, another method or another surface.
+        let proof = |id, method, effect| {
+            RouteDescriptor::new(
+                id,
+                method,
+                "/v1/tests/anonymous-ballot-proof",
+                ApiSurface::Public,
+                Listener::Torii,
+                effect,
+                AdmissionPolicy::AnonymousBallotProof,
+            )
+        };
+        for wrong in [
+            proof(
+                "test.proof_default_auth",
+                HttpMethod::Post,
+                RouteEffect::Mutation,
+            ),
+            proof(
+                "test.proof_signed_body",
+                HttpMethod::Post,
+                RouteEffect::Mutation,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalSignedBody),
+            proof("test.proof_read", HttpMethod::Post, RouteEffect::ReadOnly)
+                .with_authentication(AuthenticationPolicy::Unauthenticated),
+            proof("test.proof_get", HttpMethod::Get, RouteEffect::Mutation)
+                .with_authentication(AuthenticationPolicy::Unauthenticated),
+        ] {
+            let errors = validate_catalog(&[wrong]).expect_err("no other shape is admitted");
+            assert!(
+                errors.iter().any(|error| error.kind
+                    == CatalogValidationErrorKind::AnonymousBallotProofRequiresUnauthenticatedHttpMutation),
+                "{}: {errors:?}",
+                wrong.stable_route_id()
+            );
+        }
+        let public = RouteDescriptor::new(
+            "test.public_ballot_mutation",
+            HttpMethod::Post,
+            "/v1/tests/public-ballot-mutation",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Public,
+        )
+        .with_authentication(AuthenticationPolicy::Unauthenticated);
+        assert!(
+            validate_catalog(&[public])
+                .expect_err("a public mutation stays refused")
+                .iter()
+                .any(|error| error.kind == CatalogValidationErrorKind::PublicMutation)
+        );
+    }
+    #[test]
     fn validation_enforces_transport_method_and_effect_invariants() {
         let routes = [
             RouteDescriptor::new(

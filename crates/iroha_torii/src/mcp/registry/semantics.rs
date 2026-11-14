@@ -341,7 +341,10 @@ pub(in crate::mcp) fn authority_for_route(route: &RouteDescriptor) -> AuthorityC
         AdmissionPolicy::ValidatorRosterMember
         | AdmissionPolicy::GovernedAuditor
         | AdmissionPolicy::TargetRoute => AuthorityClass::SignedBody,
-        AdmissionPolicy::Public => authentication,
+        // `AnonymousBallotProof` has no principal and no external signature: the body's own
+        // stamp and proof admit it. An authenticated MCP session is not anonymous transport,
+        // so that route is not projected as a tool.
+        AdmissionPolicy::Public | AdmissionPolicy::AnonymousBallotProof => authentication,
         AdmissionPolicy::Operator => AuthorityClass::Operator,
     }
 }

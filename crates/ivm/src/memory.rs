@@ -56,11 +56,11 @@ pub struct AccessRange {
 }
 /// Memory manager for the VM, with fixed regions for code, heap, and stack.
 ///
-/// In accordance with the updated architecture the entire memory image is committed via a Merkle
-/// tree. Writes mark ranges dirty and the [`root`] is recomputed lazily on `commit()` by hashing
-/// only the modified chunks. This avoids re-hashing untouched memory while still enabling inclusion
-/// paths to be produced after a commit. Zero‑knowledge mode can request inclusion paths for any
-/// address.
+/// The entire memory image is committed by a Merkle tree over 32-byte leaves. Writes only mark
+/// leaves pending. Ordinary execution never reads a root, so the leaf digests and canonical nodes
+/// (about three times the image) are allocated by the first [`root`](Self::root) or path request,
+/// which then hashes exactly the pending leaves. Later requests hash only leaves written since.
+/// Zero‑knowledge mode can request inclusion paths for any address.
 pub struct Memory {
     /// Trusted stack/table ownership and actual byte initialization for compiled calls.
     pub(crate) call_frames: crate::call_frame::CallFrameMemory,
@@ -73,13 +73,22 @@ pub struct Memory {
     code_length: u64,
     /// Append-only cursor for the OUTPUT region. Enforces append-only semantics.
     output_cursor: u64,
-    /// Merkle root of the entire memory image. Updated when `commit()` is
-    /// called to batch multiple writes together.
+    /// Merkle root of the entire memory image as of the last commit into
+    /// allocated storage. Meaningless while `tree` is `None`.
     root: HashOf<MerkleTree<[u8; 32]>>,
-    tree: ByteMerkleTree,
-    /// Flag indicating that memory contents have changed since the last commit.
+    /// Leaf digests and canonical nodes, allocated by the first root or path
+    /// request. Every leaf outside `dirty_chunks` is current.
+    tree: Option<ByteMerkleTree>,
+    /// Accounting held for Merkle storage this image has not allocated, until
+    /// the allocation takes it over. `Some` exactly while `tree` is `None`.
+    tree_deferred: Option<DeferredMerkle>,
+    /// Flag indicating that a write is pending since the last commit.
     dirty: bool,
-    /// Prepaid bitmap of Merkle leaves modified since the last commit.
+    /// Prepaid bitmap of Merkle leaves whose digests are pending.
+    ///
+    /// Until the storage is allocated nothing commits, so this holds every leaf
+    /// written since the zero image: each leaf outside it still holds zero
+    /// bytes, and the zero tree plus this bitmap determines the root.
     dirty_chunks: DirtyChunks,
     /// Leaf indices modified since the last runtime-template reset.
     ///
@@ -157,6 +166,34 @@ impl DerefMut for MemoryImage {
         }
     }
 }
+/// Bytes committed by one memory Merkle leaf.
+const MERKLE_CHUNK_BYTES: usize = 32;
+
+/// Accounting an image holds for Merkle storage it has not allocated.
+///
+/// Deferring the allocation changes no admission. An image is accounted at its
+/// whole committed footprint from construction: `retention` is the cache charge
+/// the allocated storage will carry, and a funded image also keeps the
+/// storage's prepaid execution `credit`, unspent. Caches and pools therefore
+/// admit, retain and refuse images exactly as they did when the storage was
+/// allocated with the image; only the allocation and its hashing move to the
+/// first root or path request.
+struct DeferredMerkle {
+    credit: Option<ExecutionMemoryLease>,
+    retention: crate::cache_memory::MemoryReservation,
+}
+
+impl DeferredMerkle {
+    /// Account for the storage of `leaves` leaves, keeping a funded image's `credit`.
+    fn new(leaves: usize, credit: Option<ExecutionMemoryLease>) -> Result<Self, VMError> {
+        let bytes = ByteMerkleTree::memory_plan(leaves)?.requested_bytes();
+        Ok(Self {
+            credit,
+            retention: crate::cache_memory::MemoryReservation::active(bytes),
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MemoryGeometry {
     pub(crate) bytes: usize,
@@ -284,7 +321,12 @@ impl Memory {
         self.data.try_retain()
             && self.read_log.lock().try_retain()
             && self.write_log.lock().try_retain()
-            && self.tree.try_retain()
+            && self.tree.as_ref().is_none_or(ByteMerkleTree::try_retain)
+            && self.merkle_credit_intact()
+            && self
+                .tree_deferred
+                .as_ref()
+                .is_none_or(|deferred| deferred.retention.try_retain())
             && self.dirty_chunks.try_retain()
             && self.modified_chunks.try_retain()
             && self.call_frames.try_retain()
@@ -294,7 +336,12 @@ impl Memory {
         self.data.mark_unmeasured();
         self.read_log.lock().make_active();
         self.write_log.lock().make_active();
-        self.tree.make_active();
+        if let Some(tree) = &self.tree {
+            tree.make_active();
+        }
+        if let Some(deferred) = &self.tree_deferred {
+            deferred.retention.make_active();
+        }
         self.dirty_chunks.make_active();
         self.modified_chunks.make_active();
         self.call_frames.make_active();
@@ -330,34 +377,136 @@ impl Memory {
     pub fn stack_top(&self) -> u64 {
         Memory::STACK_START + self.stack_limit
     }
-    /// Update only the modified Merkle leaves and recompute the root.
-    fn recompute_dirty(&mut self) {
+    /// Number of Merkle leaves committing to this image.
+    fn merkle_leaf_count(&self) -> usize {
+        self.data.len().div_ceil(MERKLE_CHUNK_BYTES).max(1)
+    }
+    /// Whether a root or path request has allocated the Merkle storage.
+    ///
+    /// Ordinary execution never requests one, so its image carries no leaf
+    /// digests or canonical nodes.
+    #[must_use]
+    pub fn merkle_storage_allocated(&self) -> bool {
+        self.tree.is_some()
+    }
+    /// Whether a funded image still holds the whole prepaid credit of Merkle
+    /// storage it has not allocated.
+    ///
+    /// A refused allocation takes its credit back at once. Only when the pool
+    /// has meanwhile given that capacity away is the image left short; it then
+    /// re-admits on its next request and must not be retained idle as prepaid.
+    fn merkle_credit_intact(&self) -> bool {
+        match self
+            .tree_deferred
+            .as_ref()
+            .and_then(|deferred| deferred.credit.as_ref())
+        {
+            Some(credit) => ByteMerkleTree::memory_plan(self.merkle_leaf_count())
+                .is_ok_and(|plan| credit.remaining_bytes() >= plan.requested_bytes()),
+            None => true,
+        }
+    }
+    /// Rehash only the pending Merkle leaves, drain them and return the new root.
+    fn rehash_pending(
+        tree: &mut ByteMerkleTree,
+        data: &[u8],
+        pending: &mut DirtyChunks,
+    ) -> HashOf<MerkleTree<[u8; 32]>> {
         let started_at = Instant::now();
         // Heuristic: if more than half the leaves are dirty, prefer a full
         // accelerated leaf recompute when available.
-        let total_leaves = self.tree.leaf_count();
-        let dirty_chunks = self.dirty_chunks.len();
+        let total_leaves = tree.leaf_count();
+        let dirty_chunks = pending.len();
         let large_update = dirty_chunks >= total_leaves.div_ceil(2);
-        let commit_path = if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
+        let commit_path = if large_update && tree.recompute_all_leaves_accel(data) {
             MemoryCommitPath::Accel
         } else if large_update {
-            self.tree.recompute_all_leaves_parallel(&self.data);
+            tree.recompute_all_leaves_parallel(data);
             MemoryCommitPath::FullRebuild
         } else {
-            self.tree
-                .update_dirty_leaves_from_bytes(&self.data, &self.dirty_chunks);
+            tree.update_dirty_leaves_from_bytes(data, pending);
             MemoryCommitPath::Incremental
         };
-        self.root = self.tree.root_hash();
-        self.dirty_chunks.clear();
-        self.dirty = false;
+        let root = tree.root_hash();
+        pending.clear();
         crate::metrics::record_memory_commit(commit_path, started_at.elapsed(), dirty_chunks);
+        root
     }
-    /// Commit pending writes by hashing only the dirty chunks if the memory has
-    /// been modified since the last commit.
-    pub fn commit(&mut self) {
+    /// Allocate the Merkle storage on first use and commit every pending leaf.
+    ///
+    /// The allocation is the zero tree the pending bitmap is relative to; a
+    /// funded image builds it from its retained prepaid credit.
+    ///
+    /// # Errors
+    /// Defers locally when leaf or node storage cannot be allocated. The image
+    /// and its pending bitmap are unchanged and the request can be repeated: a
+    /// refused funded attempt takes its prepaid credit back from the pool at
+    /// once, and an image the pool could not give it back to re-admits it here.
+    fn committed_tree(&mut self) -> Result<&ByteMerkleTree, VMError> {
+        let leaves = self.merkle_leaf_count();
+        let tree = match &mut self.tree {
+            Some(tree) => tree,
+            deferred @ None => {
+                let tree = match self
+                    .tree_deferred
+                    .as_mut()
+                    .and_then(|deferred| deferred.credit.as_mut())
+                {
+                    Some(credit) => {
+                        let plan = ByteMerkleTree::memory_plan(leaves)?;
+                        if credit.remaining_bytes() < plan.requested_bytes() {
+                            // An earlier refused attempt could not take its
+                            // credit back; the original pool must admit it again.
+                            credit.readmit(plan).map_err(VMError::AllocationDeferred)?;
+                        }
+                        match ByteMerkleTree::new_funded(leaves, MERKLE_CHUNK_BYTES, credit) {
+                            Ok(tree) => tree,
+                            Err(error) => {
+                                // The refused attempt dropped the charges it had
+                                // split, refunding them to the pool. Take the
+                                // whole credit back now so the image stays
+                                // prepaid; a refusal leaves it short until the
+                                // next request re-admits it.
+                                let _ = credit.readmit(plan);
+                                return Err(error);
+                            }
+                        }
+                    }
+                    None => ByteMerkleTree::new(leaves, MERKLE_CHUNK_BYTES)?,
+                };
+                // The zero root is current only for an image nothing has written.
+                self.root = tree.root_hash();
+                self.dirty |= !self.dirty_chunks.is_empty();
+                // The allocated storage carries its charges itself from here.
+                self.tree_deferred = None;
+                deferred.insert(tree)
+            }
+        };
         if self.dirty {
-            self.recompute_dirty();
+            self.root = Self::rehash_pending(tree, &self.data, &mut self.dirty_chunks);
+            self.dirty = false;
+        }
+        Ok(tree)
+    }
+    /// Allocate the Merkle storage before an invocation that reads a root every
+    /// cycle, so a later root request reuses it instead of allocating.
+    ///
+    /// # Errors
+    /// Defers locally when leaf or node storage cannot be allocated.
+    pub(crate) fn ensure_merkle_storage(&mut self) -> Result<(), VMError> {
+        self.committed_tree().map(|_| ())
+    }
+    /// Rehash pending leaves into allocated Merkle storage.
+    ///
+    /// Before the first root or path request there is no storage to commit to:
+    /// pending leaves keep accumulating and this is a no-op.
+    pub fn commit(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        if let Some(tree) = self.tree.as_mut() {
+            self.root = Self::rehash_pending(tree, &self.data, &mut self.dirty_chunks);
+            self.dirty = false;
         }
     }
     #[cfg(test)]
@@ -378,10 +527,10 @@ impl Memory {
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. In particular, the exclusive end address is not rounded into the final tree leaf.
+    /// Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_path(&mut self, addr: u64) -> Result<Vec<[u8; 32]>, VMError> {
         let index = self.merkle_leaf_index(addr)?;
-        self.commit();
-        self.tree.path(index)
+        self.committed_tree()?.path(index)
     }
     /// Return both the current Merkle root (typed `HashOf<MerkleTree<[u8; 32]>>`)
     /// and the authentication path for the 32-byte chunk containing `addr` in a single operation.
@@ -389,14 +538,13 @@ impl Memory {
     ///
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
-    /// image.
+    /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_root_and_path(
         &mut self,
         addr: u64,
     ) -> Result<(HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>), VMError> {
         let index = self.merkle_leaf_index(addr)?;
-        self.commit();
-        self.tree.root_and_path(index)
+        self.committed_tree()?.root_and_path(index)
     }
     /// Build a compact Merkle proof for the memory chunk containing `addr`.
     ///
@@ -406,7 +554,7 @@ impl Memory {
     ///
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
-    /// image.
+    /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_compact(
         &mut self,
         addr: u64,
@@ -460,28 +608,25 @@ impl Memory {
     /// This commitment is authoritative only for this in-process [`Memory`]
     /// instance. Protocols transporting a root must authenticate the count
     /// alongside it rather than reconstructing a count from the proof depth.
-    pub fn merkle_commitment(&mut self) -> MerkleTreeCommitment<[u8; 32]> {
-        self.commit();
-        let leaf_count = u64::try_from(self.tree.leaf_count())
+    ///
+    /// # Errors
+    /// Defers locally when the first request cannot allocate the Merkle storage.
+    pub fn merkle_commitment(&mut self) -> Result<MerkleTreeCommitment<[u8; 32]>, VMError> {
+        let leaf_count = u64::try_from(self.committed_tree()?.leaf_count())
             .ok()
             .and_then(NonZeroU64::new)
             .expect("memory tree always has a non-zero leaf count representable as u64");
-        MerkleTreeCommitment::new(self.root, leaf_count)
+        Ok(MerkleTreeCommitment::new(self.root, leaf_count))
     }
-    /// Current typed Merkle root, recomputing pending dirty ranges if needed.
+    /// Return the current Merkle root of memory, hashing every leaf written
+    /// since the last request. The first request allocates the Merkle storage.
     ///
-    /// This helper mirrors [`root`](Self::root) but keeps the method name used by callers that
-    /// sample the root during execution (e.g., step logs). It forces a `commit()` so that in-flight
-    /// writes are reflected in the returned digest.
-    pub fn current_root(&mut self) -> HashOf<MerkleTree<[u8; 32]>> {
-        self.commit();
-        self.root
-    }
-    /// Return the current Merkle root of memory, recomputing it if any writes
-    /// have occurred since the last call.
-    pub fn root(&mut self) -> HashOf<MerkleTree<[u8; 32]>> {
-        self.commit();
-        self.root
+    /// # Errors
+    /// Defers locally when the first request cannot allocate the Merkle storage;
+    /// the image is unchanged and the request can be repeated.
+    pub fn root(&mut self) -> Result<HashOf<MerkleTree<[u8; 32]>>, VMError> {
+        self.committed_tree()?;
+        Ok(self.root)
     }
     fn update_merkle(&mut self, start: usize, len: usize) {
         const CHUNK: usize = 32;
@@ -497,8 +642,8 @@ impl Memory {
             self.dirty_chunks.insert(i);
             self.modified_chunks.insert(i);
         }
-        // Mark the tree as dirty so the root is recomputed lazily on the next
-        // `commit()` or `root()` call.
+        // Mark the leaves pending so the next root request (or a commit into
+        // allocated storage) rehashes them.
         self.dirty = true;
     }
     /// Initialize an empty memory image with the canonical ABI V1 maximum stack.
@@ -519,6 +664,8 @@ impl Memory {
     /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` is outside the
     /// ABI V1 range, is not exactly aligned, or the resulting memory geometry
     /// is not representable on the host. Local allocation refusal defers execution.
+    /// Only the image and its two leaf bitmaps are allocated here; the Merkle
+    /// storage follows on the first root or path request.
     pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
         let data = crate::cache_memory::OwnedAllocation::try_zeroed(total_size).map_err(|_| {
@@ -540,8 +687,10 @@ impl Memory {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
         let unavailable =
             || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
-        let leaf_count = total_size.div_ceil(32).max(1);
+        let leaf_count = total_size.div_ceil(MERKLE_CHUNK_BYTES).max(1);
         let mut plan = ExecutionMemoryPlan::array::<u8>(total_size).map_err(|_| unavailable())?;
+        // Admit the Merkle storage with the image: its credit is retained
+        // unspent so the first root request never needs a new pool admission.
         plan.include_child(ByteMerkleTree::memory_plan(leaf_count)?)
             .map_err(|_| unavailable())?;
         for _ in 0..2 {
@@ -580,11 +729,20 @@ impl Memory {
         mut lease: Option<&mut ExecutionMemoryLease>,
         active_budget: Option<&AllocationBudget>,
     ) -> Result<Self, VMError> {
-        let leaf_count = total_size.div_ceil(32).max(1);
-        let tree = match lease.as_deref_mut() {
-            Some(lease) => ByteMerkleTree::new_funded(leaf_count, 32, lease)?,
-            None => ByteMerkleTree::new(leaf_count, 32)?,
-        };
+        let leaf_count = total_size.div_ceil(MERKLE_CHUNK_BYTES).max(1);
+        let credit = lease
+            .as_deref_mut()
+            .map(|lease| {
+                lease
+                    .partition(ByteMerkleTree::memory_plan(leaf_count)?)
+                    .map_err(|_| {
+                        VMError::ExecutionDeferred(
+                            crate::error::ExecutionDeferral::AllocationUnavailable,
+                        )
+                    })
+            })
+            .transpose()?;
+        let tree_deferred = Some(DeferredMerkle::new(leaf_count, credit)?);
         let dirty_chunks = DirtyChunks::new(leaf_count, lease.as_deref_mut())?;
         let modified_chunks = DirtyChunks::new(leaf_count, lease)?;
         let mut mem = Memory {
@@ -601,7 +759,8 @@ impl Memory {
             code_length: 0,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
-            tree,
+            tree: None,
+            tree_deferred,
             dirty: false,
             dirty_chunks,
             modified_chunks,
@@ -615,8 +774,6 @@ impl Memory {
             ),
             diagnostic_access_recorder: None,
         };
-        // initialize root from zeroed memory
-        mem.root = mem.tree.root_hash();
         mem.activate_cache_accounting();
         Ok(mem)
     }
@@ -1194,7 +1351,11 @@ impl Memory {
             None => operation(&mut self.write_log.lock()),
         }
     }
-    /// Ranges of memory that have been modified since the last commit.
+    /// Ranges of memory whose Merkle leaves are pending.
+    ///
+    /// With allocated Merkle storage these are the ranges written since the
+    /// last commit; before the first root or path request they are every range
+    /// written since the zero image.
     pub fn dirty_ranges(&self) -> Vec<(usize, usize)> {
         const CHUNK: usize = 32;
         let mut ranges = Vec::new();
@@ -1258,7 +1419,9 @@ impl Memory {
             .map_err(VMError::AllocationDeferred)?;
         plan.include_child(self.write_log.lock().memory_plan()?)
             .map_err(VMError::AllocationDeferred)?;
-        plan.include_child(self.tree.runtime_template_memory_plan()?)
+        // A copy admits its Merkle storage whether or not this image has
+        // allocated its own, and keeps the credit until its first root request.
+        plan.include_child(ByteMerkleTree::memory_plan(self.merkle_leaf_count())?)
             .map_err(VMError::AllocationDeferred)?;
         Ok(plan)
     }
@@ -1288,6 +1451,26 @@ impl Memory {
         };
         let reads = self.with_read_log(|log| log.try_copy(lease.as_deref_mut()))?;
         let copied_writes = self.with_write_log(|log| log.try_copy(lease.as_deref_mut()))?;
+        let (tree, tree_deferred) = match &self.tree {
+            Some(tree) => (
+                Some(tree.try_clone_for_runtime_template(lease.as_deref_mut())?),
+                None,
+            ),
+            // The copy stays deferred with its own accounting: the same cache
+            // charge and, from a lease, its own prepaid Merkle credit.
+            None => {
+                let leaves = self.merkle_leaf_count();
+                let credit = lease
+                    .as_deref_mut()
+                    .map(|lease| {
+                        lease
+                            .partition(ByteMerkleTree::memory_plan(leaves)?)
+                            .map_err(|_| unavailable())
+                    })
+                    .transpose()?;
+                (None, Some(DeferredMerkle::new(leaves, credit)?))
+            }
+        };
         let mut copied = Self {
             // An empty frame stack has no nested owned buffers; retain its
             // scalar completed-result descriptor for exact runtime snapshots.
@@ -1301,9 +1484,8 @@ impl Memory {
             code_length: self.code_length,
             output_cursor: self.output_cursor,
             root: self.root,
-            tree: self
-                .tree
-                .try_clone_for_runtime_template(lease.as_deref_mut())?,
+            tree,
+            tree_deferred,
             dirty: self.dirty,
             dirty_chunks: self.dirty_chunks.try_copy(lease.as_deref_mut())?,
             modified_chunks: self.modified_chunks.try_copy(lease)?,
@@ -1323,11 +1505,10 @@ impl Memory {
         template: &Memory,
     ) -> Result<(), MemoryTemplateMismatch> {
         self.ensure_template_geometry(template)?;
-        const CHUNK: usize = 32;
-        let modified_chunks = &self.modified_chunks;
+        const CHUNK: usize = MERKLE_CHUNK_BYTES;
         // Independent leaves commute. Reuse the original bitmap for byte
         // restoration and canonical parent updates without reset scratch.
-        for index in modified_chunks.iter() {
+        for index in self.modified_chunks.iter() {
             let start = index.saturating_mul(CHUNK);
             if start >= self.data.len() {
                 continue;
@@ -1335,18 +1516,39 @@ impl Memory {
             let end = (start + CHUNK).min(self.data.len());
             self.data[start..end].copy_from_slice(&template.data[start..end]);
         }
-        self.tree.reset_leaves_from(&template.tree, modified_chunks);
+        // Equal geometry already owns every bit; the pending bitmap is rewritten
+        // in place without allocating or requesting more execution credit.
+        match (self.tree.as_mut(), template.tree.as_ref()) {
+            (Some(tree), Some(template_tree)) => {
+                // A leaf can be stale where its bytes were just restored or
+                // where it was still pending. The template's digest for it is
+                // current unless the template itself holds it pending.
+                self.dirty_chunks.union_with(&self.modified_chunks);
+                tree.reset_leaves_from(template_tree, &self.dirty_chunks);
+                self.root = template.root;
+                self.dirty = template.dirty;
+                self.dirty_chunks.copy_from(&template.dirty_chunks);
+            }
+            (None, None) => {
+                // Both images pend against the zero tree and now hold equal bytes.
+                self.dirty = template.dirty;
+                self.dirty_chunks.copy_from(&template.dirty_chunks);
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                // Only one image has leaf digests, so the template's pending
+                // bitmap is relative to a different baseline. Keep this image's
+                // own pending leaves and add the restored ones: its storage, or
+                // its zero baseline, stays exact for every other leaf.
+                self.dirty_chunks.union_with(&self.modified_chunks);
+                self.dirty |= !self.dirty_chunks.is_empty();
+            }
+        }
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
         self.heap_max_limit = template.heap_max_limit;
         self.heap_contains_data = template.heap_contains_data;
         self.code_length = template.code_length;
         self.output_cursor = template.output_cursor;
-        self.root = template.root;
-        self.dirty = template.dirty;
-        // Equal geometry already owns every bit; warm reset copies initialized
-        // words without allocating or requesting more execution credit.
-        self.dirty_chunks.copy_from(&template.dirty_chunks);
         self.modified_chunks.clear();
         self.call_frames
             .restore_inactive_from(&template.call_frames);
@@ -1371,8 +1573,8 @@ impl Memory {
             bytes: self.data.len(),
             stack_limit: self.stack_limit,
             heap_max_limit: self.heap_max_limit,
-            merkle_chunk_bytes: self.tree.chunk_size(),
-            merkle_leaves: self.tree.leaf_count(),
+            merkle_chunk_bytes: MERKLE_CHUNK_BYTES,
+            merkle_leaves: self.merkle_leaf_count(),
         }
     }
     fn record_read_range(
@@ -1499,11 +1701,17 @@ mod tests {
         let mut local = Memory::new_with_stack_limit(stack_limit).unwrap();
         funded.store_u8(Memory::STACK_START, 0xa5).unwrap();
         local.store_u8(Memory::STACK_START, 0xa5).unwrap();
-        let leaf_count = funded.tree.leaf_count();
+        let leaf_count = funded.merkle_leaf_count();
         funded.dirty_chunks.extend(0..=leaf_count / 2);
-        funded.commit();
-        local.commit();
-        assert_eq!(funded.current_root(), local.current_root());
+        // The Merkle storage is admitted with the image and allocated by the
+        // root request below, out of the same retained credit.
+        assert!(!funded.merkle_storage_allocated());
+        assert_eq!(
+            budget.reserved_bytes(),
+            image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes
+        );
+        assert_eq!(funded.root().unwrap(), local.root().unwrap());
+        assert!(funded.merkle_storage_allocated() && funded.tree_deferred.is_none());
         assert_eq!(
             budget.reserved_bytes(),
             image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes
@@ -1570,13 +1778,11 @@ mod tests {
             .runtime_template_memory_plan()
             .unwrap()
             .requested_bytes();
-        let bitmap_bytes = 2 * source.tree.leaf_count().div_ceil(64) * 8;
+        let bitmap_bytes = 2 * source.merkle_leaf_count().div_ceil(64) * 8;
         assert_eq!(
             fixed_bytes,
             source.data.len()
-                + source
-                    .tree
-                    .runtime_template_memory_plan()
+                + ByteMerkleTree::memory_plan(source.merkle_leaf_count())
                     .unwrap()
                     .requested_bytes()
                 + bitmap_bytes
@@ -1639,7 +1845,10 @@ mod tests {
         budget.set_limit_bytes(total_bytes + log_bytes);
         memory.store_u64(Memory::STACK_START, 0x1234).unwrap();
         budget.set_limit_bytes(0);
-        memory.commit();
+        // The first root request allocates the Merkle storage from credit the
+        // constructor retained, without a new pool admission.
+        memory.root().unwrap();
+        assert!(memory.dirty_chunks.is_empty());
         assert_eq!(memory.dirty_chunks.words().as_ptr(), dirty_words);
         assert_eq!(memory.modified_chunks.words().as_ptr(), modified_words);
         assert_eq!(budget.reserved_bytes(), total_bytes + log_bytes);
@@ -1693,7 +1902,7 @@ mod tests {
                 .unwrap();
         }
         let before = memory.try_write_log_snapshot().unwrap();
-        let root = memory.root();
+        let root = memory.root().unwrap();
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START + 4, 9),
@@ -1701,13 +1910,13 @@ mod tests {
                 crate::error::ExecutionDeferral::AllocationUnavailable
             ))
         ));
-        assert_eq!(memory.current_root(), root);
+        assert_eq!(memory.root().unwrap(), root);
         assert_eq!(memory.output_used_len(), 4);
         assert_eq!(memory.read_output_used(), &[0, 1, 2, 3]);
         assert_eq!(memory.try_write_log_snapshot().unwrap(), before);
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(memory.store_u8(Memory::OUTPUT_START + 4, 9).is_err());
-        assert_eq!(memory.current_root(), root);
+        assert_eq!(memory.root().unwrap(), root);
         assert_eq!(memory.output_used_len(), 4);
         assert_eq!(memory.try_write_log_snapshot().unwrap(), before);
         memory.store_u8(Memory::OUTPUT_START + 4, 9).unwrap();
@@ -1728,7 +1937,7 @@ mod tests {
     #[test]
     fn guest_store_tracking_refusal_preserves_memory_cursor_and_log() {
         let mut memory = Memory::new();
-        let initial_root = memory.current_root();
+        let initial_root = memory.root().unwrap();
         let mut next = Memory::OUTPUT_START;
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
@@ -1738,7 +1947,7 @@ mod tests {
             ))
         ));
         assert_eq!(memory.output_used_len(), 0);
-        assert_eq!(memory.current_root(), initial_root);
+        assert_eq!(memory.root().unwrap(), initial_root);
         assert!(
             memory
                 .try_write_log_snapshot()
@@ -1926,7 +2135,7 @@ mod tests {
         assert!(memory.read_log.lock().capacity() > 0);
         assert!(memory.prepare_for_cache());
         assert!(memory.write_log.lock().is_empty());
-        let before_root = memory.current_root();
+        let before_root = memory.root().unwrap();
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.load_u8(address),
@@ -1940,7 +2149,7 @@ mod tests {
                 .expect("allocate read-log snapshot"),
             before
         );
-        assert_eq!(memory.current_root(), before_root);
+        assert_eq!(memory.root().unwrap(), before_root);
         memory.load_u8(address).unwrap();
         assert_eq!(
             memory
@@ -1978,7 +2187,7 @@ mod tests {
             (copied.load_u64(Memory::STACK_START)).expect("expected successful fixture result"),
             0x1234_5678
         );
-        assert_eq!(copied.root(), source.root());
+        assert_eq!(copied.root().unwrap(), source.root().unwrap());
     }
 
     #[test]
@@ -1997,7 +2206,7 @@ mod tests {
             .expect("store output");
         worker.grow_heap(64).expect("grow heap");
         assert!(!worker.modified_chunks.is_empty());
-        let _ = worker.root();
+        let _ = worker.root().unwrap();
         assert!(worker.dirty_chunks.is_empty());
         assert!(
             !worker.modified_chunks.is_empty(),
@@ -2018,7 +2227,7 @@ mod tests {
         let mut base_clone = base
             .try_clone_for_runtime_template(None)
             .expect("bounded test memory copy");
-        assert_eq!(worker_clone.root(), base_clone.root());
+        assert_eq!(worker_clone.root().unwrap(), base_clone.root().unwrap());
     }
     #[test]
     fn warm_reset_does_not_copy_unmodified_memory_chunks() {
@@ -2055,7 +2264,7 @@ mod tests {
         let short = [0x11, 0x22, 0x33, 0x44];
         let mut historical = Memory::new();
         historical.load_code(&[0xA5; 65]).unwrap();
-        historical.commit();
+        historical.root().unwrap();
         historical.load_code(&short).unwrap();
 
         let mut fresh = Memory::new();
@@ -2067,13 +2276,13 @@ mod tests {
                 .iter()
                 .all(|byte| *byte == 0)
         );
-        assert_eq!(historical.current_root(), fresh.current_root());
+        assert_eq!(historical.root().unwrap(), fresh.root().unwrap());
 
         let mut overlaid = Memory::new();
         overlaid.load_code(&[0x5A; 65]).unwrap();
         overlaid.overlay_code(&fresh).unwrap();
         assert!(overlaid.data[short.len()..65].iter().all(|byte| *byte == 0));
-        assert_eq!(overlaid.current_root(), fresh.current_root());
+        assert_eq!(overlaid.root().unwrap(), fresh.root().unwrap());
     }
     #[test]
     fn code_load_enforces_the_exact_code_region_and_is_atomic() {
@@ -2142,7 +2351,7 @@ mod tests {
         assert_eq!(memory.heap_max_limit(), pristine.heap_max_limit());
         assert_eq!(memory.data[Memory::HEAP_START as usize], 0);
         assert_eq!(memory.data[later_address as usize], 0);
-        assert_eq!(memory.current_root(), pristine.current_root());
+        assert_eq!(memory.root().unwrap(), pristine.root().unwrap());
         assert_eq!(
             (memory.alloc(8)).expect("expected successful fixture result"),
             Memory::HEAP_START
@@ -2224,7 +2433,7 @@ mod tests {
             (worker.load_u8(Memory::HEAP_START)).expect("expected successful fixture result"),
             0xB6
         );
-        worker.commit();
+        worker.root().unwrap();
         assert!(worker.dirty_chunks.is_empty());
         assert!(!template.dirty_chunks.is_empty());
         let dirty_words = worker.dirty_chunks.words().as_ptr();
@@ -2245,7 +2454,7 @@ mod tests {
                 total_bytes + row_bytes + read_bytes
             );
         }
-        assert_eq!(worker.root(), template.root());
+        assert_eq!(worker.root().unwrap(), template.root().unwrap());
         drop(worker);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -2266,20 +2475,23 @@ mod tests {
             ]
         );
         assert_eq!(memory.dirty_chunks.len(), 6);
+        // Nothing commits before the first root request allocates the storage.
         memory.commit();
+        assert_eq!(memory.dirty_chunks.len(), 6);
+        memory.root().unwrap();
         assert!(memory.dirty_ranges().is_empty());
         assert_eq!(memory.modified_chunks.len(), 6);
     }
     #[test]
     fn commit_small_dirty_set_uses_incremental_merkle_update() {
         let mut mem = Memory::new();
-        let baseline = mem.root();
+        let baseline = mem.root().unwrap();
         let (_, updates_before) = crate::byte_merkle_tree::merkle_update_counters();
         mem.store_u8(Memory::HEAP_START, 0xAA)
             .expect("store in heap");
         mem.store_u8(Memory::HEAP_START + 1, 0x55)
             .expect("store in same chunk");
-        let updated = mem.root();
+        let updated = mem.root().unwrap();
         assert_ne!(updated, baseline, "memory root should change after writes");
         let (_, updates_after) = crate::byte_merkle_tree::merkle_update_counters();
         assert!(
@@ -2308,7 +2520,8 @@ mod tests {
             code_length: 0,
             output_cursor: 0,
             root,
-            tree,
+            tree: Some(tree),
+            tree_deferred: None,
             dirty: false,
             dirty_chunks: DirtyChunks::new(8, None).unwrap(),
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
@@ -2324,7 +2537,7 @@ mod tests {
         mem.data[96..128].fill(0x22);
         mem.dirty_chunks.extend([0, 1, 2, 3]);
         mem.dirty = true;
-        let updated = mem.root();
+        let updated = mem.root().unwrap();
         let expected = MerkleTree::<[u8; 32]>::from_byte_chunks(&mem.data, 32)
             .expect("canonical tree")
             .root()
@@ -2351,7 +2564,8 @@ mod tests {
             code_length: 0,
             output_cursor: 0,
             root,
-            tree,
+            tree: Some(tree),
+            tree_deferred: None,
             dirty: false,
             dirty_chunks: DirtyChunks::new(8, None).unwrap(),
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
@@ -2373,15 +2587,15 @@ mod tests {
         incremental.data[96..128].fill(0x22);
         incremental.dirty_chunks.extend([2, 3]);
         incremental.dirty = true;
-        let incremental_root = incremental.root();
+        let incremental_root = incremental.root().unwrap();
         rebuilt.data[0..32].fill(0xAA);
         rebuilt.data[32..64].fill(0x55);
         rebuilt.data[64..96].fill(0x11);
         rebuilt.data[96..128].fill(0x22);
         rebuilt.dirty_chunks.extend([0, 1, 2, 3]);
         rebuilt.dirty = true;
-        let rebuilt_root = rebuilt.root();
-        assert_eq!(rebuilt.tree.leaf_count(), 8);
+        let rebuilt_root = rebuilt.root().unwrap();
+        assert_eq!(rebuilt.tree.as_ref().unwrap().leaf_count(), 8);
         assert_eq!(rebuilt_root, incremental_root);
     }
     #[test]
@@ -2468,7 +2682,7 @@ mod tests {
     #[test]
     fn input_write_aligned_rejects_invalid_alignment_and_overflow() {
         let mut mem = Memory::new();
-        let baseline = mem.current_root();
+        let baseline = mem.root().unwrap();
 
         for align in [0, 3] {
             let mut cursor = 1;
@@ -2485,7 +2699,11 @@ mod tests {
             Err(VMError::MemoryOutOfBounds)
         ));
         assert_eq!(cursor, u64::MAX);
-        assert_eq!(mem.current_root(), baseline, "failed writes must be atomic");
+        assert_eq!(
+            mem.root().unwrap(),
+            baseline,
+            "failed writes must be atomic"
+        );
     }
     #[test]
     fn alloc_rejects_overflow_sizes() {
@@ -2666,17 +2884,17 @@ mod tests {
         }
     }
     #[test]
-    fn current_root_recomputes_dirty_state() {
+    fn root_recomputes_dirty_state() {
         let mut mem = Memory::new();
-        let baseline = mem.current_root();
+        let baseline = mem.root().unwrap();
         let addr = Memory::HEAP_START;
         mem.store_u64(addr, 0xCAFEBABE_DEADBEEF).unwrap();
         mem.store_u32(addr + 32, 0xA5A5_5A5A).unwrap();
         let mut clone = mem
             .try_clone_for_runtime_template(None)
             .expect("bounded test memory copy");
-        let expected = clone.root();
-        let observed = mem.current_root();
+        let expected = clone.root().unwrap();
+        let observed = mem.root().unwrap();
         assert_ne!(observed, baseline);
         assert_eq!(observed, expected);
         assert!(mem.dirty_ranges().is_empty());
@@ -2690,9 +2908,9 @@ mod tests {
             .try_clone_for_runtime_template(None)
             .expect("bounded test memory copy");
         let path = mem.merkle_path(addr).unwrap();
-        let root = mem.current_root();
+        let root = mem.root().unwrap();
         let expected_path = reference.merkle_path(addr).unwrap();
-        let expected_root = reference.current_root();
+        let expected_root = reference.root().unwrap();
         assert_eq!(root, expected_root);
         assert_eq!(path, expected_path);
     }
@@ -2756,5 +2974,319 @@ mod tests {
                 .unwrap_or([0u8; 32]);
             assert_eq!(sib_bytes, expected_path[i]);
         }
+    }
+
+    /// Reference root of an image: the canonical tree over all of its bytes.
+    fn canonical_root(memory: &Memory) -> HashOf<MerkleTree<[u8; 32]>> {
+        MerkleTree::<[u8; 32]>::from_byte_chunks(&memory.data, 32)
+            .expect("canonical tree")
+            .root()
+            .expect("root")
+    }
+
+    #[test]
+    fn merkle_storage_is_allocated_by_the_first_root_request() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        assert!(!memory.merkle_storage_allocated());
+        memory.load_code(&[0x13; 96]).unwrap();
+        memory.preload_input(8, &[0xa5; 40]).unwrap();
+        memory
+            .store_u64(Memory::HEAP_START + 64, 0x0102_0304_0506_0708)
+            .unwrap();
+        assert_eq!(
+            memory.load_u64(Memory::HEAP_START + 64).unwrap(),
+            0x0102_0304_0506_0708
+        );
+        memory
+            .store_u8(Memory::STACK_START + Memory::MIN_STACK_SIZE - 1, 0x7e)
+            .unwrap();
+        // Writes, reads and commits never allocate leaf digests or nodes.
+        memory.commit();
+        assert!(!memory.merkle_storage_allocated());
+        assert!(memory.dirty_for_testing());
+        // Three code leaves, two input leaves, one heap leaf and one stack leaf.
+        assert_eq!(memory.dirty_chunks.len(), 7);
+        let root = memory.root().unwrap();
+        assert!(memory.merkle_storage_allocated());
+        assert!(!memory.dirty_for_testing() && memory.dirty_chunks.is_empty());
+        assert_eq!(root, canonical_root(&memory));
+        // Later requests commit only the leaves written since.
+        memory.store_u8(Memory::HEAP_START, 1).unwrap();
+        assert_eq!(memory.dirty_chunks.len(), 1);
+        memory.commit();
+        assert!(memory.dirty_chunks.is_empty());
+        assert_eq!(memory.root().unwrap(), canonical_root(&memory));
+        let commitment = memory.merkle_commitment().unwrap();
+        assert_eq!(commitment.root(), &canonical_root(&memory));
+        assert_eq!(
+            commitment.leaf_count().get(),
+            memory.merkle_leaf_count() as u64
+        );
+    }
+
+    #[test]
+    fn untouched_image_root_is_the_zero_tree_root() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let root = memory.root().unwrap();
+        assert_eq!(root, canonical_root(&memory));
+        assert!(!memory.dirty_for_testing());
+        assert_eq!(memory.root().unwrap(), root);
+    }
+
+    #[test]
+    fn deferred_and_incrementally_committed_images_agree_on_roots_and_paths() {
+        let mut deferred = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let mut eager = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        // The eager image allocates before any write and commits after each one.
+        eager.root().unwrap();
+        let writes = [
+            (Memory::HEAP_START, 0x11_u8),
+            (Memory::HEAP_START + 31, 0x22),
+            (Memory::HEAP_START + 32, 0x33),
+            (Memory::HEAP_START + 64 * 32, 0x44),
+            (Memory::OUTPUT_START + 5, 0x55),
+            (Memory::STACK_START + Memory::MIN_STACK_SIZE - 32, 0x66),
+        ];
+        for (address, value) in writes {
+            deferred.store_u8(address, value).unwrap();
+            eager.store_u8(address, value).unwrap();
+            eager.root().unwrap();
+            deferred.commit();
+        }
+        // A leaf written back to zero stays pending and hashes to the zero leaf.
+        deferred.store_u8(Memory::HEAP_START + 64 * 32, 0).unwrap();
+        eager.store_u8(Memory::HEAP_START + 64 * 32, 0).unwrap();
+        for memory in [&mut deferred, &mut eager] {
+            memory.load_code(&[0x5a; 70]).unwrap();
+            memory.load_code(&[0xa5; 3]).unwrap();
+            memory.preload_input(0, &[9; 33]).unwrap();
+        }
+        assert!(!deferred.merkle_storage_allocated());
+        let root = deferred.root().unwrap();
+        assert_eq!(root, eager.root().unwrap());
+        assert_eq!(root, canonical_root(&deferred));
+        for (address, _) in writes {
+            assert_eq!(
+                deferred.merkle_root_and_path(address).unwrap(),
+                eager.merkle_root_and_path(address).unwrap()
+            );
+            let (deferred_proof, deferred_root) =
+                deferred.merkle_compact(address, Some(9)).unwrap();
+            let (eager_proof, eager_root) = eager.merkle_compact(address, Some(9)).unwrap();
+            assert_eq!(deferred_root, eager_root);
+            assert_eq!(deferred_proof.dirs(), eager_proof.dirs());
+            assert_eq!(deferred_proof.siblings(), eager_proof.siblings());
+        }
+    }
+
+    #[test]
+    fn first_path_request_allocates_and_commits_like_a_root_request() {
+        let mut by_path = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let mut by_root = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let address = Memory::HEAP_START + 96;
+        for memory in [&mut by_path, &mut by_root] {
+            memory.store_u64(address, 0xfeed_face_dead_beef).unwrap();
+        }
+        let root = by_root.root().unwrap();
+        let path = by_path.merkle_path(address).unwrap();
+        assert!(by_path.merkle_storage_allocated());
+        assert!(by_path.dirty_chunks.is_empty());
+        assert_eq!(by_root.merkle_root_and_path(address).unwrap(), (root, path));
+        // An out-of-range address is refused before anything is allocated.
+        let mut untouched = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let end = untouched.data.len() as u64;
+        assert!(matches!(
+            untouched.merkle_path(end),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+        assert!(!untouched.merkle_storage_allocated());
+    }
+
+    #[test]
+    fn refused_merkle_allocation_defers_without_changing_the_image_and_can_be_retried() {
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        memory.store_u8(Memory::HEAP_START, 0x5a).unwrap();
+        let pending = memory.dirty_chunks.try_copy(None).unwrap();
+        crate::cache_memory::refuse_next_owned_allocation_for_test();
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert!(!memory.merkle_storage_allocated());
+        assert!(memory.dirty_for_testing());
+        assert_eq!(memory.dirty_chunks, pending);
+        assert_eq!(memory.load_u8(Memory::HEAP_START).unwrap(), 0x5a);
+        assert_eq!(memory.root().unwrap(), canonical_root(&memory));
+        assert!(memory.merkle_storage_allocated());
+    }
+
+    #[test]
+    fn refused_funded_merkle_allocation_keeps_its_prepaid_credit_for_the_next_request() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let budget = AllocationBudget::new(usize::MAX);
+        let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        memory.preload_input(0, &[0x3c; 9]).unwrap();
+        let template = memory.try_clone_for_runtime_template(None).unwrap();
+        let reserved = budget.reserved_bytes();
+        // The leaves are built from the retained credit before the nodes are
+        // refused; the attempt's charges go back to the pool and are re-admitted.
+        crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert!(!memory.merkle_storage_allocated());
+        assert_eq!(memory.dirty_chunks.len(), 1);
+        assert_eq!(budget.reserved_bytes(), reserved);
+        assert!(memory.merkle_credit_intact());
+        // The refused image is still a prepaid, reusable runtime: a warm reset
+        // and the next request allocate from the same credit with no admission.
+        memory.store_u8(Memory::HEAP_START, 7).unwrap();
+        memory.reset_from_template(&template).unwrap();
+        let logged = budget.reserved_bytes();
+        budget.set_limit_bytes(0);
+        let mut expected = template.try_clone_for_runtime_template(None).unwrap();
+        assert_eq!(memory.root().unwrap(), expected.root().unwrap());
+        assert!(memory.merkle_storage_allocated() && memory.tree_deferred.is_none());
+        assert_eq!(budget.reserved_bytes(), logged);
+        drop(memory);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn merkle_credit_the_pool_gave_away_is_readmitted_by_a_later_request() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let budget = AllocationBudget::new(usize::MAX);
+        let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        memory.preload_input(0, &[0x3c; 9]).unwrap();
+        let tree_bytes = ByteMerkleTree::memory_plan(memory.merkle_leaf_count())
+            .unwrap()
+            .requested_bytes();
+        let reserved = budget.reserved_bytes();
+        // With the pool closed, the refused attempt cannot take its credit back.
+        budget.set_limit_bytes(0);
+        crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert_eq!(budget.reserved_bytes(), reserved - tree_bytes);
+        // The short image is not a prepaid runtime any more: it is refused idle
+        // retention and its requests defer on the pool, not on the allocator.
+        assert!(!memory.merkle_credit_intact());
+        assert!(!memory.try_retain());
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
+            ))
+        ));
+        assert!(matches!(
+            memory.merkle_path(Memory::INPUT_START),
+            Err(VMError::AllocationDeferred(_))
+        ));
+        assert!(!memory.merkle_storage_allocated());
+        assert_eq!(memory.dirty_chunks.len(), 1);
+        // Once the pool has capacity again the same request re-admits the
+        // credit, allocates and returns the root of the unchanged image.
+        budget.set_limit_bytes(usize::MAX);
+        let mut value = [0; 9];
+        memory.load_bytes(Memory::INPUT_START, &mut value).unwrap();
+        assert_eq!(value, [0x3c; 9]);
+        let mut local = Memory::new_with_stack_limit(stack_limit).unwrap();
+        local.preload_input(0, &[0x3c; 9]).unwrap();
+        assert_eq!(memory.root().unwrap(), local.root().unwrap());
+        assert!(memory.merkle_storage_allocated() && memory.merkle_credit_intact());
+        drop(memory);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn funded_copy_of_a_deferred_image_keeps_its_merkle_credit_until_the_first_root() {
+        let budget = AllocationBudget::new(usize::MAX);
+        let mut source =
+            Memory::new_with_stack_limit_funded(Memory::MIN_STACK_SIZE, &budget).unwrap();
+        source.preload_input(1, &[0xc3; 40]).unwrap();
+        let source_bytes = budget.reserved_bytes();
+        let plan = source.runtime_template_memory_plan().unwrap();
+        let mut lease = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
+        let mut copy = source
+            .try_clone_for_runtime_template(Some(&mut lease))
+            .unwrap();
+        // The copy took its whole plan: the image, both bitmaps and, unspent,
+        // the credit of the Merkle storage it has not allocated.
+        assert_eq!(lease.remaining_bytes(), 0);
+        drop(lease);
+        assert!(!copy.merkle_storage_allocated());
+        let tree_bytes = ByteMerkleTree::memory_plan(copy.merkle_leaf_count())
+            .unwrap()
+            .requested_bytes();
+        // The copy holds both charges of the storage it has not allocated.
+        assert_eq!(
+            copy.tree_deferred.as_ref().map(|deferred| (
+                deferred
+                    .credit
+                    .as_ref()
+                    .map(ExecutionMemoryLease::remaining_bytes),
+                deferred.retention.bytes()
+            )),
+            Some((Some(tree_bytes), tree_bytes))
+        );
+        let reserved = budget.reserved_bytes();
+        assert_eq!(reserved, source_bytes + plan.requested_bytes());
+        // The retained credit pays for either storage without a new pool admission.
+        budget.set_limit_bytes(0);
+        assert_eq!(copy.root().unwrap(), source.root().unwrap());
+        assert!(copy.merkle_storage_allocated() && copy.tree_deferred.is_none());
+        assert_eq!(budget.reserved_bytes(), reserved);
+        // A copy of the allocated image copies its storage instead of deferring it.
+        budget.set_limit_bytes(usize::MAX);
+        let allocated_plan = copy.runtime_template_memory_plan().unwrap();
+        assert_eq!(allocated_plan, plan);
+        let mut lease = ExecutionMemoryLease::reserve(&budget, allocated_plan).unwrap();
+        let mut second = copy
+            .try_clone_for_runtime_template(Some(&mut lease))
+            .unwrap();
+        assert_eq!(lease.remaining_bytes(), 0);
+        drop(lease);
+        assert!(second.merkle_storage_allocated() && second.tree_deferred.is_none());
+        assert_eq!(second.root().unwrap(), source.root().unwrap());
+        drop(second);
+        drop(copy);
+        drop(source);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn unfunded_copy_of_a_funded_deferred_image_holds_no_credit() {
+        let stack_limit = Memory::MIN_STACK_SIZE;
+        let budget = AllocationBudget::new(usize::MAX);
+        let mut funded = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        funded.preload_input(0, &[7; 17]).unwrap();
+        let tree_bytes = ByteMerkleTree::memory_plan(funded.merkle_leaf_count())
+            .unwrap()
+            .requested_bytes();
+        assert!(
+            funded
+                .tree_deferred
+                .as_ref()
+                .is_some_and(|deferred| deferred.credit.is_some())
+        );
+        let reserved = budget.reserved_bytes();
+        let mut copy = funded.try_clone_for_runtime_template(None).unwrap();
+        // The copy keeps the cache charge of its unallocated storage but no credit.
+        assert!(!copy.merkle_storage_allocated());
+        assert!(copy.tree_deferred.as_ref().is_some_and(|deferred| {
+            deferred.credit.is_none() && deferred.retention.bytes() == tree_bytes
+        }));
+        assert_eq!(budget.reserved_bytes(), reserved);
+        assert_eq!(copy.root().unwrap(), funded.root().unwrap());
+        assert_eq!(budget.reserved_bytes(), reserved);
     }
 }

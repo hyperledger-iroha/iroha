@@ -9,7 +9,7 @@ fn test_merkle_path_matches_root() {
     mem.store_u32(addr, 0xAA55AA55).unwrap();
     mem.commit();
     let path = mem.merkle_path(addr).unwrap();
-    let root = *mem.root().as_ref();
+    let root = *mem.root().unwrap().as_ref();
     // Recompute root from leaf and path
     const CHUNK: usize = 32;
     let mut leaf_data = [0u8; CHUNK];
@@ -55,13 +55,13 @@ fn final_partial_stack_chunk_is_committed_and_provable() {
     let mut mem = Memory::new_with_stack_limit(stack_limit).unwrap();
     assert_eq!(mem.stack_top() % 32, Memory::STACK_ALIGNMENT);
 
-    let baseline = mem.current_root();
+    let baseline = mem.root().unwrap();
     let final_chunk = mem.stack_top() - Memory::STACK_ALIGNMENT;
     mem.store_u128(final_chunk, u128::MAX)
         .expect("final aligned stack bytes are writable");
 
     assert_ne!(
-        mem.current_root(),
+        mem.root().unwrap(),
         baseline,
         "the final partial stack chunk must be covered by the memory commitment"
     );

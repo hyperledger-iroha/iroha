@@ -30,6 +30,7 @@ use std::{
 };
 
 mod abort_receipt;
+mod leg_overlap;
 
 pub(super) fn prepared(
     client: &Client,
@@ -658,25 +659,29 @@ fn private_settlement_promotion_refuses_substituted_upload_identity_before_prepa
         );
         let requests = snapshots.lock().unwrap();
         let n = request.0.materials[0].committee_authority.validators.len();
+        // Both legs share one bounded promotion window, so the later leg's committee is
+        // also attempted while the first leg is refused; each leg is still attempted once.
+        let legs = request.0.materials.len();
         assert_eq!(
             requests
                 .iter()
                 .filter(|r| r.url.path().ends_with("/legs"))
                 .count(),
-            n,
-            "all invalid upload acknowledgements must leave Prepare unrequested"
+            n * legs,
+            "every leg of the window is uploaded to each endpoint exactly once"
         );
         assert_eq!(
             requests
                 .iter()
                 .filter(|r| r.url.path().ends_with("/availability-shares"))
                 .count(),
-            n,
+            n * legs,
             "at most one exact rehydration request is allowed for each failed endpoint"
         );
         assert!(
             requests.iter().all(|r| r.url.path().ends_with("/legs")
-                || r.url.path().ends_with("/availability-shares"))
+                || r.url.path().ends_with("/availability-shares")),
+            "all invalid upload acknowledgements must leave Prepare unrequested"
         );
     }
 }
@@ -807,22 +812,25 @@ fn promotion_with_returning_replica(returning: bool, substituted_signer: bool) {
             "a different member's valid rehydration signature cannot authorize upload retry"
         );
         let captured = snapshots.lock().unwrap();
+        let n = request.0.materials[0].committee_authority.validators.len();
+        // Both legs share one bounded promotion window: each is uploaded once to every
+        // endpoint and rehydrates its own two failed endpoints once before refusal.
+        let legs = request.0.materials.len();
         assert_eq!(
             captured
                 .iter()
                 .filter(|r| r.url.path().ends_with("/legs"))
                 .count(),
-            request.0.materials[0].committee_authority.validators.len(),
-            "substituted responder must not trigger another upload or progress to a later leg"
+            legs * n,
+            "a substituted responder must not trigger another upload for any leg"
         );
         assert_eq!(
             captured
                 .iter()
                 .filter(|r| r.url.path().ends_with("/availability-shares"))
                 .count(),
-            request.0.materials.len() * request.0.materials[0].committee_authority.validators.len()
-                + 2,
-            "only the first leg's two failed endpoints can be rehydrated before refusal"
+            legs * (n + 2),
+            "each leg's two failed endpoints are rehydrated at most once before refusal"
         );
         return;
     }
@@ -1007,7 +1015,7 @@ fn private_settlement_promotion_counts_only_three_exact_acknowledgements_after_o
     let recorded = snapshots.clone();
     let endpoints = request.0.endpoints.clone();
     let expected = certificates.clone();
-    // Each leg's four promotion requests must be in flight together; legs stay sequential.
+    // Each leg's four promotion requests must be in flight together.
     let overlap = Arc::new(crate::client::private_settlement::tests::CommitteeOverlap::default());
     let entered = Arc::clone(&overlap);
     let result = with_mock_http(move |http| {

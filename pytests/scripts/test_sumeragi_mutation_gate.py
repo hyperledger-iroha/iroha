@@ -509,6 +509,47 @@ def test_mutation_ids_select_one_rule_across_all_implementation_owners():
             assert name.rsplit("::", 1)[-1] in row, (identifier, name)
 
 
+def test_anonymous_ballot_mutations_have_their_source_owners_and_exact_controls():
+    """Slice 4 rules (ballot design section 12.3): one owner and one causal control each."""
+    expected = {
+        "HC812": ("governance/parliament_anonymous/ballot_input.rs",
+                  "a_charge_that_does_not_fit_takes_nothing",
+                  "crates/iroha_core/src/governance/parliament_anonymous/ballot_input_tests.rs"),
+        "HC813": ("queue/anonymous_ballots.rs",
+                  "an_identity_has_one_verified_pending_holder_until_its_carrier_leaves",
+                  "crates/iroha_core/src/queue/anonymous_ballots.rs"),
+        "HC814": ("sumeragi/lanes/routing.rs",
+                  "an_anonymous_ballot_routes_to_lane_zero_only_where_the_global_root_installs_the_family",
+                  "crates/iroha_core/src/sumeragi/lanes/routing.rs"),
+        "HC815": ("state/output_network.rs",
+                  "a_ballot_needs_a_block_whose_governance_pass_ran_parliaments_items",
+                  "crates/iroha_core/src/state/output_network_ballot_tests.rs"),
+    }
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    source = gate.REPO / "crates/iroha_core/src"
+    owners = {identifier: set() for identifier in expected}
+    for path in source.rglob("*.rs"):
+        for identifier in re.findall(r'sumeragi_core_mutation\s*=\s*"([^"]+)"', path.read_text()):
+            if identifier in owners:
+                owners[identifier].add(path.relative_to(source).as_posix())
+    spec = (ROOT / "specs/sumeragi.md").read_text()
+    for identifier, (owner, control, panic_source) in expected.items():
+        assert owners[identifier] == {owner}
+        rule = registered[identifier]
+        assert len(rule.tests) == 1 and rule.tests[0].rsplit("::", 1)[-1] == control
+        assert not rule.scenarios
+        (cause,) = rule.causes
+        assert cause.source == panic_source and cause.cause and not cause.worker_thread
+        # The control asserts the registered cause in the file the panic is attributed to.
+        assert cause.cause.split(", scope:")[0].split(": false")[0] in (gate.REPO / panic_source).read_text()
+        row = re.search(rf"^\| {identifier} \| .+$", spec, re.MULTILINE)
+        assert row is not None and rule.tests[0] in row.group(0)
+        # The switch is a test-only fault: it never exists in a shipping build.
+        text = (source / owner).read_text()
+        assert f'cfg!(all(test, sumeragi_core_mutation = "{identifier}"))' in text
+        assert f"SPEC: §13.4 {identifier}" in text
+
+
 def test_core_custody_mutations_have_distinct_source_owners():
     expected = {
         "HC120": {"sumeragi/evidence_history.rs"},
@@ -7567,7 +7608,12 @@ def test_fast_pause_lapse_mutation_retains_exact_global_native_controls():
         assert "control_chain(false)" in body
     assert "mod lapse_tests;" in (core / "smartcontracts/isi/sccp/read/native/control_producer_tests.rs").read_text()
     state = (core / "state.rs").read_text()
-    assert state.index("Self::apply_block_start_parliament_enactments(&mut sb, now_h)?") < state.index("pause_lifecycle::lapse_after_enactments(&mut sb)")
+    # The baseline enactments run inside the positioned governance pass, before G4's lapse.
+    enactments = ("governance_start::run(&mut sb, |sb| {\n"
+                  "            Self::apply_block_start_parliament_enactments(sb, now_h)\n"
+                  "        })?;")
+    assert state.count(enactments) == 1
+    assert state.index(enactments) < state.index("pause_lifecycle::lapse_after_enactments(&mut sb)")
     rows = re.findall(r"^\| HC246 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.M)
     assert len(rows) == 1 and all(name in rows[0] for name in rule.tests)
 
@@ -7895,6 +7941,10 @@ def test_authenticated_proposer_time_rejects_unrelated_execution_outcome(outcome
      "amx_relay::tests::growing_source_tip_cannot_starve_pending_original_handoff_retry",
      "crates/irohad/src/amx_relay.rs",
      "continuous source growth must not starve bounded retry of the original handoff"),
+    ("HC811", True,
+     "amx_relay::tests::restarted_route_visits_pending_epoch_boundaries_before_ordinary_heights",
+     "crates/irohad/src/amx_relay.rs",
+     "a restarted route must visit pending epoch boundaries before ordinary heights"),
 ])
 def test_native_amx_handoff_mutations_require_exact_recovery_regressions(
     mutation, daemon, test, path, cause

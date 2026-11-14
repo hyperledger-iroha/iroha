@@ -3170,7 +3170,16 @@ fn snapshot_source_manifest_cannot_name_a_future_fold_as_an_ancestor() {
     w.commit(bootstrap()).unwrap();
     let (digest, mut manifest) = w.manifest().unwrap();
     manifest.folded = Some(1);
-    w.publish_manifest(digest, &manifest).unwrap();
+    // The coordinator never publishes a manifest whose fold is ahead of its index.
+    assert!(matches!(
+        w.publish_manifest(digest, &manifest),
+        Err(Error::WitnessLost("archive manifest binding"))
+    ));
+    // Custody that already selected such bytes cannot make them a snapshot source either:
+    // fault injection publishes them through the mock provider, bypassing the coordinator.
+    w.custody
+        .publish_archive_checkpoint(digest, &archive::encode(&manifest).unwrap())
+        .unwrap();
     assert!(matches!(
         w.snapshot(),
         Err(Error::WitnessLost("archive manifest binding"))

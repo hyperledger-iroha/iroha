@@ -397,26 +397,31 @@ fn coordinator_storage_counts_are_deterministic_and_filesystem_independent() {
     // Fresh commits authenticate maintenance state before taking Payment priority: Bootstrap
     // reads Enrollment, and other operations read the selected snapshot and Archive fold
     // obligation. These source fences add protected-storage probes, never writes or syncs.
+    // Opening moves the provider to the native frame owners (`AdvanceHandle::new`), which
+    // clears its reconcile cache, so the first custody call reconciles the slot completely:
+    // marker adoption and capsule/completion settlement (five file and three directory syncs).
+    // Every publication first reads the selected checkpoint again to keep its suffix
+    // envelope (`publish_manifest`): one more reconcile and closing probe per publication.
     const BASELINE: [(&str, u64, u64, u64); 21] = [
-        ("coordinator_open", 0, 0, 31),
-        ("bootstrap_commit", 38, 8, 157),
-        ("bootstrap_fold_turn_0", 10, 1, 75),
-        ("bootstrap_fold_turn_1", 26, 5, 84),
-        ("receive_commit", 30, 6, 344),
-        ("receive_fold_turn_0", 10, 1, 110),
-        ("receive_fold_turn_1", 1_406, 350, 811),
-        ("refresh_policy_commit", 30, 6, 351),
-        ("refresh_policy_fold_turn_0", 10, 1, 112),
-        ("refresh_policy_fold_turn_1", 26, 5, 123),
-        ("send_commit", 46, 10, 359),
-        ("send_fold_turn_0", 10, 1, 113),
-        ("send_fold_turn_1", 34, 7, 130),
-        ("load_commit", 30, 6, 356),
-        ("load_fold_turn_0", 10, 1, 114),
-        ("load_fold_turn_1", 26, 5, 125),
-        ("unload_commit", 38, 8, 357),
-        ("unload_fold_turn_0", 10, 1, 113),
-        ("unload_fold_turn_1", 34, 7, 130),
+        ("coordinator_open", 8, 0, 63),
+        ("bootstrap_commit", 38, 8, 168),
+        ("bootstrap_fold_turn_0", 10, 1, 86),
+        ("bootstrap_fold_turn_1", 26, 5, 95),
+        ("receive_commit", 30, 6, 355),
+        ("receive_fold_turn_0", 10, 1, 121),
+        ("receive_fold_turn_1", 1_406, 350, 822),
+        ("refresh_policy_commit", 30, 6, 362),
+        ("refresh_policy_fold_turn_0", 10, 1, 123),
+        ("refresh_policy_fold_turn_1", 26, 5, 134),
+        ("send_commit", 46, 10, 370),
+        ("send_fold_turn_0", 10, 1, 124),
+        ("send_fold_turn_1", 34, 7, 141),
+        ("load_commit", 30, 6, 367),
+        ("load_fold_turn_0", 10, 1, 125),
+        ("load_fold_turn_1", 26, 5, 136),
+        ("unload_commit", 38, 8, 368),
+        ("unload_fold_turn_0", 10, 1, 124),
+        ("unload_fold_turn_1", 34, 7, 141),
         ("snapshot", 0, 0, 134),
         ("send_exact_retry", 0, 0, 36),
     ];

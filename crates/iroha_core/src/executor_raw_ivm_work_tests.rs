@@ -682,12 +682,64 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
         independent_result.unwrap();
         assert!(expected_gas > 1);
         let mut cache = IvmCache::new();
+        // The cap is the root gas limit. A reserved syscall quote must be affordable before its
+        // unused part is refunded, so the smallest sufficient limit can exceed the gas a
+        // completed run is finally charged. Measure it with disposable quarantine roots.
+        let minimal_gas = {
+            let state = fixture();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
+            metadata.insert(
+                crate::tx::QUARANTINE_METADATA_KEY.parse().unwrap(),
+                Json::new(true),
+            );
+            let source = TransactionBuilder::new(
+                state.network_id,
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(GAS)),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+            .sign(ALICE_KEYPAIR.private_key());
+            super::effect_budget::minimal_sufficient_gas_cap(
+                |cap| {
+                    let mut block = next_block(&state);
+                    let mut tx = block
+                        .transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+                    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                    tx.pipeline.quarantine_tx_max_gas = cap;
+                    Executor::Initial
+                        .execute_transaction(&mut tx, &ALICE_ID, &source, &mut cache)
+                        .map_err(crate::execution_attempt::expect_completed_rejection)
+                        .is_ok()
+                },
+                expected_gas,
+                GAS,
+            )
+        };
+        assert!(minimal_gas >= expected_gas);
+        // The capped root meets exactly the boundary the same program meets under that gas
+        // limit in an independent VM.
+        let independent_minimal_gas = super::effect_budget::minimal_sufficient_gas_cap(
+            |gas| run_vm(&program, gas).0.is_ok(),
+            expected_gas,
+            GAS,
+        );
+        assert_eq!(
+            minimal_gas, independent_minimal_gas,
+            "expected_gas={expected_gas}"
+        );
+        assert!(matches!(
+            run_vm(&program, minimal_gas - 1).0,
+            Err(error) if error.fault_kind()
+                == Some(iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas)
+        ));
         for case in 0..7 {
             // `min(signed limit, cap)` governs a quarantine root; 0 means no cap, and only an
             // exact authenticated boolean `true` classifies a transaction as quarantined.
             let (marker, cap, success) = match case {
-                0 => (Some(Json::new(true)), expected_gas, true),
-                1 => (Some(Json::new(true)), expected_gas - 1, false),
+                0 => (Some(Json::new(true)), minimal_gas, true),
+                1 => (Some(Json::new(true)), minimal_gas - 1, false),
                 2 => (Some(Json::new(true)), GAS.saturating_mul(2), true),
                 3 => (Some(Json::new(true)), 0, true),
                 4 => (Some(Json::new(false)), 1, true),

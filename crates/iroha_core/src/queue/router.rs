@@ -3011,10 +3011,13 @@ pub fn native_execution_target<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: u64,
 ) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    // A signerless ballot carries no executable or address scope: it belongs to lane zero of
+    // the global chain, where its board is (`specs/parliament_private_ballot_design.md` §3.6).
     if tx.is_anonymous_ballot() {
-        return Err(RoutingResolveError::Deferred(
-            crate::tx::anonymous_ballot_unavailable(),
-        ));
+        return Ok(NativeExecutionTarget {
+            dataspace: None,
+            global: true,
+        });
     }
     if let Some(Executable::ContractCall(call)) = transaction_executable(tx) {
         return Ok(NativeExecutionTarget {

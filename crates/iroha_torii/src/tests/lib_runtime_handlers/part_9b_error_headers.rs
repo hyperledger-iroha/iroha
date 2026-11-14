@@ -65,37 +65,33 @@ fn query_conversion_error_does_not_infer_a_reject_code_header() {
 }
 
 #[test]
-fn anonymous_ballot_unavailable_is_not_a_transaction_rejection() {
-    let original = iroha_core::tx::AcceptTransactionFail::AnonymousBallotUnavailable
-        .into_execution_deferred()
-        .expect("missing anonymous verifier is an unfinished local attempt");
+fn an_anonymous_ballot_the_node_cannot_decide_is_not_a_transaction_rejection() {
+    // The ballot partition of the queue defers a submission whose board, verifier or frame
+    // is locally unusable; a ballot the ordered checks reject carries its admission code.
+    let deferred = iroha_core::queue::Error::Deferred(
+        ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+    );
     assert_eq!(
-        original.reason(),
-        ivm::error::ExecutionDeferral::VerifierInitializationUnavailable
+        super::Error::status_code_for_queue_error(&deferred),
+        StatusCode::TOO_MANY_REQUESTS
     );
-    let error = super::Error::AcceptTransaction(
-        iroha_core::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
-    );
-    assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
-    let response = error.into_response();
-    assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(response.headers().get("x-iroha-reject-code").is_none());
-    let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
-        .expect("collect body")
-        .to_bytes();
-    let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body).unwrap();
-    assert_eq!(envelope.code(), "transaction_admission_deferred");
+    let envelope = super::Error::queue_error_envelope(&deferred, None);
+    assert_eq!(envelope.code, "admission_deferred");
+    let details = envelope.details.expect("retry details");
+    assert_eq!(details.retry_after_seconds, Some(1));
+    assert!(details.reject_code.is_none());
+
+    let rejected = iroha_core::queue::Error::UnsupportedTransactionAdmission {
+        reason: "anonymous_ballot_insufficient_stamp: the admission stamp does not reach the \
+                 frozen difficulty"
+            .to_owned(),
+    };
     assert_eq!(
-        envelope.details.as_ref().unwrap().retry_after_seconds,
-        Some(1)
+        super::Error::status_code_for_queue_error(&rejected),
+        StatusCode::BAD_REQUEST
     );
-    assert!(
-        envelope
-            .details
-            .as_ref()
-            .is_none_or(|details| details.reject_code.is_none())
-    );
+    let (_, detail) = super::queue_rejection_metadata(&rejected);
+    assert!(detail.starts_with("anonymous_ballot_insufficient_stamp:"));
 }
 
 #[test]

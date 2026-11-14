@@ -1,23 +1,11 @@
 //! Bounded authenticated identity reads across explicitly selected ledger readers.
 
 use super::*;
-use std::{io::ErrorKind, time::Instant};
+use std::time::Instant;
 
 const MAX_IDENTITY_READERS: usize = 16;
 
 fn unavailable_reader(error: &eyre::Report) -> bool {
-    let transient_io = |kind| {
-        matches!(
-            kind,
-            ErrorKind::ConnectionRefused
-                | ErrorKind::ConnectionReset
-                | ErrorKind::ConnectionAborted
-                | ErrorKind::NotConnected
-                | ErrorKind::BrokenPipe
-                | ErrorKind::TimedOut
-                | ErrorKind::UnexpectedEof
-        )
-    };
     for cause in error.chain() {
         if let Some(error) = cause.downcast_ref::<crate::Error>() {
             return match error {
@@ -25,7 +13,7 @@ fn unavailable_reader(error: &eyre::Report) -> bool {
                 crate::Error::Transport {
                     kind: crate::TransportErrorKind::Io(kind),
                     ..
-                } => transient_io(*kind),
+                } => crate::http_default::io_failure_is_transient(*kind),
                 _ => matches!(error.http_status(), Some(502..=504)),
             };
         }
@@ -166,7 +154,10 @@ mod tests {
         SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
     };
     use crate::http_default::RequestSnapshot;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        io::ErrorKind,
+        sync::{Arc, Mutex},
+    };
 
     fn alias() -> AccountAliasName {
         "staff@bank.paynet".parse().unwrap()

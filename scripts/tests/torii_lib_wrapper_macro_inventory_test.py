@@ -227,10 +227,10 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_POLICY_DECLARATIONS_SHA256 = "c9cd5d54a3818e070e662a1406ee781198ed4ab41411acb583a8c475bdfae006"
-ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
-ROUTE_ROW_COUNT = 617
-ROUTE_TUPLE_SHA256 = "ba1cb33ebe54e351f7ad871321e59223a2e7f13a1360acaba0080ea73716d94c"
+ROUTE_POLICY_DECLARATIONS_SHA256 = "45e338dd13463fe9205339f9a4dca306c027781911adc469443fa2245276c3d2"
+ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'limited_unauthenticated_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
+ROUTE_ROW_COUNT = 637
+ROUTE_TUPLE_SHA256 = "8878b0e4a6d6d66420f4138280f421c542c25194c7ec2e7274b765ab1a7f26b9"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -313,6 +313,82 @@ def _normalized_tokens(source: str) -> bytes:
             output.append(source[index])
             index += 1
     return "".join(output).encode()
+
+
+def _without_comments(source: str) -> str:
+    """Remove line and (nested) block comments, keeping layout, strings and raw strings.
+
+    Route-table rows are split on top-level semicolons outside comments; a comment that
+    documents a row is not part of the row's syntax, while commenting a row out changes the
+    inventoried rows and so their count and digest.
+    """
+
+    output: list[str] = []
+    index = 0
+    state = "code"
+    block_depth = 0
+    raw_hashes = 0
+    while index < len(source):
+        if state == "code":
+            if source.startswith("//", index):
+                state = "line_comment"
+                index += 2
+                continue
+            if source.startswith("/*", index):
+                state = "block_comment"
+                block_depth = 1
+                index += 2
+                continue
+            raw = re.match(r'(?:br|rb|r)(#*)"', source[index:])
+            if raw:
+                output.append(raw.group(0))
+                raw_hashes = len(raw.group(1))
+                index += len(raw.group(0))
+                state = "raw_string"
+                continue
+            if source[index] == '"':
+                state = "string"
+            output.append(source[index])
+            index += 1
+            continue
+        if state == "line_comment":
+            if source[index] == "\n":
+                output.append("\n")
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if source.startswith("/*", index):
+                block_depth += 1
+                index += 2
+            elif source.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    output.append(" ")
+                    state = "code"
+            else:
+                index += 1
+            continue
+        if state == "string":
+            output.append(source[index])
+            if source[index] == "\\" and index + 1 < len(source):
+                output.append(source[index + 1])
+                index += 2
+            else:
+                if source[index] == '"':
+                    state = "code"
+                index += 1
+            continue
+        raw_end = '"' + "#" * raw_hashes
+        if source.startswith(raw_end, index):
+            output.append(raw_end)
+            index += len(raw_end)
+            state = "code"
+        else:
+            output.append(source[index])
+            index += 1
+    return "".join(output)
 
 
 def _sha256(data: bytes) -> str:
@@ -887,6 +963,7 @@ def _route_table_rows(source: str) -> list[tuple[str, str, str, str, str, str]]:
             catalog = header[1]
             cfg = _route_cfg_at(match.start(), cfg_ranges)
             for row in parts[1:]:
+                row = _without_comments(row).strip()
                 row_match = re.fullmatch(
                     r"([A-Z0-9_]+)\s*=>\s*([a-z0-9_]+)\s*(\(.*\))",
                     row,
@@ -1366,6 +1443,28 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                   '/* outer /* spoof::r#define_catalog_route_policies! { decoy } */ tail */\n'
                   'const QUALIFIED_DECOY: &str = r###"spoof::define_catalog_route_policies! { decoy }"###;\n')
         validate_source(decoys + self.source)
+
+    def test_route_row_comments_document_rows_and_commented_out_rows_drift(self) -> None:
+        row = "RUNTIME_ABI_HASH => public_get(handler_runtime_abi_hash);"
+        self.assertEqual(self.source.count(row), 1)
+        rows = _route_table_rows(self.source)
+        # Line, nested block and trailing comments around a row are documentation only.
+        for comment in ("// documents the row\n            ",
+                        "/* outer /* nested */ tail */ ",
+                        "/* before */ RUNTIME_ABI_HASH /* inside */ => "):
+            with self.subTest(comment=comment):
+                if comment.endswith("=> "):
+                    documented = self.source.replace(
+                        row, comment + "public_get(handler_runtime_abi_hash);", 1)
+                else:
+                    documented = self.source.replace(row, comment + row, 1)
+                self.assertEqual(_route_table_rows(documented), rows)
+        # A row that is commented out is no longer inventoried.
+        commented_out = self.source.replace(row, "// " + row, 1)
+        self.assertEqual(len(_route_table_rows(commented_out)), len(rows) - 1)
+        with self.assertRaisesRegex(GuardError, "route row count drifted"):
+            validate_source(commented_out)
+        self.assertEqual(_without_comments('a /* "x" */ "b // c" // d\ne'), 'a   "b // c" \ne')
 
     def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
         mutations = (

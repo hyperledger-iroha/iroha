@@ -3005,6 +3005,39 @@ pub struct Queue {
     pub expired_cull_interval: Duration,
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
+    /// Node-local bounds of the partition of signerless anonymous ballots.
+    pub anonymous_ballots: QueueAnonymousBallots,
+}
+/// Node-local bounds of the queue's partition of signerless anonymous ballots
+/// (`[queue.anonymous_ballots]`).
+///
+/// They are back-pressure of this node alone: they refuse or delay a submission and never
+/// decide whether a ballot is valid or what a block may carry. The partition's count and
+/// byte budget are separate from the ordinary queue's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueAnonymousBallots {
+    /// Most verified ballots kept resident.
+    pub pending_limit: NonZeroUsize,
+    /// Estimated retained memory budget of the resident ballots in bytes.
+    pub max_retained_bytes: NonZeroU64,
+    /// Most ballot proofs verified at once.
+    pub verifier_concurrency: NonZeroUsize,
+    /// Ballot proof verifications started per second, over every local source.
+    pub verification_rate_per_sec: NonZeroU32,
+    /// Ballot proof verifications started in one burst.
+    pub verification_burst: NonZeroU32,
+}
+impl Default for QueueAnonymousBallots {
+    fn default() -> Self {
+        Self {
+            pending_limit: super::defaults::queue::ANONYMOUS_BALLOT_PENDING_LIMIT,
+            max_retained_bytes: super::defaults::queue::ANONYMOUS_BALLOT_MAX_RETAINED_BYTES,
+            verifier_concurrency: super::defaults::queue::ANONYMOUS_BALLOT_VERIFIER_CONCURRENCY,
+            verification_rate_per_sec:
+                super::defaults::queue::ANONYMOUS_BALLOT_VERIFICATION_RATE_PER_SEC,
+            verification_burst: super::defaults::queue::ANONYMOUS_BALLOT_VERIFICATION_BURST,
+        }
+    }
 }
 /// Validator activation and capacity configuration for public lanes.
 /// Monetary staking terms belong exclusively to the original committed policy.
@@ -6340,7 +6373,7 @@ impl_default!(Queue => {
             max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
-
+            anonymous_ballots: QueueAnonymousBallots::default(),
         }
 });
 /// Node role in consensus participation.
@@ -7104,6 +7137,8 @@ pub struct Torii {
     pub iso_bridge: IsoBridge,
     /// Transaction-ingress compute and HTTP batch limits.
     pub transaction_ingress: TransactionIngress,
+    /// Isolated ingress bounds of signerless anonymous-ballot submissions.
+    pub anonymous_ballot_ingress: AnonymousBallotIngress,
     /// Data-availability ingest configuration.
     pub da_ingest: DaIngest,
     /// `SoraFS` discovery cache configuration.
@@ -7867,6 +7902,35 @@ impl_default!(TransactionIngress => {
                 super::defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT,
         }
 });
+/// Torii's isolated ingress of signerless anonymous-ballot submissions
+/// (`[torii.anonymous_ballot_ingress]`).
+///
+/// The route is account- and session-free, so every bound is global: no token, address,
+/// scope or nullifier keys it. The bounds are local back-pressure; the ballot's own admission
+/// stamp and proof decide whether the queue keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnonymousBallotIngress {
+    /// Maximum number of concurrent ingress jobs (body read, decode, admission, proof).
+    pub max_concurrent_compute_jobs: NonZeroUsize,
+    /// Largest accepted submission body in bytes.
+    pub max_body_bytes: NonZeroUsize,
+    /// Submissions admitted per second over all callers together.
+    pub submissions_per_sec: NonZeroU32,
+    /// Submissions admitted in one burst over all callers together.
+    pub submission_burst: NonZeroU32,
+}
+impl Default for AnonymousBallotIngress {
+    fn default() -> Self {
+        Self {
+            max_concurrent_compute_jobs:
+                super::defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
+            max_body_bytes: super::defaults::torii::ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES,
+            submissions_per_sec:
+                super::defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSIONS_PER_SEC,
+            submission_burst: super::defaults::torii::ANONYMOUS_BALLOT_INGRESS_SUBMISSION_BURST,
+        }
+    }
+}
 /// Data-availability ingest configuration.
 #[derive(Clone)]
 #[allow(clippy::struct_field_names)]

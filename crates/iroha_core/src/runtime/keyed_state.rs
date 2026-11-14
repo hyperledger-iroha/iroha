@@ -167,29 +167,47 @@ pub fn next_change_set(
 
 /// Install the profile in an isolated genesis fixture, retaining all of its active applications.
 /// Production transitions require governed publication and installation of the same owners.
+///
+/// Beside what the World already publishes, the fixture publishes exactly the owners the
+/// governed cutover publishes ([`next_change_set`]): the profile, its row permission and the
+/// State-level storage. A root never publishes its whole release catalog, whose compositions
+/// over every predecessor profile no single selection can reach.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn install_for_test(world: &mut crate::state::World) {
+    use crate::state::StorageReadOnly as _;
     use mv::cell::Cell;
     let catalog = super::release_catalog().expect("compiled catalog");
+    let profile = descriptor().id().expect("compiled profile id");
+    let permission = super::state_row_permission::descriptor()
+        .id()
+        .expect("compiled permission");
     let mut selection = world.runtime_selection.view().get().clone();
-    selection.commitment_profile = descriptor().id().expect("compiled profile id");
+    selection.commitment_profile = profile;
     selection
         .installed_storage
         .extend_from_slice(&catalog.keyed_storage);
     selection.installed_storage.sort_unstable();
     selection.installed_storage.dedup();
-    selection.active.push(
-        super::state_row_permission::descriptor()
-            .id()
-            .expect("compiled permission"),
-    );
+    selection.active.push(permission);
     selection.active.sort_unstable();
     selection.active.dedup();
-    world.runtime_definitions = catalog
-        .definitions
+    let mut published: std::collections::BTreeMap<_, _> = world
+        .runtime_definitions
+        .view()
         .iter()
-        .map(|(k, v)| (*k, v.clone()))
+        .map(|(id, definition)| (*id, definition.clone()))
         .collect();
+    for id in [profile, permission]
+        .into_iter()
+        .chain(catalog.keyed_storage.iter().copied())
+    {
+        let definition = catalog
+            .definitions
+            .get(&id)
+            .expect("compiled keyed State owner");
+        published.insert(id, definition.clone());
+    }
+    world.runtime_definitions = published.into_iter().collect();
     world.runtime_selection = Cell::new(selection);
 }
 
@@ -246,6 +264,58 @@ mod tests {
         selection.commitment_profile = descriptor().id().unwrap();
         assert!(selected(&selection));
         assert_ne!(selection.id().unwrap(), catalog.baseline_id);
+    }
+    #[test]
+    fn the_fixture_publishes_exactly_the_governed_owners() {
+        use crate::state::{StorageReadOnly as _, World};
+        use iroha_data_model::runtime::definition::DefinitionDescriptorV1;
+        use std::collections::BTreeMap;
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let mut world = World::new();
+        let mut expected: BTreeMap<_, DefinitionDescriptorV1> = world
+            .runtime_definitions
+            .view()
+            .iter()
+            .map(|(id, definition)| (*id, definition.clone()))
+            .collect();
+        assert_eq!(
+            expected.keys().copied().collect::<Vec<_>>(),
+            catalog.baseline_definitions,
+            "a founded World publishes its baseline only"
+        );
+        install_for_test(&mut world);
+        let permission = crate::runtime::state_row_permission::descriptor()
+            .id()
+            .unwrap();
+        for id in [profile_id(), permission]
+            .into_iter()
+            .chain(catalog.keyed_storage.iter().copied())
+        {
+            expected.insert(id, catalog.definitions[&id].clone());
+        }
+        let published: BTreeMap<_, DefinitionDescriptorV1> = world
+            .runtime_definitions
+            .view()
+            .iter()
+            .map(|(id, definition)| (*id, definition.clone()))
+            .collect();
+        assert_eq!(published, expected);
+        assert!(
+            published.len() < catalog.definitions.len(),
+            "no root publishes every composition of its release"
+        );
+        let selection = world.runtime_selection.view().get().clone();
+        assert!(selected(&selection));
+        selection
+            .check_closure(&published)
+            .expect("the fixture publishes everything its selection retains");
+        // A repeated installation publishes and selects nothing further.
+        install_for_test(&mut world);
+        assert_eq!(world.runtime_selection.view().get(), &selection);
+        assert_eq!(
+            world.runtime_definitions.view().iter().count(),
+            published.len()
+        );
     }
     #[test]
     fn governed_kernel_then_profile_import_the_exact_registered_owners() {

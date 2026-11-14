@@ -185,10 +185,10 @@ impl TransactionCheck for StatelessChecks {
         _anchor_time_ms: u64,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         match tx {
+            // A signerless ballot executes only against the Parliament State of the global
+            // chain (`specs/parliament_private_ballot_design.md` §3.6): no lane carries one.
             TransactionEntrypoint::AnonymousBallot(_) => {
-                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ))
+                Err("an anonymous ballot executes only on the global chain".into())
             }
             TransactionEntrypoint::External(signed)
             | TransactionEntrypoint::SealedReveal(

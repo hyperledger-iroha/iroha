@@ -8,9 +8,16 @@ const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 5] = [
     checkpoint_prefix::DIRECTORY,
 ];
 
+/// Number of fixed store-root files declared by `Kura::physical_resource_fixed_root_files`.
+///
+/// The declaration and the scope's exact-shape check share this one count, so a
+/// newly owned root file cannot enter one without the other.
+const PHYSICAL_RESOURCE_FIXED_ROOT_FILE_COUNT: usize = 9;
+
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
-/// The total-byte owner enumerates these declared trees, nine fixed root files. In particular,
+/// The total-byte owner enumerates these declared trees and the
+/// `PHYSICAL_RESOURCE_FIXED_ROOT_FILE_COUNT` fixed root files. In particular,
 /// Consensus WAL/body/certificate files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
 /// is also excluded; it is not a retained data-budget artifact. No entire-store-root
@@ -60,7 +67,9 @@ impl KuraPhysicalResourceScope {
         store_root: &Path,
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::Unavailable as Missing;
-        if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len() || self.files.len() != 8 {
+        if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len()
+            || self.files.len() != PHYSICAL_RESOURCE_FIXED_ROOT_FILE_COUNT
+        {
             return Err(Missing::OwnerMismatch);
         }
         let canonical = |path: &Path| {
@@ -131,7 +140,9 @@ impl Kura {
         PHYSICAL_RESOURCE_OWNED_TREE_NAMES.map(|name| self.store_root.join(name))
     }
 
-    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 9] {
+    fn physical_resource_fixed_root_files(
+        &self,
+    ) -> [PathBuf; PHYSICAL_RESOURCE_FIXED_ROOT_FILE_COUNT] {
         let root = &self.store_root;
         let query = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let projection = root.join(crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE);

@@ -1178,7 +1178,8 @@ fn execute_local_contract_debug_view<C: RunContext>(
     )?;
     let selector = args.entrypoint;
     let descriptor = resolve_local_view_entrypoint(&verified, &selector)?;
-    let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
+    let entrypoint_pc =
+        resolve_local_contract_entrypoint_pc(summary.prepared_contract(), descriptor)?;
     let payload = load_contract_payload_value(
         args.payload.args.as_deref(),
         args.payload.args_file.as_deref(),
@@ -1349,7 +1350,8 @@ fn execute_local_contract_debug_call<C: RunContext>(
     )?;
     let selector = args.entrypoint;
     let descriptor = resolve_local_call_entrypoint(&verified, &selector)?;
-    let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
+    let entrypoint_pc =
+        resolve_local_contract_entrypoint_pc(summary.prepared_contract(), descriptor)?;
     let payload = load_contract_payload_value(
         args.payload.args.as_deref(),
         args.payload.args_file.as_deref(),
@@ -1868,12 +1870,21 @@ fn resolve_local_call_entrypoint<'a>(
         "kotoage or lifecycle",
     )
 }
+/// Resolve an entrypoint to its absolute PC in IVM code memory.
+///
+/// The VM loads the artifact without its fixed header, so the PC is the prepared
+/// contract's validated code address, never the artifact offset of the
+/// instruction stream (`code_offset`), which still counts the header.
 fn resolve_local_contract_entrypoint_pc(
-    code_bytes: &[u8],
+    prepared: &ivm::PreparedContract,
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
 ) -> Result<u64> {
-    let verified = verify_contract_from_bytes(code_bytes)?;
-    Ok(verified.code_offset as u64 + descriptor.entry_pc)
+    prepared.entrypoint_pc(&descriptor.name).ok_or_else(|| {
+        eyre!(
+            "contract artifact entrypoint `{}` has no validated code address",
+            descriptor.name
+        )
+    })
 }
 fn normalize_local_contract_payload(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
@@ -2123,12 +2134,28 @@ mod tests {
             ivm::SyscallPolicy::AbiV1RuntimeLifecycle
         );
         let entrypoint = &verified.contract_interface.entrypoints[0];
+        // Code memory starts after the fixed header: the entrypoint PC is the
+        // instruction stream's artifact offset less that header, plus `entry_pc`.
+        let header_len = summary.prepared_contract().header_len();
+        let entrypoint_pc =
+            resolve_local_contract_entrypoint_pc(summary.prepared_contract(), entrypoint).unwrap();
         assert_eq!(
-            resolve_local_contract_entrypoint_pc(&artifact, entrypoint).unwrap(),
-            verified.code_offset as u64 + entrypoint.entry_pc
+            entrypoint_pc,
+            (verified.code_offset - header_len) as u64 + entrypoint.entry_pc
+        );
+        assert_eq!(
+            entrypoint_pc,
+            summary.prepared_contract().instruction_entry_pc() + entrypoint.entry_pc
         );
         let mut vm = ivm::IVM::new(1_000_000);
         vm.load_prepared(summary.prepared_contract()).unwrap();
+        // The debugger seeks to that PC; the artifact offset is not a code address.
+        vm.set_program_counter(entrypoint_pc)
+            .expect("seek to the validated entrypoint");
+        assert!(matches!(
+            vm.set_program_counter(verified.code_offset as u64 + entrypoint.entry_pc + 2),
+            Err(ivm::VMError::DecodeError)
+        ));
         assert_eq!(
             vm.syscall_policy(),
             ivm::SyscallPolicy::AbiV1RuntimeLifecycle

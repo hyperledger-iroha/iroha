@@ -93,6 +93,27 @@ impl ExecutionMemoryLease {
         self.reservation.try_split(layout)
     }
 
+    /// Return this lease's unspent credit to its pool, then admit `plan` again
+    /// from that same pool.
+    ///
+    /// A refused funded allocation drops the charges it had already split, which
+    /// refunds them to the pool rather than to this lease. Refunding the rest
+    /// first leaves the pool holding exactly what the original admission
+    /// covered, so the new admission needs no capacity the owner did not have.
+    ///
+    /// # Errors
+    /// Returns the pool's refusal when another owner took that capacity or the
+    /// limit shrank in between; the lease is then left empty.
+    pub(crate) fn readmit(&mut self, plan: ExecutionMemoryPlan) -> Result<(), AllocationRefusal> {
+        let budget = self.reservation.allocation_budget();
+        // The original pool always admits zero bytes, so no credit is ever
+        // held by two reservations at once.
+        let empty = budget.try_reserve_bytes(0)?;
+        drop(std::mem::replace(&mut self.reservation, empty));
+        self.reservation = budget.try_reserve_bytes(plan.bytes)?;
+        Ok(())
+    }
+
     /// Unspent original credit; this diagnostic never grants a new allocation.
     pub fn remaining_bytes(&self) -> usize {
         self.reservation.remaining_bytes()
@@ -286,6 +307,47 @@ mod tests {
         drop(child);
         assert_eq!(budget.reserved_bytes(), 24);
         drop(buffer);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn readmission_restores_credit_a_refused_allocation_refunded_to_the_pool() {
+        let plan = ExecutionMemoryPlan::array::<u64>(4).unwrap();
+        let budget = AllocationBudget::new(40);
+        let mut lease = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
+        // A refused allocation drops its split charge back into the pool.
+        drop(
+            lease
+                .split_allocation(Layout::array::<u64>(3).unwrap())
+                .unwrap(),
+        );
+        assert_eq!(lease.remaining_bytes(), 8);
+        assert_eq!(budget.reserved_bytes(), 8);
+        lease.readmit(plan).unwrap();
+        assert_eq!(lease.remaining_bytes(), 32);
+        assert_eq!(budget.reserved_bytes(), 32);
+        assert!(lease.belongs_to(&budget));
+        // Readmitting whole credit is idempotent and never holds it twice.
+        budget.set_limit_bytes(32);
+        lease.readmit(plan).unwrap();
+        assert_eq!(budget.reserved_bytes(), 32);
+        // Capacity another owner took in between leaves the lease empty.
+        drop(
+            lease
+                .split_allocation(Layout::array::<u64>(1).unwrap())
+                .unwrap(),
+        );
+        let other = budget.try_reserve_bytes(1).unwrap();
+        assert!(matches!(
+            lease.readmit(plan),
+            Err(AllocationRefusal::Capacity { .. })
+        ));
+        assert_eq!(lease.remaining_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(other);
+        lease.readmit(plan).unwrap();
+        assert_eq!(lease.remaining_bytes(), 32);
+        drop(lease);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 

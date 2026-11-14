@@ -349,7 +349,7 @@ fn funded_vm_capture_requires_original_pool_and_refusal_preserves_execution() {
     vm.set_zk_trace_enabled(true);
     vm.set_max_cycles(8);
     vm.run().unwrap();
-    let before = vm.execution_summary();
+    let before = vm.execution_summary().unwrap();
     let resident = budget.reserved_bytes();
     let foreign = AllocationBudget::new(0);
     assert!(matches!(
@@ -363,7 +363,7 @@ fn funded_vm_capture_requires_original_pool_and_refusal_preserves_execution() {
         Err(VMError::AllocationDeferred(_))
     ));
     assert_eq!(budget.reserved_bytes(), resident);
-    assert_eq!(vm.execution_summary(), before);
+    assert_eq!(vm.execution_summary().unwrap(), before);
     budget.set_limit_bytes(128 * 1024 * 1024);
     let snapshot = vm.try_diagnostic_snapshot(&budget).unwrap();
     assert!(!snapshot.states().is_empty());

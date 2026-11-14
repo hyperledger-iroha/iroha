@@ -1027,6 +1027,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ivm_tooling_max_inflight: defaults::torii::IVM_TOOLING_MAX_INFLIGHT,
             ivm_tooling_timeout_ms: defaults::torii::IVM_TOOLING_TIMEOUT_MS,
             transaction_ingress: A::TransactionIngress::default(),
+            anonymous_ballot_ingress: A::AnonymousBallotIngress::default(),
             da_ingest,
             connect: A::Connect {
                 enabled: false,

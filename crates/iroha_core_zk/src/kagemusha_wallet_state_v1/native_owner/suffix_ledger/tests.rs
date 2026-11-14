@@ -222,7 +222,9 @@ fn signed_stage_requires_exactly_one_instruction_executable() {
 
 #[test]
 fn retained_attempts_survive_restart_without_a_lifetime_eight_attempt_cap() {
-    let native = NativeFinalityFixture::start("suffix-many-attempts");
+    // Attempt `index` is signed `index` milliseconds before the next proposal. A genesis at
+    // 20 ms gives all twenty attempts distinct nonzero creation times (20 down to 1 ms).
+    let native = NativeFinalityFixture::start_at("suffix-many-attempts", 20);
     let mut w = ledger_wallet(&native);
     let mut stage = stage(&mut w);
     let mut originals = Vec::new();

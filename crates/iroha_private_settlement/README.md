@@ -29,7 +29,15 @@ advance is durable before another read, so cold retries with the original genesi
 pins progress beyond the per-call read budget. The same exclusive preparation
 lease covers reads, checkpoint publication and wallet work; corrupt or foreign
 custody fails without restarting from genesis. Checkpoint bytes count toward the
-existing artifact limits. This is pending-payment recovery, with no historical
+existing artifact limits. Legs are prepared in leg-ordered windows of at most four
+on that one worker and lease. For each window the worker first checks every leg and
+makes its wallet calls in leg order, then constructs the reserved legs' proofs
+together, then validates, budgets and publishes the artifacts in leg order. Every
+prover joins before a proof is used, and the first leg in order that is absent,
+refused or panicked decides the call after the legs before it are durable; a later
+leg of that window may already be reserved, which a retry reopens. Beyond its own
+worker an operation borrows at most three further prover threads from one
+process-wide allowance, so concurrent sessions never multiply proof memory. This is pending-payment recovery, with no historical
 State restoration or alternate checkpoint decoder. Prepared settlement reuses this
 caller-key file owner through `FilePrivateSettlementArtifacts::finality()`. Its
 single atomic record has fixed prefix, registration and terminal-outcome slots bound

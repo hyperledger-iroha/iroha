@@ -323,6 +323,13 @@ def test_queue_signed_proposal_gas_admission_prefix_preserves_literal_spaces() -
      "signed proposal gas admission prefix changed"),
     ("        retired: &mut QueuePrivacyRetirements,\n", "",
      "signed proposal gas admission signature changed"),
+    # The ordinary budgets exclude the ballot partition's residents (slice 5 isolation).
+    ("} else if self.ordinary_active_len() >= self.capacity.get()",
+     "} else if self.active_len() >= self.capacity.get()",
+     "signed proposal gas admission prefix changed"),
+    ("|| self.ordinary_retained_bytes().saturating_add(retained_cost)",
+     "|| self.retained_bytes().saturating_add(retained_cost)",
+     "signed proposal gas admission prefix changed"),
 ))
 def test_queue_signed_proposal_gas_pins_runtime_selection_and_privacy_refusals(
     original: str, replacement: str, message: str,
@@ -339,12 +346,14 @@ def test_queue_signed_proposal_gas_pins_runtime_selection_and_privacy_refusals(
 
 @pytest.mark.parametrize("declaration,original,replacement", (
     (GAS_ENTRYPOINT, "TransactionEntrypoint::AnonymousBallot(_)", "TransactionEntrypoint::External(_)"),
-    (GAS_ENTRYPOINT, "Err(crate::execution_attempt::ExecutionAttemptError::Deferred(\n"
-     "                    crate::tx::anonymous_ballot_unavailable(),\n"
-     "                ))", "Ok(0)"),
-    (GAS_ENTRYPOINT, "crate::execution_attempt::ExecutionAttemptError::Deferred(",
-     "crate::execution_attempt::ExecutionAttemptError::Rejected("),
-    (GAS_ENTRYPOINT, "crate::tx::anonymous_ballot_unavailable()", "foreign_refusal()"),
+    (GAS_ENTRYPOINT, "TransactionEntrypoint::AnonymousBallot(_) => Ok(0),",
+     "TransactionEntrypoint::AnonymousBallot(_) => Ok(1),"),
+    (GAS_ENTRYPOINT, "TransactionEntrypoint::AnonymousBallot(_) => Ok(0),",
+     "TransactionEntrypoint::AnonymousBallot(_) => Ok(gas::meter_sealed_transaction_commitment(tx.encoded_len())),"),
+    (GAS_ENTRYPOINT, "TransactionEntrypoint::AnonymousBallot(_) => Ok(0),",
+     "TransactionEntrypoint::AnonymousBallot(_) => Err(\n"
+     "                crate::execution_attempt::ExecutionAttemptError::Deferred(foreign_refusal()),\n"
+     "            ),"),
     (GAS_REFUSED, "checked.into_accepted()", "checked.as_accepted().clone()"),
     (GAS_REFUSED, "checked.into_accepted()", "foreign_input"),
     (GAS_REFUSED, "            err,", "            err: Error::Full,"),
@@ -359,10 +368,10 @@ def test_queue_signed_proposal_gas_pins_runtime_selection_and_privacy_refusals(
     (GAS_ADMISSION, "            expires_at,", "            expires_at: None,"),
     (GAS_ADMISSION, "            frame_digest,", "            frame_digest: foreign_digest,"),
 ))
-def test_queue_signed_proposal_gas_retains_anonymous_refusal_and_original_input(
+def test_queue_signed_proposal_gas_retains_anonymous_zero_quote_and_original_input(
     declaration: str, original: str, replacement: str,
 ) -> None:
-    """Anonymous unavailability, moved refusal ownership and cached identity stay exact."""
+    """The ballot's zero ordinary gas, moved refusal ownership and cached identity stay exact."""
     sources = [guard.read(path) for path in QUEUE_GAS_PATHS]
     guard.require_queue_signed_proposal_gas(*sources)
     item = guard.rust_item(sources[1], declaration, QUEUE_GAS_PATHS[1])
@@ -5368,6 +5377,87 @@ def test_retired_parliament_release_exposure_baseline_and_entrypoint() -> None:
              and isinstance(node.func, ast.Name)
              and node.func.id == "require_retired_parliament_release_exposure"]
     assert len(calls) == 1 and not calls[0].args
+
+
+def test_anonymous_ballot_public_route_baseline_and_entrypoint() -> None:
+    """The anonymous family has one public route; pinning it qualifies nothing."""
+    guard.require_anonymous_ballot_public_route()
+    assert [row[1:3] for row in guard.ANONYMOUS_BALLOT_PUBLIC_ROUTES] == [
+        ("governance.anonymous_ballot.submit", "/v1/gov/anonymous-ballots"),
+    ]
+    assert [row[1:3] for row in guard.ANONYMOUS_BALLOT_PUBLIC_READS] == [
+        ("governance.anonymous_ballot.board.read", "/v1/gov/anonymous-ballots/boards/{scope}"),
+        ("governance.anonymous_ballot.attempt.read",
+         "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}"),
+    ]
+    tree = ast.parse(inspect.getsource(guard.main))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name)
+             and node.func.id == "require_anonymous_ballot_public_route"]
+    assert len(calls) == 1 and not calls[0].args
+    # The baseline Parliament route pins are a separate, unchanged rule.
+    guard.require_retired_parliament_release_exposure()
+
+
+_BALLOT_CATALOG = "crates/iroha_torii_shared/src/route_catalog.rs"
+_BALLOT_TORII = "crates/iroha_torii/src/lib.rs"
+_BALLOT_GOV = "crates/iroha_torii/src/gov.rs"
+
+
+@pytest.mark.parametrize("path,original,replacement,message", (
+    # The descriptor: admission class, credential, effect, path and the exact route set.
+    (_BALLOT_CATALOG, "AdmissionPolicy::AnonymousBallotProof,\n    )",
+     "AdmissionPolicy::AuthenticatedAccount,\n    )", "SUBMIT descriptor changed"),
+    (_BALLOT_CATALOG, '"/v1/gov/anonymous-ballots",', '"/v1/gov/anonymous-ballots/{nullifier}",',
+     "route path set changed"),
+    (_BALLOT_CATALOG, "    pub const GOV_ANONYMOUS_BALLOT_SUBMIT: RouteDescriptor",
+     "    pub const GOV_ANONYMOUS_BALLOT_STATUS: &str = \"status\";\n"
+     "    pub const GOV_ANONYMOUS_BALLOT_SUBMIT: RouteDescriptor",
+     "route definition/registry set changed"),
+    # The mount and the handler: no caller credential, no ordinary permit, its own bounds.
+    (_BALLOT_TORII, "limited_unauthenticated_post(handler_gov_anonymous_ballot_submit, anonymous_ballot_body_limit);",
+     "limited_public_post(handler_gov_anonymous_ballot_submit, anonymous_ballot_body_limit);",
+     "SUBMIT mount changed"),
+    (_BALLOT_TORII, "    let format = early_rejection_response_format(request.headers());\n    let throttled = ||",
+     "    let format = early_rejection_response_format(request.headers());\n"
+     "    let _ = validate_api_token(app.as_ref(), request.headers());\n    let throttled = ||",
+     "reads a caller credential or an ordinary permit: validate_api_token"),
+    (_BALLOT_TORII, "        .anonymous_ballot_ingress_inflight\n        .clone()\n        .try_acquire_owned()",
+     "        .transaction_ingress_compute_inflight\n        .clone()\n        .try_acquire_owned()",
+     "reads a caller credential or an ordinary permit: transaction_ingress_compute_inflight"),
+    # The account-authenticated entrypoint route stays closed, before any token is read.
+    (_BALLOT_TORII, 'code: "anonymous_ballot_route_required",', 'code: "anonymous_ballot_accepted_here",',
+     "must refuse a ballot before any token"),
+    # The listener-token exemption is exact and never applies on a private root.
+    (_BALLOT_TORII, "if !app.is_private_root() && is_anonymous_ballot_submission_route(&req) {",
+     "if is_anonymous_ballot_submission_route(&req) {", "listener-token exemption changed"),
+    (_BALLOT_TORII, "        == route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT.stable_route_id()\n}",
+     "        != route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT.stable_route_id()\n}",
+     "route predicate changed"),
+    # The whole-record reads: public read-only GETs that take one path parameter and nothing
+    # that selects a credential, an assignment or a nullifier.
+    (_BALLOT_CATALOG, '"/v1/gov/anonymous-ballots/boards/{scope}",',
+     '"/v1/gov/anonymous-ballots/boards/{scope}/{nullifier}",', "route path set changed"),
+    (_BALLOT_TORII, "public_get(handler_gov_anonymous_ballot_board_read);",
+     "public_post(handler_gov_anonymous_ballot_board_read);", "BOARD_READ mount changed"),
+    (_BALLOT_GOV, "pub fn handle_gov_anonymous_ballot_board_read(\n    state: &iroha_core::state::State,\n    scope: &str,\n)",
+     "pub fn handle_gov_anonymous_ballot_board_read(\n    state: &iroha_core::state::State,\n    scope: &str,\n    nullifier: &str,\n)",
+     "takes more than its one public path parameter"),
+    (_BALLOT_GOV, "    norito::core::to_bytes_bounded(attempt, MAX_ANONYMOUS_PARLIAMENT_ATTEMPT_READ_BYTES_V1)",
+     "    norito::core::to_bytes(attempt)", "must project one bounded committed record"),
+))
+def test_anonymous_ballot_public_route_refuses_another_shape(
+    path: str, original: str, replacement: str, message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proof-admitted route keeps its exact account- and session-free shape."""
+    guard.require_anonymous_ballot_public_route()
+    source = guard.read(path)
+    assert source.count(original) == 1, original
+    mutated = source.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda p: mutated if p == path else original_read(p))
+    with pytest.raises(RuntimeError, match=re.escape(message)):
+        guard.require_anonymous_ballot_public_route()
 
 
 @pytest.mark.parametrize("mutation", ("method", "operation", "disabled", "foreign_owner", "unterminated"))

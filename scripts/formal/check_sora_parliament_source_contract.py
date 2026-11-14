@@ -1638,7 +1638,7 @@ def require_block_start_construction(state: str) -> None:
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
-        (hydration_path, "d2259450d7526a8b5ba4c5ed04ce1a9816ded6e814190c95e7012800377c4615"),
+        (hydration_path, "30b0ad1d1de3e74e938da7501266250fa09e94358060a05c1f622feaae6c9670"),
     ):
         if rust_token_digest(sources[location]) != expected:
             raise RuntimeError(f"{location}: start construction changed its defining module tokens")
@@ -1686,6 +1686,145 @@ PARLIAMENT_PUBLIC_ROUTES = (
     ("ATTEMPT_PLAN", "attempt_plan", "app_signed_get", "attempts/{governance_attempt_id}/plan", "attempt.plan"),
     ("TRANSITION_DRAFT", "transition_draft", "app_signed_post", "transitions/draft", "transition.draft"),
 )
+
+
+ANONYMOUS_BALLOT_PUBLIC_ROUTES = (
+    ("SUBMIT", "governance.anonymous_ballot.submit", "/v1/gov/anonymous-ballots",
+     "handler_gov_anonymous_ballot_submit"),
+)
+# Public whole-record reads of the family: (tag, operation, path, Torii handler, projection owner).
+# Neither takes a credential, a seat, an assignment or a nullifier as a selector.
+ANONYMOUS_BALLOT_PUBLIC_READS = (
+    ("BOARD_READ", "governance.anonymous_ballot.board.read",
+     "/v1/gov/anonymous-ballots/boards/{scope}",
+     "handler_gov_anonymous_ballot_board_read", "handle_gov_anonymous_ballot_board_read"),
+    ("ATTEMPT_READ", "governance.anonymous_ballot.attempt.read",
+     "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}",
+     "handler_gov_anonymous_parliament_attempt_read", "handle_gov_anonymous_parliament_attempt_read"),
+)
+# What an account- and session-free handler never names: a caller credential, a caller address,
+# the ordinary transaction permit or its per-token accounting.
+ANONYMOUS_BALLOT_HANDLER_FORBIDDEN = (
+    "validate_api_token", "authenticated_principal", "tx_preauth_rate_limiter",
+    "transaction_ingress_compute_inflight", "try_acquire_transaction_ingress_compute",
+    "HeaderMap", "remote_addr", "RemoteAddr", "ConnectInfo", "cookie", "authorization",
+)
+
+
+def require_anonymous_ballot_public_route() -> None:
+    """Pin the anonymous family's public surface: one account- and session-free submission route.
+
+    The baseline `/v1/gov/parliament/*` set stays pinned by
+    `require_retired_parliament_release_exposure`. This rule keeps the anonymous family's own
+    route set exact, its admission class proof-based and unauthenticated, its handler free of
+    caller credentials and ordinary transaction permits, and the account-authenticated
+    entrypoint route closed to ballots. It checks source structure only: it does not qualify
+    the proof profile, the ingress bounds or any anonymity transport.
+    """
+    catalog_path = "crates/iroha_torii_shared/src/route_catalog.rs"
+    torii_path = "crates/iroha_torii/src/lib.rs"
+    catalog, torii = read(catalog_path), read(torii_path)
+    every = ANONYMOUS_BALLOT_PUBLIC_ROUTES + ANONYMOUS_BALLOT_PUBLIC_READS
+    constants = tuple("GOV_ANONYMOUS_BALLOT_" + row[0] for row in every)
+    found = tuple(re.findall(r"\bGOV_ANONYMOUS_BALLOT_[A-Z_]+\b", mask_rust(catalog)))
+    if found != constants + constants:
+        raise RuntimeError(f"{catalog_path}: anonymous-ballot route definition/registry set changed")
+    paths = tuple(re.findall(r'"(/v1/gov/anonymous-ballots[^"\n]*)"', strip_rust_comments(catalog)))
+    if paths != tuple(row[2] for row in every):
+        raise RuntimeError(f"{catalog_path}: anonymous-ballot route path set changed")
+    gov_path = "crates/iroha_torii/src/gov.rs"
+    gov = read(gov_path)
+    for tag, operation, path, handler, owner in ANONYMOUS_BALLOT_PUBLIC_READS:
+        matches = list(re.finditer(rf"\bpub\s+const\s+GOV_ANONYMOUS_BALLOT_{tag}\s*:", mask_rust(catalog)))
+        if len(matches) != 1:
+            raise RuntimeError(f"{catalog_path}: anonymous-ballot {tag} descriptor is not unique")
+        start = matches[0].start()
+        descriptor = compact_rust(strip_rust_comments(catalog[start:catalog.index(";", start) + 1]))
+        expected = compact_rust(
+            f"pub const GOV_ANONYMOUS_BALLOT_{tag}: RouteDescriptor = RouteDescriptor::new("
+            f'"{operation}", HttpMethod::Get, "{path}", ApiSurface::Public, Listener::Torii, '
+            "RouteEffect::ReadOnly, AdmissionPolicy::Public,)"
+            '.with_feature_gate(FeatureGate::Feature("app_api"))'
+            ".with_projections(RouteProjections::OPENAPI_AND_SDK);"
+        )
+        if descriptor != expected:
+            raise RuntimeError(f"{catalog_path}: anonymous-ballot {tag} descriptor changed")
+        mount = f"GOV_ANONYMOUS_BALLOT_{tag} => public_get({handler});"
+        if compact_rust(torii).count(compact_rust(mount)) != 1:
+            raise RuntimeError(f"{torii_path}: anonymous-ballot {tag} mount changed")
+        # The projection is the whole committed record of one public key: no secret material,
+        # and no request field beyond the path parameter selects anything.
+        projection = mask_rust(rust_item(gov, f"pub fn {owner}(", gov_path))
+        signature = compact_rust(projection[:projection.index("{")])
+        if not re.fullmatch(
+            rf"pubfn{owner}\(state:&iroha_core::state::State,[a-z_]+:&str,?\)->Result<Vec<u8>,crate::Error>",
+            signature,
+        ):
+            raise RuntimeError(f"{gov_path}: {owner} takes more than its one public path parameter")
+        if "state.query_view()" not in projection or "to_bytes_bounded" not in projection:
+            raise RuntimeError(f"{gov_path}: {owner} must project one bounded committed record")
+        for forbidden in ("secret", "CredentialHandle", "nullifier", "assignment_id", "account"):
+            if re.search(rf"\b{forbidden}\b", projection):
+                raise RuntimeError(f"{gov_path}: {owner} names {forbidden}")
+    for tag, operation, path, handler in ANONYMOUS_BALLOT_PUBLIC_ROUTES:
+        matches = list(re.finditer(rf"\bpub\s+const\s+GOV_ANONYMOUS_BALLOT_{tag}\s*:", mask_rust(catalog)))
+        if len(matches) != 1:
+            raise RuntimeError(f"{catalog_path}: anonymous-ballot {tag} descriptor is not unique")
+        start = matches[0].start()
+        descriptor = compact_rust(strip_rust_comments(catalog[start:catalog.index(";", start) + 1]))
+        expected = compact_rust(
+            f"pub const GOV_ANONYMOUS_BALLOT_{tag}: RouteDescriptor = RouteDescriptor::new("
+            f'"{operation}", HttpMethod::Post, "{path}", ApiSurface::Public, Listener::Torii, '
+            "RouteEffect::Mutation, AdmissionPolicy::AnonymousBallotProof,)"
+            ".with_authentication(AuthenticationPolicy::Unauthenticated)"
+            '.with_feature_gate(FeatureGate::Feature("app_api"))'
+            ".with_projections(RouteProjections::OPENAPI_AND_SDK)"
+            ".with_cors_options(true);"
+        )
+        if descriptor != expected:
+            raise RuntimeError(f"{catalog_path}: anonymous-ballot {tag} descriptor changed")
+        mount = (f"GOV_ANONYMOUS_BALLOT_{tag} => limited_unauthenticated_post("
+                 f"{handler}, anonymous_ballot_body_limit);")
+        if compact_rust(torii).count(compact_rust(mount)) != 1:
+            raise RuntimeError(f"{torii_path}: anonymous-ballot {tag} mount changed")
+        body = mask_rust(rust_item(torii, f"async fn {handler}(", torii_path))
+        for forbidden in ANONYMOUS_BALLOT_HANDLER_FORBIDDEN:
+            if re.search(rf"\b{re.escape(forbidden)}\b", body):
+                raise RuntimeError(
+                    f"{torii_path}: {handler} reads a caller credential or an ordinary permit: {forbidden}"
+                )
+        for required in ("anonymous_ballot_rate_limiter", "anonymous_ballot_ingress_inflight",
+                         "anonymous_ballot_max_body_bytes"):
+            if not re.search(rf"\b{required}\b", body):
+                raise RuntimeError(f"{torii_path}: {handler} lost its own bound {required}")
+    entrypoint = compact_rust(strip_rust_comments(
+        rust_item(torii, "async fn handler_post_transaction_entrypoint(", torii_path)))
+    refusal = compact_rust(
+        "if matches!(transaction, TransactionEntrypoint::AnonymousBallot(_)) {"
+        "return Err(Error::AppQueryValidation {"
+        'code: "anonymous_ballot_route_required",'
+    )
+    token = compact_rust("validate_api_token(app.as_ref(), &headers)")
+    if (entrypoint.count(refusal) != 1 or entrypoint.count(token) != 1
+            or entrypoint.index(refusal) > entrypoint.index(token)):
+        raise RuntimeError(
+            f"{torii_path}: the account-authenticated entrypoint route must refuse a ballot before any token"
+        )
+    gate = compact_rust(strip_rust_comments(rust_item(torii, "async fn enforce_api_token(", torii_path)))
+    bypass = compact_rust(
+        "if !app.is_private_root() && is_anonymous_ballot_submission_route(&req) {"
+        "return Ok(next.run(req).await); }"
+    )
+    if gate.count(bypass) != 1:
+        raise RuntimeError(f"{torii_path}: the anonymous-ballot listener-token exemption changed")
+    predicate = compact_rust(strip_rust_comments(
+        rust_item(torii, "fn is_anonymous_ballot_submission_metadata(", torii_path)))
+    if predicate != compact_rust(
+        "fn is_anonymous_ballot_submission_metadata(route: &MatchedRouteMetadata) -> bool {"
+        "route.stable_route_id() == "
+        "route_catalog::runtime_governance::GOV_ANONYMOUS_BALLOT_SUBMIT.stable_route_id() }"
+    ):
+        raise RuntimeError(f"{torii_path}: the anonymous-ballot route predicate changed")
 
 
 def require_retired_parliament_release_exposure() -> None:
@@ -1768,7 +1907,7 @@ def require_retired_parliament_release_exposure() -> None:
     startup = rust_item(daemon, "async fn activate_with_runtime_deps(", daemon_path)
     builder = rust_item(startup, "let runtime_deps = (|| {", daemon_path)
     if (compact_rust(mask_rust(startup)).count("letruntime_deps=(||{") != 1
-            or rust_token_digest(builder) != "53092d37a92397ba664f0b71b4d2668ca574f131d047f7855040198dc322a2d2"
+            or rust_token_digest(builder) != "facce9d46ab161dd696b14a9cc5d61e9c488bcaa2689c2d90cbf1ec649380e51"
             or not compact_rust(mask_rust(startup[startup.index(builder) + len(builder):])).startswith(")();letqueue_backpressure=")):
         raise RuntimeError(f"{daemon_path}: current Torii dependency construction changed")
 
@@ -5164,13 +5303,11 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
             }
         }
     }""", "impl Queue")
+    # A signerless ballot pays no fee and spends no ordinary gas: the per-block ballot budget
+    # bounds it (design section 3.6). Any other quote for it is a change to review.
     exact_body(queue, queue_path, "pub(crate) fn compute_proposal_gas_cost(", """{
         match tx.entrypoint() {
-            TransactionEntrypoint::AnonymousBallot(_) => {
-                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                    crate::tx::anonymous_ballot_unavailable(),
-                ))
-            }
+            TransactionEntrypoint::AnonymousBallot(_) => Ok(0),
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 Self::signed_executable_proposal_gas_cost(signed, zk_gas)
             }
@@ -5247,7 +5384,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "77477cdb08deb99ea3f9a0a82efaa6c9d1cec363874355dbbcaa25b57a034ebf":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "bf50f2241f9b843f938b734426fc60aed2e9877588201e5231986fb684a34a82":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):
@@ -7521,6 +7658,7 @@ def main() -> int:
     route_catalog_path = "crates/iroha_torii_shared/src/route_catalog.rs"
     route_catalog = read(route_catalog_path)
     require_retired_parliament_release_exposure()
+    require_anonymous_ballot_public_route()
 
     retired_public_parliament_identifiers = (
         "ParliamentTerm",

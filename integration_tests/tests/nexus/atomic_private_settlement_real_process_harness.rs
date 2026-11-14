@@ -9583,6 +9583,43 @@ fn run_real_process_leakage_campaign(
 }
 
 #[cfg(unix)]
+/// Greatest number of independent benchmark client units (legs, or one committee's
+/// endpoints) that run together.
+const REAL_PROCESS_BENCHMARK_FANOUT: usize = 4;
+
+/// Run one independent unit of benchmark client work per index, at most
+/// [`REAL_PROCESS_BENCHMARK_FANOUT`] together and in index-ordered windows.
+///
+/// Every unit started in a window joins before any of its results is used and before the
+/// next window starts. Results keep index order and the first failure in index order is
+/// returned; a panicking unit resumes its panic on the caller after its window joined.
+fn benchmark_fanout<T: Send>(
+    count: usize,
+    work: impl Fn(usize) -> Result<T> + Sync,
+) -> Result<Vec<T>> {
+    let mut complete = Vec::with_capacity(count);
+    for first in (0..count).step_by(REAL_PROCESS_BENCHMARK_FANOUT) {
+        let last = count.min(first + REAL_PROCESS_BENCHMARK_FANOUT);
+        let joined = std::thread::scope(|scope| {
+            let work = &work;
+            // Start the whole window before joining any of it.
+            let mut started = Vec::with_capacity(last - first);
+            for index in first..last {
+                started.push(scope.spawn(move || work(index)));
+            }
+            // Collecting into a Vec completes every join before any result is read.
+            started
+                .into_iter()
+                .map(std::thread::ScopedJoinHandle::join)
+                .collect::<Vec<_>>()
+        });
+        for outcome in joined {
+            complete.push(outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic))?);
+        }
+    }
+    Ok(complete)
+}
+
 fn run_real_process_private_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
@@ -9636,21 +9673,23 @@ fn run_real_process_private_benchmark(
     measurement_boundary("ready")?;
     let end_to_end_started = Instant::now();
 
+    ensure!(
+        governed.len() == committees.len() && governed.len() == private_data.len(),
+        "private benchmark leg matrix is incomplete"
+    );
     let proof_started = Instant::now();
-    let prepared = governed
-        .into_iter()
-        .zip(&committees)
-        .enumerate()
-        .map(|(ordinal, (leg, committee))| {
-            prepare_leg_with_private_data(
-                ordinal,
-                leg,
-                &manifest,
-                committee.authority.digest()?,
-                &private_data[ordinal],
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // The legs' proofs are independent: they are constructed together, within the bounded
+    // fan-out and the recorded Rayon width, and every prover joins before a proof is used.
+    // No leg is uploaded before every proof exists: the provisional manifest binds them all.
+    let prepared = benchmark_fanout(governed.len(), |ordinal| {
+        prepare_leg_with_private_data(
+            ordinal,
+            governed[ordinal].clone(),
+            &manifest,
+            committees[ordinal].authority.digest()?,
+            &private_data[ordinal],
+        )
+    })?;
     let proof_generation = elapsed_ms(proof_started);
     let proof_bytes = prepared.iter().try_fold(0_u64, |total, leg| {
         total
@@ -9660,47 +9699,51 @@ fn run_real_process_private_benchmark(
 
     let upload_started = Instant::now();
     let materials = provisional_materials(manifest, &prepared, &committees)?;
-    let certificates = materials
-        .iter()
-        .zip(&committees)
-        .map(|(material, committee)| {
-            sponsor
-                .client()
-                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Each committee certifies its own leg; every certificate exists before any upload.
+    let certificates = benchmark_fanout(materials.len(), |ordinal| {
+        sponsor
+            .client()
+            .certify_private_settlement_leg_availability_v1(
+                &committees[ordinal].endpoints,
+                &materials[ordinal],
+            )
+    })?;
     let mut final_manifest = materials[0].manifest.clone();
     for (ordinal, certificate) in certificates.iter().enumerate() {
         final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
     }
     final_manifest.validate()?;
-    for (ordinal, ((material, certificate), committee)) in materials
-        .iter()
-        .zip(&certificates)
-        .zip(&committees)
-        .enumerate()
-    {
+    // Every endpoint of every committee must acknowledge its certified leg: the benchmark
+    // keeps all four uploads per leg and does not accept the SDK's promotion quorum.
+    benchmark_fanout(materials.len(), |ordinal| {
+        let committee = &committees[ordinal];
         let upload = PrivateSettlementLegUploadRequestV1 {
             manifest: final_manifest.clone(),
-            audit_policy: material.audit_policy.clone(),
-            committee_authority: material.committee_authority.clone(),
-            payload: material.payload_with_certificate(certificate.clone()),
+            audit_policy: materials[ordinal].audit_policy.clone(),
+            committee_authority: materials[ordinal].committee_authority.clone(),
+            payload: materials[ordinal].payload_with_certificate(certificates[ordinal].clone()),
         };
-        for endpoint in &committee.endpoints {
-            let response = sponsor
+        let acknowledged = benchmark_fanout(committee.endpoints.len(), |member| {
+            sponsor
                 .client()
-                .upload_private_settlement_leg_to_v1(endpoint, &upload)?;
+                .upload_private_settlement_leg_to_v1(&committee.endpoints[member], &upload)
+        })?;
+        for response in acknowledged {
             ensure!(
                 usize::from(response.leg_ordinal) == ordinal,
                 "upload ordinal substitution"
             );
         }
-    }
+        Ok(())
+    })?;
     let restricted_upload_availability = elapsed_ms(upload_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
 
     let auditor_started = Instant::now();
-    for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
+    // Each leg's auditor reads its capsule quorum, decides and approves independently of
+    // the other legs; every leg is Audited before committee verification starts.
+    benchmark_fanout(prepared.len(), |ordinal| {
+        let (leg, committee) = (&prepared[ordinal], &committees[ordinal]);
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
         let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
@@ -9756,7 +9799,8 @@ fn run_real_process_private_benchmark(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
             "approval quorum was not durable"
         );
-    }
+        Ok(())
+    })?;
     let auditor_response = elapsed_ms(auditor_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
 

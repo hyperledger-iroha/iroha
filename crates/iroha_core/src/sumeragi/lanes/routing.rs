@@ -137,7 +137,18 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
         height: u64,
     ) -> Result<Option<LaneId>, crate::execution_attempt::ExecutionDeferred> {
         if tx.is_anonymous_ballot() {
-            return Err(crate::tx::anonymous_ballot_unavailable());
+            // A signerless ballot executes only on lane zero of the global chain, on a root
+            // whose selection installs its entrypoint. Everywhere else it has no route: a
+            // private root, a native lane and a root without the entrypoint carry none.
+            // Routing reads the selection alone, never the State the ballot is decided on.
+            let global = matches!(
+                self.root_scope.filter(|scope| scope.validate().is_ok()),
+                Some(SumeragiRootScope::Global)
+            );
+            // SPEC: §13.4 HC814 — a root that does not install the family routes no ballot.
+            let installed = crate::tx::anonymous_ballot_entrypoint_installed(self.world)
+                || cfg!(all(test, sumeragi_core_mutation = "HC814"));
+            return Ok((global && installed).then_some(GLOBAL_LANE));
         }
         let Some(scope) = self.root_scope.filter(|scope| scope.validate().is_ok()) else {
             return Ok(None);
@@ -647,16 +658,35 @@ mod tests {
         );
     }
     #[test]
-    fn anonymous_ballot_route_is_unavailable_before_default_or_missing_scope() {
-        let world = test_support::world(SumeragiRootScope::Global);
-        let view = world.view();
+    fn an_anonymous_ballot_routes_to_lane_zero_only_where_the_global_root_installs_the_family() {
         let dataspaces = DataSpaceCatalog::default();
         let lanes = lanes(Vec::new());
         let entry = crate::tx::anonymous_ballot_tests::entrypoint();
         let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
             std::borrow::Cow::Borrowed(&entry),
         );
-        for root_scope in [None, Some(SumeragiRootScope::Global)] {
+        let private = SumeragiRootScope::Dataspace {
+            parent_network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"private-root")),
+            ),
+            dataspace_id: DataSpaceId::new((1_u64 << 40) + 7),
+        };
+        // (the family installed, the routing root scope) -> the ballot's lane.
+        for (installed, root_scope, expected) in [
+            (false, Some(SumeragiRootScope::Global), None),
+            (true, None, None),
+            (true, Some(private), None),
+            (true, Some(SumeragiRootScope::Global), Some(GLOBAL_LANE)),
+        ] {
+            let world = test_support::world(SumeragiRootScope::Global);
+            if installed {
+                crate::runtime::activate_additions_for_testing(
+                    &world,
+                    crate::runtime::catalog::additions::PARLIAMENT_ANONYMOUS.module,
+                )
+                .expect("activate the anonymous family");
+            }
+            let view = world.view();
             let inputs = RoutingInputs {
                 root_scope,
                 policy: None,
@@ -665,21 +695,28 @@ mod tests {
                 world: &view,
                 ledger_time_ms: 0,
             };
-            for result in [
-                inputs.route(&accepted, 1).map(|_| ()),
-                inputs.execution_route(&accepted, 1).map(|_| ()),
-            ] {
-                assert_eq!(
-                    result.unwrap_err().reason(),
-                    ivm::error::ExecutionDeferral::VerifierInitializationUnavailable
-                );
-            }
+            assert_eq!(
+                inputs.route(&accepted, 1).expect("a committed answer"),
+                expected,
+                "installed: {installed}, scope: {root_scope:?}"
+            );
+            assert_eq!(
+                inputs
+                    .execution_route(&accepted, 1)
+                    .expect("a committed answer"),
+                expected.map(|lane| {
+                    crate::queue::RoutingDecision::new(lane, DataSpaceId::UNIVERSAL)
+                }),
+                "installed: {installed}, scope: {root_scope:?}"
+            );
         }
-        assert!(
-            matches!(native_execution_target(&accepted, &dataspaces, &view, 0),
-            Err(crate::queue::RoutingResolveError::Deferred(reason))
-                if reason.reason() == ivm::error::ExecutionDeferral::VerifierInitializationUnavailable)
-        );
+        // Its native target is the global chain, with no concrete dataspace of its own.
+        let world = test_support::world(SumeragiRootScope::Global);
+        let view = world.view();
+        let target = native_execution_target(&accepted, &dataspaces, &view, 0)
+            .expect("a ballot has a native target");
+        assert!(target.global);
+        assert_eq!(target.dataspace, None);
     }
 
     #[test]

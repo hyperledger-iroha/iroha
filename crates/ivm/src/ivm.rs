@@ -1282,8 +1282,10 @@ impl IVM {
     /// Create a VM with the default adaptive policy, deferring on local allocation refusal.
     ///
     /// # Errors
-    /// Returns a local execution deferral if the VM memory image or Merkle backing
-    /// cannot be reserved and allocated. This error does not change transaction validity.
+    /// Returns a local execution deferral if the VM memory image or the register
+    /// Merkle backing cannot be reserved and allocated. The memory image's Merkle
+    /// storage is allocated later, by the first root or path request. This error
+    /// does not change transaction validity.
     pub fn try_new(gas_limit: u64) -> Result<Self, VMError> {
         Self::try_new_from_config(IvmConfig::adaptive(gas_limit))
     }
@@ -1291,6 +1293,8 @@ impl IVM {
     /// Construct a VM with its fixed guest memory image prepaid by a local pool.
     ///
     /// This funds the fixed image backing, memory and register Merkle nodes.
+    /// The memory Merkle storage is only admitted here: its prepaid credit stays
+    /// with the image until the first root or path request allocates it.
     /// Root and nested frame initialization bitmaps are admitted before call
     /// entry. Runtime templates, frame-vector growth, and host scratch still
     /// require separate admission.
@@ -1400,7 +1404,7 @@ impl IVM {
     fn new_from_config(config: IvmConfig) -> Self {
         Self::try_new_from_config(config).expect("VM construction requires local memory")
     }
-    /// Construct a VM with fallible, allocation-charged memory and Merkle leaves.
+    /// Construct a VM with a fallible, allocation-charged memory image.
     fn try_new_from_config(config: IvmConfig) -> Result<Self, VMError> {
         Self::try_new_from_config_with_memory_budget(config, None)
     }
@@ -3115,7 +3119,14 @@ impl IVM {
     ///
     /// The returned hashes are not an independently verifiable proof or an
     /// authenticated attestation of execution.
-    pub fn execution_summary(&mut self) -> ExecutionSummary {
+    ///
+    /// # Errors
+    /// Defers locally when the memory root is requested for the first time and
+    /// its Merkle storage cannot be allocated. Nothing else here can fail.
+    pub fn execution_summary(&mut self) -> Result<ExecutionSummary, VMError> {
+        // Ordinary execution never reads a memory root, so this request may be
+        // the one that allocates and hashes the image's Merkle storage.
+        let final_memory_root = *self.memory.root()?.as_ref();
         let register_log = self.proof_register_log_handle();
         let empty = zk::RegLog::new(self.memory.allocation_budget());
         let register_log = register_log.as_ref().map(zk::SharedRegLog::lock);
@@ -3126,11 +3137,11 @@ impl IVM {
         output_hasher.update((output.len() as u64).to_le_bytes());
         output_hasher.update(output);
         let gas_remaining = self.remaining_gas();
-        ExecutionSummary {
+        Ok(ExecutionSummary {
             version: EXECUTION_SUMMARY_VERSION_V1,
             code_hash: self.code_hash,
             final_register_root: self.register_root(),
-            final_memory_root: *self.memory.current_root().as_ref(),
+            final_memory_root,
             output_hash: Self::finish_digest(output_hasher),
             pc_trace_hash: Self::hash_pc_trace(self.pc_trace.as_slice()),
             delta_trace_hash: Self::hash_delta_trace(&self.delta_trace),
@@ -3150,7 +3161,7 @@ impl IVM {
             step_log_len: self.step_log.as_slice().len() as u64,
             zk_mode: self.zk_mode,
             halted: self.halted,
-        }
+        })
     }
     /// Get the Merkle root of the register file.
     pub fn register_root(&self) -> [u8; 32] {
@@ -5528,9 +5539,9 @@ mod tests {
             DefaultHost::new(),
         )));
         first.run().expect("first program runs");
-        let first_summary = first.execution_summary();
+        let first_summary = first.execution_summary().unwrap();
         second.run().expect("second program runs");
-        let second_summary = second.execution_summary();
+        let second_summary = second.execution_summary().unwrap();
         assert_eq!(first_summary, second_summary);
         assert_eq!(first_summary.version, EXECUTION_SUMMARY_VERSION_V1);
         assert_eq!(first_summary.code_hash, first.code_hash());
@@ -5554,7 +5565,7 @@ mod tests {
         let mut vm = quiet_vm(u64::MAX);
         vm.load_program(&store_program_with_mode(0, 0))
             .expect("program loads");
-        let before = vm.memory.current_root();
+        let before = vm.memory.root().unwrap();
         assert!(!vm.memory.dirty_for_testing());
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xCAFE_BABE_DEAD_BEEFu64);
@@ -5563,9 +5574,81 @@ mod tests {
             vm.memory.dirty_for_testing(),
             "non-ZK execution should not rebuild the full memory Merkle tree eagerly"
         );
-        let summary = vm.execution_summary();
+        let summary = vm.execution_summary().unwrap();
         assert!(!vm.memory.dirty_for_testing());
         assert_ne!(summary.final_memory_root, *before.as_ref());
+    }
+    #[test]
+    fn ordinary_load_and_run_never_allocate_memory_merkle_storage() {
+        let program = store_program_with_mode(0, 0);
+        let mut vm = quiet_vm(u64::MAX);
+        assert!(!vm.memory.merkle_storage_allocated());
+        vm.load_program(&program).expect("program loads");
+        let template = vm.try_runtime_template().expect("capture baseline");
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xCAFE_BABE_DEAD_BEEFu64);
+        vm.run().expect("program runs");
+        assert_eq!(
+            vm.memory.load_u64(Memory::HEAP_START).unwrap(),
+            0xCAFE_BABE_DEAD_BEEFu64
+        );
+        // Loading, capturing a baseline, running, a warm reset and a second
+        // run request no root.
+        vm.reset_from_runtime_template(&template)
+            .expect("warm reset");
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 7);
+        vm.run().expect("program runs again");
+        assert!(!vm.memory.merkle_storage_allocated());
+        assert!(!template.data().memory.merkle_storage_allocated());
+        // The summary's first root request allocates the storage and commits
+        // every leaf written since the zero image.
+        let mut eager = quiet_vm(u64::MAX);
+        eager.memory.root().unwrap();
+        eager.load_program(&program).expect("program loads");
+        eager.set_register(1, Memory::HEAP_START);
+        eager.set_register(2, 7);
+        eager.run().expect("program runs");
+        let summary = vm.execution_summary().unwrap();
+        assert!(vm.memory.merkle_storage_allocated());
+        assert_eq!(
+            summary.final_memory_root,
+            eager.execution_summary().unwrap().final_memory_root
+        );
+    }
+    #[test]
+    fn zk_trace_collection_allocates_memory_merkle_storage_before_the_first_step() {
+        let mut vm = quiet_vm(u64::MAX);
+        vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
+            .expect("program loads");
+        vm.set_zk_trace_enabled(true);
+        assert!(!vm.memory.merkle_storage_allocated());
+        // A refused allocation defers the invocation before any guest effect.
+        crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xABCD_EF01_2345_6789u64);
+        assert!(matches!(
+            vm.run(),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            ))
+        ));
+        assert!(!vm.memory.merkle_storage_allocated());
+        assert_eq!(vm.memory.load_u64(Memory::HEAP_START).unwrap(), 0);
+        assert!(vm.step_log().is_empty());
+        vm.set_register(1, Memory::HEAP_START);
+        vm.set_register(2, 0xABCD_EF01_2345_6789u64);
+        vm.run().expect("program runs");
+        assert!(vm.memory.merkle_storage_allocated());
+        assert_eq!(
+            vm.memory.load_u64(Memory::HEAP_START).unwrap(),
+            0xABCD_EF01_2345_6789u64
+        );
+        let final_root = vm.memory.root().unwrap();
+        assert_eq!(
+            vm.step_log().last().expect("recorded cycles").mem_root,
+            final_root
+        );
     }
     #[test]
     fn zk_run_with_trace_collection_disabled_defers_memory_merkle_commit() {
@@ -5573,7 +5656,7 @@ mod tests {
         vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
             .expect("program loads");
         vm.set_zk_trace_enabled(false);
-        let before = vm.memory.current_root();
+        let before = vm.memory.root().unwrap();
         assert!(!vm.memory.dirty_for_testing());
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xABCD_EF01_2345_6789u64);
@@ -5582,7 +5665,7 @@ mod tests {
             vm.memory.dirty_for_testing(),
             "ZK semantic execution without trace collection should not rebuild the full memory Merkle tree eagerly"
         );
-        let summary = vm.execution_summary();
+        let summary = vm.execution_summary().unwrap();
         assert!(!vm.memory.dirty_for_testing());
         assert_ne!(summary.final_memory_root, *before.as_ref());
     }
@@ -5597,7 +5680,7 @@ mod tests {
         vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
             .expect("program loads");
         vm.set_zk_trace_enabled(true);
-        let before = vm.memory.current_root();
+        let before = vm.memory.root().unwrap();
         assert!(!vm.memory.dirty_for_testing());
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xABCD_EF01_2345_6789u64);
@@ -5606,7 +5689,7 @@ mod tests {
             !vm.memory.dirty_for_testing(),
             "ZK trace collection must keep the final memory root committed"
         );
-        assert_ne!(*vm.memory.current_root().as_ref(), *before.as_ref());
+        assert_ne!(*vm.memory.root().unwrap().as_ref(), *before.as_ref());
     }
     fn empty_blob_tlv() -> Vec<u8> {
         use crate::pointer_abi::PointerType;

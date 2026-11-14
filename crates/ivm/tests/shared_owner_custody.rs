@@ -408,7 +408,11 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
         .set(budget.clone())
         .expect("one node observer test");
     let mut vm = ivm::IVM::try_new_with_memory_budget(gas, &budget).unwrap();
-    assert_eq!(NODE_ALLOCS.load(SeqCst), 1);
+    assert_eq!(
+        NODE_ALLOCS.load(SeqCst),
+        0,
+        "node storage is admitted with the image and allocated by the first root request"
+    );
     // Code and heap together exceed half this fixed image: force the dense path.
     let code = vec![0x42; ivm::Memory::HEAP_START as usize];
     let heap = vec![0x5a; ivm::Memory::HEAP_SIZE as usize];
@@ -419,10 +423,22 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     vm.memory.commit();
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
-        1,
-        "dense commit must reuse node storage"
+        0,
+        "nothing commits before the first root request"
     );
-    let template_root = vm.memory.current_root();
+    // The first root request spends the credit the constructor retained: it
+    // needs no new pool admission and allocates the node array exactly once.
+    let admitted = budget.reserved_bytes();
+    budget.set_limit_bytes(0);
+    let template_root = vm.memory.root().unwrap();
+    assert_eq!(budget.reserved_bytes(), admitted);
+    budget.set_limit_bytes(256 * 1024 * 1024);
+    assert_eq!(
+        NODE_ALLOCS.load(SeqCst),
+        1,
+        "the first dense commit allocates the prepaid node storage once"
+    );
+    assert_eq!(vm.memory.root().unwrap(), template_root);
     let template = vm.try_runtime_template().unwrap();
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
@@ -442,14 +458,14 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
     vm.memory.store_u8(ivm::Memory::HEAP_START, 0xa5).unwrap();
     budget.set_limit_bytes(0);
     vm.memory.commit();
-    assert_ne!(vm.memory.current_root(), template_root);
+    assert_ne!(vm.memory.root().unwrap(), template_root);
     assert_eq!(
         NODE_ALLOCS.load(SeqCst),
         2,
         "sparse commit must reuse node storage"
     );
     vm.reset_from_runtime_template(&template).unwrap();
-    assert_eq!(vm.memory.current_root(), template_root);
+    assert_eq!(vm.memory.root().unwrap(), template_root);
     // Memory's known root can bypass a tree refresh after reset; requesting a
     // proof must actually rebuild the retained canonical nodes as well.
     let (restored_root, _) = vm

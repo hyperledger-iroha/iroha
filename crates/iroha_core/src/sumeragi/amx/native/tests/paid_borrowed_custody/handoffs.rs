@@ -156,6 +156,49 @@ fn native_amx_handoff_discovery_delivers_final_boundary_without_record_and_repla
     assert_eq!(native(&restored_participant).participant.global.epoch(), 1);
 }
 
+#[test]
+fn native_amx_discovery_reports_the_authenticated_epoch_first_height_of_any_height() {
+    let (global, _) = boundary_roots();
+    let view = global.state().view();
+    // H10 is the final height of epoch 0, whose certified schedule names its first height.
+    let authorization = view
+        .world()
+        .consensus_schedule()
+        .ready(10)
+        .unwrap()
+        .epoch
+        .authorization;
+    assert_eq!((authorization.epoch, authorization.last_height), (0, 10));
+    for height in [9, 10] {
+        let mut discovery = amx_relays(&view, height).unwrap();
+        assert_eq!(
+            discovery.complete_epoch_first_height().unwrap(),
+            authorization.first_height,
+            "the certified carrier at H{height} names the first height of its own epoch"
+        );
+        // The walk step consumes nothing: the same job still delivers this height's work.
+        let delivered = discovery.complete_next().unwrap();
+        assert_eq!(
+            delivered.is_some(),
+            height == 10,
+            "only the boundary carries a handoff"
+        );
+        if let Some(intent) = delivered {
+            assert_eq!(intent.descriptor().source_height(), 10);
+            assert!(discovery.complete_next().unwrap().is_none());
+        }
+        // A completed job keeps answering from its authenticated source.
+        assert_eq!(
+            discovery.complete_epoch_first_height().unwrap(),
+            authorization.first_height
+        );
+    }
+    assert!(
+        amx_relays(&view, 11).is_err(),
+        "a height beyond captured history has no authenticated epoch"
+    );
+}
+
 fn handoff_pointers(proof: &iroha_data_model::sumeragi_amx::AmxHandoffProofV1) -> [usize; 3] {
     [
         proof.block.consensus_header.as_ptr() as usize,

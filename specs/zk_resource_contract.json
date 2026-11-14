@@ -5607,7 +5607,7 @@
         {
           "stage": "queue",
           "path": "crates/iroha_core/src/queue.rs",
-          "contains": "} else if self.active_len() >= self.capacity.get()"
+          "contains": "} else if self.ordinary_active_len() >= self.capacity.get()"
         }
       ],
       "tests": [
@@ -5673,7 +5673,7 @@
         {
           "stage": "queue",
           "path": "crates/iroha_core/src/queue.rs",
-          "contains": "|| self.retained_bytes().saturating_add(retained_cost) > self.max_retained_bytes.get()"
+          "contains": "|| self.ordinary_retained_bytes().saturating_add(retained_cost)"
         }
       ],
       "tests": [
@@ -12994,7 +12994,7 @@
       "group": "proof",
       "status": "not_implemented",
       "what": "The wire, verifier-work and output bounds of the Parliament anonymous ballot on the node path: the envelope (262,144 bytes) and entrypoint wire (263,168 bytes) of one anonymous input; the verifier input of one verification call (425,984 bytes); the committed per-block ballot verification reservations and verifier-input bytes of parliament_ballot_v1 (default 2 and 851,968, at most 8 and 3,407,872); the registration-proof reservations and verifier-input bytes per block (1 and 425,984); and the governance block-start output partition (1 MiB and 256 rows per block, rows of at most 256 KiB, 1 KiB and 16 KiB).",
-      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot policy in the authenticated State adapter. ExecutionOutputV1 carries governance block-start rows in their own partition (1,048,576 complete row bytes in 256 rows), which Core reserves before the block-start pass mutates and against which every block result is validated; the rows count towards no execution-row limit. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
+      "today": "The data model defines and validates these values, and TransactionEntrypoint carries the bounded canonical anonymous-ballot envelope with its permitted outcomes. Core executes the ballot on a root whose committed selection installs the anonymous Parliament family: the queue's ballot partition and block execution verify each ballot with the typed iroha_parliament_ballot crate against the board World keeps for its scope, and block validation and the proposer's offer charge every ballot input one verification reservation and its verifier-input bytes (the canonical envelope and the canonical authenticated context) against the parliament_ballot_v1 value the block's parent commits (BallotBlockBudgetV1, check_block_ballot_budget). The queue partition's node-local bounds and Torii's ballot ingress bounds are iroha_config sections of their own; they are back-pressure and no part of this budget. Core range-checks the committed value where it reads it (committed_ballot_parameters). Open against the requirements below: no value is yet a listed bound with its node site and a test at the bound and one over, and the validation of the committed budgets when genesis or SetParameter installs parliament_ballot_v1, their relation to block.max_transactions and to the block wire and execution-output bounds they reserve from and the registration-proof reservations per block are not recorded here. Core refuses an anonymous-ballot entrypoint frame above the 263,168-byte wire bound when it accepts the entrypoint (check_anonymous_ballot_entrypoint_wire_len_v1, AcceptedTransaction::anonymous_ballot_wire_within_cap). ExecutionOutputV1 carries governance block-start rows in their own partition (1,048,576 complete row bytes in 256 rows), which Core reserves before the block-start pass mutates and against which every block result is validated; the rows count towards no execution-row limit. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record).",
       "requires": [
         "Each value is a listed bound with the node site where admission, block validation or the governance block-start pass compares it, and a test at the bound and one over.",
         "The committed per-block budgets are validated when genesis or SetParameter installs parliament_ballot_v1 and are related to block.max_transactions and to the block wire and execution-output bounds they reserve from.",
@@ -13003,7 +13003,7 @@
       "relations": [],
       "open": {
         "owner": "P.8",
-        "summary": "The canonical transaction carrier and permitted output shapes are represented. P.8 still owns authenticated Core ballot admission and execution, committed parameter validation, per-block verifier budgets and the governance block-start output partition; specs/parliament_ballot_implementation_goals.md tracks the remaining integration."
+        "summary": "Authenticated Core ballot admission and execution and the committed per-block verifier budget are implemented (specs/parliament_private_ballot_design.md section 12.3, slice 4). P.8 still owns the listed bounds with their sites and tests, committed parameter validation and its relation to the block limits it reserves from, the entrypoint wire cap and the registration reservations; specs/parliament_ballot_implementation_goals.md tracks the remaining integration."
       }
     }
   ],
@@ -25694,6 +25694,48 @@
         }
       },
       {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "module": [
+          "pub mod queue {"
+        ],
+        "reason": "Node-local count and byte budget of the queue's partition of signerless anonymous ballots (the anonymous_ballots section of the queue configuration): its resident verified ballots and room for that many carriers at their largest wire size, separate from the ordinary queue capacity and byte budget, whose saturation predicates exclude the partition's residents. It is back-pressure that refuses or delays a submission (queue::Error::Full) and never decides whether a ballot is valid or what a block may carry; the committed per-block ballot budget is proof.anonymous_ballot_verifier_budget.",
+        "symbols": [
+          "ANONYMOUS_BALLOT_PENDING_LIMIT",
+          "ANONYMOUS_BALLOT_MAX_RETAINED_BYTES"
+        ],
+        "exprs": {
+          "ANONYMOUS_BALLOT_PENDING_LIMIT": "nonzero!(1_024_usize)",
+          "ANONYMOUS_BALLOT_MAX_RETAINED_BYTES": "nonzero!(320_u64 * 1024 * 1024)"
+        }
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/defaults.rs",
+        "module": [
+          "pub mod torii {"
+        ],
+        "reason": "The body limit of Torii's account- and session-free anonymous-ballot route (the anonymous_ballot_ingress section of the Torii configuration) and its first-release ceiling. The ceiling is the data model's envelope cap ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1 itself, not a second copy, and the default equals it: a submission body is exactly one canonical envelope frame. The limit is a local serving bound; the envelope cap that decides validity is the schema constant recorded with the anonymous-ballot record.",
+        "symbols": [
+          "ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1",
+          "ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES"
+        ],
+        "exprs": {
+          "ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1": "iroha_data_model::governance::anonymous_ballot::ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1",
+          "ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES": "match NonZeroUsize::new(ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1) { Some(bytes) => bytes, None => panic!(\"the envelope cap is nonzero\"), }"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/gov.rs",
+        "reason": "Defensive response bounds of Torii's two public anonymous-family projections (the board record of a ballot scope and the reducer state of an attempt): a record above the bound is an internal error of the read, never a verdict on a ballot, an attempt or a block. The schema bounds of the records themselves are the data model's.",
+        "symbols": [
+          "MAX_ANONYMOUS_BALLOT_BOARD_READ_BYTES_V1",
+          "MAX_ANONYMOUS_PARLIAMENT_ATTEMPT_READ_BYTES_V1"
+        ],
+        "exprs": {
+          "MAX_ANONYMOUS_BALLOT_BOARD_READ_BYTES_V1": "1024 * 1024",
+          "MAX_ANONYMOUS_PARLIAMENT_ATTEMPT_READ_BYTES_V1": "16 * 1024 * 1024"
+        }
+      },
+      {
         "reason": "Field ceilings of registered bond terms, checked by `BondTerms::validate` when `RegisterBond` is admitted (specs/finance/bond_ops.md, section 1): the number of scheduled cash flows of one bond, the ISO 6166 ISIN, ISO 10962 CFI and ISO 17442 LEI identifier lengths, the BDT version label length, and the longest payment grace period (366 days; its day length is recorded with the terms of excluded limits). They bound one record of the bond product, which travels in one instruction bounded by transaction.max_tx_bytes and transaction.max_instructions; recording is paged by the separately named page size, so none of them sizes a quantity on the path.",
         "path": "crates/iroha_data_model/src/bond.rs",
         "symbols": [
@@ -30141,6 +30183,18 @@
               "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
               "sites": {
                 "text.len() > 20": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Token arithmetic of the ballot partition's node-local verification-rate bucket (crates/iroha_core/src/queue/anonymous_ballots.rs, VerificationRateV1): one verification is 1,000 thousandths of a token, the refill is capped at the configured burst and a verification starts only with a whole token. The literal is a unit of account of local back-pressure, not a bound on a ballot, a proof or a block; the rate and burst are node configuration.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/queue/anonymous_ballots.rs",
+              "sites": {
+                ".saturating_add(refill) .min(u64::from(burst.get()) * 1_000)": 1,
+                "self.milli_tokens < 1_000": 1
               }
             }
           ]

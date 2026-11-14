@@ -860,7 +860,11 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         .payload()
         .action_statement_digests_v1()
         .map_err(|_| evidence_error())?[0];
-    let namespace_encoding = norito::to_bytes(&namespace).map_err(|_| evidence_error())?;
+    // The node's consumer binds the source-owned namespace grammar (the frozen
+    // `PrivacyNamespaceV1` frame), not the runtime type's own Norito frame.
+    let namespace_encoding = namespace
+        .canonical_wire_bytes_v1()
+        .map_err(|_| evidence_error())?;
     let bootstrap_binding = TranscriptBindingV1 {
         network_id: transaction_context.network_id.as_bytes(),
         genesis_hash: transaction_context.genesis_hash,

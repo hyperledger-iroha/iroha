@@ -4,9 +4,10 @@
 //! byte-level construction in `specs/parliament_ballot_proof_profile.md` §6, and the
 //! production integration decisions of 2026-10-18 fix the envelope, the admission order,
 //! the corpus, the stamp, the encodings and the full-verification interface. This crate is
-//! the one implementation of those rules. Core depends on it only for its uncalled candidate
-//! registration preparation: integration into Core, Torii, the CLI, the Rust client and the
-//! native bridge is P.8 work still to come.
+//! the one implementation of those rules. Core calls it for credential registration and
+//! sealing, for the board of every sealed binding jury, for queue admission and for the
+//! block execution of signerless ballots; the CLI, the Rust client and the native bridges
+//! do not use its wallet yet.
 //! It sits between the data-model wire types
 //! ([`iroha_data_model::governance::anonymous_ballot`]) and the state-free proof relations
 //! ([`iroha_parliament_ballot_proof`]):
@@ -27,21 +28,23 @@
 //! - [`wallet`]: native credential handling, disclosure, the choice lock, proving and
 //!   relaying.
 //!
+//! The `test-fixtures` feature adds `fixtures`: reproducible fixed-tape ballots for the tests
+//! of dependent crates. No shipped build enables it.
+//!
 //! # Status
 //!
 //! **Nothing here is qualified.** The data-model launch gate
-//! [`PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`. No Core path reads that gate, and no
-//! production Core path calls this crate: Core's one import, the registration verifier, serves
-//! a preparation with no production caller, which writes no State.
-//! Core and Torii recognize the wire entrypoint but defer its admission and execution
-//! because the authenticated State/context adapter is unavailable. Registration, sealing,
-//! casting and closure integration remain P.8 work, so no node accepts a binding anonymous
-//! ballot. This crate neither reads nor changes the gate: its real candidate proofs and
-//! protocol rules are available for engineering tests now. Run
-//! `scripts/test_parliament_ballot_local.sh` for registration, wallet admission/execution,
-//! corpus closure and replay, or add `--full` for the complete crate suite. These tests use
-//! an in-memory board with fixture authority and anchors; they do not establish network
-//! finality or qualification. No verification step is a placeholder.
+//! [`PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`, so no attempt has the production
+//! purpose and binding production use stays disabled. Core runs these rules only on a root
+//! whose selection installs the anonymous Parliament definition family
+//! (`specs/parliament_private_ballot_design.md` §12.3), for attempts of the candidate-testing
+//! purpose a genesis selected; no live network has activated the family. This crate neither
+//! reads nor changes the gate: its real candidate proofs and protocol rules are available
+//! for engineering tests now. Run `scripts/test_parliament_ballot_local.sh` for
+//! registration, wallet admission/execution, corpus closure and replay, or add `--full` for
+//! the complete crate suite. These tests use an in-memory board with fixture authority and
+//! anchors; they do not establish network finality or qualification. No verification step
+//! is a placeholder.
 //!
 //! # One row
 //!
@@ -73,6 +76,8 @@ pub mod board;
 pub mod context;
 pub mod corpus;
 mod entropy;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 pub mod inputs;
 pub mod registration;
 pub mod replay;

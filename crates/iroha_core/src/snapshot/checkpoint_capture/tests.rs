@@ -532,8 +532,13 @@ fn armed_capture_skips_replay_and_keeps_first_live_checkpoint_before_worker_runs
 fn checkpoint_acknowledgement_keeps_disk_and_rolling_writers_live() {
     use crate::sumeragi::test_chain::Signers;
     use std::{thread, time::Duration};
+    // The deadline bounds only the concurrent phases under test: the disk writer and the
+    // rolling capture must finish while the original publisher stays frozen. Fixture
+    // construction and the first execution run on the producer alone, before any other
+    // thread of this test exists, so they cannot deadlock against it and are not timed.
     let timeout = Duration::from_secs(20);
     let (setup, ready) = mpsc::channel();
+    let (refused, refusal) = mpsc::channel();
     let (advance, advanced) = mpsc::channel();
     let (published, publication) = mpsc::channel();
     let producer = thread::spawn(move || {
@@ -551,11 +556,16 @@ fn checkpoint_acknowledgement_keeps_disk_and_rolling_writers_live() {
                 .unwrap_err()
                 .contains("durable acknowledgement")
         );
+        refused.send(()).unwrap();
         advanced.recv().unwrap();
         let _ = published.send(pending.publish(Signers::Quorum).map(|_| ()));
     });
-    let (state, receiver) = ready.recv_timeout(timeout).unwrap();
-    let job = receiver.recv_timeout(timeout).unwrap();
+    // A producer panic drops both senders, so these waits fail instead of hanging.
+    let (state, receiver) = ready.recv().unwrap();
+    refusal.recv().unwrap();
+    let job = receiver
+        .try_recv()
+        .expect("the refused publication queued its exact original image before returning");
     let original_height = state.committed_height();
     assert_eq!(job.capture.height, original_height as u64 + 1);
     let directory = tempfile::tempdir().unwrap();

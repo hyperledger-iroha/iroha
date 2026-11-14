@@ -273,6 +273,29 @@ fn hashes_from_bytes(bytes: &[u8], count: usize, path: &Path) -> Result<Vec<Hash
     Ok(hashes)
 }
 
+/// Whether this root holds a published portable prefix with no fresh-store intent pending.
+///
+/// The bootstrap establishes only the configured-catalog baseline; no lane binding exists
+/// until State authenticates one. The manifest, written after every proof file, is therefore
+/// the sole durable owner of canonical bodies under an unbound catalog journal. Its presence
+/// grants no history by itself: Strict and Fast opening still verify the complete prefix
+/// against the canonical journals before any omitted or retained body is trusted.
+///
+/// # Errors
+/// The manifest or intent cannot be inspected, or the manifest is not a valid bounded record.
+pub(super) fn is_published(root: &Path) -> Result<bool> {
+    let directory = root.join(DIRECTORY);
+    if manifest(&directory)?.is_none() {
+        return Ok(false);
+    }
+    let intent = directory.join(INTENT);
+    match std::fs::symlink_metadata(&intent) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(io(&intent, error)),
+    }
+}
+
 /// Recover only the exact fully verified fresh-store intent while holding the root process lock.
 pub(super) fn recover(root: &Path, may_publish: bool) -> Result<()> {
     let directory = root.join(DIRECTORY);

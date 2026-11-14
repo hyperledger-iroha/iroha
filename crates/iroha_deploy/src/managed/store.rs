@@ -764,18 +764,28 @@ impl ManagedStore {
         )
     }
 
-    // One observation deadline covers session admission, terminal reply and original-owner exit.
-    // Tests inject a short bound here; no user option or task authorization is introduced.
+    // The stop deadline is taken before admission, so admitting the retained generation and
+    // observing the worker spend one budget. Tests inject a short bound; no user option or task
+    // authorization is introduced.
     fn down_until(
         &self,
         name: &str,
         deadline: Instant,
         expected: Option<&PreparedLocalnet>,
     ) -> Result<ManagedStatus> {
+        observe_down(self.admit_down(name, expected)?, deadline)
+    }
+
+    // Take the operation lock and authenticate the retained generation a stop applies to.
+    fn admit_down<'a>(
+        &self,
+        name: &'a str,
+        expected: Option<&PreparedLocalnet>,
+    ) -> Result<DownAdmission<'a>> {
         let directory = self.directory(name)?;
         #[cfg(test)]
         selected_generation_tests::before_operation();
-        let _operation = acquire(&directory, "operation.lock", name)?;
+        let operation = acquire(&directory, "operation.lock", name)?;
         let retained = generation::read(&directory)?;
         validate_prepared(
             name,
@@ -788,65 +798,12 @@ impl ManagedStore {
                 "captured managed generation changed before stop".into(),
             ));
         }
-        let context = retained.prepared.context.clone();
-        let mut stopped = None;
-        loop {
-            if Instant::now() >= deadline {
-                return Err(Error::Busy(name.into()));
-            }
-            match acquire(&directory, "runtime.lock", name) {
-                Ok(_runtime) => {
-                    // The inherited spawn gate prevents a delayed child from entering after
-                    // this availability proof. Retain it while closing public native custody.
-                    let current = generation::read(&directory)?;
-                    if encode(&current)? != encode(&retained)? {
-                        return Err(Error::Invalid(
-                            "managed generation changed during stop".into(),
-                        ));
-                    }
-                    let status = match stopped {
-                        Some(status) => status,
-                        None => retained_status(&directory, context.clone(), false)?,
-                    };
-                    directory.revalidate()?;
-                    if Instant::now() >= deadline {
-                        return Err(Error::Busy(name.into()));
-                    }
-                    return Ok(status);
-                }
-                Err(Error::Busy(_)) => {}
-                Err(error) => return Err(error),
-            }
-            if stopped.is_none() {
-                if let Some(status) =
-                    exchange_optional(&directory, ControlAction::Down, &retained, deadline)?
-                {
-                    if status.context != context {
-                        return Err(Error::Invalid(
-                            "worker stop belongs to another managed identity".into(),
-                        ));
-                    }
-                    if !matches!(status.phase, ManagedPhase::Stopped | ManagedPhase::Failed)
-                        || status.running_peers != 0
-                    {
-                        return Err(Error::Invalid(
-                            "worker stop did not prove terminal zero-peer cleanup".into(),
-                        ));
-                    }
-                    stopped = Some(status);
-                } else {
-                    // Genuine initial session absence is a pre-session owner, never stopped
-                    // evidence. Native custody, malformed records and transport errors refuse.
-                    #[cfg(test)]
-                    pre_session_tests::before_wait();
-                }
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(Error::Busy(name.into()));
-            }
-            thread::sleep(POLL.min(remaining));
-        }
+        Ok(DownAdmission {
+            name,
+            directory,
+            _operation: operation,
+            retained,
+        })
     }
 
     /// Delete a stopped managed generation after the caller has obtained explicit reset intent.
@@ -1445,6 +1402,86 @@ fn retained_status(
         failure: None,
         validators: Vec::new(),
     })
+}
+
+/// A stop admitted under its operation lock; observation keeps that lock until it returns.
+struct DownAdmission<'a> {
+    name: &'a str,
+    directory: PrivateDirectory,
+    _operation: File,
+    retained: RetainedLocalnet,
+}
+
+// One observation deadline covers session admission, terminal reply and original-owner exit.
+fn observe_down(admission: DownAdmission<'_>, deadline: Instant) -> Result<ManagedStatus> {
+    let DownAdmission {
+        name,
+        directory,
+        _operation,
+        retained,
+    } = admission;
+    let context = retained.prepared.context.clone();
+    let mut stopped = None;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(Error::Busy(name.into()));
+        }
+        match acquire(&directory, "runtime.lock", name) {
+            Ok(_runtime) => {
+                // The inherited spawn gate prevents a delayed child from entering after
+                // this availability proof. Retain it while closing public native custody.
+                let current = generation::read(&directory)?;
+                if encode(&current)? != encode(&retained)? {
+                    return Err(Error::Invalid(
+                        "managed generation changed during stop".into(),
+                    ));
+                }
+                let status = match stopped {
+                    Some(status) => status,
+                    None => retained_status(&directory, context.clone(), false)?,
+                };
+                directory.revalidate()?;
+                if Instant::now() >= deadline {
+                    return Err(Error::Busy(name.into()));
+                }
+                return Ok(status);
+            }
+            Err(Error::Busy(_)) => {}
+            Err(error) => return Err(error),
+        }
+        if stopped.is_none() {
+            if let Some(status) =
+                exchange_optional(&directory, ControlAction::Down, &retained, deadline)?
+            {
+                if status.context != context {
+                    return Err(Error::Invalid(
+                        "worker stop belongs to another managed identity".into(),
+                    ));
+                }
+                if !matches!(status.phase, ManagedPhase::Stopped | ManagedPhase::Failed)
+                    || status.running_peers != 0
+                {
+                    return Err(Error::Invalid(
+                        "worker stop did not prove terminal zero-peer cleanup".into(),
+                    ));
+                }
+                stopped = Some(status);
+            } else {
+                // Genuine initial session absence is a pre-session owner, never stopped
+                // evidence. Native custody, malformed records and transport errors refuse.
+                #[cfg(test)]
+                pre_session_tests::before_wait();
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        // Observe-only: the deadline a validated terminal reply leaves the owner wait with.
+        #[cfg(test)]
+        pre_session_tests::owner_wait(stopped.is_some(), deadline);
+        if remaining.is_zero() {
+            return Err(Error::Busy(name.into()));
+        }
+        thread::sleep(POLL.min(remaining));
+    }
 }
 
 // Only the initial native record absence waits for an already-owned worker's session.

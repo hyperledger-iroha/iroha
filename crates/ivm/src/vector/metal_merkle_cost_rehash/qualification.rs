@@ -121,7 +121,7 @@ fn required_metal_rehash_covers_actual_memory_bounds_and_original_fixed_outputs(
                         assert!(dirty_leaves >= geometry.leaves.div_ceil(2));
                         let before = counts(&health, false);
                         let probes = counts(&health, true);
-                        assert_eq!(memory.root(), cpu.root_hash());
+                        assert_eq!(memory.root().unwrap(), cpu.root_hash());
                         assert_eq!(counts(&health, false), [before[0] + u64::from(profile.cost().is_some()), before[1]]);
                         assert_eq!(counts(&health, true), probes);
                     }

@@ -107,7 +107,7 @@ fn canonical_nodes_keep_exact_geometry_across_dense_sparse_reset_and_final_borro
 #[test]
 fn template_node_copy_spends_exact_original_plan_and_outlives_source() {
     let source = ByteMerkleTree::from_bytes(&[0xa5; 65 * 32 - 7], 32).unwrap();
-    let plan = source.runtime_template_memory_plan().unwrap();
+    let plan = ByteMerkleTree::memory_plan(source.leaf_count()).unwrap();
     let budget = AllocationBudget::new(plan.requested_bytes());
     let mut lease = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
     let copy = source

@@ -117,7 +117,7 @@ High-level smart contract language targeting IVM bytecode:
   or `aplay` on Linux, PowerShell's `SoundPlayer` on Windows); hosts without a
   player or audio device skip it silently. Disable via `ivm.banner.beep = false`
   in your node config.
-- **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
+- **Merkle‑Backed Memory:** Memory writes only mark 32-byte leaves pending. The image's Merkle storage (leaf digests and canonical nodes, about three times the image) is allocated by the first root or path request, which hashes the pending leaves; ordinary execution never makes one. Later requests hash only the leaves written since, in parallel with Rayon for large updates. Authentication paths can be requested for proofs.
 - **Governed Heap Growth:** Hosts set a per-runtime heap ceiling. `SYSCALL_GROW_HEAP` may extend the active heap only up to that ceiling and never beyond the ABI address window.
 - **Declared Access Sets:** Hosts receive each transaction's declared state accesses and report observed accesses, so host schedulers derive conflicts from declarations rather than execution history.
 - **Full-width cryptography:** Opcodes are limited to scalar operations with coherent register-sized semantics; none is cryptographic. Hashing (`crypto::sha256`, `crypto::sha3`, `crypto::keccak256`, …), signature verification (`crypto::verify_signature` for Ed25519, secp256k1 and ML-DSA), full-width commitments, curve points, and pairing statements use typed syscall or proof-envelope boundaries instead of truncated register values.

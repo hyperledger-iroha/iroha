@@ -3,6 +3,13 @@
 //! Source files never supply authority. Core's opaque intent binds the original certified
 //! carrier, record and destination; explicit route configuration owns signing and fee custody.
 //! Restart selects that source again and resumes the existing exact-byte workflow journal.
+//!
+//! Each route sweeps its source root's history again and again. A sweep first offers the
+//! epoch-boundary handoffs it has not seen applied, found by walking the authenticated epoch
+//! chain back from the tip, and then scans every height from H2. A destination follows the
+//! source only through those handoffs, so a restarted relay must not make a new one wait
+//! behind the whole ordinary history. The order of heights is the only difference: both
+//! passes use the same discovery, admission, handoff order and authentication.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,13 +35,13 @@ use iroha_core::{
     query::native_receipts::{
         NativeAmxRelayDescriptorV1, NativeAmxRelayIntentV1, NativeAmxRelaySourceV1, amx_relays_to,
     },
-    state::State,
+    state::{State, WorldReadOnly as _},
 };
 use iroha_data_model::{
     NetworkId,
     isi::InstructionBox,
     sumeragi_finality::{
-        MAX_SIGNED_GENESIS_BYTES_V1, SignedGenesisPinsV1, SumeragiFinalityVerifier,
+        MAX_SIGNED_GENESIS_BYTES_V1, ScheduledSlot, SignedGenesisPinsV1, SumeragiFinalityVerifier,
         authenticate_signed_genesis_v1, authenticated_genesis,
     },
     transaction::FeePaymentIntent,
@@ -164,6 +171,12 @@ impl HandoffOrder {
     }
     fn restart_scan(&mut self) {
         self.blocked.clear();
+    }
+    // The source height of the latest handoff this process has seen applied for `target`.
+    fn completed_height(&self, target: NetworkId) -> Option<u64> {
+        self.completed
+            .get(&target)
+            .map(|completed| completed.height)
     }
 }
 
@@ -684,156 +697,364 @@ fn start_route(
     shutdown: ShutdownSignal,
 ) -> Child {
     let task = tokio::task::spawn_blocking(move || {
+        RouteWorker {
+            state,
+            route,
+            admissions: FreshAdmissions::default(),
+            handoff_order: HandoffOrder::default(),
+            expiry_recovery: ExpiryRecovery::default(),
+            clock: SystemWorkflowClock::new(),
+            max_finality_proof_reads,
+            cadence,
+            runtime,
+            shutdown,
+        }
+        .run(max_source_heights_per_pass);
+    });
+    Child::new(task, OnShutdown::Drain)
+}
+
+/// Which original intents of a source height a visit offers to the route.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selection {
+    /// Every intent, in source order: the ordinary scan.
+    All,
+    /// Epoch-boundary handoffs only: the pass that precedes each ordinary scan.
+    Boundaries,
+}
+
+/// How the visit of one source height ended.
+#[derive(Debug, PartialEq, Eq)]
+enum HeightVisit {
+    /// Every selected intent of the height was offered to the route.
+    Visited,
+    /// The original source is unavailable at this height; a later pass retries it.
+    Unavailable,
+    /// Shutdown was signalled.
+    Shutdown,
+}
+
+// One route's scheduling state. All of it is in memory: a restart discards it and the
+// source is authenticated again from canonical history.
+struct RouteWorker {
+    state: Arc<State>,
+    route: Route,
+    admissions: FreshAdmissions,
+    handoff_order: HandoffOrder,
+    expiry_recovery: ExpiryRecovery,
+    clock: SystemWorkflowClock,
+    max_finality_proof_reads: usize,
+    cadence: Duration,
+    runtime: tokio::runtime::Handle,
+    shutdown: ShutdownSignal,
+}
+
+impl RouteWorker {
+    // Every sweep of the source, and so every restart, first offers the epoch-boundary
+    // handoffs this process has not seen applied and then scans the heights from H2. A
+    // destination follows the source only through those handoffs, and the ordinary scan
+    // authenticates every height on its way to one.
+    fn run(mut self, max_source_heights_per_pass: usize) {
         let mut height = 2u64;
-        let mut admissions = FreshAdmissions::default();
-        let mut handoff_order = HandoffOrder::default();
-        let clock = SystemWorkflowClock::new();
-        let target = route.config.network_id;
-        let mut expiry_recovery = ExpiryRecovery::default();
-        while !shutdown.is_sent() {
+        let mut boundaries_first = true;
+        while !self.shutdown.is_sent() {
+            if boundaries_first {
+                if self.visit_pending_boundaries() == HeightVisit::Shutdown {
+                    return;
+                }
+                boundaries_first = false;
+            }
             // A State view is held only for a local read. Deliveries wait on the destination
             // root for up to a cadence each; holding one view across a whole pass of them
             // pinned the source root's snapshot for minutes under load.
-            let tip = admissions.frontier(state.view().block_hashes().len() as u64);
+            let tip = self
+                .admissions
+                .frontier(self.state.view().block_hashes().len() as u64);
             for _ in 0..max_source_heights_per_pass {
-                if shutdown.is_sent() || height > tip {
+                if self.shutdown.is_sent() || height > tip {
                     break;
                 }
-                let intents =
-                    match discover_height(&state, height, target, &runtime, &shutdown, cadence) {
-                        HeightDiscovery::Intents(intents) => intents,
-                        HeightDiscovery::Unavailable => break,
-                        HeightDiscovery::Shutdown => return,
-                    };
-                // Count every original yielded source, including filtered intents.
-                for (source_ordinal, intent) in (0u64..).zip(intents) {
-                    if shutdown.is_sent() {
-                        return;
-                    }
-                    let position = loop {
-                        match ledger::instruction_digest(intent.instruction()).and_then(|digest| {
-                            ScanPosition::from_descriptor(intent.descriptor(), digest)
-                        }) {
-                            Ok(position) => break position,
-                            Err(error) => {
-                                iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
-                                // Keep this same opaque source through local identity refusal.
-                                if wait(&runtime, &shutdown, cadence) {
-                                    return;
-                                }
-                            }
-                        }
-                    };
-                    let admission = AdmissionPosition {
-                        height: position.height,
-                        ordinal: source_ordinal,
-                        plan: position.identity,
-                    };
-                    // Authenticated existing custody is classified before scheduling hints.
-                    // Neither absence here nor a cursor grants a new signature or an outcome.
-                    let pending = match route.has_pending(&intent) {
-                        Ok(pending) => pending,
-                        Err(error) => {
-                            admission_refused(&mut admissions, admission, &error);
-                            handoff_order.permits(position);
-                            handoff_order.observed(position, false);
-                            iroha_logger::warn!(height, %error, "AMX pending custody cannot be classified");
-                            continue;
-                        }
-                    };
-                    let permitted = handoff_order.permits(position);
-                    if !permitted && !pending {
-                        admissions.skip(admission);
-                        continue;
-                    }
-                    let now = clock.now_unix_ms();
-                    let ready = intent
-                        .descriptor()
-                        .ready_at_ms()
-                        .is_none_or(|wake| now >= wake);
-                    if !pending && !position.boundary && !admissions.consider(admission, ready) {
-                        continue;
-                    }
-                    let lease = match route.admit(&intent) {
-                        Ok(lease) => lease,
-                        Err(error) => {
-                            admission_refused(&mut admissions, admission, &error);
-                            if permitted {
-                                handoff_order.observed(position, false);
-                            }
-                            iroha_logger::warn!(height, %error, "AMX original admission remains resumable");
-                            continue;
-                        }
-                    };
-                    admissions.admitted(admission);
-                    // Read-only original-carrier recovery can bypass the authority barrier.
-                    // It does not update HandoffOrder, even when an older carrier finishes.
-                    let decided = if permitted {
-                        // A fresh view reads the local Decision prefix; it is released before
-                        // the delivery below. A later Decision is resolved by native Expire.
-                        let observed = {
-                            let view = state.view();
-                            expiry_recovery.observe(
-                                &view,
-                                &intent,
-                                now,
-                                max_finality_proof_reads,
-                                &runtime,
-                                &shutdown,
-                                cadence,
-                            )
-                        };
-                        match observed {
-                            Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
-                            Ok(ExpiryProgress::Decided) => true,
-                            Ok(ExpiryProgress::Waiting) => continue,
-                            Err(error) => {
-                                iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
-                                continue;
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    // The opaque source and observation lease survive the delivery; no State
-                    // view does. Shutdown never reports a successful observation.
-                    let result = runtime.block_on(async {
-                        tokio::select! {
-                            () = shutdown.receive() => None,
-                            result = async {
-                                if !permitted {
-                                    route.recover_pending(&intent, cadence, &lease).await
-                                } else if decided {
-                                    route.recover_decided_expiry(&intent, cadence, &lease).await
-                                } else {
-                                    route.deliver(intent, cadence, &lease).await
-                                }
-                            } => Some(result),
-                        }
-                    });
-                    let Some(result) = result else {
-                        return;
-                    };
-                    if permitted {
-                        handoff_order.observed(position, result.is_ok());
-                    }
-                    if let Err(error) = result {
-                        iroha_logger::warn!(height, %error, "AMX workflow remains resumable");
-                    }
+                match self.visit_height(height, Selection::All) {
+                    HeightVisit::Visited => {}
+                    HeightVisit::Unavailable => break,
+                    HeightVisit::Shutdown => return,
                 }
                 height += 1;
             }
             if height > tip {
                 height = 2;
-                admissions.finish_sweep();
-                handoff_order.restart_scan();
+                self.admissions.finish_sweep();
+                self.handoff_order.restart_scan();
+                boundaries_first = true;
             }
-            if wait(&runtime, &shutdown, cadence) {
+            if wait(&self.runtime, &self.shutdown, self.cadence) {
                 break;
             }
         }
-    });
-    Child::new(task, OnShutdown::Drain)
+    }
+
+    // Offer the pending epoch-boundary handoffs in ascending source order, under the same
+    // admission, order and authentication rules as the scan that follows. The walk supplies
+    // heights only: a refused or interrupted walk leaves every boundary to that scan.
+    fn visit_pending_boundaries(&mut self) -> HeightVisit {
+        let target = self.route.config.network_id;
+        let Some(tip) = tip_epoch(&self.state) else {
+            return HeightVisit::Visited;
+        };
+        let heights = pending_boundary_heights(
+            tip,
+            self.handoff_order.completed_height(target),
+            |boundary| {
+                (!self.shutdown.is_sent())
+                    .then(|| epoch_first_height(&self.state, boundary, target))
+                    .flatten()
+            },
+        );
+        let mut visit = HeightVisit::Visited;
+        for height in heights.unwrap_or_default() {
+            visit = self.visit_height(height, Selection::Boundaries);
+            if visit != HeightVisit::Visited {
+                break;
+            }
+        }
+        // The scan from H2 reaches an unresolved handoff again, in source order, before any
+        // later work of the route: it is the authenticated rescan a deferral waits for.
+        self.handoff_order.restart_scan();
+        if visit == HeightVisit::Shutdown || self.shutdown.is_sent() {
+            HeightVisit::Shutdown
+        } else {
+            HeightVisit::Visited
+        }
+    }
+
+    // Discover one height and offer its selected intents to the route in source order.
+    fn visit_height(&mut self, height: u64, selection: Selection) -> HeightVisit {
+        let intents = match discover_height(
+            &self.state,
+            height,
+            self.route.config.network_id,
+            &self.runtime,
+            &self.shutdown,
+            self.cadence,
+        ) {
+            HeightDiscovery::Intents(intents) => intents,
+            HeightDiscovery::Unavailable => return HeightVisit::Unavailable,
+            HeightDiscovery::Shutdown => return HeightVisit::Shutdown,
+        };
+        // Count every original yielded source, including filtered intents.
+        for (source_ordinal, intent) in (0u64..).zip(intents) {
+            if self.shutdown.is_sent() {
+                return HeightVisit::Shutdown;
+            }
+            if selection == Selection::Boundaries
+                && !matches!(
+                    intent.descriptor().source(),
+                    NativeAmxRelaySourceV1::EpochBoundary { .. }
+                )
+            {
+                continue;
+            }
+            if self.visit_intent(height, source_ordinal, intent) {
+                return HeightVisit::Shutdown;
+            }
+        }
+        HeightVisit::Visited
+    }
+
+    // Offer one original intent to the route. Returns whether shutdown interrupted it.
+    fn visit_intent(
+        &mut self,
+        height: u64,
+        source_ordinal: u64,
+        intent: NativeAmxRelayIntentV1,
+    ) -> bool {
+        let position = loop {
+            match ledger::instruction_digest(intent.instruction())
+                .and_then(|digest| ScanPosition::from_descriptor(intent.descriptor(), digest))
+            {
+                Ok(position) => break position,
+                Err(error) => {
+                    iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
+                    // Keep this same opaque source through local identity refusal.
+                    if wait(&self.runtime, &self.shutdown, self.cadence) {
+                        return true;
+                    }
+                }
+            }
+        };
+        let admission = AdmissionPosition {
+            height: position.height,
+            ordinal: source_ordinal,
+            plan: position.identity,
+        };
+        // Authenticated existing custody is classified before scheduling hints.
+        // Neither absence here nor a cursor grants a new signature or an outcome.
+        let pending = match self.route.has_pending(&intent) {
+            Ok(pending) => pending,
+            Err(error) => {
+                admission_refused(&mut self.admissions, admission, &error);
+                self.handoff_order.permits(position);
+                self.handoff_order.observed(position, false);
+                iroha_logger::warn!(height, %error, "AMX pending custody cannot be classified");
+                return false;
+            }
+        };
+        let permitted = self.handoff_order.permits(position);
+        if !permitted && !pending {
+            self.admissions.skip(admission);
+            return false;
+        }
+        let now = self.clock.now_unix_ms();
+        let ready = intent
+            .descriptor()
+            .ready_at_ms()
+            .is_none_or(|wake| now >= wake);
+        if !pending && !position.boundary && !self.admissions.consider(admission, ready) {
+            return false;
+        }
+        let lease = match self.route.admit(&intent) {
+            Ok(lease) => lease,
+            Err(error) => {
+                admission_refused(&mut self.admissions, admission, &error);
+                if permitted {
+                    self.handoff_order.observed(position, false);
+                }
+                iroha_logger::warn!(height, %error, "AMX original admission remains resumable");
+                return false;
+            }
+        };
+        self.admissions.admitted(admission);
+        // Read-only original-carrier recovery can bypass the authority barrier.
+        // It does not update HandoffOrder, even when an older carrier finishes.
+        let decided = if permitted {
+            // A fresh view reads the local Decision prefix; it is released before
+            // the delivery below. A later Decision is resolved by native Expire.
+            let observed = {
+                let view = self.state.view();
+                self.expiry_recovery.observe(
+                    &view,
+                    &intent,
+                    now,
+                    self.max_finality_proof_reads,
+                    &self.runtime,
+                    &self.shutdown,
+                    self.cadence,
+                )
+            };
+            match observed {
+                Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
+                Ok(ExpiryProgress::Decided) => true,
+                Ok(ExpiryProgress::Waiting) => return false,
+                Err(error) => {
+                    iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
+                    return false;
+                }
+            }
+        } else {
+            false
+        };
+        // The opaque source and observation lease survive the delivery; no State
+        // view does. Shutdown never reports a successful observation.
+        let (route, shutdown, cadence) = (&self.route, &self.shutdown, self.cadence);
+        let result = self.runtime.block_on(async {
+            tokio::select! {
+                () = shutdown.receive() => None,
+                result = async {
+                    if !permitted {
+                        route.recover_pending(&intent, cadence, &lease).await
+                    } else if decided {
+                        route.recover_decided_expiry(&intent, cadence, &lease).await
+                    } else {
+                        route.deliver(intent, cadence, &lease).await
+                    }
+                } => Some(result),
+            }
+        });
+        let Some(result) = result else {
+            return true;
+        };
+        if permitted {
+            self.handoff_order.observed(position, result.is_ok());
+        }
+        if let Err(error) = result {
+            iroha_logger::warn!(height, %error, "AMX workflow remains resumable");
+        }
+        false
+    }
+}
+
+/// The applied tip of the source root and the epoch that certified it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TipEpoch {
+    height: u64,
+    first_height: u64,
+    last_height: u64,
+}
+
+// The committed schedule's first slot is the applied tip under its authenticated epoch.
+fn tip_epoch(state: &State) -> Option<TipEpoch> {
+    let view = state.view();
+    let ScheduledSlot::Ready(config) = view.world().consensus_schedule().entries().first()? else {
+        return None;
+    };
+    let authorization = &config.epoch.authorization;
+    Some(TipEpoch {
+        height: config.height,
+        first_height: authorization.first_height,
+        last_height: authorization.last_height,
+    })
+}
+
+// The authenticated first height of the epoch that certified `height`. The view lasts for
+// this one read; a refusal ends the walk and leaves the boundary to the ordinary scan.
+fn epoch_first_height(state: &State, height: u64, target: NetworkId) -> Option<u64> {
+    let view = state.view();
+    match amx_relays_to(&view, height, target)
+        .and_then(|mut original| original.complete_epoch_first_height())
+    {
+        Ok(first_height) => Some(first_height),
+        Err(error) => {
+            iroha_logger::warn!(height, %error, "AMX epoch boundary walk refused");
+            None
+        }
+    }
+}
+
+/// The source heights of the epoch boundaries above `completed`, ascending.
+///
+/// The boundary that installed an epoch is the height before the epoch's first height, so
+/// the walk steps backwards from the tip's epoch through `epoch_first_height`, the
+/// authenticated first height of the epoch that certified a boundary. It stops at the
+/// handoff this process has seen applied, or at the first epoch: genesis installs that one
+/// and relay discovery needs non-genesis history. A tip that ends its own epoch is a
+/// boundary with no successor. These heights only order discovery; each handoff is
+/// authenticated by the discovery of its own height. `None` when the walk was refused or
+/// its history is not an epoch chain.
+fn pending_boundary_heights(
+    tip: TipEpoch,
+    completed: Option<u64>,
+    mut epoch_first_height: impl FnMut(u64) -> Option<u64>,
+) -> Option<Vec<u64>> {
+    if cfg!(all(test, sumeragi_daemon_mutation = "HC811")) {
+        return Some(Vec::new());
+    }
+    let pending =
+        |boundary: &u64| *boundary >= 2 && completed.is_none_or(|completed| *boundary > completed);
+    let mut heights = Vec::new();
+    if tip.height == tip.last_height && pending(&tip.height) {
+        heights.push(tip.height);
+    }
+    let mut first_height = tip.first_height;
+    while let Some(boundary) = first_height.checked_sub(1).filter(pending) {
+        heights.push(boundary);
+        first_height = epoch_first_height(boundary)?;
+        // An epoch contains the boundary that ends it.
+        if first_height > boundary {
+            return None;
+        }
+    }
+    heights.reverse();
+    Some(heights)
 }
 
 /// One source height's original relay intents, or why the pass stops at that height.
@@ -1150,6 +1371,109 @@ mod tests {
             independent_heights.contains(&5),
             "independent source work also progresses"
         );
+    }
+
+    #[test]
+    fn restarted_route_visits_pending_epoch_boundaries_before_ordinary_heights() {
+        // Three completed epochs of 64 heights; the applied tip opens the fourth.
+        let epochs = [(1u64, 64u64), (65, 128), (129, 192), (193, 256)];
+        let first_height_of = |boundary: u64| {
+            epochs
+                .iter()
+                .find(|(first, last)| (*first..=*last).contains(&boundary))
+                .map(|(first, _)| *first)
+        };
+        let tip = TipEpoch {
+            height: 193,
+            first_height: 193,
+            last_height: 256,
+        };
+        let walked = std::cell::RefCell::new(Vec::new());
+        let walk = |boundary: u64| {
+            walked.borrow_mut().push(boundary);
+            first_height_of(boundary)
+        };
+        // A restart has no cursor: every boundary is offered, oldest first, after one
+        // authenticated read per boundary instead of one per ordinary height.
+        assert_eq!(
+            pending_boundary_heights(tip, None, walk),
+            Some(vec![64, 128, 192]),
+            "a restarted route must visit pending epoch boundaries before ordinary heights"
+        );
+        assert_eq!(*walked.borrow(), [192, 128, 64]);
+        // A handoff this process has seen applied ends the walk before it is read again.
+        walked.borrow_mut().clear();
+        assert_eq!(
+            pending_boundary_heights(tip, Some(128), walk),
+            Some(vec![192])
+        );
+        assert_eq!(*walked.borrow(), [192]);
+        walked.borrow_mut().clear();
+        assert_eq!(pending_boundary_heights(tip, Some(192), walk), Some(vec![]));
+        assert!(walked.borrow().is_empty());
+        // A tip that ends its epoch is a boundary with no successor, offered last.
+        let final_tip = TipEpoch {
+            height: 192,
+            first_height: 129,
+            last_height: 192,
+        };
+        assert_eq!(
+            pending_boundary_heights(final_tip, Some(64), first_height_of),
+            Some(vec![128, 192])
+        );
+        assert_eq!(
+            pending_boundary_heights(final_tip, Some(192), first_height_of),
+            Some(vec![])
+        );
+        // Genesis installs the first epoch: no handoff precedes it.
+        let first_epoch = TipEpoch {
+            height: 40,
+            first_height: 1,
+            last_height: 64,
+        };
+        assert_eq!(
+            pending_boundary_heights(first_epoch, None, |_| unreachable!("no boundary to read")),
+            Some(vec![])
+        );
+        // A refused read or a history that is not an epoch chain offers nothing: the
+        // ordinary scan still reaches every boundary in source order.
+        assert_eq!(
+            pending_boundary_heights(tip, None, |boundary| {
+                (boundary != 128)
+                    .then(|| first_height_of(boundary))
+                    .flatten()
+            }),
+            None
+        );
+        assert_eq!(
+            pending_boundary_heights(tip, None, |boundary| Some(boundary + 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn completed_handoff_height_is_scoped_to_its_destination() {
+        let first = NativeFinalityFixture::start("amx-completed-height-first").network_id();
+        let second =
+            NativeFinalityFixture::start_with_explicit_parameters("amx-completed-height-second")
+                .network_id();
+        let position = |target, height, boundary| ScanPosition {
+            target,
+            context: [1; 32],
+            identity: [2; 32],
+            height,
+            boundary,
+        };
+        let mut order = HandoffOrder::default();
+        assert_eq!(order.completed_height(first), None);
+        // Ordinary work and an unresolved handoff are not an applied handoff.
+        order.observed(position(first, 30, false), true);
+        order.observed(position(first, 64, true), false);
+        assert_eq!(order.completed_height(first), None);
+        order.observed(position(first, 64, true), true);
+        order.observed(position(first, 128, true), true);
+        assert_eq!(order.completed_height(first), Some(128));
+        assert_eq!(order.completed_height(second), None);
     }
 
     #[test]

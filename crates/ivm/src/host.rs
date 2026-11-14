@@ -3859,7 +3859,7 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_EXECUTION_SUMMARY => {
-                let summary = vm.execution_summary();
+                let summary = vm.execution_summary()?;
                 let payload = encode_canonical_norito(&summary)?;
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, ptr);

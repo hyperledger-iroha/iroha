@@ -200,7 +200,7 @@ def test_the_pipeline_limits_are_recorded_as_committed(tree_scan) -> None:
 
 def test_an_open_f4_entry_without_a_reason_fails(tree_scan) -> None:
     def strip(census):
-        entry(census, "cfg.nexus.bounds").pop("open_reason")
+        entry(census, "cfg.nexus.policy").pop("open_reason")
     assert_fails(tree_scan, edited(strip), "states why it is not changed now")
 
 
@@ -1240,28 +1240,61 @@ def test_unavailable_family_filter_keeps_actual_identifier_membership(tmp_path: 
     names = Counter(name for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code)
                     if CHECKER["FAMILY_PATH"].search(name)
                     and tree_scan.token_of(detector, name) == "unavailable")
-    assert names == {"anonymous_ballot_unavailable": 5, "AnonymousBallotUnavailable": 5}
-    assert tree_scan.rows[(outer, "unavailable", "unavailable")] == sum(names.values())
+    # The implemented ballot entrypoint left the real tx.rs no family identifier, so the
+    # file has no row although it still transports the generic crypto refusal.
+    assert names == {}
+    assert (outer, "unavailable", "unavailable") not in tree_scan.rows
+    assert re.search(r"\bCryptoImplementationUnavailable\b", code)
 
 
-def test_anonymous_adapter_remains_unsupported_and_mixed_service_row_is_explicit() -> None:
-    """An honest execution deferral does not implement authenticated ballot execution."""
+def test_anonymous_entrypoint_is_implemented_and_its_unavailable_boundary_stays_removed(tree_scan) -> None:
+    """Executing the entrypoint removes the refusal; it does not qualify the ballot."""
     ballot = entry(CENSUS, "voting.anonymous_entrypoint_unavailable")
-    assert (ballot["status"], ballot["owner"]) == ("unsupported", "P.8")
-    tx = (ROOT / ballot["path"]).read_text()
-    assert ("pub(crate) fn anonymous_ballot_unavailable() -> ExecutionDeferred {\n"
-            "    ivm::error::ExecutionDeferral::VerifierInitializationUnavailable.into()\n}") in tx
-    assert ("TransactionEntrypoint::AnonymousBallot(_) => {\n"
-            "            Err(AcceptTransactionFail::AnonymousBallotUnavailable)") in tx
-    assert "two AnonymousBallotUnavailable identifiers" in ballot["note"]
-    assert "two bootle_lantern_issuance_unavailable_response_v1 service helpers" in ballot["note"]
-    mixed = ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 4]
-    assert mixed in ballot["sites"]
-    assert mixed not in entry(CENSUS, "torii.unavailable")["sites"]
-    code, strings = CHECKER["mask_rust"]((ROOT / mixed[0]).read_text())
+    assert (ballot["status"], ballot["owner"]) == ("done", "P.8")
+    assert not ballot.get("sites")
+    removed = {(item["path"], item["contains"]) for item in ballot["removed"]}
+    assert {("crates/iroha_core/src/tx.rs", "anonymous_ballot_unavailable"),
+            ("crates/iroha_core/src/tx.rs", "AnonymousBallotUnavailable"),
+            ("crates/iroha_torii/src/lib.rs", "AnonymousBallotUnavailable")} <= removed
+    for path, needle in removed:
+        assert needle not in (ROOT / path).read_text(), (path, needle)
+    assert ballot["symbol"] in (ROOT / ballot["path"]).read_text()
+    for test in ballot["tests"]:
+        assert f"fn {test['name']}(" in (ROOT / test["path"]).read_text(), test
+    # Mutation: the removed variant back in tx.rs is reported, whatever else the entry says.
+    census = copy.deepcopy(CENSUS)
+    entry(census, ballot["id"])["removed"].append(
+        {"path": "crates/iroha_core/src/tx.rs", "contains": "AcceptTransactionFail"})
+    assert_fails(tree_scan, census, "removed construct 'AcceptTransactionFail' is back")
+    # A verdict on the block comes from committed State and the carried bytes; every other
+    # refusal is this node's own inability to decide and defers.
+    core = (ROOT / ballot["path"]).read_text()
+    assert ("    pub(crate) const fn is_local(&self) -> bool {\n"
+            "        !matches!(self, Self::BlockInvalid(_))\n") in core
+    assert ("    pub(crate) const fn is_local(&self) -> bool {\n"
+            "        matches!(self, Self::Unavailable(_))\n") in core
+    local = entry(CENSUS, "voting.anonymous_ballot_local_refusal")
+    assert (local["status"], local["owner"]) == ("local_resource", "P.8")
+    assert {tuple(site[:3]) for site in local["sites"]} == {
+        (ballot["path"], "unavailable", "unavailable"),
+        ("crates/iroha_core/src/queue/anonymous_ballots.rs", "unavailable", "unavailable"),
+    }
+    queue = entry(CENSUS, "voting.anonymous_ballot_queue_admission")
+    assert (queue["status"], queue["owner"]) == ("not_a_gate", None)
+    assert {tuple(site[:3]) for site in queue["sites"]} == {
+        (queue["path"], "time_budget", "deadline"),
+        (queue["path"], "unavailable", "unsupported"),
+    }
+    # The Torii row is the two Bootle-Lantern service helpers alone again.
+    service = ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 2]
+    assert service in entry(CENSUS, "torii.unavailable")["sites"]
+    code, strings = CHECKER["mask_rust"]((ROOT / service[0]).read_text())
     code, _, _ = CHECKER["blank_test_items"](code, strings)
-    assert len(re.findall(r"\bAnonymousBallotUnavailable\b", code)) == 2
+    assert not re.findall(r"\bAnonymousBallotUnavailable\b", code)
     assert len(re.findall(r"\bbootle_lantern_issuance_unavailable_response_v1\b", code)) == 2
+    # Execution is not production qualification: that gate stays open with its owner.
+    gate = entry(CENSUS, "voting.anonymous_ballot_qualification")
+    assert (gate["status"], gate["owner"]) == ("open", "P.8")
 
 
 def test_canonical_ballot_decode_refusal_is_distinct_from_missing_execution() -> None:
@@ -1278,7 +1311,7 @@ def test_canonical_ballot_decode_refusal_is_distinct_from_missing_execution() ->
             "            Ok(refusal) => AnonymousBallotCodecErrorV1::DecodeUnavailable(refusal),\n"
             "            Err(error) => AnonymousBallotCodecErrorV1::codec(error.error()),") in source
     assert "return Err(AnonymousBallotCodecErrorV1::TooLarge {" in source
-    assert entry(CENSUS, "voting.anonymous_entrypoint_unavailable")["status"] == "unsupported"
+    assert entry(CENSUS, "voting.anonymous_ballot_local_refusal")["status"] == "local_resource"
 
 
 def test_missing_crypto_implementation_remains_open_compiled_family_work() -> None:

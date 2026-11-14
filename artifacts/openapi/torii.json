@@ -80253,6 +80253,300 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/gov/anonymous-ballots": {
+      "post": {
+        "description": "Submit one canonical signerless anonymous-ballot envelope frame. The route is account- and session-free: it reads no API token, account, cookie or caller address, and the deployment API token is not required on a global root. The envelope's admission stamp and membership proof alone admit it, under ingress permits and one global submission rate of its own. An admitted ballot, a nullifier that is already pending and a nullifier that is already committed all return the same empty 202, which acknowledges handling and not finalized acceptance: confirm acceptance from the scope's public corpus. Do not send identifying headers, and do not submit a ballot through the account-authenticated transaction routes.",
+        "operationId": "governanceAnonymousBallotSubmitV1",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 262144,
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The ballot was handled. The response has no body and never reveals a ballot's or a nullifier's status."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot was not admitted. ErrorEnvelope.code is one stable code: anonymous_ballot_malformed, anonymous_ballot_oversize, anonymous_ballot_wrong_network, anonymous_ballot_unknown_scope, anonymous_ballot_casting_not_open, anonymous_ballot_casting_closed, anonymous_ballot_unknown_profile, anonymous_ballot_insufficient_stamp, anonymous_ballot_proof_rejected or anonymous_ballot_not_admitted."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body exceeds one canonical anonymous-ballot envelope frame (262,144 bytes at most; the node may configure less)."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unsupported request content type; the body is application/x-norito."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The node's anonymous-ballot ingress or its ballot queue partition is at a local bound, or local admission is deferred. No verdict on the ballot was produced; retry the same bytes after Retry-After."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The node cannot decide this ballot now, or its admission worker failed. No verdict was produced."
+          }
+        },
+        "security": [],
+        "summary": "Submit an anonymous Parliament ballot.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "anonymous_ballot_proof",
+          "authentication": "unauthenticated",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_ballot.submit"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/gov/anonymous-ballots/attempts/{governance_attempt_id}": {
+      "get": {
+        "description": "Return the canonical Norito bytes of one attempt's reducer state in the anonymous Parliament family: its elections and assignments, its bodies with their phases and the committed schedule a client plans against. It never includes credential secrets or a ballot.",
+        "operationId": "governanceAnonymousParliamentAttemptReadV1",
+        "parameters": [
+          {
+            "description": "Governance attempt identifier: 64 lowercase hexadecimal characters.",
+            "in": "path",
+            "name": "governance_attempt_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical Norito bytes of the attempt state."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The path parameter is not canonical lowercase hexadecimal of the required length."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No anonymous Parliament attempt has this identifier."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The projection exceeds its defensive framed Norito bound."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read an attempt of the anonymous Parliament family.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_ballot.attempt.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/anonymous-ballots/boards/{scope}": {
+      "get": {
+        "description": "Return the canonical Norito bytes of the ParliamentBallotBoardRecordV1 the chain keeps for one ballot scope: its sealed context (the whole sealed credential list and the frozen policy), its casting window and its whole corpus. A wallet builds its proof context from the whole board and confirms acceptance from the whole corpus; no route answers for one credential or one nullifier.",
+        "operationId": "governanceAnonymousBallotBoardReadV1",
+        "parameters": [
+          {
+            "description": "Ballot scope: 128 lowercase hexadecimal characters.",
+            "in": "path",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical Norito bytes of the board record."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The path parameter is not canonical lowercase hexadecimal of the required length."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No sealed anonymous-ballot board has this scope."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The projection exceeds its defensive framed Norito bound."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read the public board of an anonymous-ballot scope.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.anonymous_ballot.board.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/gov/ballots/plain": {
       "post": {
         "description": "Authenticate the exact-network request authority, then build deterministic non-ZK ballot draft instructions for local transaction signing. The route does not submit or mutate ledger state.",

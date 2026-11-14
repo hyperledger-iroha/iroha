@@ -90,6 +90,14 @@ impl PendingOrderIndex {
     }
 
     /// Whether a resident input retains exactly this canonical frame digest.
+    /// The oldest resident input that `counts`, in admission order.
+    pub(super) fn front_where(
+        &self,
+        counts: impl Fn(&EntrypointHash) -> bool,
+    ) -> Option<&PendingOrderEntry> {
+        self.fifo.values().find(|entry| counts(&entry.hash))
+    }
+
     pub(super) fn holds_frame(&self, frame: &Hash) -> bool {
         self.frames.contains_key(frame)
     }

@@ -4991,10 +4991,11 @@
    "gates": "Torii: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "Committed State already decides it.",
    "attribution": "path_rule",
-   "note": "Responses of Torii services to requests they cannot serve (unsupported media type or proof mode, service unavailable, unsupported X.509 extensions in an uploaded attachment): local service outcomes, not consensus validity. AMX debit approval proof unavailability retains the original read outcome without altering the approval, escrow or transaction result. The AMX approval producer now returns typed capacity, invalid-source and advanced-cut outcomes through the shared projection response owner, so its former generic unavailable detector row is removed. Reserve account and policy readers still return local service unavailability after unsuccessful original proof production; the updated count does not reclassify these outcomes as consensus validity. The mixed lib.rs unavailable row is now voting.anonymous_entrypoint_unavailable because it also contains two AnonymousBallotUnavailable projections; that entry explicitly separates those from the two existing Bootle-Lantern issuance service-response identifiers.",
+   "note": "Responses of Torii services to requests they cannot serve (unsupported media type or proof mode, service unavailable, unsupported X.509 extensions in an uploaded attachment): local service outcomes, not consensus validity. AMX debit approval proof unavailability retains the original read outcome without altering the approval, escrow or transaction result. The AMX approval producer now returns typed capacity, invalid-source and advanced-cut outcomes through the shared projection response owner, so its former generic unavailable detector row is removed. Reserve account and policy readers still return local service unavailability after unsuccessful original proof production; the updated count does not reclassify these outcomes as consensus validity. The lib.rs unavailable row is the two Bootle-Lantern issuance service-response helpers (bootle_lantern_issuance_unavailable_response_v1); the two AnonymousBallotUnavailable projections that once shared the row are deleted with the boundary (voting.anonymous_entrypoint_unavailable, done).",
    "sites": [
     ["crates/iroha_torii/src/identifier_resolution.rs", "unavailable", "unsupported", 3],
     ["crates/iroha_torii/src/iso20022_bridge.rs", "unavailable", "unsupported", 3],
+    ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_torii/src/reserve_account_proof.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_torii/src/reserve_policy_proof.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_torii/src/zk_attachments.rs", "unavailable", "unavailable", 1],
@@ -6063,7 +6064,7 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/generations.rs", "unavailable", "local_resource", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/governance_clock.rs", "unavailable", "unavailable", 8],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/hook.rs", "unavailable", "local_resource", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/keepalive.rs", "unavailable", "unavailable", 10],
+    ["crates/iroha_core/src/smartcontracts/isi/sccp/keepalive.rs", "unavailable", "unavailable", 14],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/light_clients.rs", "unavailable", "unavailable", 14],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/parliament_iface.rs", "unavailable", "unavailable", 12],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/coalition.rs", "unavailable", "unavailable", 23],
@@ -6357,39 +6358,108 @@
   {
    "id": "voting.anonymous_entrypoint_unavailable",
    "kind": "activation_lifecycle",
-   "status": "unsupported",
+   "status": "done",
    "owner": "P.8",
-   "path": "crates/iroha_core/src/tx.rs",
-   "symbol": "pub(crate) fn anonymous_ballot_unavailable()",
-   "gates": "The anonymous-ballot transaction entrypoint has no completed authenticated State/context verifier and execution adapter. Admission, routing, queue, block and certified lane merge refuse that entrypoint before ordinary authority/route selection.",
-   "decided_by": "P.8 must supply the real authenticated context and ballot execution relation. Until then the unconditional accurate typed refusal must remain; deleting it cannot make the operation valid.",
+   "path": "crates/iroha_core/src/governance/parliament_anonymous/ballot_input.rs",
+   "symbol": "pub(crate) fn execute_ballot_input(",
+   "gates": "The anonymous-ballot transaction entrypoint was refused unconditionally by a typed unavailable outcome (AcceptTransactionFail::AnonymousBallotUnavailable, tx::anonymous_ballot_unavailable) at admission, routing, queue, block validation, lane merge and Network execution, because no authenticated State/context verifier and execution adapter existed.",
+   "decided_by": "Removed. Committed State decides a ballot: it routes to lane zero of a global root whose committed selection installs the anonymous Parliament family, the queue's ballot partition admits it by the ordered admission checks and its proof against the board the committed view keeps for its scope, block validation charges it to the per-block budget its parent commits, and the Network output owner decides it against that board recomputed from World (execute_ballot_input): an invalid ballot invalidates its block, a valid one is accepted into the corpus or recorded as outside its window or as a duplicate nullifier. On every other root a ballot has no route, exactly as on a release without the family.",
    "attribution": "read",
-   "note": "tx.rs explicitly TODO(E2) marks the missing adapter. AnonymousBallotUnavailable becomes ExecutionDeferred::VerifierInitializationUnavailable and never a committed rejection, but this transport does not make the missing implementation an incidental local resource. Torii projects the same unfinished boundary. Its lib.rs row includes two AnonymousBallotUnavailable identifiers and two bootle_lantern_issuance_unavailable_response_v1 service helpers; only the former are the unfinished ballot adapter. No completion or release readiness is claimed. The ten tx.rs hits are five AnonymousBallotUnavailable and five anonymous_ballot_unavailable identifiers. Generic CryptoImplementationUnavailable in the same non-family file is outside this detector row, not assigned to P.8; its provenance is open M.2 in crypto.implementation_unavailable.",
-   "tests": [
+   "note": "Slice 4 of specs/parliament_private_ballot_design.md section 12.3. The unavailable variant, its helper and every arm that mapped them are deleted from Core and Torii; nothing constructs or names them. This entry claims the entrypoint's execution only. Production use of the ballot stays gated by the open voting.anonymous_ballot_qualification, the proof profile is unqualified, no network has activated the family, and the real-peer corridor is still open. A local inability to decide a ballot is voting.anonymous_ballot_local_refusal; the queue's own refusals and clock are voting.anonymous_ballot_queue_admission. Generic CryptoImplementationUnavailable in tx.rs is outside the family detector row, not assigned to P.8; its provenance is open M.2 in crypto.implementation_unavailable.",
+   "removed": [
     {
      "path": "crates/iroha_core/src/tx.rs",
-     "name": "anonymous_admission_union_preserves_unfinished_attempt"
+     "contains": "anonymous_ballot_unavailable"
+    },
+    {
+     "path": "crates/iroha_core/src/tx.rs",
+     "contains": "AnonymousBallotUnavailable"
+    },
+    {
+     "path": "crates/iroha_core/src/queue.rs",
+     "contains": "anonymous_ballot_unavailable"
     },
     {
      "path": "crates/iroha_core/src/block.rs",
-     "name": "anonymous_ballot_unavailable_has_no_block_rejection_reason"
+     "contains": "AnonymousBallotUnavailable"
+    },
+    {
+     "path": "crates/iroha_core/src/state/output_network.rs",
+     "contains": "anonymous_ballot_unavailable"
+    },
+    {
+     "path": "crates/iroha_core/src/sumeragi/lanes/merge.rs",
+     "contains": "anonymous_ballot_unavailable"
+    },
+    {
+     "path": "crates/iroha_torii/src/lib.rs",
+     "contains": "AnonymousBallotUnavailable"
+    },
+    {
+     "path": "crates/iroha_torii/src/lib_pipeline_handlers.rs",
+     "contains": "anonymous_ballot_unavailable"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/governance/parliament_anonymous/ballot_input_tests.rs",
+     "name": "ballots_are_decided_by_their_board_from_before_the_opening_to_the_closure"
+    },
+    {
+     "path": "crates/iroha_core/src/queue/anonymous_ballots.rs",
+     "name": "a_ballot_is_admitted_by_its_proof_and_offered_within_the_block_budget"
+    },
+    {
+     "path": "crates/iroha_core/src/sumeragi/lanes/routing.rs",
+     "name": "an_anonymous_ballot_routes_to_lane_zero_only_where_the_global_root_installs_the_family"
+    },
+    {
+     "path": "crates/iroha_core/src/tx/anonymous_ballot_tests.rs",
+     "name": "signerless_acceptance_has_no_stateless_verdict_and_no_lane_carries_a_ballot"
+    }
+   ],
+   "sites": []
+  },
+  {
+   "id": "voting.anonymous_ballot_local_refusal",
+   "kind": "activation_lifecycle",
+   "status": "local_resource",
+   "owner": "P.8",
+   "path": "crates/iroha_core/src/governance/parliament_anonymous/ballot_input.rs",
+   "symbol": "Unavailable(VerificationUnavailableV1)",
+   "gates": "Deciding an anonymous ballot can fail for this node alone: the board stored for its scope does not recompute, the proof verifier or a pinned frame cannot run, or an envelope or context cannot be decoded or encoded under local resources.",
+   "decided_by": "BallotInputErrorV1::is_local and BallotBudgetErrorV1::is_local keep these refusals apart from the verdicts: block execution and block validation defer the block (ExecutionDeferral::VerifierArtifactsUnavailable) and never record a rejection or invalidate the block, and the queue's ballot partition returns Error::Deferred and reserves nothing.",
+   "attribution": "read",
+   "note": "The identifiers are the Unavailable variants of BallotInputErrorV1 and BallotBudgetErrorV1, the protocol crate's VerificationUnavailableV1 and BallotExecutionErrorV1::Unavailable they carry, and the queue partition's `unavailable` helper that maps them to Error::Deferred. None reads configuration, a feature, an environment variable or a clock, and none is unfinished work: the verdicts of the same code (an invalid ballot invalidates its block; the two recorded ballot rejections) come from committed State and the carried bytes.",
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/governance/parliament_anonymous/ballot_input_tests.rs",
+     "name": "a_stored_board_that_does_not_recompute_defers_the_input"
+    },
+    {
+     "path": "crates/iroha_core/src/sumeragi/executor/preparation/tests.rs",
+     "name": "a_local_ballot_refusal_stays_deferred_through_publication"
     }
    ],
    "sites": [
-    ["crates/iroha_core/src/block.rs", "unavailable", "unavailable", 2],
-    ["crates/iroha_core/src/gossiper.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/queue.rs", "unavailable", "unavailable", 6],
-    ["crates/iroha_core/src/queue/router.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/state/network_policy_routes.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/state/output_network.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/sumeragi/executor/preparation.rs", "unavailable", "unavailable", 2],
-    ["crates/iroha_core/src/sumeragi/executor_control.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/sumeragi/lanes/global.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/sumeragi/lanes/merge.rs", "unavailable", "unavailable", 5],
-    ["crates/iroha_core/src/sumeragi/lanes/routing.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/tx.rs", "unavailable", "unavailable", 10],
-    ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 4],
-    ["crates/iroha_torii/src/lib_pipeline_handlers.rs", "unavailable", "unavailable", 1]
+    ["crates/iroha_core/src/governance/parliament_anonymous/ballot_input.rs", "unavailable", "unavailable", 12],
+    ["crates/iroha_core/src/queue/anonymous_ballots.rs", "unavailable", "unavailable", 6]
+   ]
+  },
+  {
+   "id": "voting.anonymous_ballot_queue_admission",
+   "kind": "wall_clock",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_core/src/queue/anonymous_ballots.rs",
+   "symbol": "pub(super) fn admit_anonymous_ballot_in_view(",
+   "gates": "The queue's partition of signerless anonymous ballots: the typed refusal of a submission its admission checks reject (queue::Error::UnsupportedTransactionAdmission with the stable admission code) and the deadline of a resident ballot's queue residence.",
+   "decided_by": "Committed State already decides it.",
+   "attribution": "read",
+   "note": "Queue admission is this node's own decision of what it keeps, gossips and offers to a proposer; it never decides whether a ballot is valid. The `unsupported` hits are Error::UnsupportedTransactionAdmission, the queue's existing typed refusal, carrying the code of the ordered admission check that rejected the submission (size, canonical frame, network, scope, window, profile, stamp) or of a rejected proof; the same carried bytes are judged again by every validator at execution against committed State. The window status at admission and at the proposer's offer uses the local clock only to refuse or withhold a ballot early (a locally due or locally closed window); block execution decides the window from the canonical block time. The `deadline` hit is expiry_deadline_with_enqueue_timestamp, the local queue residence of an input without a creation time, as for a sealed commitment: it reclaims a carrier this node keeps and is no validity rule. Nothing here reads node configuration, a feature or an environment variable; the partition's working bounds are recorded in specs/zk_resource_contract.json.",
+   "sites": [
+    ["crates/iroha_core/src/queue/anonymous_ballots.rs", "time_budget", "deadline", 1],
+    ["crates/iroha_core/src/queue/anonymous_ballots.rs", "unavailable", "unsupported", 4]
    ]
   },
   {
@@ -7369,9 +7439,9 @@
   }
  },
  "summary": {
-  "entries": 243,
-  "sites": 1553,
-  "by_status": {"done": 17, "local_resource": 24, "not_a_gate": 125, "open": 37, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 146, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 245,
+  "sites": 1544,
+  "by_status": {"done": 18, "local_resource": 25, "not_a_gate": 126, "open": 37, "out_of_plan": 21, "unsupported": 18},
+  "by_owner": {"-": 147, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 8, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

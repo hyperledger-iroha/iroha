@@ -962,6 +962,12 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         dispatch_original_amx::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1>;
     let native_escrow_open: InstructionHandler =
         dispatch_instruction::<iroha_data_model::isi::escrow::OpenAssetEscrow>;
+    // Under the capture service the unreserved export and import execute their own native
+    // handlers, which refuse them: a transfer then requires its certified reservation.
+    let native_game_export: InstructionHandler =
+        dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1>;
+    let native_game_import: InstructionHandler =
+        dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1>;
     std::collections::BTreeMap::from([
         (
             crate::runtime::catalog::additions::NATIVE_AMX_CAPTURE.module,
@@ -976,6 +982,13 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
                 "iroha.instruction.v1::escrow::OpenAssetEscrow",
                 native_escrow_open,
             )]),
+        ),
+        (
+            crate::runtime::catalog::additions::NATIVE_GAME_CAPTURE.module,
+            std::collections::BTreeMap::from([
+                ("iroha.game_partition.export.v1", native_game_export),
+                ("iroha.game_partition.import.v1", native_game_import),
+            ]),
         ),
         (
             crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,

@@ -6342,7 +6342,7 @@ fn core_host_rejects_raw_private_witness_transport_without_mutation() {
     vm.set_register(11, 0);
     let registers_before = vm.registers.snapshot();
     let tags_before = vm.registers.snapshot_tags();
-    let memory_root_before = vm.memory.current_root();
+    let memory_root_before = vm.memory.root().unwrap();
     assert!(
         matches!(
             host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &vm),
@@ -6359,7 +6359,7 @@ fn core_host_rejects_raw_private_witness_transport_without_mutation() {
     );
     assert_eq!(vm.registers.snapshot(), registers_before);
     assert_eq!(vm.registers.snapshot_tags(), tags_before);
-    assert_eq!(vm.memory.current_root(), memory_root_before);
+    assert_eq!(vm.memory.root().unwrap(), memory_root_before);
     assert!(host.queued.is_empty());
     assert!(host.durable_state_overlay.is_empty());
 }

@@ -452,14 +452,19 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
         let mut actual_json = String::new();
         JsonSerializeTrait::json_serialize(&pair.first, &mut actual_json);
         assert_eq!(actual_json, expected_json);
-        // The original manual serializer does not certify bounded output.
-        // Forward that exact refusal instead of fabricating a checked path.
-        assert_eq!(
-            expected_bounded_json,
-            Err(json::BoundedJsonError::Unsupported)
-        );
+        // The original serializer certifies its bounded output since checkpoint capture
+        // streams the cut (`write_transactions_cut_json_to`): the checked writer produces
+        // the unbounded writer's exact bytes, and the field forwards that same result
+        // instead of fabricating a second checked path.
+        assert_eq!(expected_bounded_json.as_deref(), Ok(expected_json.as_str()));
         assert_eq!(
             json::to_json_bounded(&pair.first, usize::MAX),
+            expected_bounded_json
+        );
+        // A bound below the exact body still refuses before any destination exists.
+        assert!(json::to_json_bounded(&pair.first, expected_json.len() - 1).is_err());
+        assert_eq!(
+            json::to_json_bounded(&pair.first, expected_json.len()),
             expected_bounded_json
         );
         assert_eq!(

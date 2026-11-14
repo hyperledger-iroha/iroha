@@ -417,3 +417,76 @@ fn parliament_terms_are_asked_only_when_no_sccp_term_holds_and_stay_unavailable(
         );
     }
 }
+
+#[test]
+fn an_authenticated_global_root_observes_due_work_without_decoding_its_committed_scope() {
+    use crate::sumeragi::lanes::routing::{read_routing_root_scope, test_support};
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+
+    let world = test_support::world(SumeragiRootScope::Global);
+    let view = world.view();
+    let accounting = || {
+        norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            64,
+        ))
+    };
+    // The committed scope is JSON metadata: reading it is a decode charged to its caller.
+    let committed_scope = accounting();
+    assert_eq!(
+        committed_scope
+            .with(|| read_routing_root_scope(&view))
+            .expect("an unrefused scope read"),
+        Some(SumeragiRootScope::Global)
+    );
+    assert!(committed_scope.consumed_allocated_bytes() > 0);
+    // The observation that reads the committed scope answers first, outside the accounting
+    // below: a global root with no SCCP or Parliament work has nothing due.
+    let committed_due = due(&view, None, 2, 1_000);
+    assert_eq!(committed_due, Ok(false));
+    let committed = ProgressClock::capture(&view, None, 2, 1_000).expect("clock parameters");
+    // An executor that authenticated its root asks Parliament on that root directly, so
+    // its routing read stays the first and only decode of that metadata.
+    let authenticated = accounting();
+    let (observed, clock) = authenticated.with(|| {
+        (
+            due_on_global_root(&view, None, 2, 1_000),
+            ProgressClock::capture_on_global_root(&view, None, 2, 1_000),
+        )
+    });
+    assert_eq!(
+        authenticated.consumed_allocated_bytes(),
+        0,
+        "the authenticated observation must not decode the committed root scope"
+    );
+    assert_eq!(observed, committed_due);
+    let clock = clock.expect("the same clock parameters");
+    for (wall_ms, certified) in [(1_000, false), (u64::MAX, false), (u64::MAX, true)] {
+        assert_eq!(
+            clock.is_stale(wall_ms, certified),
+            committed.is_stale(wall_ms, certified)
+        );
+        assert_eq!(clock.is_stale(wall_ms, certified), Ok(false));
+    }
+}
+
+#[test]
+fn the_global_root_observation_keeps_the_heartbeat_term_and_the_staleness_guard() {
+    let (world, deadline) = world(0);
+    let view = world.view();
+    // The heartbeat leg is the same parent read as the committed-scope observation.
+    assert_eq!(due_on_global_root(&view, None, 2, deadline - 1), Ok(false));
+    assert_eq!(due_on_global_root(&view, None, 2, deadline), Ok(true));
+    let clock = ProgressClock::capture_on_global_root(&view, None, 2, deadline)
+        .expect("committed clock parameters");
+    assert_eq!(clock.is_stale(deadline + 60_000, false), Ok(false));
+    assert_eq!(
+        clock.is_stale(deadline + 60_001, false),
+        Ok(true),
+        "CT5 must refuse stale uncertified due work on an authenticated global root"
+    );
+    assert_eq!(clock.is_stale(u64::MAX, true), Ok(false));
+}

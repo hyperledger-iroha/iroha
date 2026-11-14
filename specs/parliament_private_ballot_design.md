@@ -2235,13 +2235,173 @@ still open (last bullet).
     With no such time it waits for a pulse or a transaction; an unavailable
     Parliament observation is never a deadline.
 - **Open.**
-  - A real-peer test: no network may activate the family before slice 4, so
-    the interfaces and the pass are tested on World rows only.
-  - Clients (slice 5): a committed-transaction proof assumes a Network
-    output's index equals its input's index, which holds only in a block
-    without governance rows, and no query projects an attempt's schedule.
+  - A real-peer test of the pass (seal, opening, successor-block clock and
+    closure with identical committed rows on every peer and across a restart):
+    it belongs with the slice 4 corridor below.
+  - Clients (slice 5): no query projects an attempt's schedule. A
+    committed-transaction proof already locates a Network output after the
+    block's governance rows (`SignedBlock::network_output_at`, checked by the
+    seal test of HC807 and the transaction-history projection); the selective
+    verifier of a committed transaction accepts signed inputs only, so
+    anonymous evidence needs its own verification path.
   - Production enactment in G3 (slice 5). This release certifies no
     production attempt.
+
+**Slice 4: signerless execution.** Implemented in Core. Its component tests
+run genuine fixture ballots through the ballot input owner on World rows,
+the queue's partition, the routing, the block-validation budget, the
+protocol crate's independent replay and the Network output owner inside a
+block (`state/output_network_ballot_tests.rs`: accepted, `DuplicateNullifier`,
+`OutsideCastingWindow`, an invalid ballot and a block whose pass did not run
+invalidating the block, and a local deferral). That carrier is a component
+fixture: the governance pass is run on it directly, because fixture proofs
+and stamps bind the fixture's network id and a block-start pass needs an
+authenticated native schedule. No real-peer run exists (see "Open"). No
+network has activated the family, and binding production use stays disabled
+(section 12.2). The rules have mutation controls HC812 to HC815
+(`specs/sumeragi.md` section 13.4).
+
+- **Identity.** A ballot is identified by `(scope, nullifier)`, never by the
+  hash of its carrier (section 3.5; section 5 item 3). Its carrier joins no
+  committed replay membership: the same bytes may be relayed by anyone and may
+  reach a later block, where the window and the corpus decide them again. A
+  ballot a block recorded as outside its window before the window opened is
+  therefore still good when the window opens.
+- **Route.** A ballot has one route: lane zero of the global chain, on a root
+  whose selection installs the family. A private root, a native lane and a
+  root without the family give it none, so a block or a lane batch that
+  carries one there is refused, exactly as on a release without the family.
+  Routing reads the root's selection alone; no consensus path reads the State
+  a ballot is decided on.
+- **Execution.** The Network output owner executes a ballot input in input
+  order after the block's governance pass, in its own overlay
+  (`governance::parliament_anonymous::ballot_input`). Only a block whose pass
+  ran Parliament's items executes ballots. The board is recomputed from its
+  stored record and decides the input with the protocol crate's block
+  decision (section 3.6):
+  - an invalid encoding, network, scope, profile, stamp or proof makes the
+    block invalid and records nothing;
+  - a valid ballot outside its window is recorded as `OutsideCastingWindow`,
+    and one whose nullifier the corpus holds as `DuplicateNullifier`; the
+    window is decided first, and neither changes anything;
+  - an accepted ballot's entry joins the board's corpus at `(height, input
+    index)` and the board is written back with the input's row, so the next
+    input of the block sees it and a dropped block forgets it.
+
+  The only rows of a ballot input are an empty success and those two
+  rejections. It runs no instruction, trigger or callback, pays no fee and
+  spends no ordinary gas; a generic limit that would give it another row
+  abandons the block instead. A board that does not recompute, a verifier the
+  node cannot run and a frame it cannot produce defer the block and are never
+  a verdict.
+- **Per-block budget.** A block carries at most `B_work` ballots and `B_bytes`
+  verifier-input bytes, read from the `gov.parliament_ballot` value its
+  parent commits or its default. Every ballot input is charged one whole
+  reservation and its copied bytes (the canonical envelope and the canonical
+  authenticated context of its scope), whatever execution then records.
+  Block validation checks the budget against the parent State before
+  execution; the proposer is offered ballots under the same budget against
+  the same parent.
+- **One carrier per block.** A block carries a byte-identical carrier at most
+  once: every Network input owns one FASTPQ source invocation under its
+  execution call, and an honest queue holds a carrier once. Distinct carriers
+  under one nullifier are decided in canonical order.
+- **Queue.** Ballots are residents of the transaction queue in a partition of
+  their own (`queue::anonymous_ballots`). Admission runs the seven ordered
+  checks of section 3.6 against the committed board and the node's clock,
+  then verifies the proof under the partition's verifier bound, then repeats
+  the state checks atomically with claiming `(scope, nullifier)`. A
+  nullifier is never reserved for an unverified ballot, a verified pending
+  ballot blocks rerandomized copies before their verification, and only
+  verified ballots become resident, so gossip forwards nothing else;
+  receivers run the same pipeline. Committed State decides a resident ballot
+  for good when its nullifier is in the corpus, its ballot closed or its
+  board is gone; it is then retired. The proposer is offered only ballots
+  whose window committed State has opened and the local clock has not
+  closed. Queue residence ends by the queue's own time to live, as for a
+  sealed commitment; a ballot carries no creation time and never moves the
+  clock.
+- **Lanes.** A lane's stateless admission refuses a batch that carries a
+  ballot, and a merged ballot fails the route check and is dropped like any
+  other inadmissible merged input.
+- **Replay.** The test corridor replays the opening-to-closure interval with
+  the protocol crate's independent full verification (section 3.9): from the
+  seal, the anchors, the recorded closure and exactly the inputs the blocks
+  carried, every stamp and proof verifies again and the rebuilt corpus,
+  counts and closure record are the ones World recorded.
+- **Open.**
+  - The real-peer corridor: four validators taking a ballot through Torii,
+    gossip, proposal, validation, execution and commit, with identical corpus
+    rows on every peer and across a restart. It needs a genesis that
+    activates the family with candidate testing, enrolled citizens, the
+    exact-slot pulse of the sortition draw and genuine registration and vote
+    proofs with mined stamps.
+  - Node-local bounds (section 3.10): the partition's own budget is
+    configured in `[queue.anonymous_ballots]` (resident ballots and their
+    retained bytes, verifier concurrency, verification rate and burst over
+    every local source) and is separate from the ordinary queue's capacity,
+    bytes and age pressure. The defaults are unqualified working values.
+    Priority by stamp work and the exact-payload verification cache are not
+    implemented. Ballot ingress is isolated (slice 5 below).
+  - Capacity rule (section 3.6): the reserved ballot slots and wire bytes are
+    not subtracted from the block's ordinary input-count and wire limits, and
+    an update of `gov.parliament_ballot` is not validated against
+    outstanding capacity commitments.
+  - Evidence reader (section 3.9): reading the interval's inputs, results and
+    seal from finalized blocks against external finality evidence.
+  - A root whose family a change set retires while ballots are pending: the
+    route follows the parent's selection, the pass the block's.
+
+**Slice 5: clients.** Partly implemented. Production enactment is not
+implemented and stays disabled.
+
+- **Submission.** `POST /v1/gov/anonymous-ballots`
+  (`governance.anonymous_ballot.submit`) takes one canonical envelope frame
+  as `application/x-norito`, at most 262,144 bytes. Its catalog admission is
+  `anonymous_ballot_proof`: no principal, an unauthenticated public mutation
+  that only this route may claim. The handler reads no token, account,
+  cookie or caller address, and on a global root the deployment API token is
+  not required for it. It takes a permit and one global submission rate of
+  its own before it buffers the body
+  (`[torii.anonymous_ballot_ingress]`: `max_concurrent_compute_jobs`,
+  `max_body_bytes`, `submissions_per_sec`, `submission_burst`) and never an
+  ordinary transaction permit. An admitted ballot, a pending nullifier and a
+  committed nullifier are the same empty `202`. A rejected ballot is `400`
+  with one stable code and no reason text. Local bounds and deferrals are
+  `429`; a failed worker is `503`. The account-authenticated
+  `/v1/pipeline/transaction-entrypoints` route refuses a ballot before it
+  reads any token. Listener pre-authentication, request tracing and the
+  remote address the listener sees are unchanged: network metadata stays
+  unprotected until a transport profile is qualified (section 6).
+- **Reads.** `GET /v1/gov/anonymous-ballots/boards/{scope}` returns the
+  canonical Norito bytes of the scope's board record: the sealed context,
+  the casting window and the whole corpus. `GET
+  /v1/gov/anonymous-ballots/attempts/{governance_attempt_id}` returns the
+  attempt's reducer state: elections, assignments, bodies and the committed
+  schedule. Both are ordinary public reads of whole records; neither takes a
+  credential, an assignment or a nullifier as a selector.
+- **Clients.** The Rust SDK submits a ballot with none of the client's
+  configured headers (`Client::submit_anonymous_ballot`) and reads both
+  records (`Client::anonymous_ballot_board`,
+  `Client::anonymous_parliament_attempt`); the CLI exposes them as `iroha
+  gov anonymous-ballot submit|board|attempt`. `submit` transports an
+  envelope a wallet produced; neither proves or stamps.
+- **Open.**
+  - The wallet path in a client: no SDK or CLI calls
+    `iroha_parliament_ballot::wallet` (credential generation, registration
+    proof, choice locking, ballot proof and stamp) yet.
+  - Draft routes for the family's instructions (attempt creation,
+    transitions, credential registration). Rust clients build these
+    instructions from the data model; Kotlin, Swift, JavaScript and Python
+    have only the baseline Parliament routes and none of the three
+    anonymous-family routes.
+  - A positive test of the two reads and of an admitted submission over
+    HTTP: Torii's fixtures hold no anonymous-family record, so the tests
+    cover refusals, absence and isolation only.
+  - Verification of anonymous evidence in the selective
+    committed-transaction verifier, which accepts signed inputs only.
+  - The stored proposal (slice 3 note) and production enactment in G3.
+  - A qualified anonymity transport (section 6).
 
 ## 13. Required validation
 

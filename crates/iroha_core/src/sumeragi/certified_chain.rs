@@ -3417,6 +3417,9 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     // Initialize the same signed-genesis cursor before target/gap receipt slots are live.
     // The caller retains the lock across this stage and all subsequent verification.
+    // The sources are tried in the same order, each in its own frame: a complete prefix is
+    // over 23 KiB, and the signed-genesis decoder must not run above the return slots of the
+    // sources that were tried before it. A refusal leaves the caller's cursor unchanged.
     fn prepare_certificate_prefix(
         &self,
         cursor: &mut Option<VerifiedPrefix>,
@@ -3425,15 +3428,51 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         if cursor
             .as_ref()
             .is_none_or(|prefix| prefix.tip.height >= height)
+            && !self.install_shared_prefix_below(cursor, height)
+            && !self.install_portable_native_prefix(cursor, height)?
         {
-            *cursor = Some(match self.shared_prefix_below(height) {
-                Some(shared) => shared,
-                None => match self.portable_native_prefix(height)? {
-                    Some(portable) => portable,
-                    None => self.genesis_prefix()?,
-                },
-            });
+            self.install_genesis_prefix(cursor)?;
         }
+        Ok(())
+    }
+
+    // Whether a shared prefix below `height` replaced the cursor.
+    #[inline(never)]
+    fn install_shared_prefix_below(
+        &self,
+        cursor: &mut Option<VerifiedPrefix>,
+        height: u64,
+    ) -> bool {
+        let shared = self.shared_prefix_below(height);
+        let installed = shared.is_some();
+        if installed {
+            *cursor = shared;
+        }
+        installed
+    }
+
+    // Whether the portable checkpoint's native prefix replaced the cursor.
+    #[inline(never)]
+    fn install_portable_native_prefix(
+        &self,
+        cursor: &mut Option<VerifiedPrefix>,
+        height: u64,
+    ) -> Result<bool, ExecutionAttemptError<ChainReadError>> {
+        let portable = self.portable_native_prefix(height)?;
+        let installed = portable.is_some();
+        if installed {
+            *cursor = portable;
+        }
+        Ok(installed)
+    }
+
+    // The walk's last resort: authority derived from signed genesis alone.
+    #[inline(never)]
+    fn install_genesis_prefix(
+        &self,
+        cursor: &mut Option<VerifiedPrefix>,
+    ) -> Result<(), ExecutionAttemptError<ChainReadError>> {
+        *cursor = Some(self.genesis_prefix()?);
         Ok(())
     }
 

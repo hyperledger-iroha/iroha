@@ -37,7 +37,7 @@ fn run_with(
     RunOutcome {
         register_value: vm.register(5),
         gas_used: gas_limit.saturating_sub(vm.remaining_gas()),
-        execution_summary: vm.execution_summary(),
+        execution_summary: vm.execution_summary().unwrap(),
     }
 }
 #[test]

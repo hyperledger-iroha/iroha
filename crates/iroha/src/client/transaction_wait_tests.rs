@@ -1,10 +1,14 @@
-//! Blocking and async waits share one deadline and survive read backpressure without replaying writes.
+//! Blocking and async waits share one deadline and survive read backpressure and transient
+//! transport failures without replaying writes.
 
 use std::{
     collections::VecDeque,
+    io::ErrorKind,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+use url::Url;
 
 use super::{
     Client, Hash, HashOf, Response, SignedTransaction, StatusCode, TransactionFinalityFailure,
@@ -58,26 +62,90 @@ fn backpressure(retry_after: Option<&str>) -> Response<Vec<u8>> {
     response
 }
 
+/// Every connection-level failure kind that a finality wait repeats.
+const TRANSIENT_TRANSPORT_FAILURES: [ErrorKind; 7] = [
+    ErrorKind::ConnectionRefused,
+    ErrorKind::ConnectionReset,
+    ErrorKind::ConnectionAborted,
+    ErrorKind::NotConnected,
+    ErrorKind::BrokenPipe,
+    ErrorKind::UnexpectedEof,
+    ErrorKind::TimedOut,
+];
+
+/// One scripted status read: a response, or a failure before any response arrived.
+#[derive(Clone)]
+enum Read {
+    Response(Response<Vec<u8>>),
+    /// The default transport's dispatch context over one connection-level failure.
+    Transport(ErrorKind),
+    /// Any other read failure, built afresh for every dispatch.
+    Fail(fn() -> eyre::Report),
+}
+
+impl Read {
+    fn into_result(self) -> eyre::Result<Response<Vec<u8>>> {
+        match self {
+            Self::Response(response) => Ok(response),
+            Self::Transport(kind) => Err(dispatch_failure(std::io::Error::new(
+                kind,
+                "scripted connection failure",
+            ))),
+            Self::Fail(failure) => Err(failure()),
+        }
+    }
+}
+
+fn dispatch_failure(cause: std::io::Error) -> eyre::Report {
+    eyre::Report::new(cause).wrap_err(
+        "Failed to send http GET request to http://mock.local/v1/pipeline/transactions/status",
+    )
+}
+
 fn scripted_client(
     responses: Vec<Response<Vec<u8>>>,
 ) -> (Client, Arc<Mutex<Vec<RequestSnapshot>>>) {
-    let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+    scripted_reads(responses.into_iter().map(Read::Response).collect())
+}
+
+fn scripted_reads(reads: Vec<Read>) -> (Client, Arc<Mutex<Vec<RequestSnapshot>>>) {
+    let reads = Arc::new(Mutex::new(VecDeque::from(reads)));
     let snapshots = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&snapshots);
     let transport = DefaultHttpTransport::mock(Arc::new(move |snapshot| {
         observed.lock().expect("snapshots").push(snapshot);
-        let mut pending = responses.lock().expect("responses");
-        // Repeat the last response so timeout tests cannot pass by exhausting a mock.
-        Ok(if pending.len() > 1 {
-            pending.pop_front().expect("next response")
+        let mut pending = reads.lock().expect("reads");
+        // Repeat the last read so timeout tests cannot pass by exhausting a mock.
+        if pending.len() > 1 {
+            pending.pop_front().expect("next read")
         } else {
-            pending.front().expect("nonempty response script").clone()
-        })
+            pending.front().expect("nonempty read script").clone()
+        }
+        .into_result()
     }));
     (
         client_with_base_url(base_url()).with_test_http_transport(transport),
         snapshots,
     )
+}
+
+fn carries_transport_failure(error: &eyre::Report, kind: ErrorKind) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|cause| cause.kind() == kind)
+    })
+}
+
+/// Read the attempt count from an unresolved deadline report.
+fn reported_attempts(error: &eyre::Report) -> u64 {
+    let report = format!("{error:#}");
+    let (_, tail) = report.split_once("attempts=").expect("attempt count");
+    tail.chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .expect("attempt count")
 }
 
 fn wait(
@@ -777,6 +845,383 @@ fn transaction_wait_local_late_applied_never_confirms_the_peer() {
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         assert_exact_scoped_reads(&snapshots, "local");
+    }
+}
+
+#[test]
+fn transaction_wait_repeats_transient_transport_failures_until_state_applied() {
+    for asynchronous in [false, true] {
+        for kind in TRANSIENT_TRANSPORT_FAILURES {
+            let (client, snapshots) = scripted_reads(vec![
+                Read::Transport(kind),
+                Read::Response(status("Applied", "state")),
+            ]);
+            let outcome = wait(&client, asynchronous, Duration::from_secs(30))
+                .unwrap_or_else(|error| panic!("{kind:?} must repeat the read: {error:#}"));
+            assert_eq!(outcome.attempts, 2);
+            assert_eq!(outcome.resolved_from, "state");
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 2);
+            assert_only_exact_status_reads(&snapshots);
+        }
+        // Transport failures share backpressure's cadence and never end the wait early.
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Response(backpressure(Some("0"))),
+            Read::Transport(ErrorKind::UnexpectedEof),
+            Read::Response(status("Applied", "cache")),
+            Read::Transport(ErrorKind::TimedOut),
+            Read::Response(status("Applied", "state")),
+        ]);
+        let outcome = wait(&client, asynchronous, Duration::from_secs(30)).expect("state finality");
+        assert_eq!(outcome.attempts, 6);
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 6);
+        assert_only_exact_status_reads(&snapshots);
+    }
+}
+
+#[test]
+fn transaction_wait_persistent_transport_failure_ends_unresolved_with_the_last_read_error() {
+    // Coarse polls keep the final read clear of the deadline, so the report keeps the
+    // scripted failure instead of the transport's own refusal at the deadline.
+    let options = TransactionWaitOptions {
+        timeout: Duration::from_millis(500),
+        poll_interval: Duration::from_millis(100),
+    };
+    for asynchronous in [false, true] {
+        let (client, snapshots) =
+            scripted_reads(vec![Read::Transport(ErrorKind::ConnectionRefused)]);
+        let error =
+            wait_with_options(&client, asynchronous, options).expect_err("persistent failure");
+        let attempts = reported_attempts(&error);
+        assert_unresolved(&error, attempts);
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("within 500 ms; last_status=not_observed"),
+            "{report}"
+        );
+        assert!(report.contains("scripted connection failure"), "{report}");
+        assert!(
+            carries_transport_failure(&error, ErrorKind::ConnectionRefused),
+            "{report}"
+        );
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert!(snapshots.len() >= 2, "the read was not repeated: {report}");
+        assert_eq!(attempts, u64::try_from(snapshots.len()).expect("count"));
+        assert_only_exact_status_reads(&snapshots);
+        assert!(
+            snapshots
+                .iter()
+                .all(|request| request.timeout.expect("remaining budget") <= options.timeout)
+        );
+
+        // A later transport failure keeps the last observed status beside its own cause.
+        let (client, _) = scripted_reads(vec![
+            Read::Response(status("Queued", "queue")),
+            Read::Transport(ErrorKind::ConnectionReset),
+        ]);
+        let error = wait_with_options(&client, asynchronous, options).expect_err("unresolved");
+        let report = format!("{error:#}");
+        assert!(report.contains("last_status=Queued"), "{report}");
+        assert!(
+            carries_transport_failure(&error, ErrorKind::ConnectionReset),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn transaction_wait_terminal_read_failures_end_the_wait_at_once() {
+    fn certificate() -> eyre::Report {
+        dispatch_failure(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid peer certificate: UnknownIssuer",
+        ))
+    }
+    fn name_resolution() -> eyre::Report {
+        dispatch_failure(std::io::Error::other(
+            "dns error: failed to lookup address information",
+        ))
+    }
+    fn oversized() -> eyre::Report {
+        crate::Error::ResponseTooLarge {
+            maximum: 8,
+            actual: Some(9),
+        }
+        .into()
+    }
+    fn untyped() -> eyre::Report {
+        eyre::eyre!("connection reset by peer, in display text only")
+    }
+    let failures: [(fn() -> eyre::Report, &str); 4] = [
+        (certificate, "invalid peer certificate"),
+        (name_resolution, "dns error"),
+        (oversized, "response exceeds the 8 byte limit"),
+        (untyped, "in display text only"),
+    ];
+    let mut wrong_hash = status("Applied", "state");
+    let body = String::from_utf8(wrong_hash.body().clone()).expect("JSON text");
+    *wrong_hash.body_mut() = body
+        .replace(
+            &hash().to_string(),
+            &Hash::prehashed([0x73; Hash::LENGTH]).to_string(),
+        )
+        .into_bytes();
+    for asynchronous in [false, true] {
+        for (failure, expected) in failures {
+            let (client, snapshots) = scripted_reads(vec![
+                Read::Fail(failure),
+                Read::Response(status("Applied", "state")),
+            ]);
+            let error = wait(&client, asynchronous, Duration::from_secs(30))
+                .expect_err("terminal read failure");
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+            assert!(
+                error
+                    .downcast_ref::<super::TxConfirmationFinalError>()
+                    .is_none(),
+                "a terminal read failure is not an unresolved deadline: {error:#}"
+            );
+            assert_eq!(snapshots.lock().expect("snapshots").len(), 1);
+        }
+
+        // A repeated read still ends at the next terminal outcome.
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Response(status("Rejected", "state")),
+        ]);
+        let error = wait(&client, asynchronous, Duration::from_secs(30)).expect_err("rejection");
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.downcast_ref::<TransactionFinalityFailure>().is_some()),
+            "{error:#}"
+        );
+        assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
+
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Response(wrong_hash.clone()),
+        ]);
+        let error = wait(&client, asynchronous, Duration::from_secs(30)).expect_err("binding");
+        assert!(
+            matches!(
+                error.downcast_ref::<crate::Error>(),
+                Some(crate::Error::ResponseBinding {
+                    operation: "pipeline.transaction_status",
+                    field: "hash",
+                })
+            ),
+            "{error:#}"
+        );
+        assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
+
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Fail(certificate),
+        ]);
+        let error = wait(&client, asynchronous, Duration::from_secs(30)).expect_err("TLS");
+        assert!(
+            format!("{error:#}").contains("invalid peer certificate"),
+            "{error:#}"
+        );
+        assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
+    }
+}
+
+#[test]
+fn transaction_wait_local_repeats_transient_transport_failures_in_every_transport() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Response(scoped_status("Applied", "state", "local")),
+        ]);
+        let outcome = wait_local(&client, transport, Duration::from_secs(30))
+            .unwrap_or_else(|error| panic!("{transport:?}: {error:#}"));
+        assert_eq!(outcome.attempts, 2);
+        assert_eq!(outcome.scope, "local");
+        assert_eq!(outcome.resolved_from, "state");
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 2);
+        assert_exact_scoped_reads(&snapshots, "local");
+    }
+}
+
+#[test]
+fn transaction_wait_transient_transport_failures_still_fail_one_shot_status_reads() {
+    type OneShot = fn(&Client) -> eyre::Result<Option<super::PipelineTransactionStatusResponse>>;
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(future)
+    }
+    let reads: [OneShot; 5] = [
+        |client| client.get_transaction_status_response(hash()),
+        |client| client.get_transaction_status_response_global(hash()),
+        |client| client.get_transaction_status_response_local(hash()),
+        |client| block_on(client.fetch_transaction_status_response_global(hash())),
+        |client| block_on(client.fetch_transaction_status_response_local(hash())),
+    ];
+    for read in reads {
+        let (client, snapshots) = scripted_reads(vec![
+            Read::Transport(ErrorKind::ConnectionReset),
+            Read::Response(status("Applied", "state")),
+        ]);
+        let error = read(&client).expect_err("one-shot reads fail fast");
+        assert!(
+            carries_transport_failure(&error, ErrorKind::ConnectionReset),
+            "{error:#}"
+        );
+        assert_eq!(snapshots.lock().expect("snapshots").len(), 1);
+    }
+}
+
+/// One loopback connection served by a real socket, in script order.
+enum Connection {
+    /// Read three request bytes and close: the unread rest makes the kernel reset.
+    Reset,
+    /// Read the whole request head, then close before any response.
+    CloseBeforeResponse,
+    /// Answer with one complete response, then close.
+    Respond(Response<Vec<u8>>),
+}
+
+/// Serve `connections` on a fresh loopback port; the handle reports how many were served.
+fn serve_loopback(connections: Vec<Connection>) -> (Url, std::thread::JoinHandle<usize>) {
+    use std::io::{Read as _, Write as _};
+
+    fn read_request_head(stream: &mut std::net::TcpStream) {
+        let mut head = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut buffer).expect("request head");
+            assert!(read > 0, "connection closed inside the request head");
+            head.extend_from_slice(&buffer[..read]);
+        }
+        assert!(
+            head.starts_with(b"GET /v1/pipeline/transactions/status?"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let address = listener.local_addr().expect("loopback address");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut served = 0;
+        for connection in connections {
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return served,
+                }
+            };
+            // Accepted sockets can inherit the listener's nonblocking mode.
+            stream.set_nonblocking(false).expect("blocking stream");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .expect("read timeout");
+            match connection {
+                Connection::Reset => {
+                    let mut method = [0_u8; 3];
+                    stream.read_exact(&mut method).expect("request method");
+                    assert_eq!(&method, b"GET");
+                }
+                Connection::CloseBeforeResponse => read_request_head(&mut stream),
+                Connection::Respond(response) => {
+                    read_request_head(&mut stream);
+                    let mut raw = format!("HTTP/1.1 {}\r\n", response.status()).into_bytes();
+                    for (name, value) in response.headers() {
+                        raw.extend_from_slice(name.as_str().as_bytes());
+                        raw.extend_from_slice(b": ");
+                        raw.extend_from_slice(value.as_bytes());
+                        raw.extend_from_slice(b"\r\n");
+                    }
+                    raw.extend_from_slice(
+                        format!(
+                            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+                            response.body().len()
+                        )
+                        .as_bytes(),
+                    );
+                    raw.extend_from_slice(response.body());
+                    stream.write_all(&raw).expect("write response");
+                }
+            }
+            served += 1;
+        }
+        served
+    });
+    let url = Url::parse(&format!("http://{address}/")).expect("loopback URL");
+    (url, server)
+}
+
+/// A client on real reqwest pools that ignore any proxy environment for the loopback peer.
+fn loopback_client(url: Url) -> Client {
+    let mut client = client_with_base_url(url);
+    client.http_transport =
+        DefaultHttpTransport::new().with_policy(crate::config::HttpTransportPolicy::DirectLoopback);
+    client
+}
+
+#[test]
+fn transaction_wait_survives_real_connection_reset_and_premature_close() {
+    for asynchronous in [false, true] {
+        let (url, server) = serve_loopback(vec![
+            Connection::Reset,
+            Connection::CloseBeforeResponse,
+            Connection::Respond(status("Applied", "state")),
+        ]);
+        let outcome = wait(&loopback_client(url), asynchronous, Duration::from_secs(30))
+            .unwrap_or_else(|error| {
+                panic!("real connection failures must repeat the read: {error:#}")
+            });
+        assert_eq!(outcome.attempts, 3);
+        assert_eq!(outcome.resolved_from, "state");
+        assert_eq!(server.join().expect("loopback server"), 3);
+    }
+}
+
+#[test]
+fn transaction_wait_refused_connections_end_unresolved_at_the_original_deadline() {
+    let options = TransactionWaitOptions {
+        timeout: Duration::from_millis(500),
+        poll_interval: Duration::from_millis(100),
+    };
+    for asynchronous in [false, true] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let url = Url::parse(&format!(
+            "http://{}/",
+            listener.local_addr().expect("loopback address")
+        ))
+        .expect("loopback URL");
+        drop(listener);
+        let started = Instant::now();
+        let error = wait_with_options(&loopback_client(url), asynchronous, options)
+            .expect_err("nothing listens");
+        assert!(
+            started.elapsed() >= options.timeout,
+            "a refused read cannot end the wait before its deadline"
+        );
+        let attempts = reported_attempts(&error);
+        assert!(attempts >= 2, "the read was not repeated: {error:#}");
+        assert_unresolved(&error, attempts);
+        assert!(
+            carries_transport_failure(&error, ErrorKind::ConnectionRefused),
+            "{error:#}"
+        );
     }
 }
 

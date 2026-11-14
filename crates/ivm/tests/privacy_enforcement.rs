@@ -865,7 +865,7 @@ fn complete_public_overwrite_clears_private_stack_range() {
 #[test]
 fn execution_summary_preserves_private_stack_ranges() {
     let mut vm = vm_with_private_stack_word();
-    let _summary = vm.execution_summary();
+    let _summary = vm.execution_summary().unwrap();
     vm.run()
         .expect("execution summary must not discard privacy metadata");
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);

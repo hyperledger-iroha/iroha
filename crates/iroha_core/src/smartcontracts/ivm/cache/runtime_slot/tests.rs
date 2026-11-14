@@ -226,7 +226,7 @@ fn shared_nested_runtime_slot_keeps_original_pool_through_cold_idle_and_warm_use
     let row = row_pointer(runtime.backing.as_ref().unwrap());
     assert!(runtime.backing.as_ref().unwrap().belongs_to(&budget));
     let image = runtime.memory.load_region(0, 1).unwrap().as_ptr();
-    let root = runtime.memory.root();
+    let root = runtime.memory.root().unwrap();
     let charged = budget.reserved_bytes();
     assert_eq!(runtime.remaining_gas(), GAS);
     assert_eq!(runtime.memory.heap_max_limit(), HEAP);
@@ -255,12 +255,12 @@ fn shared_nested_runtime_slot_keeps_original_pool_through_cold_idle_and_warm_use
             .unwrap(),
         [0]
     );
-    assert_eq!(warm.memory.root(), root);
+    assert_eq!(warm.memory.root().unwrap(), root);
     assert_eq!(warm.remaining_gas(), GAS);
     assert_eq!(budget.reserved_bytes(), charged);
     // Reusing the loaded row needs no new credit; a new invocation still
     // requires its own register-log owner before any guest effect can run.
-    let before_invocation = warm.execution_summary();
+    let before_invocation = warm.execution_summary().unwrap();
     assert!(matches!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
         Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
@@ -268,7 +268,7 @@ fn shared_nested_runtime_slot_keeps_original_pool_through_cold_idle_and_warm_use
             limit_bytes: 0,
         })) if requested_bytes > 0
     ));
-    assert_eq!(warm.execution_summary(), before_invocation);
+    assert_eq!(warm.execution_summary().unwrap(), before_invocation);
     assert_eq!(budget.reserved_bytes(), charged);
     budget.set_limit_bytes(LIMIT);
     assert_eq!(
@@ -304,7 +304,7 @@ fn local_contract_runtime_slot_keeps_original_pool_and_existing_summary_semantic
     let row = row_pointer(cold.backing.as_ref().unwrap());
     assert!(cold.backing.as_ref().unwrap().belongs_to(&budget));
     let image = cold.memory.load_region(0, 1).unwrap().as_ptr();
-    let root = cold.memory.root();
+    let root = cold.memory.root().unwrap();
     let charged = budget.reserved_bytes();
     cold.set_register(8, 41);
     cold.memory.preload_input(0, &[0x7E]).unwrap();
@@ -316,7 +316,7 @@ fn local_contract_runtime_slot_keeps_original_pool_and_existing_summary_semantic
         .unwrap();
     assert_eq!(row_pointer(warm.backing.as_ref().unwrap()), row);
     assert_eq!(warm.memory.load_region(0, 1).unwrap().as_ptr(), image);
-    assert_eq!(warm.memory.root(), root);
+    assert_eq!(warm.memory.root().unwrap(), root);
     assert_eq!(warm.register(8), 0);
     assert_eq!(warm.remaining_gas(), GAS);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
@@ -346,7 +346,7 @@ fn local_generic_runtime_slot_keeps_original_program_and_warm_reset() {
     let mut cold = cache.checkout_generic_runtime(&summary, GAS, HEAP).unwrap();
     let row = row_pointer(cold.backing.as_ref().unwrap());
     let image = cold.memory.load_region(0, 1).unwrap().as_ptr();
-    let root = cold.memory.root();
+    let root = cold.memory.root().unwrap();
     let charged = budget.reserved_bytes();
     cold.set_register(9, 42);
     cold.memory.preload_input(0, &[0x5A]).unwrap();
@@ -357,13 +357,13 @@ fn local_generic_runtime_slot_keeps_original_program_and_warm_reset() {
     assert!(warm.backing.as_ref().unwrap().belongs_to(&budget));
     assert_eq!(row_pointer(warm.backing.as_ref().unwrap()), row);
     assert_eq!(warm.memory.load_region(0, 1).unwrap().as_ptr(), image);
-    assert_eq!(warm.memory.root(), root);
+    assert_eq!(warm.memory.root().unwrap(), root);
     assert_eq!(warm.register(9), 0);
     assert_eq!(warm.remaining_gas(), GAS);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
     // Reusing the loaded row needs no new credit; a new invocation still
     // requires its own register-log owner before any guest effect can run.
-    let before_invocation = warm.execution_summary();
+    let before_invocation = warm.execution_summary().unwrap();
     assert!(matches!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
         Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
@@ -371,7 +371,7 @@ fn local_generic_runtime_slot_keeps_original_program_and_warm_reset() {
             limit_bytes: 0,
         })) if requested_bytes > 0
     ));
-    assert_eq!(warm.execution_summary(), before_invocation);
+    assert_eq!(warm.execution_summary().unwrap(), before_invocation);
     assert_eq!(budget.reserved_bytes(), charged);
     budget.set_limit_bytes(LIMIT);
     assert_eq!(
@@ -486,7 +486,7 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
     let first_charge = budget.reserved_bytes();
     let first_row = row_pointer(first.backing.as_ref().unwrap());
     let first_image = first.memory.load_region(0, 1).unwrap().as_ptr();
-    let first_root = first.memory.root();
+    let first_root = first.memory.root().unwrap();
     let mut second = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     let second_row = row_pointer(second.backing.as_ref().unwrap());
     let second_image = second.memory.load_region(0, 1).unwrap().as_ptr();
@@ -510,7 +510,7 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
     let mut warm = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     assert_eq!(row_pointer(warm.backing.as_ref().unwrap()), first_row);
     assert_eq!(warm.memory.load_region(0, 1).unwrap().as_ptr(), first_image);
-    assert_eq!(warm.memory.root(), first_root);
+    assert_eq!(warm.memory.root().unwrap(), first_root);
     assert_eq!(warm.register(7), 0);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
     assert_eq!(warm.remaining_gas(), GAS);
@@ -564,7 +564,7 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         let declined_pc = declined.pc();
         let declined_register = declined.register(7);
         let declined_register_root = declined.register_root();
-        let declined_memory_root = declined.memory.root();
+        let declined_memory_root = declined.memory.root().unwrap();
         if fault {
             assert!(matches!(
                 (&(declined_result), &(ivm::VMError::OutOfGas)),
@@ -608,7 +608,7 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         assert_eq!(admitted.pc(), declined_pc);
         assert_eq!(admitted.register(7), declined_register);
         assert_eq!(admitted.register_root(), declined_register_root);
-        assert_eq!(admitted.memory.root(), declined_memory_root);
+        assert_eq!(admitted.memory.root().unwrap(), declined_memory_root);
         drop(admitted);
         assert_eq!(cache.stats().runtime_misses, 2);
         assert_eq!(cache.stats().runtime_hits, 0);
@@ -876,7 +876,7 @@ fn runtime_slot_rejects_foreign_equal_limit_pool_without_refresh_or_guest_effect
     );
     assert_eq!(runtime.register(7), 0);
     let completed_gas = runtime.remaining_gas();
-    let completed_root = runtime.memory.root();
+    let completed_root = runtime.memory.root().unwrap();
     drop(runtime);
     assert_eq!(cache.stats().runtime_dirty_resets, 0);
     assert_eq!(foreign.reserved_bytes(), 0);
@@ -900,7 +900,7 @@ fn runtime_slot_rejects_foreign_equal_limit_pool_without_refresh_or_guest_effect
         ()
     );
     assert_eq!(retry.remaining_gas(), completed_gas);
-    assert_eq!(retry.memory.root(), completed_root);
+    assert_eq!(retry.memory.root().unwrap(), completed_root);
     drop(retry);
     assert_eq!(cache.stats().runtime_misses, 2);
     assert_eq!(cache.stats().runtime_hits, 0);

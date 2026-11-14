@@ -302,16 +302,32 @@ mod tests {
 
 /// Exact Request body for an isolated self-transfer. The caller obtains its
 /// signature from the enrolled hardware through the canonical Request domain.
+///
+/// The completed-Request relation refuses payer == receiver wallet
+/// (`request::append_completed`), so a Send built from this body is refused by
+/// native preparation. Successor and two-wallet fixtures use [`request_to`].
 pub fn request_self(load: &ExactOperationWitness) -> Result<Vec<u8>> {
+    let ExactOperationWitness::Load { step, .. } = load else {
+        return Err(Error::Malformed("fixture Request requires Load"));
+    };
+    request_to(load, &step.credential)
+}
+
+/// Exact Request body paying 10 from the Load-shaped payer state to `receiver`
+/// (its wallet, account and credential digest). Confers no authority.
+pub fn request_to(
+    load: &ExactOperationWitness,
+    receiver: &crate::credential::Credential,
+) -> Result<Vec<u8>> {
     let ExactOperationWitness::Load { step, .. } = load else {
         return Err(Error::Malformed("fixture Request requires Load"));
     };
     let mut body = [0u8; 418];
     body[0] = 1;
     body[2..130].copy_from_slice(&step.credential.body[2..130]);
-    body[130..194].copy_from_slice(&step.credential.body[66..130]);
+    body[130..194].copy_from_slice(&receiver.body[66..130]);
     body[194..210].copy_from_slice(&step.after_core[12].to_repr()[..16]);
-    body[210..242].copy_from_slice(&crate::credential::digest(&step.credential).to_repr());
+    body[210..242].copy_from_slice(&crate::credential::digest(receiver).to_repr());
     body[242..258].copy_from_slice(&10u128.to_le_bytes());
     body[258..290].copy_from_slice(&step.after_rest[2].to_repr());
     body[306..314].copy_from_slice(&step.after_core[27].to_repr()[..8]);
@@ -331,8 +347,21 @@ pub fn send10(
     let ExactOperationWitness::Load { step, .. } = load else {
         return Err(Error::Malformed("fixture Send requires Load"));
     };
+    send10_to(load, &step.credential, request_signature)
+}
+
+/// Send10 witness material paying `receiver`; `request_signature` signs the
+/// body from [`request_to`] with the same receiver.
+pub fn send10_to(
+    load: &ExactOperationWitness,
+    receiver: &crate::credential::Credential,
+    request_signature: [u8; 64],
+) -> Result<ExactOperationWitness> {
+    let ExactOperationWitness::Load { step, .. } = load else {
+        return Err(Error::Malformed("fixture Send requires Load"));
+    };
     let request = CompletedRequest {
-        body: request_self(load)?.try_into().unwrap(),
+        body: request_to(load, receiver)?.try_into().unwrap(),
         signature: request_signature,
     };
     let terms = crate::request::commitments(&request).map_err(Error::Malformed)?;

@@ -1455,18 +1455,15 @@ fn original_evidence_decode_owner_survives_worker_deferral_until_its_last_reader
 }
 
 #[test]
-fn anonymous_ballot_adapter_absence_stays_deferred_through_publication() {
-    for error in [
-        BlockValidationError::from(crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable),
-        BlockValidationError::TransactionAccept(
-            crate::tx::AcceptTransactionFail::AnonymousBallotUnavailable,
-        ),
-    ] {
-        assert!(matches!(
-            validation_failure(error),
-            Ok(PublicationError::Deferred(_))
-        ));
-    }
+fn a_local_ballot_refusal_stays_deferred_through_publication() {
+    // A block whose ballot input the node cannot decide (an unusable board, verifier or
+    // frame) defers; only a completed verdict reaches the caller as a rejection.
+    assert!(matches!(
+        validation_failure(BlockValidationError::ExecutionDeferred(
+            ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+        )),
+        Ok(PublicationError::Deferred(_))
+    ));
     assert!(matches!(
         validation_failure(BlockValidationError::TransactionInTheFuture),
         Err(BlockValidationError::TransactionInTheFuture)

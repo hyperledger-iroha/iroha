@@ -1,5 +1,5 @@
-//! The block-execution decision of one anonymous-ballot input, used by the full verifier
-//! and ready for Core integration (design §3.6 "Block validation", integration decision 1).
+//! The block-execution decision of one anonymous-ballot input, shared by the node's block
+//! execution and the full verifier (design §3.6 "Block validation", integration decision 1).
 //!
 //! Decision order:
 //!
@@ -28,9 +28,9 @@ use iroha_data_model::{
 use super::{BallotProofErrorV1, VerificationUnavailableV1, verify_ballot_proof_v1};
 use crate::context::ScopedBallotContextV1;
 
-/// The committed state the block decision reads. The full verifier implements it; Core
-/// integration remains pending. Answers reflect every earlier input of the same block
-/// in canonical order.
+/// The committed state the block decision reads. The node's board store and the full
+/// verifier implement it. Answers reflect every earlier input of the same block in
+/// canonical order.
 pub trait BlockBallotStateV1 {
     /// The genesis-bound identity of the executing network.
     fn network_id(&self) -> NetworkId;

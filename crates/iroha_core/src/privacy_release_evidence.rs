@@ -2395,7 +2395,10 @@ fn anonymous_pgc_bootstrap_material_v1(
     let bootstrap_digest = bootstrap
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let namespace_encoding = norito::to_bytes(&namespace)
+    // The native relation binds the source-owned namespace grammar (the frozen
+    // `PrivacyNamespaceV1` frame), not the runtime type's own Norito frame.
+    let namespace_encoding = namespace
+        .canonical_wire_bytes_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let compiled = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;

@@ -4,6 +4,9 @@ import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const APP_DATA_DIR = __APP_DATA_DIR__;
+// Hang guard only. A start is judged by what the process does (it exits or it
+// answers /health), never by how long a busy host takes to schedule it.
+const STARTUP_HANG_GUARD_MS = 120_000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -51,7 +54,13 @@ function startServer(port, serviceVersion) {
   child.stderr.on("data", (chunk) => {
     logs += chunk.toString("utf8");
   });
-  return { child, logs: () => logs };
+  // "close" follows the process exit and the end of both output streams, so
+  // the captured logs are complete once it has fired.
+  let closed = false;
+  child.once("close", () => {
+    closed = true;
+  });
+  return { child, logs: () => logs, closed: () => closed };
 }
 
 function sleep(ms) {
@@ -77,19 +86,27 @@ async function stopServer(server) {
   }
 }
 
-async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
+// Observe how the started process settles its own startup: "exited" once it
+// has terminated and its output is drained, "serving" once /health answers.
+// A process that has done neither is still starting, so no fixed wait may
+// stand in for either verdict; "undecided" reports only the hang guard.
+async function startupOutcome(server, port) {
+  const deadline = Date.now() + STARTUP_HANG_GUARD_MS;
+  while (Date.now() < deadline) {
+    if (server.closed()) {
+      return "exited";
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`);
       if (response.status === 200) {
-        return;
+        return "serving";
       }
     } catch {
-      // keep retrying while process boots
+      // not listening: the process is still booting or is about to exit
     }
     await sleep(25);
   }
-  throw new Error(`server failed healthcheck on port ${port}`);
+  return "undecided";
 }
 
 async function jsonRequest(port, method, route, body) {
@@ -110,10 +127,14 @@ async function assertInvalidServiceVersionFails(serviceVersion) {
   const port = await freePort();
   const server = startServer(port, serviceVersion);
   try {
-    await waitForExit(server.child, 800);
+    const outcome = await startupOutcome(server, port);
     assert(
-      server.child.exitCode !== null,
+      outcome !== "serving",
       "server accepted a missing service version"
+    );
+    assert(
+      outcome === "exited",
+      `server neither refused nor served a missing service version: ${server.logs()}`
     );
     assert(
       server.child.exitCode !== 0,
@@ -135,7 +156,11 @@ async function main() {
     await assertInvalidServiceVersionFails("");
     const port = await freePort();
     server = startServer(port, "1.0.0");
-    await waitForHealth(port);
+    const outcome = await startupOutcome(server, port);
+    assert(
+      outcome === "serving",
+      `server failed to start on port ${port} (${outcome}): ${server.logs()}`
+    );
 
     const health = await jsonRequest(port, "GET", "/health");
     assert(health.status === 200, `health failed: ${JSON.stringify(health)}`);
