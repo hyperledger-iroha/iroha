@@ -691,158 +691,138 @@ fn start_route(
         let target = route.config.network_id;
         let mut expiry_recovery = ExpiryRecovery::default();
         while !shutdown.is_sent() {
-            let view = state.view();
-            let tip = admissions.frontier(view.block_hashes().len() as u64);
+            // A State view is held only for a local read. Deliveries wait on the destination
+            // root for up to a cadence each; holding one view across a whole pass of them
+            // pinned the source root's snapshot for minutes under load.
+            let tip = admissions.frontier(state.view().block_hashes().len() as u64);
             for _ in 0..max_source_heights_per_pass {
                 if shutdown.is_sent() || height > tip {
                     break;
                 }
-                let mut original = match amx_relays_to(&view, height, target) {
-                    Ok(original) => original,
-                    Err(error) => {
-                        iroha_logger::warn!(height, %error, "AMX original source unavailable");
-                        break;
-                    }
-                };
-                let mut ordinal = 0u64;
-                loop {
+                let intents =
+                    match discover_height(&state, height, target, &runtime, &shutdown, cadence) {
+                        HeightDiscovery::Intents(intents) => intents,
+                        HeightDiscovery::Unavailable => break,
+                        HeightDiscovery::Shutdown => return,
+                    };
+                // Count every original yielded source, including filtered intents.
+                for (source_ordinal, intent) in (0u64..).zip(intents) {
                     if shutdown.is_sent() {
                         return;
                     }
-                    match original.complete_next() {
-                        Ok(Some(intent)) => {
-                            // Count every original yielded source, including filtered intents.
-                            let source_ordinal = ordinal;
-                            let Some(next) = ordinal.checked_add(1) else {
-                                iroha_logger::error!(
-                                    height,
-                                    "AMX source ordinal exceeds its bound"
-                                );
-                                return;
-                            };
-                            ordinal = next;
-                            let position = loop {
-                                match ledger::instruction_digest(intent.instruction()).and_then(
-                                    |digest| {
-                                        ScanPosition::from_descriptor(intent.descriptor(), digest)
-                                    },
-                                ) {
-                                    Ok(position) => break position,
-                                    Err(error) => {
-                                        iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
-                                        // Keep this same opaque source through local identity refusal.
-                                        if wait(&runtime, &shutdown, cadence) {
-                                            return;
-                                        }
-                                    }
+                    let position = loop {
+                        match ledger::instruction_digest(intent.instruction()).and_then(|digest| {
+                            ScanPosition::from_descriptor(intent.descriptor(), digest)
+                        }) {
+                            Ok(position) => break position,
+                            Err(error) => {
+                                iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
+                                // Keep this same opaque source through local identity refusal.
+                                if wait(&runtime, &shutdown, cadence) {
+                                    return;
                                 }
-                            };
-                            let admission = AdmissionPosition {
-                                height: position.height,
-                                ordinal: source_ordinal,
-                                plan: position.identity,
-                            };
-                            // Authenticated existing custody is classified before scheduling hints.
-                            // Neither absence here nor a cursor grants a new signature or an outcome.
-                            let pending = match route.has_pending(&intent) {
-                                Ok(pending) => pending,
-                                Err(error) => {
-                                    admission_refused(&mut admissions, admission, &error);
-                                    handoff_order.permits(position);
-                                    handoff_order.observed(position, false);
-                                    iroha_logger::warn!(height, %error, "AMX pending custody cannot be classified");
-                                    continue;
-                                }
-                            };
-                            let permitted = handoff_order.permits(position);
-                            if !permitted && !pending {
-                                admissions.skip(admission);
-                                continue;
-                            }
-                            let now = clock.now_unix_ms();
-                            let ready = intent
-                                .descriptor()
-                                .ready_at_ms()
-                                .is_none_or(|wake| now >= wake);
-                            if !pending
-                                && !position.boundary
-                                && !admissions.consider(admission, ready)
-                            {
-                                continue;
-                            }
-                            let lease = match route.admit(&intent) {
-                                Ok(lease) => lease,
-                                Err(error) => {
-                                    admission_refused(&mut admissions, admission, &error);
-                                    if permitted {
-                                        handoff_order.observed(position, false);
-                                    }
-                                    iroha_logger::warn!(height, %error, "AMX original admission remains resumable");
-                                    continue;
-                                }
-                            };
-                            admissions.admitted(admission);
-                            // Read-only original-carrier recovery can bypass the authority barrier.
-                            // It does not update HandoffOrder, even when an older carrier finishes.
-                            let decided = if permitted {
-                                match expiry_recovery.observe(
-                                    &view,
-                                    &intent,
-                                    now,
-                                    max_finality_proof_reads,
-                                    &runtime,
-                                    &shutdown,
-                                    cadence,
-                                ) {
-                                    Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
-                                    Ok(ExpiryProgress::Decided) => true,
-                                    Ok(ExpiryProgress::Waiting) => continue,
-                                    Err(error) => {
-                                        iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                false
-                            };
-                            // Same State view, opaque source and observation lease survive the read
-                            // and its delivery. Shutdown never reports a successful observation.
-                            let result = runtime.block_on(async {
-                                tokio::select! {
-                                    () = shutdown.receive() => None,
-                                    result = async {
-                                        if !permitted {
-                                            route.recover_pending(&intent, cadence, &lease).await
-                                        } else if decided {
-                                            route.recover_decided_expiry(&intent, cadence, &lease).await
-                                        } else {
-                                            route.deliver(intent, cadence, &lease).await
-                                        }
-                                    } => Some(result),
-                                }
-                            });
-                            let Some(result) = result else {
-                                return;
-                            };
-                            if permitted {
-                                handoff_order.observed(position, result.is_ok());
-                            }
-                            if let Err(error) = result {
-                                iroha_logger::warn!(height, %error, "AMX workflow remains resumable");
                             }
                         }
-                        Ok(None) => break,
+                    };
+                    let admission = AdmissionPosition {
+                        height: position.height,
+                        ordinal: source_ordinal,
+                        plan: position.identity,
+                    };
+                    // Authenticated existing custody is classified before scheduling hints.
+                    // Neither absence here nor a cursor grants a new signature or an outcome.
+                    let pending = match route.has_pending(&intent) {
+                        Ok(pending) => pending,
                         Err(error) => {
-                            iroha_logger::warn!(height, %error, "AMX original proof retained for retry");
-                            if wait(&runtime, &shutdown, cadence) {
-                                return;
+                            admission_refused(&mut admissions, admission, &error);
+                            handoff_order.permits(position);
+                            handoff_order.observed(position, false);
+                            iroha_logger::warn!(height, %error, "AMX pending custody cannot be classified");
+                            continue;
+                        }
+                    };
+                    let permitted = handoff_order.permits(position);
+                    if !permitted && !pending {
+                        admissions.skip(admission);
+                        continue;
+                    }
+                    let now = clock.now_unix_ms();
+                    let ready = intent
+                        .descriptor()
+                        .ready_at_ms()
+                        .is_none_or(|wake| now >= wake);
+                    if !pending && !position.boundary && !admissions.consider(admission, ready) {
+                        continue;
+                    }
+                    let lease = match route.admit(&intent) {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            admission_refused(&mut admissions, admission, &error);
+                            if permitted {
+                                handoff_order.observed(position, false);
+                            }
+                            iroha_logger::warn!(height, %error, "AMX original admission remains resumable");
+                            continue;
+                        }
+                    };
+                    admissions.admitted(admission);
+                    // Read-only original-carrier recovery can bypass the authority barrier.
+                    // It does not update HandoffOrder, even when an older carrier finishes.
+                    let decided = if permitted {
+                        // A fresh view reads the local Decision prefix; it is released before
+                        // the delivery below. A later Decision is resolved by native Expire.
+                        let observed = {
+                            let view = state.view();
+                            expiry_recovery.observe(
+                                &view,
+                                &intent,
+                                now,
+                                max_finality_proof_reads,
+                                &runtime,
+                                &shutdown,
+                                cadence,
+                            )
+                        };
+                        match observed {
+                            Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
+                            Ok(ExpiryProgress::Decided) => true,
+                            Ok(ExpiryProgress::Waiting) => continue,
+                            Err(error) => {
+                                iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
+                                continue;
                             }
                         }
+                    } else {
+                        false
+                    };
+                    // The opaque source and observation lease survive the delivery; no State
+                    // view does. Shutdown never reports a successful observation.
+                    let result = runtime.block_on(async {
+                        tokio::select! {
+                            () = shutdown.receive() => None,
+                            result = async {
+                                if !permitted {
+                                    route.recover_pending(&intent, cadence, &lease).await
+                                } else if decided {
+                                    route.recover_decided_expiry(&intent, cadence, &lease).await
+                                } else {
+                                    route.deliver(intent, cadence, &lease).await
+                                }
+                            } => Some(result),
+                        }
+                    });
+                    let Some(result) = result else {
+                        return;
+                    };
+                    if permitted {
+                        handoff_order.observed(position, result.is_ok());
+                    }
+                    if let Err(error) = result {
+                        iroha_logger::warn!(height, %error, "AMX workflow remains resumable");
                     }
                 }
                 height += 1;
             }
-            drop(view);
             if height > tip {
                 height = 2;
                 admissions.finish_sweep();
@@ -854,6 +834,73 @@ fn start_route(
         }
     });
     Child::new(task, OnShutdown::Drain)
+}
+
+/// One source height's original relay intents, or why the pass stops at that height.
+#[derive(Debug, PartialEq, Eq)]
+enum HeightDiscovery<T> {
+    /// Every original intent for the route's destination, in source order. A relay intent is
+    /// an owned descriptor and instruction; none borrows the State view that discovered it.
+    Intents(Vec<T>),
+    /// The original source is unavailable at this height; a later pass retries it.
+    Unavailable,
+    /// Shutdown was signalled before the height's discovery completed.
+    Shutdown,
+}
+
+// Discovery borrows one State view for the whole height and keeps it, with the funded
+// discovery job, through a local refusal instead of re-certifying with new credit. The view
+// is released when this returns, before any intent is delivered.
+fn discover_height(
+    state: &State,
+    height: u64,
+    target: NetworkId,
+    runtime: &tokio::runtime::Handle,
+    shutdown: &ShutdownSignal,
+    cadence: Duration,
+) -> HeightDiscovery<NativeAmxRelayIntentV1> {
+    let view = state.view();
+    collect_intents(
+        amx_relays_to(&view, height, target).map_err(eyre::Report::from),
+        |original| original.complete_next().map_err(eyre::Report::from),
+        height,
+        || wait(runtime, shutdown, cadence),
+        || shutdown.is_sent(),
+    )
+}
+
+// Collect a height's intents from one discovery job. Separated from the State view and the
+// runtime so its refusal, retry and shutdown order is testable without a chain.
+fn collect_intents<J, T>(
+    job: Result<J>,
+    mut next: impl FnMut(&mut J) -> Result<Option<T>>,
+    height: u64,
+    mut wait_refusal: impl FnMut() -> bool,
+    shutdown_sent: impl Fn() -> bool,
+) -> HeightDiscovery<T> {
+    let mut job = match job {
+        Ok(job) => job,
+        Err(error) => {
+            iroha_logger::warn!(height, %error, "AMX original source unavailable");
+            return HeightDiscovery::Unavailable;
+        }
+    };
+    let mut intents = Vec::new();
+    loop {
+        if shutdown_sent() {
+            return HeightDiscovery::Shutdown;
+        }
+        match next(&mut job) {
+            Ok(Some(intent)) => intents.push(intent),
+            Ok(None) => return HeightDiscovery::Intents(intents),
+            Err(error) => {
+                iroha_logger::warn!(height, %error, "AMX original proof retained for retry");
+                if wait_refusal() {
+                    return HeightDiscovery::Shutdown;
+                }
+            }
+        }
+    }
 }
 
 // Physical/local refusal retains the next fresh source's place. A malformed original may be
@@ -893,6 +940,103 @@ mod tests {
         account::AccountId, block::consensus::SumeragiRootScope,
         sumeragi_finality::test_fixtures::NativeFinalityFixture,
     };
+
+    // Stand-in discovery job: yields scripted results and records when it is dropped.
+    struct ScriptedJob<'a> {
+        results: std::collections::VecDeque<Result<Option<u32>>>,
+        calls: &'a std::cell::Cell<usize>,
+        dropped: &'a std::cell::Cell<bool>,
+    }
+    impl Drop for ScriptedJob<'_> {
+        fn drop(&mut self) {
+            self.dropped.set(true);
+        }
+    }
+    fn scripted<'a>(
+        results: Vec<Result<Option<u32>>>,
+        calls: &'a std::cell::Cell<usize>,
+        dropped: &'a std::cell::Cell<bool>,
+    ) -> ScriptedJob<'a> {
+        ScriptedJob {
+            results: results.into(),
+            calls,
+            dropped,
+        }
+    }
+    fn next_scripted(job: &mut ScriptedJob<'_>) -> Result<Option<u32>> {
+        job.calls.set(job.calls.get() + 1);
+        job.results.pop_front().expect("script covers every call")
+    }
+
+    #[test]
+    fn height_discovery_owns_its_intents_so_no_view_survives_into_delivery() {
+        // A delivery may wait on the destination root for a cadence. The discovered intents
+        // must not borrow the State view, or the route would pin it across every delivery.
+        fn owns_no_borrow<T: 'static>() {}
+        owns_no_borrow::<HeightDiscovery<NativeAmxRelayIntentV1>>();
+        let (calls, dropped) = (std::cell::Cell::new(0), std::cell::Cell::new(false));
+        let job = scripted(vec![Ok(Some(7)), Ok(Some(8)), Ok(None)], &calls, &dropped);
+        let discovered = collect_intents(Ok(job), next_scripted, 9, || false, || false);
+        assert_eq!(discovered, HeightDiscovery::Intents(vec![7, 8]));
+        assert!(
+            dropped.get(),
+            "the discovery job is released before its intents are relayed"
+        );
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn height_discovery_retains_its_job_through_refusal_and_stops_on_shutdown() {
+        let (calls, dropped) = (std::cell::Cell::new(0), std::cell::Cell::new(false));
+        let job = scripted(
+            vec![Ok(Some(1)), Err(eyre!("capacity")), Ok(Some(2)), Ok(None)],
+            &calls,
+            &dropped,
+        );
+        let waits = std::cell::Cell::new(0);
+        let discovered = collect_intents(
+            Ok(job),
+            next_scripted,
+            3,
+            || {
+                waits.set(waits.get() + 1);
+                false
+            },
+            || false,
+        );
+        // The same job resumes after one refusal wait; nothing yielded before it is lost.
+        assert_eq!(discovered, HeightDiscovery::Intents(vec![1, 2]));
+        assert_eq!((waits.get(), calls.get()), (1, 4));
+
+        let (calls, dropped) = (std::cell::Cell::new(0), std::cell::Cell::new(false));
+        let job = scripted(vec![Ok(Some(1)), Err(eyre!("capacity"))], &calls, &dropped);
+        let discovered = collect_intents(Ok(job), next_scripted, 3, || true, || false);
+        assert_eq!(discovered, HeightDiscovery::Shutdown);
+        assert!(dropped.get());
+
+        let (calls, dropped) = (std::cell::Cell::new(0), std::cell::Cell::new(false));
+        let job = scripted(Vec::new(), &calls, &dropped);
+        let discovered = collect_intents(Ok(job), next_scripted, 3, || false, || true);
+        assert_eq!(discovered, HeightDiscovery::Shutdown);
+        assert_eq!(calls.get(), 0, "a sent shutdown polls no further source");
+    }
+
+    #[test]
+    fn unavailable_height_source_stops_the_pass_without_waiting() {
+        let waits = std::cell::Cell::new(0);
+        let discovered = collect_intents::<ScriptedJob<'_>, u32>(
+            Err(eyre!("relay discovery height is outside captured history")),
+            next_scripted,
+            5,
+            || {
+                waits.set(waits.get() + 1);
+                false
+            },
+            || false,
+        );
+        assert_eq!(discovered, HeightDiscovery::Unavailable);
+        assert_eq!(waits.get(), 0);
+    }
 
     #[test]
     fn pending_finality_directory_preserves_the_complete_journal_name_and_route() {
