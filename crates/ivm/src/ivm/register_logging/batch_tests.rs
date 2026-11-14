@@ -586,11 +586,9 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
         reject_prepare: false,
         calls: 0,
     };
-    assert!(
-        matches!(vm.run_with_host(&mut host),
+    assert!(matches!(vm.run_with_host(&mut host),
         Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
-        if requested_bytes == shell)
-    );
+        if requested_bytes == shell));
     assert_eq!(
         (
             vm.pc,

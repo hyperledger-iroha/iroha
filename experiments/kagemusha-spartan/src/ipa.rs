@@ -135,6 +135,62 @@ impl<C: PastaCurve> Gens<C> {
         tables.push((active, window, table.clone()));
         Ok((table, build))
     }
+
+    /// Retained points and skip flags of commitment tables this stage will
+    /// build. Existing caches are already charged by OS available memory.
+    /// Construction scratch belongs to the process MSM reservation separately.
+    /// `complete` adds round-slot tables; a phase-one preview needs only rows.
+    pub fn commitment_cache_bytes(&self, shape: &crate::r1cs::Shape, complete: bool) -> u64 {
+        let estimate = |n: usize, window: usize| -> u128 {
+            if n == 0 {
+                return 0;
+            }
+            // Query the canonical builder's public budget refusal before it
+            // allocates. Admission therefore follows its exact construction
+            // requirements, including chunk scratch and index limits.
+            let required = match FixedBaseTable::<C>::with_window(
+                &self.g[..n],
+                window,
+                MemoryBudget::new(0),
+            ) {
+                Err(error) => error.required,
+                Ok(_) => return 0,
+            };
+            if required > MemoryBudget::DEFAULT.bytes() {
+                return 0;
+            }
+            // fixed_base.rs retains n * num_windows(255, c) affine points
+            // and n skip flags. Signed windows include the final carry.
+            let window = window.clamp(2, 15);
+            n as u128 * ((255 / window + 1) * core::mem::size_of::<Aff<C>>() + 1) as u128
+        };
+        let active = shape.active_cols();
+        let window = crate::spartan::table_window::<C>();
+        let mut bytes = if self
+            .tables
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(a, w, _)| *a == active && *w == window)
+        {
+            0
+        } else {
+            estimate(active, window)
+        };
+        if complete {
+            let cached = self.round_tables.lock().unwrap();
+            for slot in crate::spartan::slots(shape) {
+                let len = crate::grid::pow3(slot.k);
+                if !cached
+                    .iter()
+                    .any(|(offset, count, _)| *offset == slot.offset && *count == len)
+                {
+                    bytes += estimate(len + 1, ROUND_WINDOW);
+                }
+            }
+        }
+        bytes.min(u64::MAX as u128) as u64
+    }
 }
 
 /// An inherited generator claim `G_old = <s(u_old), G>`, folded into this
@@ -156,7 +212,7 @@ pub struct IpaProof<C: PastaCurve> {
 }
 
 /// Timer names of the L/R work by log2 of the half length.
-const ROUND_NAMES: [&str; 17] = [
+const ROUND_NAMES: [&str; 19] = [
     "lr.h00001",
     "lr.h00002",
     "lr.h00004",
@@ -174,7 +230,16 @@ const ROUND_NAMES: [&str; 17] = [
     "lr.h16384",
     "lr.h32768",
     "lr.h65536",
+    "lr.h131072",
+    "lr.h262144",
 ];
+
+fn round_name(half: usize) -> &'static str {
+    ROUND_NAMES
+        .get(half.trailing_zeros() as usize)
+        .copied()
+        .unwrap_or("lr.large")
+}
 
 fn inner<S: Field>(a: &[S], b: &[S]) -> S {
     a.par_iter()
@@ -299,10 +364,7 @@ pub fn prove<C: PastaCurve>(
             },
             lr_clock.elapsed().as_secs_f64(),
         );
-        crate::prof::add(
-            ROUND_NAMES[half.trailing_zeros() as usize],
-            lr_clock.elapsed().as_secs_f64(),
-        );
+        crate::prof::add(round_name(half), lr_clock.elapsed().as_secs_f64());
         t.point(b"ipa/L", &l);
         t.point(b"ipa/R", &r);
         let u: F<C> = t.endo_challenge(b"ipa/u");
@@ -429,6 +491,15 @@ mod generator_tests {
     use super::*;
     use group::{Curve, GroupEncoding};
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    #[test]
+    fn round_profile_labels_cover_every_pointer_width() {
+        assert_eq!(round_name(1 << 17), "lr.h131072");
+        assert_eq!(round_name(1 << 18), "lr.h262144");
+        for bits in 0..usize::BITS {
+            assert!(!round_name(1usize << bits).is_empty());
+        }
+    }
 
     fn encoded<C: PastaCurve>(point: Aff<C>) -> String {
         point

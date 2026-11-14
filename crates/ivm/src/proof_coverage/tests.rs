@@ -256,20 +256,16 @@ fn opcode_names_and_values_match_the_abi_constant_source() {
 /// calls. A result returned without `?` needs no trap token and no
 /// propagated helper, so the whole call surface is pinned: a new call there
 /// requires a review of the `terminal` phase.
-const TERMINAL_CALLS: [&str; 33] = [
+const TERMINAL_CALLS: [&str; 28] = [
     "abort_host_register_log_isolation",
-    "and_then",
     "as_deref_mut",
     "as_ref",
     "call_result_word_count",
     "capture_trap_at",
-    "checked_sub",
     "clear",
     "clone",
     "commit_memory_after_run_if_needed",
-    "complete",
     "diagnostic_step_state",
-    "ensure_healthy",
     "err",
     "expect",
     "finish_run",
@@ -285,7 +281,6 @@ const TERMINAL_CALLS: [&str; 33] = [
     "prepare_trace_padding",
     "publish_trace_cycles",
     "records",
-    "reserve",
     "resume_unwind",
     "saturating_sub",
     "take",
@@ -519,7 +514,7 @@ fn run_phases_match_the_interpreter_and_root_call_sources() {
     assert!(terminal.obligations.contains(&Obligation::Padding));
     assert_eq!(
         terminal.result_sources,
-        ["contract_abort_error", "ensure_healthy", "into_vm_error"]
+        ["contract_abort_error", "into_vm_error"]
     );
     // Every variant root-call initialization names has that origin recorded.
     for trap in root.direct_traps {
@@ -1608,7 +1603,7 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
     );
     assert_eq!(
         kind(VmTrapKind::AssertionFailed).origins(),
-        [InitializationTrap, InterpreterTrap, OutsideInvocation]
+        [InterpreterTrap, OutsideInvocation]
     );
     assert_eq!(
         kind(VmTrapKind::InvalidOpcode).origins(),
@@ -1725,7 +1720,7 @@ fn numeric_and_pointer_faults_match_their_tag_decoders_and_enum_sources() {
     assert!(NumericFaultEntry::OBLIGATIONS.contains(&Obligation::Faults));
     assert!(PointerAbiFaultEntry::OBLIGATIONS.contains(&Obligation::Pointers));
     let counts = summary();
-    assert_eq!(counts.numeric_faults, 13);
+    assert_eq!(counts.numeric_faults, 14);
     assert_eq!(counts.pointer_abi_faults, 11);
 }
 
@@ -2049,9 +2044,9 @@ fn mutated_sources_fail_every_completeness_check() {
     );
     rejects(
         with("crates/ivm/src/contract_return_stack.rs", &|code| {
-            code.replace("VMError::AssertionFailed", "other_error()")
+            code.replace("VMError::CallDepthExceeded", "other_error()")
         }),
-        "crates/ivm/src/contract_return_stack.rs no longer constructs VMError::AssertionFailed",
+        "crates/ivm/src/contract_return_stack.rs no longer constructs VMError::CallDepthExceeded",
     );
     passes(with("crates/ivm/src/gas.rs", &|code| {
         format!(
@@ -2442,10 +2437,8 @@ fn coverage_is_derived_from_components_and_never_complete() {
         }
     }
     for entry in TRAP_KINDS.iter() {
-        let expected = if matches!(
-            entry.kind,
-            VmTrapKind::OutOfGas | VmTrapKind::AssertionFailed
-        ) {
+        // The step AIR component proves checked-division numeric faults and gas exhaustion.
+        let expected = if matches!(entry.kind, VmTrapKind::OutOfGas | VmTrapKind::NumericFault) {
             CoverageStatus::ComponentOnly
         } else {
             CoverageStatus::Uncovered

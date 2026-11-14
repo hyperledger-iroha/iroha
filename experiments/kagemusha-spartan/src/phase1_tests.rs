@@ -98,7 +98,9 @@ fn phase1_preview_matches_actual_proof_on_both_curves() {
 /// and looks up a rho nibble in a fixed table. The copy and lookup argument
 /// creates second-phase rows. Two explicit product masks make the entropy
 /// consumption independently countable, including the omitted fixed tail.
-fn phased_fixture<S: Scalar>(table_last: u64) -> (UniformCircuit<S>, Instance<S>, Witness<S>) {
+pub(crate) fn phased_fixture<S: Scalar>(
+    table_last: u64,
+) -> (UniformCircuit<S>, Instance<S>, Witness<S>) {
     use crate::uniform::{Array, Copies, Export, Import, LinkPhase, constant, link, own, plus};
     let one = || constant(vec![S::ONE]);
     let io = |name| Array {

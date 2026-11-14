@@ -60,6 +60,9 @@ mod continuation;
 mod measure;
 #[path = "kagemusha_suffix_corpus/stages.rs"]
 mod stages;
+#[cfg(unix)]
+#[path = "kagemusha_suffix_corpus/spartan_transfer.rs"]
+mod spartan_transfer;
 
 const FIXTURE: &str = "output/merchant-hundred-payers-20261024";
 const SLOT: &str = "9fc4cd3811cd2cbd6fa9c6ab68351c27025f8d72ca9b05e5d80d0c2e3acb2bec";

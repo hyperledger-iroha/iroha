@@ -1059,14 +1059,15 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
                 VmTrapKind::PrivacyViolation,
                 20,
             ),
+            // An uninitialized argument word breaks the call-table protocol.
             (
                 boolean(),
                 1,
                 false,
                 false,
                 10000,
-                ivm::VMError::AssertionFailed,
-                VmTrapKind::AssertionFailed,
+                ivm::VMError::ControlFlowViolation,
+                VmTrapKind::ControlFlowViolation,
                 2,
             ),
             (
@@ -1158,23 +1159,27 @@ fn genuine_scalar_failures_preserve_word_gas_order_and_cannot_publish_completion
             let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
             let mut recorder =
                 ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(6, &budget).unwrap();
-            assert!(matches!(
-                (
-                    vm.run_with_host_diagnostic_steps(
-                        &mut ivm::host::DefaultHost::default(),
-                        &mut recorder
-                    ),
-                    error
+            let outcome = vm.run_with_host_diagnostic_steps(
+                &mut ivm::host::DefaultHost::default(),
+                &mut recorder,
+            );
+            assert!(
+                matches!(
+                    (&outcome, &error),
+                    (
+                        Err(ivm::VMError::PrivacyViolation),
+                        ivm::VMError::PrivacyViolation
+                    ) | (
+                        Err(ivm::VMError::AssertionFailed),
+                        ivm::VMError::AssertionFailed
+                    ) | (
+                        Err(ivm::VMError::ControlFlowViolation),
+                        ivm::VMError::ControlFlowViolation
+                    ) | (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+                        | (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
                 ),
-                (
-                    Err(ivm::VMError::PrivacyViolation),
-                    ivm::VMError::PrivacyViolation
-                ) | (
-                    Err(ivm::VMError::AssertionFailed),
-                    ivm::VMError::AssertionFailed
-                ) | (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
-                    | (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
-            ));
+                "jals={jals} value={value} private={private} initialized={initialized} gas={gas}: {outcome:?} != {error:?}"
+            );
 
             assert_eq!(recorder.records().len(), 6);
             for (i, step) in recorder.records()[..5].iter().enumerate() {

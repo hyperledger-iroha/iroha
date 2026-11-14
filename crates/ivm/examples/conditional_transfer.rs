@@ -109,16 +109,12 @@ fn build_program() -> Vec<u8> {
     prog.extend_from_slice(&branch.to_le_bytes());
     // perform transfer
     prog.extend_from_slice(
-        &encoding::wide::encode_scall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
     );
     // halt after success
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     // abort branch target
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(syscalls::SYSCALL_ABORT)
-        .to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(syscalls::SYSCALL_ABORT).to_le_bytes());
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog
 }

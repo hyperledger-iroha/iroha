@@ -24,8 +24,7 @@ fn tlv_wrong_type_id_is_rejected() {
     vm.set_register(11, PointerType::AccountId as u16 as u64);
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -50,8 +49,7 @@ fn tlv_expected_type_rejects_high_register_bits_without_truncation() {
     vm.set_register(11, (1_u64 << 16) | u64::from(PointerType::Name as u16));
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_POINTER_FROM_NORITO).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),

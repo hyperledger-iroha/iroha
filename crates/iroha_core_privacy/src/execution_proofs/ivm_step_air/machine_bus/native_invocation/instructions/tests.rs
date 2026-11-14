@@ -4,6 +4,17 @@ use super::*;
 use crate::execution_proofs::ivm_step_air::residues::{Scratch, Stream};
 use ivm::{PreparedContract, encoding::wide as enc, instruction::wide};
 
+/// Canonical register word: register-unary formats keep their reserved `rs2` field zero.
+/// Rotate-immediate forms carry `rs2` as their amount in `0..=63`.
+pub(in super::super) fn canonical_rr(opcode: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
+    match wide::operand_format(opcode) {
+        Some(wide::OperandFormat::Register2) => enc::encode_rr(opcode, rd, rs1, 0),
+        Some(wide::OperandFormat::RotateImmediate) => {
+            enc::encode_ri(opcode, rd, rs1, i16::from(rs2))
+        }
+        _ => enc::encode_rr(opcode, rd, rs1, rs2),
+    }
+}
 pub(super) fn artifact(body: &[u32], frame: u32, literal: bool) -> PreparedContract {
     artifact_with_literals(body, frame, if literal { &[u64::MAX] } else { &[] })
 }

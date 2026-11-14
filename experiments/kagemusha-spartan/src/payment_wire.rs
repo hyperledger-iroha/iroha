@@ -35,6 +35,12 @@ pub const HEADER_BYTES: usize = 84;
 const MAX_BYTES: usize = 65_536;
 const REQUEST_BYTES: usize = 304;
 const RECEIPT_BYTES: usize = 128;
+const CREDENTIAL_BYTES: usize = 530;
+const CERTIFICATE_BYTES: usize = 137;
+// Scheme/relation/asset/credential/kind and complete Request commitments are
+// reconstructed from the authenticated profile and the carried originals.
+const STATEMENT_FIELDS: [usize; 15] = [8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 24, 25];
+const STATEMENT_BYTES: usize = STATEMENT_FIELDS.len() * 32;
 const COMPANION_LIMIT: usize = 2048;
 const PAYLOAD_DOMAIN: &[u8] = b"IROHA-PEER-PAYLOAD-V1\0";
 const MESSAGE_DOMAIN: &[u8] = b"IROHA-PEER-MESSAGE-V1\0";
@@ -188,7 +194,7 @@ fn read_envelope(bytes: &[u8]) -> Result<Envelope, String> {
         return Err("noncanonical Payment envelope".into());
     }
     if value.version != 1
-        || value.statement.len() != 832
+        || value.statement.len() != STATEMENT_BYTES
         || value.request.len() != REQUEST_BYTES
         || value.receipt.len() != RECEIPT_BYTES
         || value.pending_root.len() != 32
@@ -206,10 +212,59 @@ fn read_companion(bytes: &[u8]) -> Result<Companion, String> {
     if encode_norito(&value)? != bytes {
         return Err("noncanonical payer companion".into());
     }
-    if value.version != 1 || value.credential.len() != 596 || value.certificate.len() != 172 {
+    if value.version != 1
+        || value.credential.len() != CREDENTIAL_BYTES
+        || value.certificate.len() != CERTIFICATE_BYTES
+    {
         return Err("payer companion field version/length".into());
     }
     Ok(value)
+}
+
+fn companion_restore(
+    profile: &Profile<'_>,
+    compact: &Companion,
+) -> Result<(Credential, Certificate), String> {
+    if compact.version != 1
+        || compact.credential.len() != CREDENTIAL_BYTES
+        || compact.certificate.len() != CERTIFICATE_BYTES
+    {
+        return Err("compact payer companion version/length".into());
+    }
+    let mut certificate = Certificate {
+        body: [0; 108],
+        signature: compact.certificate[73..].try_into().unwrap(),
+    };
+    certificate.body[0] = 1;
+    certificate.body[2..34].copy_from_slice(&profile.scheme);
+    certificate.body[34] = 1;
+    certificate.body[35..].copy_from_slice(&compact.certificate[..73]);
+    let mut payer = Credential {
+        body: [0; 532],
+        signature: compact.credential[466..].try_into().unwrap(),
+    };
+    payer.body[0] = 1;
+    payer.body[2..34].copy_from_slice(&profile.scheme);
+    payer.body[34..500].copy_from_slice(&compact.credential[..466]);
+    payer.body[500..].copy_from_slice(&certificate::certificate_digest(&certificate).to_repr());
+    Ok((payer, certificate))
+}
+
+fn companion_compact(profile: &Profile<'_>, o: &Originals) -> Result<Companion, String> {
+    let compact = Companion {
+        version: 1,
+        credential: [&o.payer.body[34..500], &o.payer.signature].concat(),
+        certificate: [&o.certificate.body[35..], &o.certificate.signature].concat(),
+    };
+    let (payer, certificate) = companion_restore(profile, &compact)?;
+    if payer.body != o.payer.body
+        || payer.signature != o.payer.signature
+        || certificate.body != o.certificate.body
+        || certificate.signature != o.certificate.signature
+    {
+        return Err("payer companion originals differ from compact reconstruction".into());
+    }
+    Ok(compact)
 }
 
 fn request_restore(
@@ -265,6 +320,32 @@ fn receipt_restore(compact: &[u8], payer: &Credential, s: &[Fp; 26]) -> Result<R
         body,
         signature: compact[64..].try_into().unwrap(),
     })
+}
+
+fn statement_restore(
+    profile: &Profile<'_>,
+    payer: &Credential,
+    compact: &[u8],
+    request: &[u8],
+) -> Result<([Fp; 26], CompletedRequest), String> {
+    if compact.len() != STATEMENT_BYTES {
+        return Err("compact statement length".into());
+    }
+    let mut s = [Fp::ZERO; 26];
+    s[0] = Fp::ONE;
+    s[1..3].copy_from_slice(&limbs(&profile.relation));
+    s[3..5].copy_from_slice(&limbs(&profile.scheme));
+    s[5..7].copy_from_slice(&limbs(&payer.body[34..66]));
+    s[7] = credential::digest(payer);
+    s[16] = Fp::from(3);
+    for (i, word) in STATEMENT_FIELDS.into_iter().zip(compact.chunks_exact(32)) {
+        s[i] = field(word)?;
+    }
+    let request = request_restore(request, payer, &s)?;
+    let commitments = request::commitments(&request).map_err(str::to_string)?;
+    s[17] = commitments.credit;
+    s[23] = commitments.digest;
+    Ok((s, request))
 }
 
 /// Reconstruct the complete ordinary IO. No claimed proof inputs are read.
@@ -323,13 +404,26 @@ pub fn projection(profile: &Profile<'_>, o: &Originals) -> Result<ProjectedInput
     )
 }
 
-fn compact(o: &Originals, pair: Vec<u8>) -> Result<(Envelope, Companion), String> {
+fn compact(
+    profile: &Profile<'_>,
+    o: &Originals,
+    pair: Vec<u8>,
+) -> Result<(Envelope, Companion), String> {
+    let companion = companion_compact(profile, o)?;
     let mut request = Vec::with_capacity(REQUEST_BYTES);
     for (start, len) in REQUEST_RANGES {
         request.extend_from_slice(&o.request.body[start..start + len]);
     }
     request.extend_from_slice(&o.request.signature);
-    let restored = request_restore(&request, &o.payer, &o.statement)?;
+    let statement: Vec<_> = STATEMENT_FIELDS
+        .iter()
+        .flat_map(|i| o.statement[*i].to_repr())
+        .collect();
+    let (restored_statement, restored) =
+        statement_restore(profile, &o.payer, &statement, &request)?;
+    if restored_statement != o.statement {
+        return Err("statement original differs from compact reconstruction".into());
+    }
     if restored.body != o.request.body || restored.signature != o.request.signature {
         return Err("Request original differs from compact reconstruction".into());
     }
@@ -341,18 +435,13 @@ fn compact(o: &Originals, pair: Vec<u8>) -> Result<(Envelope, Companion), String
     }
     let envelope = Envelope {
         version: 1,
-        statement: o.statement.iter().flat_map(|f| f.to_repr()).collect(),
+        statement,
         request,
         receipt,
         policy_epoch: o.policy_epoch,
         pending_root: o.pending_root.to_repr().to_vec(),
         credit_root: o.credit_root.to_repr().to_vec(),
         pair,
-    };
-    let companion = Companion {
-        version: 1,
-        credential: [o.payer.body.as_slice(), &o.payer.signature].concat(),
-        certificate: [o.certificate.body.as_slice(), &o.certificate.signature].concat(),
     };
     Ok((envelope, companion))
 }
@@ -459,7 +548,7 @@ pub fn encode(
 ) -> Result<Vec<u8>, String> {
     let projection = projection(profile, originals)?;
     let pair = carrier::encode_projected_pair(profile.pair, ip, is, pp, ps, r, &projection)?;
-    let (envelope, companion) = compact(originals, pair)?;
+    let (envelope, companion) = compact(profile, originals, pair)?;
     peer_encode(&encode_norito(&envelope)?, &encode_norito(&companion)?)
 }
 
@@ -486,23 +575,11 @@ pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate
     let (ebytes, cbytes) = peer_decode(bytes)?;
     let envelope = read_envelope(ebytes)?;
     let companion = read_companion(cbytes)?;
-    let payer = Credential {
-        body: companion.credential[..532].try_into().unwrap(),
-        signature: companion.credential[532..].try_into().unwrap(),
-    };
-    let certificate = Certificate {
-        body: companion.certificate[..108].try_into().unwrap(),
-        signature: companion.certificate[108..].try_into().unwrap(),
-    };
-    let statement: [Fp; 26] = envelope
-        .statement
-        .chunks_exact(32)
-        .map(field)
-        .collect::<Result<Vec<_>, _>>()?
-        .try_into()
-        .unwrap();
+    let (payer, certificate) = companion_restore(profile, &companion)?;
+    let (statement, request) =
+        statement_restore(profile, &payer, &envelope.statement, &envelope.request)?;
     let originals = Originals {
-        request: request_restore(&envelope.request, &payer, &statement)?,
+        request,
         receipt: receipt_restore(&envelope.receipt, &payer, &statement)?,
         payer,
         certificate,
@@ -538,10 +615,27 @@ pub fn decode_candidate(profile: &Profile<'_>, bytes: &[u8]) -> Result<Candidate
 
 /// Reframe an exact-profile malformed candidate for native Burn integration tests.
 #[cfg(test)]
-pub(crate) fn test_replace_pair(profile: &Profile<'_>, payment: &[u8], pair: Vec<u8>) -> Result<Vec<u8>, String> {
+pub(crate) fn test_replace_pair(
+    profile: &Profile<'_>,
+    payment: &[u8],
+    pair: Vec<u8>,
+) -> Result<Vec<u8>, String> {
     let candidate = decode_candidate(profile, payment)?;
+    test_reframe_originals(profile, &candidate.originals, pair)
+}
+
+/// Reframe changed signed originals for total-candidate integration tests.
+/// Projection and exact compact restoration remain mandatory; signature and
+/// proof validity are deliberately decided by the candidate relation.
+#[cfg(test)]
+pub(crate) fn test_reframe_originals(
+    profile: &Profile<'_>,
+    originals: &Originals,
+    pair: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let _ = projection(profile, originals)?;
     carrier::frame_projected_pair(profile.pair, &pair)?;
-    let (envelope, companion) = compact(&candidate.originals, pair)?;
+    let (envelope, companion) = compact(profile, originals, pair)?;
     peer_encode(&encode_norito(&envelope)?, &encode_norito(&companion)?)
 }
 
@@ -651,7 +745,7 @@ mod tests {
             [0; 32],
         )
         .unwrap();
-        let (envelope, companion) = compact(&h.originals, raw.clone()).unwrap();
+        let (envelope, companion) = compact(&h.profile(), &h.originals, raw.clone()).unwrap();
         let packet = peer_encode(
             &encode_norito(&envelope).unwrap(),
             &encode_norito(&companion).unwrap(),
@@ -794,7 +888,7 @@ mod tests {
             HEADER_BYTES + 16 + restored.size.envelope + restored.size.companion
         );
         println!(
-            "complete Payment codec with actual toy linked proofs: {} B IPM1 =84 header+16 wrapper+{} Norito envelope+{} Norito credential/certificate companion; pair{} B; originals832+304+128+72+596+172; fixed-point monetary proof size still requires integrated backend measurement",
+            "complete Payment codec with actual toy linked proofs: {} B IPM1 =84 header+16 wrapper+{} Norito envelope+{} Norito credential/certificate companion; pair{} B; compact originals480+304+128+72+530+137 (eleven statement fields and101 companion bytes reconstructed exactly); fixed-point monetary proof size still requires integrated backend measurement",
             restored.size.peer, restored.size.envelope, restored.size.companion, restored.size.pair
         );
         // These are small genuine linked proofs for codec/verification coverage,
@@ -829,16 +923,51 @@ mod tests {
     fn compact_encoding_never_normalizes_any_omitted_signed_byte() {
         let h = Harness::new();
         let original = &h.originals;
-        let (e, c) = compact(original, vec![1]).unwrap();
+        let (e, c) = compact(&h.profile(), original, vec![1]).unwrap();
         assert_eq!(
             (
+                e.statement.len(),
                 e.request.len(),
                 e.receipt.len(),
                 c.credential.len(),
                 c.certificate.len()
             ),
-            (304, 128, 596, 172)
+            (480, 304, 128, 530, 137)
         );
+        assert_eq!(encode_norito(&c).unwrap().len(), 749);
+        let (payer, certificate) = companion_restore(&h.profile(), &c).unwrap();
+        assert_eq!(payer.body, original.payer.body);
+        assert_eq!(payer.signature, original.payer.signature);
+        assert_eq!(certificate.body, original.certificate.body);
+        assert_eq!(certificate.signature, original.certificate.signature);
+        let mut omitted_companion_bytes = 0;
+        for i in (0..34).chain(500..532) {
+            let mut changed = original.clone();
+            changed.payer.body[i] ^= 1;
+            assert!(
+                compact(&h.profile(), &changed, vec![1]).is_err(),
+                "omitted original credential byte{i}"
+            );
+            omitted_companion_bytes += 1;
+        }
+        for i in 0..35 {
+            let mut changed = original.clone();
+            changed.certificate.body[i] ^= 1;
+            assert!(
+                compact(&h.profile(), &changed, vec![1]).is_err(),
+                "omitted original certificate byte{i}"
+            );
+            omitted_companion_bytes += 1;
+        }
+        assert_eq!(omitted_companion_bytes, 101);
+        for i in (0..26).filter(|i| !STATEMENT_FIELDS.contains(i)) {
+            let mut changed = original.clone();
+            changed.statement[i] += Fp::ONE;
+            assert!(
+                compact(&h.profile(), &changed, vec![1]).is_err(),
+                "omitted original statement field {i} must never be normalized"
+            );
+        }
         let mut unique_request = vec![false; 418];
         for (start, len) in REQUEST_RANGES {
             unique_request[start..start + len].fill(true);
@@ -846,17 +975,27 @@ mod tests {
         for i in 0..418 {
             let mut changed = original.clone();
             changed.request.body[i] ^= 1;
+            let mut compact_request = Vec::new();
+            for (start, len) in REQUEST_RANGES {
+                compact_request.extend_from_slice(&changed.request.body[start..start + len]);
+            }
+            compact_request.extend_from_slice(&changed.request.signature);
+            let restored =
+                request_restore(&compact_request, &changed.payer, &changed.statement).unwrap();
             assert_eq!(
-                compact(&changed, vec![1]).is_ok(),
+                restored.body == changed.request.body,
                 unique_request[i],
                 "original Request byte{i}"
             );
+            if !unique_request[i] {
+                assert!(compact(&h.profile(), &changed, vec![1]).is_err());
+            }
         }
         for i in 0..338 {
             let mut changed = original.clone();
             changed.receipt.body[i] ^= 1;
             assert_eq!(
-                compact(&changed, vec![1]).is_ok(),
+                compact(&h.profile(), &changed, vec![1]).is_ok(),
                 (242..306).contains(&i),
                 "original receipt byte{i}"
             );
@@ -917,7 +1056,7 @@ mod tests {
     #[test]
     fn canonical_norito_and_fixed_original_lengths_are_mandatory() {
         let h = Harness::new();
-        let (e, c) = compact(&h.originals, vec![1]).unwrap();
+        let (e, c) = compact(&h.profile(), &h.originals, vec![1]).unwrap();
         let eb = encode_norito(&e).unwrap();
         let cb = encode_norito(&c).unwrap();
         assert!(read_envelope(&eb).is_ok());

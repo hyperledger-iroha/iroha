@@ -15,12 +15,57 @@ use group::{Curve, Group};
 use iroha_pasta::{Ep, Eq};
 use std::sync::Arc;
 
-const P_COLUMNS: usize = 18;
-const S_COLUMNS: usize = 17;
 const DIMENSIONS: ((usize, usize), (usize, usize)) = ((24, 25), (24, 24));
+#[derive(Clone, Debug)]
+struct RunConfig {
+    p_columns: usize,
+    s_columns: usize,
+    output: std::path::PathBuf,
+}
+
+impl RunConfig {
+    fn from_environment() -> Self {
+        let label =
+            std::env::var("KAGEMUSHA_SPARTAN_TEST_LAYOUT").unwrap_or_else(|_| "p18-s17".to_owned());
+        let (p_columns, s_columns) = match label.as_str() {
+            "p18-s17" => (18, 17),
+            "p17-s17" => (17, 17),
+            "p18-s16" => (18, 16),
+            _ => panic!("unknown test layout {label}; choose p18-s17, p17-s17 or p18-s16"),
+        };
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let output = std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| manifest.join("output/full-backend-layouts").join(&label));
+        let output = if output.is_absolute() {
+            output
+        } else {
+            manifest.join(output)
+        };
+        assert!(
+            !output.exists(),
+            "test output already exists: {}; select a new KAGEMUSHA_SPARTAN_TEST_OUTPUT to preserve earlier results",
+            output.display()
+        );
+        std::fs::create_dir_all(output.parent().expect("test output parent")).unwrap();
+        std::fs::create_dir(&output).expect("reserve a new per-run output directory");
+        std::fs::write(
+            output.join("layout.txt"),
+            format!("layout={label}\ndimensions={DIMENSIONS:?}\n"),
+        )
+        .unwrap();
+        Self {
+            p_columns,
+            s_columns,
+            output,
+        }
+    }
+}
+
 type Built<F> = (UniformCircuit<F>, Instance<F>, Witness<F>);
 
 struct Generation {
+    config: RunConfig,
     /// Selector order is Receive, Send, Bootstrap, Load.
     kinds: [UniformPair; 4],
     receiver_boot: UniformPair,
@@ -67,7 +112,12 @@ impl Step {
     }
 }
 
-fn build<F: Scalar>(w: Wiring<F>, primary: bool, target: Option<Layout>) -> Built<F> {
+fn build<F: Scalar>(
+    config: &RunConfig,
+    w: Wiring<F>,
+    primary: bool,
+    target: Option<Layout>,
+) -> Built<F> {
     let (arrays, pi, counts, tables, copies) = w.finish();
     UniformCircuit::build_with_copies_at(
         if primary { "P-uniform" } else { "S-uniform" },
@@ -76,7 +126,11 @@ fn build<F: Scalar>(w: Wiring<F>, primary: bool, target: Option<Layout>) -> Buil
         counts,
         tables,
         copies,
-        if primary { P_COLUMNS } else { S_COLUMNS },
+        if primary {
+            config.p_columns
+        } else {
+            config.s_columns
+        },
         if primary { 64 } else { 62 },
         if primary {
             b"full backend P"
@@ -87,7 +141,7 @@ fn build<F: Scalar>(w: Wiring<F>, primary: bool, target: Option<Layout>) -> Buil
     )
 }
 
-fn empty_generators() -> PairGens {
+fn empty_generators(config: &RunConfig) -> PairGens {
     fn empty<F: Scalar>() -> Kind<F> {
         Kind {
             sx: 0,
@@ -98,8 +152,8 @@ fn empty_generators() -> PairGens {
         }
     }
     PairGens {
-        p: Gens::<Eq>::new(1 << P_COLUMNS),
-        s: Gens::<Ep>::new(1 << S_COLUMNS),
+        p: Gens::<Eq>::new(1 << config.p_columns),
+        s: Gens::<Ep>::new(1 << config.s_columns),
         defer_p: MatPoly::with_min(
             std::array::from_fn::<_, 4, _>(|_| empty()),
             DIMENSIONS.0.0,
@@ -333,16 +387,26 @@ fn secondary(gens: &PairGens, plan: Option<&OperationPlan>, step: Step) -> Wirin
     }
 }
 
-fn layouts(chain: &Chain, gens: &PairGens, previous: Option<&Generation>) -> (Layout, Layout) {
+fn layouts(
+    config: &RunConfig,
+    chain: &Chain,
+    gens: &PairGens,
+    previous: Option<&Generation>,
+) -> (Layout, Layout) {
     let mut p = Vec::new();
     let mut s = Vec::new();
     // Each natural witness is released before constructing the next kind.
     for step in [Step::Receive, Step::Send, Step::SenderBoot, Step::Load] {
         let plan = previous.map(|p| OperationPlan::new(gens, p, step));
-        let (c, _, _) = build(primary(chain, gens, plan.as_ref(), step), true, None);
+        let (c, _, _) = build(
+            config,
+            primary(chain, gens, plan.as_ref(), step),
+            true,
+            None,
+        );
         p.push(Requirements::of(&c));
         drop(c);
-        let (c, _, _) = build(secondary(gens, plan.as_ref(), step), false, None);
+        let (c, _, _) = build(config, secondary(gens, plan.as_ref(), step), false, None);
         s.push(Requirements::of(&c));
     }
     (
@@ -382,6 +446,7 @@ fn retain_public_program<F: Scalar + zeroize::Zeroize>(
 }
 
 fn prove_step(
+    config: &RunConfig,
     chain: &Chain,
     gens: &PairGens,
     previous: Option<&Generation>,
@@ -391,15 +456,22 @@ fn prove_step(
 ) -> UniformPair {
     let plan = previous.map(|p| OperationPlan::new(gens, p, step));
     let (cp, ip, mut wp) = build(
+        config,
         primary(chain, gens, plan.as_ref(), step),
         true,
         Some(layout.0),
     );
-    let (cs, is, mut ws) = build(secondary(gens, plan.as_ref(), step), false, Some(layout.1));
+    let (cs, is, mut ws) = build(
+        config,
+        secondary(gens, plan.as_ref(), step),
+        false,
+        Some(layout.1),
+    );
     assert_eq!((cp.layout(), cs.layout()), layout);
     if generation == 1 && matches!(step, Step::Receive) {
         let independent = OperationPlan::new(gens, previous.unwrap(), step);
         let (other, _, mut witness) = build(
+            config,
             primary(chain, gens, Some(&independent), step),
             true,
             Some(layout.0),
@@ -413,6 +485,7 @@ fn prove_step(
         zeroize::Zeroize::zeroize(&mut witness);
         drop((other.into_verifier_program(), witness));
         let (other, _, mut witness) = build(
+            config,
             secondary(gens, Some(&independent), step),
             false,
             Some(layout.1),
@@ -433,6 +506,11 @@ fn prove_step(
         cp.proving_memory_accounting(),
         cs.shape,
         cs.proving_memory_accounting(),
+    );
+    eprintln!(
+        "full backend generation {generation} {step:?}: P phase memory={:?}; S phase memory={:?}",
+        cp.phase_memory_accounting(),
+        cs.phase_memory_accounting(),
     );
     let pair = crate::prove_linked_pair(
         "full backend chain",
@@ -460,19 +538,21 @@ fn prove_step(
 }
 
 fn generation(
+    config: &RunConfig,
     chain: &Chain,
     gens: &PairGens,
     previous: Option<&Generation>,
     generation: usize,
 ) -> Generation {
-    let layout = layouts(chain, gens, previous);
+    let layout = layouts(config, chain, gens, previous);
     eprintln!(
         "full backend generation {generation}: P {:#?}, S {:#?}",
         layout.0, layout.1
     );
     let kinds = [Step::Receive, Step::Send, Step::SenderBoot, Step::Load]
-        .map(|step| prove_step(chain, gens, previous, step, layout, generation));
+        .map(|step| prove_step(config, chain, gens, previous, step, layout, generation));
     let mut receiver_boot = prove_step(
+        config,
         chain,
         gens,
         previous,
@@ -492,6 +572,7 @@ fn generation(
     receiver_boot.cp = kinds[BOOTSTRAP].cp.clone();
     receiver_boot.cs = kinds[BOOTSTRAP].cs.clone();
     Generation {
+        config: config.clone(),
         kinds,
         receiver_boot,
     }
@@ -508,6 +589,7 @@ fn matrix_checks(pair: &UniformPair, gens: &PairGens) -> (bool, bool) {
 
 /// Fresh final witnesses and proofs consume only final-program predecessors.
 fn final_chain(chain: &Chain, gens: &PairGens, mut fixed: Generation) -> Generation {
+    let config = fixed.config.clone();
     let expected = fixed.program_ids();
     let layout = (fixed.kinds[0].cp.layout(), fixed.kinds[0].cs.layout());
     for step in [
@@ -517,7 +599,15 @@ fn final_chain(chain: &Chain, gens: &PairGens, mut fixed: Generation) -> Generat
         Step::Send,
         Step::Receive,
     ] {
-        let pair = prove_step(chain, gens, Some(&fixed), step, layout, 200 + step.kind());
+        let pair = prove_step(
+            &config,
+            chain,
+            gens,
+            Some(&fixed),
+            step,
+            layout,
+            200 + step.kind(),
+        );
         assert_eq!(
             [pair.cp.program_digest(), pair.cs.program_digest()],
             expected[step.kind()],
@@ -551,7 +641,12 @@ fn final_chain(chain: &Chain, gens: &PairGens, mut fixed: Generation) -> Generat
     fixed
 }
 
-fn complete_payment(chain: &Chain, send: &UniformPair, gens: &PairGens) -> usize {
+fn complete_payment(
+    config: &RunConfig,
+    chain: &Chain,
+    send: &UniformPair,
+    gens: &PairGens,
+) -> usize {
     let trusted = crate::carrier::TrustedProfile::from_parameters(
         chain.sender_context.relation,
         send.cp.shape,
@@ -590,7 +685,7 @@ fn complete_payment(chain: &Chain, send: &UniformPair, gens: &PairGens) -> usize
         decoded.size.envelope,
         decoded.size.companion
     );
-    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    let output = &config.output;
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("research-payment.ipm1"), &encoded).unwrap();
     std::fs::write(
@@ -612,7 +707,7 @@ fn complete_payment(chain: &Chain, send: &UniformPair, gens: &PairGens) -> usize
 /// arrays, reproduce both native verifiers and all final accumulator checks.
 fn imported_programs(final_chain: &Generation) -> Generation {
     use crate::spartan::{self, Link};
-    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    let output = &final_chain.config.output;
     std::fs::create_dir_all(&output).unwrap();
     let kinds = std::array::from_fn(|kind| {
         let mut pair = final_chain.kinds[kind].clone();
@@ -651,6 +746,7 @@ fn imported_programs(final_chain: &Generation) -> Generation {
     receiver_boot.cp = kinds[BOOTSTRAP].cp.clone();
     receiver_boot.cs = kinds[BOOTSTRAP].cs.clone();
     let imported = Generation {
+        config: final_chain.config.clone(),
         kinds,
         receiver_boot,
     };
@@ -764,9 +860,9 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
         final_chain.kinds[RECEIVE].cp.layout(),
         final_chain.kinds[RECEIVE].cs.layout(),
     );
-    let (cp, ip, wp) = build(w, true, Some(layout.0));
+    let (cp, ip, wp) = build(&final_chain.config, w, true, Some(layout.0));
     let (w, _) = s_operation(RECEIVE, gens, &pairs, &folds);
-    let (cs, is, ws) = build(w, false, Some(layout.1));
+    let (cs, is, ws) = build(&final_chain.config, w, false, Some(layout.1));
     assert_eq!(
         cp.program_digest(),
         final_chain.kinds[RECEIVE].cp.program_digest(),
@@ -803,7 +899,7 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
         &gens.s,
         &inherited_generator_claim(&traced.tr_s, &gens.s).unwrap()
     ));
-    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain");
+    let output = &final_chain.config.output;
     std::fs::write(output.join("research-malformed-incoming-pair.bin"), &raw).unwrap();
     eprintln!("actual malformed-R Receive verified under the same program; adjusted burn=10");
 }
@@ -811,13 +907,25 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
 #[test]
 #[ignore = "heavy actual recursive program fixed point; run in the coordinated proof lane"]
 fn complete_recursive_bootstrap_load_send_receive() {
-    let seed_gens = empty_generators();
+    run_recursive_chain(true);
+}
+
+#[test]
+#[ignore = "layout measurement only; selected layout must pass the complete native containment gate"]
+fn measure_recursive_layout_candidate() {
+    run_recursive_chain(false);
+}
+
+fn run_recursive_chain(complete_validation: bool) {
+    let config = RunConfig::from_environment();
+    eprintln!("full backend test config: {config:?}; dimensions={DIMENSIONS:?}");
+    let seed_gens = empty_generators(&config);
     let chain = chain_fixture::new(&seed_gens.p);
-    let mut previous = generation(&chain, &seed_gens, None, 0);
+    let mut previous = generation(&config, &chain, &seed_gens, None, 0);
     let mut unchanged_geometry = 0;
     for hop in 1..=12 {
         let gens = previous.generators();
-        let next = generation(&chain, &gens, Some(&previous), hop);
+        let next = generation(&config, &chain, &gens, Some(&previous), hop);
         let before = previous.program_ids();
         let after = next.program_ids();
         let same_structure = previous.kinds.iter().zip(&next.kinds).all(|(a, b)| {
@@ -863,14 +971,20 @@ fn complete_recursive_bootstrap_load_send_receive() {
             let final_chain = final_chain(&chain, &final_gens, next);
             // Record the actual complete monetary bytes before the separate
             // program-distribution size gate, while requiring both gates below.
-            let bytes = complete_payment(&chain, &final_chain.kinds[SEND], &final_gens);
+            let bytes = complete_payment(&config, &chain, &final_chain.kinds[SEND], &final_gens);
             drop(imported_programs(&final_chain));
             malformed_receive_burn(&chain, &final_gens, &final_chain);
-            crate::native::test_full_chain_native(
+            let native_check = if complete_validation {
+                crate::native::test_full_chain_native
+            } else {
+                crate::native::test_measure_chain_native
+            };
+            native_check(
                 &chain,
                 &final_chain.kinds,
                 &final_chain.receiver_boot,
                 DIMENSIONS,
+                &config.output.join("native-device"),
             )
             .expect("complete native Send/Receive prepare, resume, finalize and verify flow");
             assert_eq!(chain.load.after_core[9], Fp::from(100));

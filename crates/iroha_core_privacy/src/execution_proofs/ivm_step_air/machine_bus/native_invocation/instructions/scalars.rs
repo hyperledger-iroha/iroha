@@ -156,7 +156,8 @@ fn every_public_expression_uses_full_words_original_sources_and_atomic_alias_wri
 
 #[test]
 fn zero_and_maximum_register_sources_do_not_disappear_when_destination_is_r0() {
-    let mut body = vec![enc::encode_literal(wide::memory::LDI64, 31, 0)];
+    // r31 is the stack pointer: read it as the maximum source without writing it.
+    let mut body = vec![enc::encode_literal(wide::memory::LDI64, 29, 0)];
     for opcode in OPCODES {
         let word = match opcode {
             wide::arithmetic::ADDI

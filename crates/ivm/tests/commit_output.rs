@@ -7,8 +7,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-const SCALL_COMMIT_OUTPUT: [u8; 4] = encoding::wide::encode_scall(syscalls::SYSCALL_COMMIT_OUTPUT)
-.to_le_bytes();
+const SCALL_COMMIT_OUTPUT: [u8; 4] =
+    encoding::wide::encode_scall(syscalls::SYSCALL_COMMIT_OUTPUT).to_le_bytes();
 struct CaptureHost {
     out: Arc<Mutex<Vec<u8>>>,
 }

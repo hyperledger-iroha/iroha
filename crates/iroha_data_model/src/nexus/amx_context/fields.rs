@@ -24,7 +24,9 @@ pub enum NexusAmxContextFieldOriginV1 {
     NodeConfig,
     /// Fixed by genesis execution or the protocol: the root fee policy and pipeline validity policy it commits
     /// (or their protocol defaults), the public-lane validators and lane lineage it registers,
-    /// the autoscale transition height and reserved metadata, and the lane projection version.
+    /// the autoscale transition height and reserved metadata, the lane projection version, and the
+    /// two DA ingest quota ceilings, which hold their signed first-release values (the quotas a
+    /// chain applies are its committed `nexus_quota_policy_v1`).
     /// These are not node-configuration keys; paths identify their projected fields.
     Genesis,
 }
@@ -540,12 +542,12 @@ impl Walk<'_> {
                 | AXT_PROOF_CACHE_TTL_SLOTS
                 | AXT_REPLAY_RETENTION_SLOTS
                 | AUTOSCALE_TARGET_BLOCK_MS
-                | DA_INGEST_QUOTA_WINDOW_BLOCKS
-                | DA_INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT
-                | DA_INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT => {
+                | DA_INGEST_QUOTA_WINDOW_BLOCKS => {
                     self.scalar::<u64>(tag, path, NodeConfig, None, integer)?;
                 }
                 AUTOSCALE_LAST_TRANSITION_HEIGHT
+                | DA_INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT
+                | DA_INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT
                 | PIPELINE_AMX_PER_DATASPACE_BUDGET_MS
                 | PIPELINE_AMX_GROUP_BUDGET_MS
                 | PIPELINE_AMX_PER_INSTRUCTION_NS
@@ -853,6 +855,11 @@ mod tests {
             ("nexus.autoscale.last_transition_height", Genesis, "7"),
             ("pipeline.amx_group_budget_ms", Genesis, "7"),
             ("pipeline.amx_per_instruction_ns", Genesis, "7"),
+            // The window length is node configuration; the two ceilings are signed
+            // first-release slots, and a chain applies its committed quota policy.
+            ("nexus.da.ingest_quota_window_blocks", NodeConfig, "7"),
+            ("nexus.da.ingest_quota_max_count_per_account", Genesis, "7"),
+            ("nexus.da.ingest_quota_max_bytes_per_account", Genesis, "7"),
         ] {
             assert_eq!(field(path), (origin, value), "{path}");
         }

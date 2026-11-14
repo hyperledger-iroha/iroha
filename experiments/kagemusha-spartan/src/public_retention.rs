@@ -25,7 +25,11 @@ impl<F: Scalar> UniformCircuit<F> {
         };
         let ops = a.ops.iter().zip(&b.ops).position(|(a, b)| op(a) != op(b));
         let pool = first(&a.pool, &b.pool);
-        let fixed = first(&self.fixed_values, &other.fixed_values);
+        let fixed = self
+            .fixed_values
+            .iter()
+            .zip(other.fixed_values.iter())
+            .position(|(a, b)| a != b);
         let values = |a: &[F], b: &[F], at: Option<usize>| {
             at.map(|i| format!("{i}: {:?} -> {:?}", a[i].to_repr(), b[i].to_repr()))
         };
@@ -47,7 +51,11 @@ impl<F: Scalar> UniformCircuit<F> {
             values(&a.pool, &b.pool, pool),
             self.fixed_values.len(),
             other.fixed_values.len(),
-            values(&self.fixed_values, &other.fixed_values, fixed),
+            fixed.map(|i| format!(
+                "{i}: {:?} -> {:?}",
+                self.fixed_values.value(i).unwrap().to_repr(),
+                other.fixed_values.value(i).unwrap().to_repr()
+            )),
             self.late_io == other.late_io,
             self.link_io == other.link_io,
         )
@@ -77,7 +85,7 @@ impl<F: Scalar> UniformCircuit<F> {
             blocks: vec![],
             bounds: vec![],
             fixed_rows: self.fixed_rows,
-            fixed_values: self.fixed_values,
+            fixed_values: self.fixed_values.compact(),
             wallet_rows: self.wallet_rows,
             wallet_io: self.wallet_io,
             phase2: vec![],
@@ -199,6 +207,8 @@ mod tests {
         );
         zeroize::Zeroize::zeroize(&mut witness);
         let public = c.into_verifier_program();
+        assert!(matches!(&public.fixed_values, FixedValues::Runs { .. }));
+        assert!(public.fixed_values.heap_bytes() < (public.fixed_values.len() * 32) as u128);
         assert!(public.arrays.is_empty());
         assert!(public.gather.get().is_none() && public.symbolic.get().is_none());
         assert!(public.readers.get().is_none() && public.m_plans.get().is_none());

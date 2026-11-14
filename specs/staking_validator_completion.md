@@ -22,7 +22,7 @@ decoders, aliases, shims and parallel implementations are prohibited.
 | Monetary fees | Exact signed effects, bounded claims with retained dust, and principal distinct from assessed fees | Monetary plans and native effect checks are present. Required explicit fee-reward claim bindings and additive shared custody are implemented; canonical reward-currency admission, current-policy integration, multisig/proved execution and paid network coverage remain under validation |
 | Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | Native execution/context retention, deterministic history and Kura's fail-stop gate are integrated. Complete original-pool funding through World/DA/proof graphs, publication, replay and retained-generation reclamation remains open |
 | Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Candidate and credential commands and native evidence readers are present. Same-source native artifacts, regenerated fixtures, complete SDK consumers and operator network qualification remain open |
-| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties and withdrawal; funded rewards on an aged network; maintained formal/DA/workspace/SDK gates | The five-process real-peer double-sign slash passes on one frozen working-tree candidate. The complete paid 4→7→4 scenario with exits, a slash while unbonding and withdrawal of the slashed remainder awaits execution on that candidate. Funded rewards cannot be qualified by a disposable run (reward gate below) |
+| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties and withdrawal; funded rewards on an aged network; maintained formal/DA/workspace/SDK gates | The five-process double-sign slash and the complete paid 4→7→4 scenario (exits, a slash while unbonding, withdrawal of the slashed remainder after replacement and liability expiry, all-seat restarts, consumed-plan rejection, no claimable reward) pass on real peers on one frozen working-tree candidate with `local-release` daemons. The retention and missing-signer scenarios and the committed release candidate still need runs. Funded rewards cannot be qualified by a disposable run (reward gate below) |
 
 Rewards automatically accrue from authenticated funded XOR conversion using
 historical validator and nominator exposure. Committee preparation
@@ -333,9 +333,10 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   penalty follows. In the complete rotation the slash must reduce the pending
   unbond in place: the request keeps its identity and liability horizon, the
   node prepares withdrawal of exactly the remainder and refuses it until
-  replacement and expiry. The focused case passes on real peers, including the
-  typed refusal of an absent reward entitlement; the complete rotation's slash
-  while unbonding awaits execution on the same candidate.
+  replacement and expiry. Both cases pass on real peers on one candidate,
+  including the typed refusal of an absent reward entitlement. The fixture reads
+  committed evidence through the reading node's own client: the evidence list is
+  operator-signed, and a node accepts only its own key.
 - The finality-owned lane penalty component
   `native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission`
   now covers signed full-unbond scheduling, a delayed physical XOR transfer to a
@@ -405,7 +406,7 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
 | Staking under the enacted validation-fee policy | `RetailMonthlyAllowance` is the canonical policy: calendar maintenance, included retail payments and overage, with an institutional per-payment fee and separate immutable reward custody. Native assessment checks qualifying payments of the enacted fee asset. TODO: complete and qualify staking integration, distinct fee-asset accounting, bounded claims, multisig/proved overlays and signed payer bounds through original execution. Staking principal cannot satisfy a fee obligation. | Core/native execution and fees |
 | Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: qualify silent authors, saturation, final-transaction progress and retirement/restart cuts, with named deterministic regressions and mutation controls. | Core/Sumeragi, Queue, Kura and formal owners |
 | Reward allocation | Funded canonical-XOR conversion preserves validator service-count gross rewards and automatically divides them using historical eligible stake cohorts, with zero commission. TODO: qualify monthly funding, multiple nominator claims and restart together on an authentically aged real network; the reward gate below rules out a fresh disposable network. | Core finalized service, fee conversion and staking custody |
-| Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, Parliament sortition consuming the boundary pulse after rotation, missing target signer, all-seat restart, replay rejection, the real-peer double-sign slash and withdrawal of the slashed remainder, with no claimable reward. Run the maintained fault/DA/formal gates and complete workspace checks. Funded rewards are the separate aged-network gate. | Integration, release and subsystem owners |
+| Network qualification | Admission, prepared 4→7→4 rotation, Parliament sortition consuming the boundary pulse after rotation, all-seat restart, replay rejection, the real-peer double-sign slash and withdrawal of the slashed remainder, with no claimable reward, pass on one frozen working-tree candidate. TODO: the missing-target-signer and retention scenarios on that candidate, all of them on the committed release candidate, the maintained fault/DA/formal gates and complete workspace checks. Funded rewards are the separate aged-network gate. | Integration, release and subsystem owners |
 
 The current fee owners are `iroha_data_model::validation_fee`,
 `iroha_core::retail_fee` and the common numeric-asset mutation path. The native

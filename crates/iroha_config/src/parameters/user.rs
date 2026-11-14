@@ -8883,9 +8883,6 @@ pub struct Nexus {
     /// Shared Hugging Face lease policy.
     #[config(nested)]
     pub hf_shared_leases: NexusHfSharedLeases,
-    /// Uploaded-model registry quota policy.
-    #[config(nested)]
-    pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     #[config(nested)]
     pub endorsement: NexusEndorsement,
@@ -8943,7 +8940,6 @@ impl_default!(Nexus {
     dataspace_catalog: Vec::new(),
     staking: NexusStaking::default(),
     hf_shared_leases: NexusHfSharedLeases::default(),
-    uploaded_models: NexusUploadedModels::default(),
     endorsement: NexusEndorsement::default(),
     axt: NexusAxt::default(),
     atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
@@ -9401,29 +9397,6 @@ impl NexusHfSharedLeases {
         }
     }
 }
-/// User-level configuration for encrypted uploaded-model registry quotas.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct NexusUploadedModels {
-    /// Maximum plaintext bytes admitted for one uploaded model.
-    #[config(default = "defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL")]
-    pub max_plaintext_bytes_per_model: u64,
-    /// Maximum encrypted chunk count admitted for one uploaded model.
-    #[config(default = "defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL")]
-    pub max_chunk_count_per_model: u32,
-}
-impl_default!(NexusUploadedModels {
-    max_plaintext_bytes_per_model: defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
-    max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-});
-impl NexusUploadedModels {
-    #[allow(clippy::unnecessary_wraps)]
-    fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
-        Some(actual::NexusUploadedModels {
-            max_plaintext_bytes_per_model: self.max_plaintext_bytes_per_model,
-            max_chunk_count_per_model: self.max_chunk_count_per_model,
-        })
-    }
-}
 /// User-level configuration container for domain endorsements.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusEndorsement {
@@ -9647,14 +9620,11 @@ pub struct Da {
     #[config(default = "defaults::nexus::da::PER_ATTESTER_SHARDS")]
     pub per_attester_shards: u16,
     /// Number of consecutive block heights in one deterministic ingest quota window.
+    ///
+    /// The count and byte ceilings of a window are committed policy
+    /// (`nexus_quota_policy_v1`), so this section has no key for them.
     #[config(default = "defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS")]
     pub ingest_quota_window_blocks: u64,
-    /// Maximum accepted DA ingests per account in one quota window.
-    #[config(default = "defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT")]
-    pub ingest_quota_max_count_per_account: u64,
-    /// Maximum canonical DA payload bytes per account in one quota window.
-    #[config(default = "defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT")]
-    pub ingest_quota_max_bytes_per_account: u64,
     /// Rolling audit configuration.
     #[config(nested)]
     pub audit: DaAudit,
@@ -9673,8 +9643,6 @@ impl_default!(Da {
     threshold_base: defaults::nexus::da::THRESHOLD_BASE,
     per_attester_shards: defaults::nexus::da::PER_ATTESTER_SHARDS,
     ingest_quota_window_blocks: defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
-    ingest_quota_max_count_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-    ingest_quota_max_bytes_per_account: defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
     audit: DaAudit::default(),
     recovery: DaRecovery::default(),
     rotation: DaRotation::default(),
@@ -10032,24 +10000,6 @@ impl Da {
                 );
                 None
             });
-        let ingest_quota_max_count_per_account =
-            NonZeroU64::new(self.ingest_quota_max_count_per_account).or_else(|| {
-                invalid = true;
-                emitter.emit(
-                    Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.da.ingest_quota_max_count_per_account must be > 0"),
-                );
-                None
-            });
-        let ingest_quota_max_bytes_per_account =
-            NonZeroU64::new(self.ingest_quota_max_bytes_per_account).or_else(|| {
-                invalid = true;
-                emitter.emit(
-                    Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.da.ingest_quota_max_bytes_per_account must be > 0"),
-                );
-                None
-            });
         if let (Some(base), Some(max)) = (&sample_size_base, &sample_size_max)
             && base > max
         {
@@ -10097,8 +10047,6 @@ impl Da {
             || threshold_base.is_none()
             || per_attester_shards.is_none()
             || ingest_quota_window_blocks.is_none()
-            || ingest_quota_max_count_per_account.is_none()
-            || ingest_quota_max_bytes_per_account.is_none()
             || audit.is_none()
             || recovery.is_none()
             || rotation.is_none()
@@ -10113,10 +10061,6 @@ impl Da {
             threshold_base: threshold_base.expect("validated"),
             per_attester_shards: per_attester_shards.expect("validated"),
             ingest_quota_window_blocks: ingest_quota_window_blocks.expect("validated"),
-            ingest_quota_max_count_per_account: ingest_quota_max_count_per_account
-                .expect("validated"),
-            ingest_quota_max_bytes_per_account: ingest_quota_max_bytes_per_account
-                .expect("validated"),
             audit: audit.expect("validated"),
             recovery: recovery.expect("validated"),
             rotation: rotation.expect("validated"),
@@ -10505,7 +10449,6 @@ impl Nexus {
             dataspace_catalog,
             staking,
             hf_shared_leases,
-            uploaded_models,
             endorsement: endorsement_cfg,
             axt,
             atomic_private_settlement,
@@ -10537,7 +10480,6 @@ impl Nexus {
         let atomic_private_settlement = atomic_private_settlement.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let hf_shared_leases = hf_shared_leases.parse();
-        let uploaded_models = uploaded_models.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
         let lane_config = actual::LaneConfig::from_catalog(&lane_catalog);
         if autoscale.enabled {
@@ -10571,7 +10513,6 @@ impl Nexus {
             storage,
             staking,
             hf_shared_leases,
-            uploaded_models,
             endorsement,
             configured_lane_catalog: lane_catalog.clone(),
             lane_catalog,

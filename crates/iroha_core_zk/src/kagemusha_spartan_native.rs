@@ -415,6 +415,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         self.parameters.id()
     }
 
+    /// Share the already authenticated public verifier parameters with a Native
+    /// proof reader without copying the program bundle or transferring custody.
+    #[must_use]
+    pub fn authenticated_parameters(&self) -> Arc<native::AuthenticatedParameters> {
+        Arc::clone(&self.parameters)
+    }
+
     /// Verify complete Payment bytes under the installed program and both curve
     /// accumulators. This does not credit a receiver or select any journal head.
     ///
@@ -509,7 +516,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
     > {
         use crate::kagemusha_wallet_advance_v1::{
             KagemushaWalletAdvanceRequestV1, KagemushaWalletExpectedHeadV1,
-            KagemushaWalletSlotStatusV1 as Status,
         };
         let owner = TransitionOwner::new(&self.engine, &self.parameters);
         let capsule = prepared.capsule().clone();

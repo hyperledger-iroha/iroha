@@ -2687,7 +2687,7 @@ fn soracloud_echo_return_words(argument_index: u8) -> Vec<u32> {
             wide::memory::LOAD64,
             5,
             10,
-            i8::try_from(argument_index * 8).expect("fixture argument offset"),
+            i16::try_from(argument_index * 8).expect("fixture argument offset"),
         ),
         enc::encode_store(wide::memory::STORE64, 12, 5, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),

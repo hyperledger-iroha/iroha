@@ -6,6 +6,9 @@
 use super::*;
 use core::mem::size_of;
 
+#[path = "memory_plan_counts.rs"]
+mod memory_plan_counts;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProvingMemoryAccounting {
     pub construction_bytes: u64,
@@ -16,10 +19,187 @@ pub struct ProvingMemoryAccounting {
     pub matrix_program_bytes: u64,
     /// Accounted heap storage already owned by this circuit.
     pub retained_bytes: u64,
-    /// Dense proof workspace and a conservative projection of all lazy plans.
-    /// Includes one caller witness even if the caller has already allocated it.
+    /// Largest additional phase allocation. The caller's witness and all
+    /// already retained circuit plans are excluded: an OS availability query
+    /// has already charged them. Shared MSM scratch is accounted separately.
     pub additional_peak_bytes: u64,
     pub accounted_peak_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_plans<F: Scalar>(c: UniformCircuit<F>) {
+        let counts = c.memory_plan_counts();
+        let before = c.proving_memory_accounting();
+        let phases = c.phase_memory_accounting();
+        let w = 1u64 << c.shape.sw();
+        let x = 1u64 << c.shape.sx;
+        assert!(phases.preparation_bytes >= (2 * w + 3 * x) * size_of::<F>() as u64);
+        assert!(c.symbolic.get().is_none() && c.gather.get().is_none());
+        assert!(c.readers.get().is_none() && c.m_plans.get().is_none());
+        let _ = c.symbolic();
+        let _ = c.gather_plan();
+        let prepared = c.proving_memory_accounting();
+        let prepared_phase = c.phase_memory_accounting();
+        assert!(
+            counts.symbolic >= prepared.symbolic_bytes as u128,
+            "symbolic projection {} < materialized {}",
+            counts.symbolic,
+            prepared.symbolic_bytes
+        );
+        assert!(
+            counts.gather >= prepared.gather_bytes as u128,
+            "gather projection {} < materialized {}",
+            counts.gather,
+            prepared.gather_bytes
+        );
+        assert!(
+            phases.preparation_bytes
+                >= prepared_phase.preparation_bytes + prepared.retained_bytes
+                    - before.retained_bytes
+        );
+        let _ = c.readers();
+        let _ = c.m_plans();
+        assert_eq!(
+            counts.edge_count,
+            c.readers()
+                .at
+                .iter()
+                .flatten()
+                .map(|(_, pairs)| pairs.len() as u128)
+                .sum::<u128>(),
+            "exact CSR edges"
+        );
+        assert_eq!(
+            counts.entry_count,
+            c.m_plans()
+                .iter()
+                .map(|p| p.entries.len() as u128)
+                .sum::<u128>(),
+            "exact present nonzero M entries"
+        );
+        assert_eq!(
+            counts.coefficient_count,
+            c.m_plans()
+                .iter()
+                .map(|p| p.coefs.len() as u128)
+                .sum::<u128>(),
+            "exact non-unit M coefficients"
+        );
+        let planned = c.proving_memory_accounting();
+        assert!(
+            counts.readers >= planned.readers_bytes as u128,
+            "CSR projection {} < materialized {}",
+            counts.readers,
+            planned.readers_bytes
+        );
+        assert!(
+            counts.m_plans >= planned.m_plan_bytes as u128,
+            "M projection {} < materialized {}",
+            counts.m_plans,
+            planned.m_plan_bytes
+        );
+        assert_eq!(
+            prepared_phase.preparation_bytes,
+            c.preparation_memory_bytes(),
+            "preparation never charges readers or M plans, cached or absent"
+        );
+        assert_eq!(
+            prepared_phase.phase1_bytes,
+            c.phase_memory_accounting().phase1_bytes,
+            "prefix commitments never charge matrix plans"
+        );
+        assert!(
+            planned.retained_bytes - before.retained_bytes
+                <= before.additional_peak_bytes - planned.additional_peak_bytes
+        );
+    }
+
+    fn check<F: Scalar + iroha_pasta::poseidon::PoseidonField>() {
+        let (arrays, pi, _) = rp57::<F>(2, b"memory mapped rows");
+        let counts = pi.iter().map(|p| 1 << p).collect();
+        let (c, _, _) = UniformCircuit::build(
+            "memory mapped rows",
+            arrays,
+            pi,
+            counts,
+            Vec::new(),
+            11,
+            4,
+            b"memory mapped witness",
+        );
+        check_plans(c);
+        let target = Array {
+            name: "memory sparse target",
+            family: 0,
+            rho: 5,
+            r_count: 32,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![],
+            values: vec![vec![F::ONE; 32]],
+        };
+        let readers = Array {
+            name: "memory absent sparse readers",
+            family: 1,
+            rho: 2,
+            r_count: 3,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![[
+                vec![Term {
+                    src: Src::Link {
+                        array: 0,
+                        cell: 0,
+                        map: vec![Some(4), Some(4), None, Some(31)],
+                    },
+                    coef: vec![F::ZERO, -F::ONE, F::from(7), F::from(9)],
+                }],
+                own(0, 4),
+                constant(vec![F::ZERO; 4]),
+            ]],
+            values: vec![vec![F::ZERO; 16]],
+        };
+        let (c, _, _) = UniformCircuit::build(
+            "memory sparse edges",
+            vec![target, readers],
+            vec![0, 2],
+            vec![1, 3],
+            Vec::new(),
+            10,
+            4,
+            b"memory sparse witness",
+        );
+        check_plans(c);
+        let (c, _, _) = crate::spartan::phase1_tests::phased_fixture::<F>(15);
+        check_plans(c);
+    }
+
+    #[test]
+    fn phase_memory_covers_materialized_plans_on_both_curves() {
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+}
+
+/// Allocation lifetimes of the actual native paths. Every value excludes the
+/// existing caller witness and retained circuit storage. Missing plans are
+/// counted only in phases that use them. Opaque fill closures, allocator
+/// overhead and the separately bounded MSM kernel are not included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhaseMemoryAccounting {
+    pub helper_bytes: u64,
+    pub preparation_bytes: u64,
+    pub phase1_bytes: u64,
+    pub outer_bytes: u64,
+    pub matrix_bytes: u64,
+    pub inner_bytes: u64,
+    pub opening_bytes: u64,
+    pub additional_peak_bytes: u64,
 }
 
 fn bytes<T>(v: &Vec<T>) -> u128 {
@@ -63,51 +243,14 @@ fn cap(x: u128) -> u64 {
     x.min(u64::MAX as u128) as u64
 }
 
-/// Upper counts for all original and replacement symbolic terms. Replaced
-/// rows are deliberately counted twice, which avoids materializing them merely
-/// to decide whether there is enough memory to prove.
-#[derive(Default)]
-struct Terms {
-    count: u128,
-    coefficients: u128,
-    maps: u128,
-}
-impl Terms {
-    fn term<F>(&mut self, t: &Term<F>) {
-        self.count += 1;
-        self.coefficients += t.coef.len() as u128;
-        if let Src::Link { map, .. } = &t.src {
-            self.maps += map.len() as u128;
-        }
-    }
-    fn synthetic(&mut self, n: usize, count: usize, links: usize) {
-        self.count += count as u128;
-        self.coefficients += n as u128 * count as u128;
-        self.maps += n as u128 * links as u128;
-    }
-}
-
 impl<F: Scalar> UniformCircuit<F> {
     pub fn proving_memory_accounting(&self) -> ProvingMemoryAccounting {
-        let field = size_of::<F>() as u128;
         let mut retained = size_of::<Self>() as u128 + bytes(&self.arrays);
-        let mut terms = Terms::default();
-        let mut template_rows = 0u128;
-        let mut template_instances = 0u128;
-        let mut cell_spans = 0u128;
-        let mut cells = 0u128;
         for a in &self.arrays {
             retained += bytes(&a.widths) + nested(&a.values) + bytes(&a.rows) + bytes(&a.lookups);
-            template_rows += a.rows.len() as u128;
-            template_instances += a.rows.len() as u128 * (1u128 << a.rho);
-            cells += a.cells() as u128;
-            cell_spans += a.cells() as u128 * ((1u128 << a.rho) + 1);
             for r in &a.rows {
                 for lin in r {
                     retained += lin_heap(lin);
-                    for t in lin {
-                        terms.term(t);
-                    }
                 }
             }
             for (_, tuple) in &a.lookups {
@@ -120,7 +263,7 @@ impl<F: Scalar> UniformCircuit<F> {
             + nested(&self.row_base)
             + nested(&self.blocks)
             + bytes(&self.bounds)
-            + bytes(&self.fixed_values)
+            + self.fixed_values.heap_bytes()
             + nested(&self.phase2)
             + bytes(&self.lookup_arrays)
             + bytes(&self.tables)
@@ -141,7 +284,6 @@ impl<F: Scalar> UniformCircuit<F> {
                 retained += bytes(lin);
                 for (t, _) in lin {
                     retained += term_heap(t);
-                    terms.term(t);
                 }
             }
         }
@@ -164,37 +306,6 @@ impl<F: Scalar> UniformCircuit<F> {
             * 64;
         retained += self.lookup_mask.values().map(bytes).sum::<u128>();
 
-        for &(a, _, _) in &self.lookup_arrays {
-            let arr = &self.arrays[a];
-            let n = 1usize << arr.rho;
-            for (j, (_, tuple)) in arr.lookups.iter().enumerate() {
-                terms.synthetic(
-                    n,
-                    3,
-                    usize::from(self.lookup_mask_col.contains_key(&(a, j))),
-                );
-                for lin in tuple {
-                    for t in lin {
-                        terms.term(t);
-                    }
-                }
-            }
-        }
-        for &(va, _, wa) in &self.tables {
-            terms.synthetic(
-                1usize << self.arrays[wa].rho,
-                3 + self.arrays[va].cells(),
-                self.arrays[va].cells(),
-            );
-        }
-        for (_, wa, _, tuple) in &self.exports {
-            terms.synthetic(1usize << self.arrays[*wa].rho, 3, 0);
-            for lin in tuple {
-                for t in lin {
-                    terms.term(t);
-                }
-            }
-        }
         let construction_bytes = retained;
         if let Some(rows) = self.symbolic.get() {
             retained += symbolic_heap(rows);
@@ -243,59 +354,7 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         let matrix_program_bytes = retained - start;
 
-        // Growing vectors include their minimum allocation and capacity slack. The
-        // source coefficients bound gather/CSR edges, even when all maps repeat.
-        let symbolic = 4 * terms.count * size_of::<(Term<F>, Factor)>() as u128
-            + terms.coefficients * field
-            + terms.maps * size_of::<Option<usize>>() as u128
-            + template_rows * 3 * size_of::<Vec<(Term<F>, Factor)>>() as u128
-            + self.arrays.len() as u128 * size_of::<Vec<[Vec<(Term<F>, Factor)>; 3]>>() as u128;
-        let gather = 4 * template_rows * 3 * size_of::<GatherJob>() as u128
-            + 4 * terms.count
-                * (size_of::<Option<GatherTarget>>() + size_of::<Factor>() + size_of::<usize>())
-                    as u128
-            + template_instances * 3 * size_of::<usize>() as u128;
-        let readers = 4
-            * terms.count
-            * (size_of::<Reader>() + size_of::<(usize, usize, usize, usize)>()) as u128
-            + cell_spans * 8
-            + terms.coefficients * (4 * 12 + 8)
-            + cells * 256;
-        let m_plans = 4 * cells * size_of::<MPlan<F>>() as u128
-            + cell_spans * 4
-            + terms.count * size_of::<MReader>() as u128
-            + 4 * terms.coefficients * (size_of::<(u32, u8, u32, u32)>() as u128 + field);
-        let mut additional = 0u128;
-        if self.symbolic.get().is_none() {
-            additional += symbolic;
-        }
-        if self.gather.get().is_none() {
-            additional += gather;
-        }
-        if self.readers.get().is_none() {
-            additional += readers;
-        }
-        if self.m_plans.get().is_none() {
-            additional += m_plans;
-        }
-        // Per-proof matrix weights and the gather's per-term factor/base
-        // workspace remain necessary even when their public plans are cached.
-        additional += terms.count * (2 * field + size_of::<usize>() as u128);
-        if let Some(t) = self.plan.get() {
-            additional += (t.inputs + t.ops.len()) as u128 * field;
-        }
-        // Caller + cloned witness, z and M (2W each), helper filling and the
-        // largest folded allocation; A/B/C, equality tables and first fold.
-        // Summing stage maxima deliberately overcounts overlapping lifetimes.
-        let w = 1u128
-            .checked_shl(self.shape.sw() as u32)
-            .unwrap_or(u128::MAX);
-        let x = 1u128.checked_shl(self.shape.sx as u32).unwrap_or(u128::MAX);
-        additional = additional.saturating_add(
-            w.saturating_mul(8)
-                .saturating_add(x.saturating_mul(5))
-                .saturating_mul(field),
-        );
+        let additional = self.phase_memory_accounting().additional_peak_bytes as u128;
         ProvingMemoryAccounting {
             construction_bytes: cap(construction_bytes),
             symbolic_bytes: cap(symbolic_bytes),
@@ -306,6 +365,107 @@ impl<F: Scalar> UniformCircuit<F> {
             retained_bytes: cap(retained),
             additional_peak_bytes: cap(additional),
             accounted_peak_bytes: cap(retained.saturating_add(additional)),
+        }
+    }
+
+    /// Workspace for `instantiate(..., Some(w))`, then `z_vector` and `abc`.
+    /// This path does not build a reader, M-table or matrix-evaluation tape.
+    pub fn preparation_memory_bytes(&self) -> u64 {
+        self.phase_memory_accounting().preparation_bytes
+    }
+
+    /// Count phase workspaces without building lazy plans or changing a witness.
+    pub fn phase_memory_accounting(&self) -> PhaseMemoryAccounting {
+        let p = self.memory_plan_counts();
+        let field = size_of::<F>() as u128;
+        let w = 1u128
+            .checked_shl(self.shape.sw() as u32)
+            .unwrap_or(u128::MAX);
+        let x = 1u128.checked_shl(self.shape.sx as u32).unwrap_or(u128::MAX);
+        let cols = 1u128
+            .checked_shl(self.shape.col_bits as u32)
+            .unwrap_or(u128::MAX);
+        let symbolic = if self.symbolic.get().is_none() {
+            p.symbolic
+        } else {
+            0
+        };
+        let symbolic_scratch = if self.symbolic.get().is_none() {
+            p.symbolic_build_scratch
+        } else {
+            0
+        };
+        let gather = if self.gather.get().is_none() {
+            p.gather
+        } else {
+            0
+        };
+        let readers = if self.readers.get().is_none() {
+            p.readers
+        } else {
+            0
+        };
+        let reader_scratch = if self.readers.get().is_none() {
+            p.readers_build_scratch
+        } else {
+            0
+        };
+        let m_plans = if self.m_plans.get().is_none() {
+            p.m_plans
+        } else {
+            0
+        };
+        let before_outer = symbolic + gather;
+        let all_plans = before_outer + readers + m_plans;
+        let preparation = p
+            .helpers
+            .max((2 * w + 3 * x) * field + before_outer + p.gather_scratch)
+            .max(2 * w * field + symbolic + symbolic_scratch);
+        // The full prover owns one cloned witness. Its caller's witness is
+        // resident before admission. Helper buffers die before z/A/B/C exist.
+        let phase1 = w * field
+            + self.bounds.len() as u128 * size_of::<usize>() as u128
+            + self.shape.rows() as u128 * field;
+        let helper = phase1 + p.helpers;
+        let outer_k = self.shape.outer_blocks().first().copied().unwrap_or(0);
+        let outer_low = x >> outer_k;
+        // eq_low is alive while each A/B/C fold allocates its replacement.
+        let outer =
+            (3 * w + 3 * x + 2 * outer_low) * field + before_outer + p.gather_scratch + phase1
+                - w * field;
+        let outer = outer.max((3 * w) * field + symbolic + symbolic_scratch);
+        // readers() precedes the M output; its temporary edge buckets are
+        // released before m_plans() is built. Equality ex is alive in both.
+        let matrix_readers = (3 * w + x) * field + before_outer + readers + reader_scratch;
+        let matrix_values = (5 * w + x) * field + all_plans + p.matrix_scratch;
+        let matrix = matrix_readers.max(matrix_values);
+        let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
+        let inner_low = (2 * w) >> inner_k;
+        let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 4;
+        let inner = (5 * w + inner_low) * field + all_plans + support;
+        // At opening only folded m/z/A/B/C remain; witness clone, IPA x/b,
+        // generator copy and two L/R scalar/base buffers overlap. Pasta affine
+        // points contain two base-field elements on both supported curves.
+        let tape_scratch = self
+            .plan
+            .get()
+            .map_or(0, |t| (t.inputs + t.ops.len()) as u128 * field);
+        let opening = w * field + all_plans + (7 * cols) * field + tape_scratch;
+        let additional = phase1
+            .max(helper)
+            .max(outer)
+            .max(matrix)
+            .max(inner)
+            .max(opening);
+        PhaseMemoryAccounting {
+            helper_bytes: cap(p.helpers),
+            preparation_bytes: cap(preparation),
+            phase1_bytes: cap(phase1),
+            outer_bytes: cap(outer),
+            matrix_bytes: cap(matrix),
+            inner_bytes: cap(inner),
+            opening_bytes: cap(opening),
+            additional_peak_bytes: cap(additional),
         }
     }
 }

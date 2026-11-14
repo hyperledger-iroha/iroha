@@ -714,7 +714,6 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/ivm/src/zk.rs",
         LocalDeferral: [ExecutionDeferred],
-        OutsideInvocation: [AssertionFailed],
     ),
     producer!(
         "crates/ivm/src/zk/cycle_roots.rs",

@@ -221,6 +221,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
         let autoscale = &nexus.autoscale;
         let atomic_private_settlement =
             iroha_config::parameters::actual::NexusConsensusAtomicPrivateSettlementV1::frozen_v1();
+        // The quota slots keep their signed V1 values; quotas are committed policy.
+        let quotas = iroha_config::parameters::actual::NexusConsensusQuotaSlotsV1::FROZEN;
         let preimage = record!(
             1_u8,
             Raw(&self.configured_lane_catalog_hash),
@@ -252,8 +254,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
             self.fees.map(norito::core::PayloadRef),
             record!(duration(nexus.hf_shared_leases.drain_grace)),
             record!(
-                nexus.uploaded_models.max_plaintext_bytes_per_model,
-                nexus.uploaded_models.max_chunk_count_per_model
+                quotas.max_plaintext_bytes_per_model,
+                quotas.max_chunk_count_per_model
             ),
             record!(
                 Seq(nexus.endorsement.committee_keys.iter().map(DisplayString)),
@@ -314,8 +316,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.da.threshold_base.get(),
                 nexus.da.per_attester_shards.get(),
                 nexus.da.ingest_quota_window_blocks.get(),
-                nexus.da.ingest_quota_max_count_per_account.get(),
-                nexus.da.ingest_quota_max_bytes_per_account.get(),
+                quotas.ingest_quota_max_count_per_account,
+                quotas.ingest_quota_max_bytes_per_account,
                 nexus.da.audit.sample_size.get(),
                 nexus.da.audit.window_count.get(),
                 duration(nexus.da.audit.interval),

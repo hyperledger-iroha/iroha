@@ -19,10 +19,12 @@ use std::{fmt::Write as _, io::Read as _, path::Path};
 /// File name of the published Nexus/AMX context preimage, beside the signed genesis file.
 pub const PUBLISHED_NEXUS_AMX_CONTEXT_FILE: &str = "nexus-amx-context.v1.bin";
 
-/// Execution-policy inputs that still come from node configuration.
-const EXECUTION_POLICY_SECTIONS: &str = "`gov`, `oracle`, `content`, `settlement`, and the `nexus` \
-     keys outside the Nexus/AMX context (`endorsement`, `governance`, `compliance`, `registry` \
-     lane manifests, `uploaded_models`, `hf_shared_leases`, `atomic_private_settlement`)";
+/// Execution-policy inputs that still come from node configuration. Content limits, settlement
+/// router inputs, private-settlement bounds and uploaded-model quotas are protocol constants or
+/// committed parameters, which no node file restates.
+const EXECUTION_POLICY_SECTIONS: &str = "`gov`, `oracle`, and the `nexus` keys outside the \
+     Nexus/AMX context (`endorsement`, `governance`, `compliance`, `registry` lane manifests, \
+     `hf_shared_leases`)";
 
 /// Explain a refused genesis execution when it is a signed genesis policy mismatch.
 pub fn explain_genesis_startup_error(config: &Config, error: &StartupError) -> Option<String> {

@@ -11,7 +11,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 iroha_core_zk = { path = "../../../../crates/iroha_core_zk", default-features = false, features = ["kagemusha-simulator"] }
-connect_norito_bridge = { path = "../../../../crates/connect_norito_bridge" }
+connect_norito_bridge = { path = "../../../../crates/connect_norito_bridge", features = ["spartan-device-fixture"] }
 iroha_data_model = { path = "../../../../crates/iroha_data_model", default-features = false, features = ["transparent_api", "test-fixtures"] }
 norito = { path = "../../../../crates/norito", default-features = false, features = ["node-codec"] }
 zk-spartan = { path = "../..", features = ["device-fixture"] }

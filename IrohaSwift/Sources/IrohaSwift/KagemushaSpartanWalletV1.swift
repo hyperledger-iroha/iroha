@@ -51,7 +51,7 @@ public final class KagemushaSpartanWalletV1: @unchecked Sendable {
       driver.output(handle, slot.bindMemory(to: UInt8.self).baseAddress,
         operation.bindMemory(to: UInt8.self).baseAddress, part.rawValue, out)
     } } }
-    return try .init(reply)
+    return try .init(reply, part: part)
   }
 
   /// Full native proof verification, binding the returned Request to the exact Payment bytes.
@@ -148,7 +148,7 @@ public enum KagemushaSpartanOperationV1: UInt8, Sendable { case bootstrap = 1, l
 
 public enum KagemushaSpartanRetainedOutputV1: Sendable {
   case unknown, pending, archived, deliveryLoss, released(Data)
-  init(_ reply: KagemushaSpartanReplyV1) throws {
+  init(_ reply: KagemushaSpartanReplyV1, part: KagemushaSpartanOutputV1) throws {
     try reply.requireShape(status: reply.status, count: reply.status == 1 ? nil : 0)
     switch reply.status {
     case 0: self = .unknown
@@ -156,7 +156,8 @@ public enum KagemushaSpartanRetainedOutputV1: Sendable {
     case 4: self = .archived
     case 5: self = .deliveryLoss
     case 1:
-      guard !reply.bytes.isEmpty else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      // Completed Bootstrap, Load and Receive intentionally have no outgoing Payment.
+      guard part == .payment || !reply.bytes.isEmpty else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       self = .released(reply.bytes)
     default: throw KagemushaWalletErrorV1.invalidNativeOutput
     }

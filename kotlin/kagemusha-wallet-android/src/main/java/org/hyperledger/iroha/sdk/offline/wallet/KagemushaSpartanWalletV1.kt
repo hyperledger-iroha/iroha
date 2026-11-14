@@ -53,7 +53,7 @@ class KagemushaSpartanWalletV1 internal constructor(
         require(operationId.size == 32)
         val identity = slot.copyOf(); val operation = operationId.copyOf()
         val reply = call { NativeSpartanBridge.output(owner.exchangeHandle(), identity, operation, part.ordinal) }
-        return KagemushaSpartanRetainedOutputV1.from(reply)
+        return KagemushaSpartanRetainedOutputV1.from(reply, part)
     }
 
     /** Full native proof verification; the returned Request is bound to these exact Payment bytes. */
@@ -145,14 +145,19 @@ sealed class KagemushaSpartanRetainedOutputV1 {
         fun bytes(): ByteArray = original.copyOf()
     }
     internal companion object {
-        fun from(reply: KagemushaSpartanReplyV1): KagemushaSpartanRetainedOutputV1 {
+        fun from(reply: KagemushaSpartanReplyV1, part: KagemushaSpartanOutputV1): KagemushaSpartanRetainedOutputV1 {
             reply.requireShape(reply.status, if (reply.status == 1) null else 0)
             return when (reply.status) {
                 0 -> Unknown
                 2 -> Pending
                 4 -> Archived
                 5 -> DeliveryLoss
-                1 -> { val bytes = reply.bytes(); if (bytes.isEmpty()) invalidSpartanOutput(); Released(bytes) }
+                1 -> {
+                    val bytes = reply.bytes()
+                    // Completed Bootstrap, Load and Receive have no outgoing Payment.
+                    if (bytes.isEmpty() && part != KagemushaSpartanOutputV1.PAYMENT) invalidSpartanOutput()
+                    Released(bytes)
+                }
                 else -> invalidSpartanOutput()
             }
         }

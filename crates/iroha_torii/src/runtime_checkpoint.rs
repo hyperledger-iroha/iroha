@@ -16,7 +16,15 @@ const METADATA_BYTES: usize = 16 * 1024;
 pub(crate) const REQUEST_BYTES: usize = 1024;
 
 /// Select one artifact only within the independently pinned immutable inventory.
-#[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+#[derive(
+    Debug,
+    norito::json::JsonSerialize,
+    norito::json::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime_checkpoint::ArtifactRequest")]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ArtifactRequest {
     /// Exact digest returned by the package descriptor.
@@ -25,7 +33,15 @@ pub(crate) struct ArtifactRequest {
     pub index: u64,
 }
 /// Select one exact bounded range of an original artifact.
-#[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+#[derive(
+    Debug,
+    norito::json::JsonSerialize,
+    norito::json::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime_checkpoint::RangeRequest")]
 #[norito(deny_unknown_fields)]
 pub(crate) struct RangeRequest {
     /// Exact digest returned by the package descriptor.
@@ -38,7 +54,15 @@ pub(crate) struct RangeRequest {
     pub length: u32,
 }
 /// Finish delivery by rechecking all original source snapshots.
-#[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+#[derive(
+    Debug,
+    norito::json::JsonSerialize,
+    norito::json::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime_checkpoint::FinishRequest")]
 #[norito(deny_unknown_fields)]
 pub(crate) struct FinishRequest {
     /// Exact digest returned by the package descriptor.

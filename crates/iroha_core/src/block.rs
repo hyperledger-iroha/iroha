@@ -5423,7 +5423,7 @@ pub(crate) mod valid {
             }
             Self::validate_sumeragi_consensus_effects(block)?;
             Self::validate_da_sidecar_hashes(block)?;
-            Self::validate_da_pin_intent_bundle(block, state)?;
+            Self::validate_da_pin_intent_bundle(block, state, soft_fork)?;
             Self::validate_execution_context_with_state(
                 block,
                 topology,
@@ -5577,7 +5577,8 @@ pub(crate) mod valid {
         )]
         fn validate_da_pin_intent_bundle(
             block: &SignedBlock,
-            state: &impl StateReadOnly,
+            state: &crate::state::StateQueryView<'_>,
+            replacement: bool,
         ) -> Result<(), BlockValidationError> {
             let Some(bundle) = block.da_pin_intents() else {
                 return Ok(());
@@ -5628,11 +5629,14 @@ pub(crate) mod valid {
                 admission_policy.as_ref(),
                 |lane_id| state.lane_incarnation_at_height(lane_id, block.header().height().get()),
             )?;
+            // The committed quotas of the State this block builds on, as its construction
+            // freezes them; the window length is the signed Nexus DA setting.
             crate::da::quota::prepare_ingest_quota_writes(
                 world.smart_contract_state(),
                 bundle,
                 block.header().height().get(),
-                &state.nexus().da,
+                state.nexus().da.ingest_quota_window_blocks,
+                &state.nexus_quotas_for_validation(replacement),
             )?;
             for intent in &bundle.intents {
                 if world

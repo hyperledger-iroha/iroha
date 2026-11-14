@@ -451,7 +451,11 @@ impl CheckpointTransport for ExportedCheckpoint {
 
 fn destination_directory(root: &OwnerDirectory, relative: &Path) -> Attempt<OwnerDirectory> {
     let mut directory = OwnerDirectory::open(root.path()).map_err(io)?;
-    for component in relative.parent().unwrap_or(Path::new("")).components() {
+    for component in relative
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .components()
+    {
         let std::path::Component::Normal(name) = component else {
             return Err(invalid("destination escaped the closed inventory"));
         };

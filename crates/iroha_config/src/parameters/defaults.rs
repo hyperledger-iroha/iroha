@@ -3606,13 +3606,6 @@ pub mod nexus {
         /// Drain grace window after the last member leaves a shared HF lease pool (milliseconds).
         pub const DRAIN_GRACE_MS: u64 = 5_000;
     }
-    /// Encrypted uploaded-model registry admission defaults.
-    pub mod uploaded_models {
-        /// Maximum plaintext bytes admitted for one uploaded model.
-        pub const MAX_PLAINTEXT_BYTES_PER_MODEL: u64 = 64 * 1024 * 1024 * 1024;
-        /// Maximum encrypted chunk count admitted for one uploaded model.
-        pub const MAX_CHUNK_COUNT_PER_MODEL: u32 = 16_384;
-    }
     /// Lane compliance configuration defaults.
     pub mod compliance {
         /// Compliance disabled by default.
@@ -3751,10 +3744,6 @@ pub mod nexus {
         pub const PER_ATTESTER_SHARDS: u16 = 25;
         /// Number of consecutive block heights in one deterministic ingest quota window.
         pub const INGEST_QUOTA_WINDOW_BLOCKS: u64 = 100;
-        /// Maximum accepted DA ingests per account in one quota window.
-        pub const INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT: u64 = 1_024;
-        /// Maximum canonical DA payload bytes per account in one quota window (64 GiB).
-        pub const INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT: u64 = 64 << 30;
         /// Rolling audit defaults ensuring long-term coverage.
         pub mod audit {
             use std::time::Duration;

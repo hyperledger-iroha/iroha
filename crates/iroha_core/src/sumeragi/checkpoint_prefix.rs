@@ -87,7 +87,7 @@ pub(crate) fn verifier(
             proof_of_possession: member.proof_of_possession,
         })
         .collect();
-    let selected = SumeragiFinalityVerifier::new(genesis, &chain_id.to_string(), validators)
+    let selected = SumeragiFinalityVerifier::new(genesis, chain_id.as_ref(), validators)
         .map_err(finality_error)?;
     let certificate = genesis
         .commit_certificate()

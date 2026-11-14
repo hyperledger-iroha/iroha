@@ -333,11 +333,7 @@ fn ensure_actual(
     Ok(())
 }
 
-fn authoritative<'a>(
-    world: &'a impl WorldReadOnly,
-    kind: Kind,
-    tx: [u8; 32],
-) -> Result<&'a Record, Error> {
+fn authoritative(world: &impl WorldReadOnly, kind: Kind, tx: [u8; 32]) -> Result<&Record, Error> {
     let opening = match kind {
         Kind::GlobalDecision => {
             let entry = world

@@ -564,7 +564,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
     use iroha_config::parameters::actual::{
         Autoscale, Commit, Da, Fusion, GovernanceCatalog, LaneRegistry, LaneRoutingMatcher,
         LaneRoutingPolicy, LaneRoutingRule, Nexus, NexusAtomicPrivateSettlement, NexusAxt,
-        NexusHfSharedLeases, NexusUploadedModels,
+        NexusHfSharedLeases,
     };
     use iroha_primitives::nonzero;
     use norito::json::to_string as to_json_string;
@@ -628,7 +628,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         staking: NexusStaking::default(),
         fees: iroha_config::parameters::defaults::nexus::fees::genesis_policy(),
         hf_shared_leases: NexusHfSharedLeases::default(),
-        uploaded_models: NexusUploadedModels::default(),
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
         atomic_private_settlement: NexusAtomicPrivateSettlement::default(),

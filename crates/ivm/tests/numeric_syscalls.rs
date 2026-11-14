@@ -1425,8 +1425,7 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         context.phase_charge(SyscallMeteringPhase::PayloadHash),
         32 + u64::try_from(frame_bytes).expect("bounded frame")
     );
-    let instruction_gas =
-        ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALL gas");
+    let instruction_gas = ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALL gas");
     let phases = [
         SyscallMeteringPhase::Entry,
         SyscallMeteringPhase::PointerHeader,
@@ -1522,8 +1521,7 @@ fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
 #[test]
 fn entry_oog_precedes_staged_numeric_privacy_validation() {
     let syscall = syscalls::SYSCALL_INT_NEG;
-    let instruction_gas =
-        ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALL gas");
+    let instruction_gas = ivm::cost_of(encoding::wide::encode_scall(syscall)).expect("SCALL gas");
     let mut vm = zk_vm_for(
         syscall,
         instruction_gas + ivm::numeric_gas::NUMERIC_ENTRY_GAS - 1,
@@ -2135,10 +2133,7 @@ fn assert_int_helper_gas_boundaries(
                 Err(_) => SyscallCompletion::Trap,
             })
         );
-        assert_eq!(
-            ivm::cost_of(encoding::wide::encode_scall(syscall)),
-            Some(5)
-        );
+        assert_eq!(ivm::cost_of(encoding::wide::encode_scall(syscall)), Some(5));
         // One gas unit short of each independently known event must trap before
         // that event. Even Status mode cannot turn an observer refusal into a result.
         let mut completed_work = 0;

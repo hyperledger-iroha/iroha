@@ -139,6 +139,8 @@ pub mod ministry;
 pub mod musubi;
 /// Nexus-lane scaffolding and identifiers.
 pub mod nexus;
+/// Committed uploaded-model and DA ingest quotas: the typed chain parameter, its protocol default and validation.
+pub mod nexus_quota_policy;
 /// Non-fungible token structures and specs.
 pub mod nft;
 /// Native NFT custody and exact-price sale records.

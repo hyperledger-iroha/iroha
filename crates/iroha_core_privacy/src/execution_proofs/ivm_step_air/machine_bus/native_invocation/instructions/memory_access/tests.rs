@@ -532,7 +532,7 @@ fn memory_and_composed_instruction_degrees_include_all_private_fields() {
         enc::encode_ri(wide::memory::LOAD64, 4, 31, -8),
     ];
     body.extend((u8::MIN..=u8::MAX).filter_map(|opcode| {
-        let word = enc::encode_rr(opcode, 6, 4, 5);
+        let word = super::super::tests::canonical_rr(opcode, 6, 4, 5);
         ivm::execution_packets::public_scalar_operands(word).map(|_| word)
     }));
     let (native, _) = native(artifact(&body, 16, true));

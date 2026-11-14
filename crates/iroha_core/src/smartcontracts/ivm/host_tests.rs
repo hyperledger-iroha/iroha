@@ -847,10 +847,7 @@ fn typed_contract_request_bytes(state: &State, target: &ContractAddress, selecto
 }
 
 fn typed_dispatch_setup_gas() -> u64 {
-    use ivm::{
-        encoding::wide,
-        instruction::wide::{arithmetic, system},
-    };
+    use ivm::{encoding::wide, instruction::wide::arithmetic};
     authenticated_test_probe_setup_gas()
         + (0..6)
             .map(|index| {

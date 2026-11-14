@@ -397,16 +397,28 @@ def test_node_local_validity_bounds_are_defects_owned_by_a_task() -> None:
         for item in CONTRACT["bounds"]
         if item["class"] == "consensus" and item["source"] == "node_local"
     }
-    assert defects, "today's node-local validity bounds are recorded"
-    assert set(defects.values()) == {"F.4"}
-    assert "storage.config_da_ingest_quota_max_bytes_per_account" in defects
-    assert "proof.private_settlement_admission_max_proof_bytes" not in defects
-    # F.4 moved the ZK consensus-policy hash inventory (45 bounds) and the
-    # execution limits of the pipeline (15 bounds) into committed State: they are
-    # no longer node-local defects and name the committed policy. Four
-    # unrelated [nexus] validity bounds remain; private settlement admission now
-    # comes from World privacy policy, and sidecar capacity is local refusal only.
-    assert len(defects) == 4
+    # F.4 moved the ZK consensus-policy hash inventory (45 bounds), the execution
+    # limits of the pipeline (15 bounds) and the four [nexus] uploaded-model and DA
+    # ingest quotas into committed State: none is a node-local defect any more and
+    # each names its committed policy. Private settlement admission comes from World
+    # privacy policy, and sidecar capacity is local refusal only.
+    assert defects == {}, "no validity bound is read from node configuration"
+    quotas = [
+        item
+        for item in CONTRACT["bounds"]
+        if str(item.get("committed_as", "")).startswith("nexus_quota_policy_v1 ")
+    ]
+    assert {item["id"] for item in quotas} == {
+        "storage.config_uploaded_model_max_plaintext_bytes",
+        "storage.config_uploaded_model_max_chunk_count",
+        "storage.config_da_ingest_quota_max_count_per_account",
+        "storage.config_da_ingest_quota_max_bytes_per_account",
+    }
+    for item in quotas:
+        assert item["source"] == "committed" and item["class"] == "consensus", item["id"]
+        assert "defect" not in item and "catalog" not in item, item["id"]
+        assert item["owner"]["path"] == "crates/iroha_data_model/src/nexus_quota_policy.rs"
+        assert item["owner"]["anchor"][-1] == "pub const fn protocol_default() -> Self {"
     pipeline_policy = [
         item
         for item in CONTRACT["bounds"]
@@ -426,15 +438,18 @@ def test_node_local_validity_bounds_are_defects_owned_by_a_task() -> None:
         assert item["source"] == "committed" and "defect" not in item, item["id"]
         assert item["committed_as"].startswith("zk_validity_policy_v1 "), item["id"]
 
+    # A validity bound read from node configuration again must be a defect of a task.
     def undeclared(contract: dict) -> None:
-        del bound(contract, "storage.config_da_ingest_quota_max_bytes_per_account")["defect"]
+        bound(contract, "storage.config_da_ingest_quota_max_bytes_per_account")["source"] = (
+            "node_local"
+        )
 
     assert_fails(edited(undeclared), "must be recorded as a defect with an owner task")
 
     def ownerless(contract: dict) -> None:
-        bound(contract, "storage.config_da_ingest_quota_max_bytes_per_account")["defect"][
-            "owner"
-        ] = "Z.9"
+        item = bound(contract, "storage.config_da_ingest_quota_max_bytes_per_account")
+        item["source"] = "node_local"
+        item["defect"] = {"owner": "Z.9", "summary": "read from node configuration"}
 
     assert_fails(edited(ownerless), "owner `Z.9` is not a task of the delivery graph")
 
@@ -1956,9 +1971,9 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         if item["class"] == "consensus" and item["source"] == "node_local"
     }
     assert listed == node_local, "every node-local validity bound is a catalog field"
-    assert len(node_local) == 4
-    for identifier in node_local:
-        assert bound(CONTRACT, identifier)["defect"]["owner"] == "F.4"
+    # The four quota slots of the Nexus catalog are frozen V1 values since F.4 moved the
+    # quotas into nexus_quota_policy_v1; no node-local validity bound remains.
+    assert node_local == set()
     pipeline = catalogs["execution_policy_digest_v1"]["fields"]
     for field in (
         "pipeline.ivm_max_decoded_instructions",
@@ -1992,7 +2007,7 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         assert all(group["reason"] for group in catalog["excluded"])
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
     assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 45
-    assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 4
+    assert catalogs["nexus_consensus_policy_v1"]["fields"] == {}
     # The execution-policy digest binds 152 fields: fraud is one exact typed policy,
     # and ten committee sizes come from a loop. Ordinary signing admission now has
     # the separate committed CryptoAdmissionPolicyV1 owner, so the four retired
@@ -2024,11 +2039,19 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     nexus = catalogs["nexus_consensus_policy_v1"]
     assert nexus["struct"] == "NexusConsensusPolicyPreimageV1"
     assert nexus["function"] == "nexus_consensus_policy_preimage_with_runtime_policies"
-    for field, identifier in (
-        ("uploaded_models.max_plaintext_bytes_per_model", "storage.config_uploaded_model_max_plaintext_bytes"),
-        ("da.ingest_quota_max_bytes_per_account", "storage.config_da_ingest_quota_max_bytes_per_account"),
+    # The quota slots stay in the preimage as frozen V1 values; the bounds are committed.
+    quota_slots = next(
+        group for group in nexus["excluded"]
+        if "uploaded_models.max_plaintext_bytes_per_model" in group["fields"]
+    )
+    assert "da.ingest_quota_max_bytes_per_account" in quota_slots["fields"]
+    assert "NexusConsensusQuotaSlotsV1::FROZEN" in quota_slots["reason"]
+    for identifier in (
+        "storage.config_uploaded_model_max_plaintext_bytes",
+        "storage.config_da_ingest_quota_max_bytes_per_account",
     ):
-        assert nexus["fields"][field] == identifier
+        item = bound(CONTRACT, identifier)
+        assert item["source"] == "committed" and "catalog" not in item, identifier
     private = catalogs["private_settlement_validity_v1"]
     assert private["source"] == "committed"
     assert private["fields"] == {
@@ -2113,13 +2136,24 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     assert_fails(edited(committed), "a field of zk_consensus_policy_hash has source `committed`")
 
     def local_class(contract: dict) -> None:
-        item = bound(contract, "storage.config_da_ingest_quota_max_bytes_per_account")
-        item["class"] = "local_defer"
+        # A local capacity bound recoupled as a field of the node-local Nexus catalog.
+        catalog = next(
+            item for item in contract["catalogs"] if item["id"] == "nexus_consensus_policy_v1"
+        )
+        field = "atomic_private_settlement.sidecar_max_records"
+        for group in catalog["excluded"]:
+            if field in group["fields"]:
+                group["fields"].remove(field)
+        identifier = "storage.config_private_settlement_sidecar_max_records"
+        catalog["fields"][field] = identifier
+        bound(contract, identifier)["catalog"] = {"id": catalog["id"], "field": field}
 
     assert_fails(edited(local_class), "the bound is classed consensus with its defect")
 
     def nexus_without_defect(contract: dict) -> None:
-        del bound(contract, "storage.config_da_ingest_quota_max_count_per_account")["defect"]
+        bound(contract, "storage.config_da_ingest_quota_max_count_per_account")["source"] = (
+            "node_local"
+        )
 
     assert_fails(
         edited(nexus_without_defect),
@@ -2487,14 +2521,41 @@ def _assert_nexus_resource_catalog_retains_frozen_slots(contract: dict, source: 
     """Separate immutable signed slots from dynamic bounds and local custody limits."""
     catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
     observed = CHECKER["catalog_fields"](source, catalog, "t")
-    expected = {
+    # The uploaded-model and DA ingest quota slots are frozen V1 values; the quotas
+    # themselves are committed (nexus_quota_policy_v1), so no field is a bound.
+    quota_slots = [
         "uploaded_models.max_plaintext_bytes_per_model",
         "uploaded_models.max_chunk_count_per_model",
         "da.ingest_quota_max_count_per_account",
         "da.ingest_quota_max_bytes_per_account",
-    }
-    assert set(catalog["fields"]) == expected
-    assert expected.issubset(observed)
+    ]
+    assert catalog["fields"] == {}
+    assert set(quota_slots).issubset(observed)
+    quota_exclusions = [
+        item for item in catalog["excluded"] if set(item["fields"]) & set(quota_slots)
+    ]
+    assert len(quota_exclusions) == 1
+    assert quota_exclusions[0]["fields"] == quota_slots
+    quota_reason = quota_exclusions[0]["reason"]
+    assert "NexusConsensusQuotaSlotsV1::FROZEN" in quota_reason
+    assert "frozen_quota_slots_v1_match_original_commitment_bytes_and_position" in quota_reason
+    quota_body = CHECKER["_function_body"](source, catalog["function"], "t", catalog["path"])
+    assert re.search(r"let\s+quotas\s*=\s*NexusConsensusQuotaSlotsV1::FROZEN\s*;", quota_body)
+    for field in (
+        "max_plaintext_bytes_per_model",
+        "max_chunk_count_per_model",
+        "ingest_quota_max_count_per_account",
+        "ingest_quota_max_bytes_per_account",
+    ):
+        assert re.search(rf"\b{field}\s*:\s*quotas\.{field}\s*,", quota_body), field
+    for identifier in (
+        "storage.config_uploaded_model_max_plaintext_bytes",
+        "storage.config_uploaded_model_max_chunk_count",
+        "storage.config_da_ingest_quota_max_count_per_account",
+        "storage.config_da_ingest_quota_max_bytes_per_account",
+    ):
+        item = bound(contract, identifier)
+        assert item["source"] == "committed" and "catalog" not in item, identifier
     # These original signed V1 slots remain in source order. The independent Rust
     # literal golden pins their types, values, bytes and position in the preimage.
     frozen = [
@@ -2546,6 +2607,7 @@ def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() ->
     "missing_slot", "extra_slot", "reordered_slots", "missing_exclusion",
     "extra_exclusion", "reclassified_slot", "unreasoned_exclusion",
     "reclassified_capacity", "catalogued_capacity", "dynamic_capacity_leak",
+    "reclassified_quota_slot", "dynamic_quota_leak",
 ])
 def test_nexus_frozen_catalog_refuses_slot_and_capacity_drift(mutation: str) -> None:
     """Small source/catalog mutations cannot erase slots or recouple local capacity."""
@@ -2588,6 +2650,18 @@ def test_nexus_frozen_catalog_refuses_slot_and_capacity_drift(mutation: str) -> 
         bound(contract, "storage.config_private_settlement_sidecar_max_total_bytes")["catalog"] = {
             "id": catalog["id"], "field": "atomic_private_settlement.sidecar_max_total_bytes"
         }
+    elif mutation == "reclassified_quota_slot":
+        catalog["fields"]["da.ingest_quota_max_count_per_account"] = (
+            "storage.config_da_ingest_quota_max_count_per_account"
+        )
+    elif mutation == "dynamic_quota_leak":
+        original = "ingest_quota_max_bytes_per_account: quotas.ingest_quota_max_bytes_per_account,"
+        assert source.count(original) == 1
+        source = source.replace(
+            original,
+            "ingest_quota_max_bytes_per_account: nexus.da.ingest_quota_window_blocks.get(),",
+            1,
+        )
     else:
         original = "atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),"
         assert original in source

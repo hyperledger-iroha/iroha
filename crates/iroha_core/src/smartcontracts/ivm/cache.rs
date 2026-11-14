@@ -3169,7 +3169,7 @@ mod named_profile_tests {
     fn named_profile_query_cache_hits_and_misses_enforce_effective_restrictions() {
         use crate::{
             smartcontracts::ivm::host::{QueryStateRef, QueryStateRefOps as _},
-            state::{StateReadOnly as _, WorldReadOnly as _},
+            state::WorldReadOnly as _,
         };
         use iroha_data_model::runtime::definition::{
             DefinitionDescriptorV1, RestrictionEntryV1, RestrictionV1,

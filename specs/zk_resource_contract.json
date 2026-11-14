@@ -5405,41 +5405,34 @@
       "what": "Plaintext size one uploaded-model bundle may declare. The model bytes are not in the transaction; the instruction carries the declared size.",
       "unit": "bytes",
       "value": 68719476736,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_PLAINTEXT_BYTES_PER_MODEL",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/nexus_quota_policy.rs",
+        "symbol": "max_uploaded_model_plaintext_bytes",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod uploaded_models {"
+          "impl NexusQuotaPolicyV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
         "expr": "64 * 1024 * 1024 * 1024"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "uploaded_models.max_plaintext_bytes_per_model"
-      },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
-          "contains": "if bundle.plaintext_bytes > state_transaction .nexus .uploaded_models .max_plaintext_bytes_per_model {"
+          "contains": "if bundle.plaintext_bytes > quotas.max_uploaded_model_plaintext_bytes {"
         }
       ],
       "tests": [
         {
           "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
-          "name": "soracloud_uploaded_model_register_rejects_nexus_limit_overrides"
+          "name": "soracloud_uploaded_model_register_applies_committed_quotas"
         }
       ],
-      "test_note": "The named test lowers the limit to refuse a sample bundle (one byte of plaintext, zero chunks). No test registers a bundle that declares exactly the limit and one more; C.6 owns the uploaded-model flow."
+      "test_note": "The named test commits each ceiling at the size the sample bundle declares (4 096 plaintext bytes in one chunk) and one below it: the exact ceilings admit the bundle and one byte or one chunk less refuses it. An opaque value on a root that does not recognize the policy applies nowhere. C.6 owns the uploaded-model flow.",
+      "committed_as": "nexus_quota_policy_v1 (NexusQuotaPolicyV1.max_uploaded_model_plaintext_bytes): World.parameters.custom[nexus_quota_policy_v1].max_uploaded_model_plaintext_bytes; a root that does not recognize the typed parameter applies the protocol default, and each block freezes the value of its predecessor (StaticExecutionPolicy::nexus_quotas)."
     },
     {
       "id": "storage.config_uploaded_model_max_chunk_count",
@@ -5447,41 +5440,34 @@
       "what": "Encrypted chunks one uploaded-model bundle may declare.",
       "unit": "count",
       "value": 16384,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "MAX_CHUNK_COUNT_PER_MODEL",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/nexus_quota_policy.rs",
+        "symbol": "max_uploaded_model_chunks",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod uploaded_models {"
+          "impl NexusQuotaPolicyV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
         "expr": "16_384"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "uploaded_models.max_chunk_count_per_model"
-      },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
-          "contains": "if bundle.chunk_count > state_transaction .nexus .uploaded_models .max_chunk_count_per_model {"
+          "contains": "if bundle.chunk_count > quotas.max_uploaded_model_chunks {"
         }
       ],
       "tests": [
         {
           "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
-          "name": "soracloud_uploaded_model_register_rejects_nexus_limit_overrides"
+          "name": "soracloud_uploaded_model_register_applies_committed_quotas"
         }
       ],
-      "test_note": "The named test lowers the limit to refuse a sample bundle (one byte of plaintext, zero chunks). No test registers a bundle that declares exactly the limit and one more; C.6 owns the uploaded-model flow."
+      "test_note": "The named test commits each ceiling at the size the sample bundle declares (4 096 plaintext bytes in one chunk) and one below it: the exact ceilings admit the bundle and one byte or one chunk less refuses it. An opaque value on a root that does not recognize the policy applies nowhere. C.6 owns the uploaded-model flow.",
+      "committed_as": "nexus_quota_policy_v1 (NexusQuotaPolicyV1.max_uploaded_model_chunks): World.parameters.custom[nexus_quota_policy_v1].max_uploaded_model_chunks; a root that does not recognize the typed parameter applies the protocol default, and each block freezes the value of its predecessor (StaticExecutionPolicy::nexus_quotas)."
     },
     {
       "id": "storage.config_da_ingest_quota_max_count_per_account",
@@ -5489,32 +5475,24 @@
       "what": "DA pin intents one account may have accepted in one quota window.",
       "unit": "count",
       "value": 1024,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/nexus_quota_policy.rs",
+        "symbol": "max_da_ingests_per_account",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod da {"
+          "impl NexusQuotaPolicyV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
         "expr": "1_024"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "da.ingest_quota_max_count_per_account"
-      },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/da/quota.rs",
-          "contains": "let max_count = policy.ingest_quota_max_count_per_account.get();"
+          "contains": "let max_count = quotas.max_da_ingests_per_account;"
         },
         {
           "stage": "follower",
@@ -5526,8 +5504,14 @@
         {
           "path": "crates/iroha_core/src/da/quota.rs",
           "name": "quota_counts_all_intents_for_one_owner_transactionally"
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_da_validation_tests.rs",
+          "name": "native_validation_enforces_consensus_da_ingest_quota"
         }
-      ]
+      ],
+      "test_note": "The unit test admits exactly the count and byte ceilings and refuses one more intent. The native test drives two intents that together declare two bytes more than the protocol-default byte ceiling through block validation.",
+      "committed_as": "nexus_quota_policy_v1 (NexusQuotaPolicyV1.max_da_ingests_per_account): World.parameters.custom[nexus_quota_policy_v1].max_da_ingests_per_account; a root that does not recognize the typed parameter applies the protocol default, and each block freezes the value of its predecessor (StaticExecutionPolicy::nexus_quotas)."
     },
     {
       "id": "storage.config_da_ingest_quota_max_bytes_per_account",
@@ -5535,32 +5519,24 @@
       "what": "Canonical DA payload bytes one account may have accepted in one quota window.",
       "unit": "bytes",
       "value": 68719476736,
-      "source": "node_local",
+      "source": "committed",
       "class": "consensus",
       "owner": {
-        "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "symbol": "INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT",
-        "kind": "const",
+        "path": "crates/iroha_data_model/src/nexus_quota_policy.rs",
+        "symbol": "max_da_ingest_bytes_per_account",
+        "kind": "field",
         "anchor": [
-          "pub mod nexus {",
-          "pub mod da {"
+          "impl NexusQuotaPolicyV1 {",
+          "pub const fn protocol_default() -> Self {"
         ],
         "expr": "64 << 30"
       },
       "inclusive": true,
-      "defect": {
-        "owner": "F.4",
-        "summary": "The value is read from node configuration ([nexus]) and bound into State only through the Nexus consensus-policy digest (nexus_consensus_policy_preimage_with_runtime_policies, hashed into execution_policy_digest_v1 as nexus.policy_digest); two nodes configured differently decide differently until F.4 moves its source into committed State."
-      },
-      "catalog": {
-        "id": "nexus_consensus_policy_v1",
-        "field": "da.ingest_quota_max_bytes_per_account"
-      },
       "enforcement": [
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/da/quota.rs",
-          "contains": "let max_bytes = policy.ingest_quota_max_bytes_per_account.get();"
+          "contains": "let max_bytes = quotas.max_da_ingest_bytes_per_account;"
         },
         {
           "stage": "follower",
@@ -5572,8 +5548,14 @@
         {
           "path": "crates/iroha_core/src/da/quota.rs",
           "name": "quota_counts_all_intents_for_one_owner_transactionally"
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_da_validation_tests.rs",
+          "name": "native_validation_enforces_consensus_da_ingest_quota"
         }
-      ]
+      ],
+      "test_note": "The unit test admits exactly the count and byte ceilings and refuses one more intent. The native test drives two intents that together declare two bytes more than the protocol-default byte ceiling through block validation.",
+      "committed_as": "nexus_quota_policy_v1 (NexusQuotaPolicyV1.max_da_ingest_bytes_per_account): World.parameters.custom[nexus_quota_policy_v1].max_da_ingest_bytes_per_account; a root that does not recognize the typed parameter applies the protocol default, and each block freezes the value of its predecessor (StaticExecutionPolicy::nexus_quotas)."
     },
     {
       "id": "storage.held_payload_bytes",
@@ -13998,13 +13980,8 @@
       "struct": "NexusConsensusPolicyPreimageV1",
       "field_form": "struct_tree",
       "source": "node_local",
-      "what": "Typed Nexus consensus-policy preimage. Four uploaded-model and DA-ingest resource bounds remain node-local F.4 defects. Private-payment validity is now committed in World.privacy_consensus_policy; local sidecar capacity is absent from this digest.",
-      "fields": {
-        "uploaded_models.max_plaintext_bytes_per_model": "storage.config_uploaded_model_max_plaintext_bytes",
-        "uploaded_models.max_chunk_count_per_model": "storage.config_uploaded_model_max_chunk_count",
-        "da.ingest_quota_max_count_per_account": "storage.config_da_ingest_quota_max_count_per_account",
-        "da.ingest_quota_max_bytes_per_account": "storage.config_da_ingest_quota_max_bytes_per_account"
-      },
+      "what": "Typed Nexus consensus-policy preimage. No field of it is a validity bound any more: the uploaded-model and DA-ingest quota slots hold frozen V1 values while the quotas are committed in World.parameters (nexus_quota_policy_v1), and private-payment validity is committed in World.privacy_consensus_policy; local sidecar capacity is absent from this digest.",
+      "fields": {},
       "excluded": [
         {
           "reason": "The layout version of the preimage itself.",
@@ -14063,6 +14040,15 @@
           ]
         },
         {
+          "reason": "Immutable original V1 signing slots of the uploaded-model and DA ingest quota ceilings, restored with their exact types, order and first-release values by NexusConsensusQuotaSlotsV1::FROZEN. These are not admission settings: the four ceilings are the committed nexus_quota_policy_v1 bounds storage.config_uploaded_model_max_plaintext_bytes, storage.config_uploaded_model_max_chunk_count, storage.config_da_ingest_quota_max_count_per_account and storage.config_da_ingest_quota_max_bytes_per_account, and a governed change of a quota cannot alter these slots. The independent literal golden frozen_quota_slots_v1_match_original_commitment_bytes_and_position pins their bytes and positions in the preimage and in the Nexus/AMX context.",
+          "fields": [
+            "uploaded_models.max_plaintext_bytes_per_model",
+            "uploaded_models.max_chunk_count_per_model",
+            "da.ingest_quota_max_count_per_account",
+            "da.ingest_quota_max_bytes_per_account"
+          ]
+        },
+        {
           "reason": "Timing of shared Hugging Face lease pools and the endorsement committee: a grace period and an identity set with its quorum, not bounds on bytes, counts or work.",
           "fields": [
             "hf_shared_leases.drain_grace.seconds",
@@ -14116,7 +14102,7 @@
           ]
         },
         {
-          "reason": "Sampling, audit, recovery and rotation policy of the Nexus DA attester service and the length of the ingest quota window: committee sampling geometry and windows. The RS16 payload availability of consensus blocks is listed under rs16.*, and the two ingest quota ceilings are listed above.",
+          "reason": "Sampling, audit, recovery and rotation policy of the Nexus DA attester service and the length of the ingest quota window: committee sampling geometry and windows. The RS16 payload availability of consensus blocks is listed under rs16.*, and the two ingest quota ceilings are the frozen quota slots above.",
           "fields": [
             "da.q_in_slot_total",
             "da.q_in_slot_per_ds_min",

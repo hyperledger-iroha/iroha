@@ -657,9 +657,9 @@ fn only_the_taira_activation_unbinds_a_wire() {
 /// publishes only what its successor relies on, so a dormant addition the release also compiles
 /// moves none of them.
 const PINNED_CHANGE_SET_IDS: [&str; 3] = [
-    "bbcd8210545b676995dd52bb2739297a84204d15a16bf414043af86228368151",
-    "452de7033b02707a826abe9c8ca1b2ca6900dec9700c6a79388d1677f4a6b7a9",
-    "b73260d26fb5ccd603c1453cb14cc83f305daba867701709a09e198461232af1",
+    "31687bf1d5d23bbeb68491e5581edfb6f66298a03df62af7d38eb6680017f567",
+    "bd395ef94865f469e983256cc1e0edb89ddcc99f9fe87c6794f3ccbcee678029",
+    "52ba6de979712a1e8d0bb28f10afa2f4b794992c93fbb187648d137c818f7559",
 ];
 
 #[test]

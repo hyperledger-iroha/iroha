@@ -9454,6 +9454,14 @@ fn checked_frame_payload<'a, T: NoritoSerialize>(
     bytes: &'a [u8],
     header: &core::Header,
 ) -> Result<&'a [u8], Error> {
+    checked_frame_payload_with_archive_limit::<T>(bytes, header, core::max_archive_len())
+}
+
+fn checked_frame_payload_with_archive_limit<'a, T: NoritoSerialize>(
+    bytes: &'a [u8],
+    header: &core::Header,
+    archive_limit: u64,
+) -> Result<&'a [u8], Error> {
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
             header.compression as u8,
@@ -9463,7 +9471,17 @@ fn checked_frame_payload<'a, T: NoritoSerialize>(
     if header.schema != norito::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
-    let payload_len = core::payload_len_to_usize(header.length)?;
+    let limit = archive_limit.min(usize::MAX as u64);
+    if header.length > limit {
+        return Err(Error::ArchiveLengthExceeded {
+            length: header.length,
+            limit,
+        });
+    }
+    let payload_len = usize::try_from(header.length).map_err(|_| Error::ArchiveLengthExceeded {
+        length: header.length,
+        limit,
+    })?;
     let padding = core::payload_alignment_padding_for::<T>();
     let slice = bytes
         .get(core::Header::SIZE..)
@@ -9816,9 +9834,69 @@ pub fn canonical_frame_payload<T: NoritoSerialize>(
     checked_frame_payload::<T>(bytes, &header)
 }
 
+/// Borrow one exact canonical frame using an explicit per-call archive bound.
+///
+/// This is the same envelope validation as [`canonical_frame_payload`], but
+/// replaces the process-default archive ceiling for this call only. The bound
+/// covers the uncompressed payload and cannot exceed the platform pointer width.
+/// It neither changes the global ceiling nor installs or relaxes decode budgets.
+/// Callers must decode the returned payload under their own [`DecodeLimits`],
+/// preserving any stricter enclosing limits, and validate its canonical encoding.
+/// No payload allocation or graph decoding occurs here.
+///
+/// # Errors
+/// Rejects a payload above `archive_limit`, or any invalid version, flags,
+/// compression, schema, exact padding, length or checksum.
+pub fn canonical_frame_payload_with_archive_limit<T: NoritoSerialize>(
+    bytes: &[u8],
+    expected_flags: u8,
+    archive_limit: u64,
+) -> Result<&[u8], Error> {
+    let header = checked_canonical_header(bytes)?;
+    if header.flags != expected_flags {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    checked_frame_payload_with_archive_limit::<T>(bytes, &header, archive_limit)
+}
+
 #[cfg(test)]
 mod canonical_frame_payload_tests {
     use super::*;
+
+    #[test]
+    fn explicit_archive_bound_is_local_and_preserves_exact_envelope_checks() {
+        let before = core::max_archive_len();
+        let value = 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10_u128;
+        let bytes = encode_canonical(&value).unwrap();
+        let flags = core::V1_LAYOUT_FLAGS;
+        let bounded = |bytes: &[u8], limit| {
+            canonical_frame_payload_with_archive_limit::<u128>(bytes, flags, limit)
+                .map(|payload| payload.to_vec())
+        };
+        assert_eq!(bounded(&bytes, 16).unwrap(), value.to_le_bytes());
+        assert!(matches!(
+            bounded(&bytes, 15),
+            Err(Error::ArchiveLengthExceeded { .. })
+        ));
+        assert_eq!(core::max_archive_len(), before);
+        assert_eq!(
+            canonical_frame_payload::<u128>(&bytes, flags).unwrap(),
+            value.to_le_bytes()
+        );
+        assert!(canonical_frame_payload_with_archive_limit::<u64>(&bytes, flags, 16).is_err());
+        assert!(canonical_frame_payload_with_archive_limit::<u128>(&bytes, flags ^ 1, 16).is_err());
+        for index in 0..bytes.len() {
+            let mut changed = bytes.clone();
+            changed[index] ^= 0x80;
+            assert!(bounded(&changed, 16).is_err(), "changed byte {index}");
+        }
+        let mut suffix = bytes.clone();
+        suffix.push(0);
+        assert!(bounded(&suffix, 16).is_err());
+        for end in 0..bytes.len() {
+            assert!(bounded(&bytes[..end], 16).is_err());
+        }
+    }
 
     #[test]
     fn borrowed_envelope_preserves_source_and_checks_exact_schema_padding_and_flags() {

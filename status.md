@@ -81,10 +81,11 @@ complete original funded execution graph remain open.
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
 The committee fixture explicitly pays for the first E+1 successor before authenticating
 preparation: stopping exactly at the E selection boundary cannot supply E+1 evidence.
-The five-process real-peer double-sign slash passes on one frozen working-tree candidate.
-Full paid 4→7→4, a slash while unbonding, withdrawal, return-boundary liveness and restart
-qualification remain open. Both rotation ceremonies must finish within their original transport and
-overall runtime deadlines on the rebuilt candidate. Lane retirement component controls
+Paid real-XOR 4→7→4 passes on real peers on one frozen working-tree candidate with
+`local-release` daemons: both rotation ceremonies within their original transport and runtime
+deadlines, a slash while unbonding, return-boundary liveness, withdrawal of the slashed
+remainder, all-seat restarts and consumed-plan rejection. The five-process double-sign slash
+passes on the same binaries. Lane retirement component controls
 now cover original reads, publications,
 historical opening joins, final-reader release and authentication/refusal propagation.
 Physical retirement and complete retained-history dependency closure remain open;
@@ -432,11 +433,10 @@ remains under qualification. Later Privacy source additions have a separate
 development libtest build and registry discovery (2,541 tests, 65 ignored,
 433 dep-info inputs). The latest focused Privacy validation lists 2,628 tests,
 including 2,560 ordinary cases and 68 ignores. All original 65 ignores remain;
-three additional ignores are reviewed cost diagnostics. The earlier
-ordinary suite closed naturally with 2,424 passes, 52 failures and 65 ignores,
-with concurrent source changes. All 52 failed cases retain ordinary coverage
-and require current-source validation. Full current ordinary and merged-source
-qualification remain open. The derive library, strict JSON
+three additional ignores are reviewed cost diagnostics. On a frozen copy of the
+2026-11-13 working tree the full ordinary library suite passes: 3,321 tests, no
+failures, 159 ignored. Merged-source qualification on a committed candidate
+remains open. The derive library, strict JSON
 and UI regressions pass, preserving diagnostics.
 SDK custody and genuine proving qualification follow the canonical G1, Advance
 and PIPA owners; their bridge, SDK and ledger integration remains open. FASTPQ
@@ -463,9 +463,9 @@ Compiler/toolchain, all 14 ABI/IVM phases, direct SDK consumers and workspace
 qualification remain open. Core ZK requires current strict default/no-default
 libraries, test-feature library/group coverage and canonical proof-owner and
 consumer checks. Its retired real-proof-harness feature is not a target.
-FASTPQ's ordinary runtime and raw-field regression remain pending. Privacy's
-previous failures remain ordinary tests and require current regressions followed
-by the full ordinary suite with stock ignores retained.
+FASTPQ's library and integration tests pass on the 2026-11-13 working-tree copy;
+its raw-field regression remains pending. The full ordinary Privacy suite passes on
+the same copy.
 
 The generic Norito array correction is applied and formatted, preserving explicit
 raw-field layouts and charging actual owned allocations once. Complete
@@ -516,11 +516,11 @@ passes.
 ## Remaining production risks
 
 - **Consensus/staking:** complete [Sumeragi S1–S9](specs/sumeragi_goals.md), signed
-  RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
-  custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
-  with restart, exits, a slash while unbonding and withdrawal of the slashed
-  remainder: integrated in the real-peer scenarios, not yet executed on one unchanged
-  candidate; the focused real-peer double-sign slash passes. Funded staking rewards need an authentically aged network (thirty days of
+  RS16 availability at whole-node/network scope, DS-local State/AMX and E+2/beacon
+  custody. [Paid 4→7→4 transitions](specs/staking_validator_completion.md) with
+  restart, exits, a slash while unbonding and withdrawal of the slashed remainder pass
+  on one frozen working-tree candidate; the committed release candidate and the
+  retention and missing-signer scenarios still need their runs. Funded staking rewards need an authentically aged network (thirty days of
   enactment notice and a closed earning month); a disposable run cannot qualify them.
 - **Privacy/crypto:** the joint X509 maximum diagnostic proof passes independent
   verification within the unchanged size and 12 GiB RSS limits. Its 300-second

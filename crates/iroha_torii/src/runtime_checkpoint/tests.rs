@@ -6,7 +6,9 @@ use tower::ServiceExt as _;
 
 fn fixture() -> (tempfile::TempDir, SharedAppState) {
     let directory = tempfile::tempdir().unwrap();
-    let mut app = crate::mk_app_state_for_tests();
+    // Operator routes validate the API token only after native execution established the
+    // listener's authenticated root scope, so the fixture executes its signed genesis first.
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     let root = iroha_fs::OwnerDirectory::open(directory.path()).unwrap();
     // These opaque artifact bytes exercise transport only, never native State acceptance.
     for (parents, names) in [
@@ -186,13 +188,12 @@ async fn runtime_checkpoint_routes_authenticate_bound_inventory_and_retain_respo
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let descriptor: transport::PackageDescriptorV1 = norito::json::from_slice(
-        &axum::body::to_bytes(response.into_body(), METADATA_BYTES)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), METADATA_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let descriptor: transport::PackageDescriptorV1 = norito::json::from_slice(&body).unwrap();
     let inventory = descriptor.inventory_sha256;
     let artifact_request = norito::json::to_vec(&ArtifactRequest {
         inventory_sha256: inventory,
@@ -411,4 +412,44 @@ fn runtime_checkpoint_source_rechecks_authentic_current_floor_and_independent_pi
             assert!(matches!(validate_source(&app, &descriptor), Err(WorkError::HistoricalFloor)), "the same previously allowed package is refused after the authentic floor advances");
         });
     }).unwrap().join().unwrap();
+}
+
+#[test]
+fn runtime_checkpoint_requests_decode_from_norito_and_json() {
+    // NoritoJson admits either body format, so every request body carries both codecs.
+    let range = RangeRequest {
+        inventory_sha256: [7; 32],
+        index: 3,
+        offset: 4096,
+        length: 512,
+    };
+    let decoded: RangeRequest =
+        norito::decode_from_bytes(&norito::to_bytes(&range).expect("range Norito")).expect("range");
+    assert_eq!(
+        (
+            decoded.inventory_sha256,
+            decoded.index,
+            decoded.offset,
+            decoded.length
+        ),
+        ([7; 32], 3, 4096, 512)
+    );
+    let from_json: RangeRequest =
+        norito::json::from_str(&norito::json::to_json(&range).expect("range JSON")).expect("range");
+    assert_eq!((from_json.offset, from_json.length), (4096, 512));
+    let artifact = ArtifactRequest {
+        inventory_sha256: [1; 32],
+        index: 9,
+    };
+    let artifact: ArtifactRequest =
+        norito::decode_from_bytes(&norito::to_bytes(&artifact).expect("artifact Norito"))
+            .expect("artifact");
+    assert_eq!((artifact.inventory_sha256, artifact.index), ([1; 32], 9));
+    let finish = FinishRequest {
+        inventory_sha256: [2; 32],
+    };
+    let finish: FinishRequest =
+        norito::decode_from_bytes(&norito::to_bytes(&finish).expect("finish Norito"))
+            .expect("finish");
+    assert_eq!(finish.inventory_sha256, [2; 32]);
 }

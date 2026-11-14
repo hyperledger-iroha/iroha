@@ -243,6 +243,85 @@ mod tests {
         );
     }
 
+    /// Split one canonical V1 record into the payloads of its length-prefixed fields.
+    fn v1_fields(mut remaining: &[u8]) -> Vec<&[u8]> {
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(remaining, 0x02)
+                .expect("canonical V1 field prefix");
+            let (field, rest) = remaining[prefix..].split_at(len);
+            fields.push(field);
+            remaining = rest;
+        }
+        fields
+    }
+
+    #[test]
+    fn frozen_quota_slots_v1_match_original_commitment_bytes_and_position() {
+        // Independently encoded from the first-release defaults (64 GiB and 16 384 chunks per
+        // uploaded model, 1 024 ingests and 64 GiB per account and quota window) using
+        // norito.md: each field is a compact length followed by its little-endian scalar. These
+        // literals were not captured from the implementation under test.
+        let uploaded_models = hex::decode("0800000000100000000400400000").unwrap();
+        let ingest_count = hex::decode("0004000000000000").unwrap();
+        let ingest_bytes = hex::decode("0000000010000000").unwrap();
+        let nexus = Nexus::default();
+        let preimage = nexus_consensus_policy_preimage_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            None,
+        )
+        .unwrap();
+        let fields = v1_fields(&preimage);
+        assert_eq!(fields.len(), 21, "the original V1 field count is frozen");
+        assert_eq!(
+            fields[8], uploaded_models,
+            "the uploaded-model slots stay after shared leases and before endorsement"
+        );
+        let da = v1_fields(fields[20]);
+        assert_eq!(da.len(), 17, "the original V1 DA field count is frozen");
+        assert_eq!(
+            da[7], ingest_count,
+            "the ingest count slot follows the window"
+        );
+        assert_eq!(
+            da[8], ingest_bytes,
+            "the ingest byte slot follows the count"
+        );
+
+        // The Nexus/AMX context carries the same two DA slots, as protocol-fixed fields.
+        use iroha_data_model::nexus::{NexusAmxContextFieldOriginV1, nexus_amx_context_fields_v1};
+        let context = sumeragi_nexus_amx_context_preimage(
+            &nexus,
+            Some(&nexus.fees),
+            &Pipeline::default(),
+            &[],
+            &[],
+        );
+        let fields = nexus_amx_context_fields_v1(&context).expect("canonical context");
+        for (path, value) in [
+            ("nexus.da.ingest_quota_max_count_per_account", "1024"),
+            ("nexus.da.ingest_quota_max_bytes_per_account", "68719476736"),
+        ] {
+            let field = fields
+                .iter()
+                .find(|field| field.path == path)
+                .unwrap_or_else(|| panic!("{path} is a context field"));
+            assert_eq!(field.value, value, "{path}");
+            assert_eq!(
+                field.origin,
+                NexusAmxContextFieldOriginV1::Genesis,
+                "{path}"
+            );
+        }
+        let slots = NexusConsensusQuotaSlotsV1::FROZEN;
+        assert_eq!(slots.max_plaintext_bytes_per_model, 64 << 30);
+        assert_eq!(slots.max_chunk_count_per_model, 16_384);
+        assert_eq!(slots.ingest_quota_max_count_per_account, 1_024);
+        assert_eq!(slots.ingest_quota_max_bytes_per_account, 64 << 30);
+    }
+
     #[test]
     fn private_sidecar_capacity_does_not_change_payment_consensus_identity() {
         let baseline = Nexus::default();
@@ -1936,6 +2015,9 @@ mod tests {
                     "root.",
                     "staged.",
                     "pipeline.",
+                    // Frozen first-release slots: the quotas are committed policy.
+                    "nexus.da.ingest_quota_max_count_per_account",
+                    "nexus.da.ingest_quota_max_bytes_per_account",
                 ]
                 .iter()
                 .any(|prefix| field.path.starts_with(prefix))

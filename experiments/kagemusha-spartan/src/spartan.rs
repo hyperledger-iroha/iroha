@@ -31,7 +31,7 @@ use crate::r1cs::{self, Circuit, Instance, Rel, Shape, ToyCircuit, Witness};
 
 #[cfg(test)]
 #[path = "phase1_tests.rs"]
-mod phase1_tests;
+pub(crate) mod phase1_tests;
 
 #[cfg(test)]
 #[path = "commitment_budget_tests.rs"]

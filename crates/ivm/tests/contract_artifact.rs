@@ -322,7 +322,11 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         version_minor: 1,
         mode,
         // A ZK header must declare its trace bound; ordinary headers carry none.
-        max_cycles: if mode & ivm::ivm_mode::ZK != 0 { 1_000 } else { 0 },
+        max_cycles: if mode & ivm::ivm_mode::ZK != 0 {
+            1_000
+        } else {
+            0
+        },
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {

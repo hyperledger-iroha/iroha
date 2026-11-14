@@ -292,7 +292,7 @@ pub struct UniformCircuit<F> {
     bounds: Vec<usize>,
     /// Trailing fixed rows and their values (row major).
     fixed_rows: usize,
-    fixed_values: Vec<F>,
+    fixed_values: FixedValues<F>,
     /// The wallet row (the last fixed row) and its commitment's io index.
     wallet_rows: usize,
     wallet_io: Option<usize>,
@@ -366,11 +366,14 @@ pub struct UniformCircuit<F> {
 
 #[path = "program_artifact.rs"]
 mod program_artifact;
+#[path = "fixed_values.rs"]
+mod fixed_values;
+use fixed_values::FixedValues;
 #[path = "public_retention.rs"]
 mod public_retention;
 #[path = "proving_memory.rs"]
 mod proving_memory;
-pub use proving_memory::ProvingMemoryAccounting;
+pub use proving_memory::{PhaseMemoryAccounting, ProvingMemoryAccounting};
 
 /// A linear combination's value at slot `i` of array `a`, from the arrays'
 /// values (multiplicities are counted before the layout exists).
@@ -2283,7 +2286,7 @@ impl<F: Scalar> UniformCircuit<F> {
             );
             row[0] = F::ONE;
         }
-        let fixed_values = w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec();
+        let fixed_values = FixedValues::Dense(w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec());
         let _ = n_user;
         let circuit = UniformCircuit {
             verifier_only: None,
@@ -3123,7 +3126,7 @@ impl<F: Scalar> UniformCircuit<F> {
         // The wallet's omitted row is instance-owned and issuer-certified.
         // fixed_values contains only the trusted global tail.
         word(&mut h,self.fixed_values.len());
-        for value in &self.fixed_values {h.update(&value.to_repr());}
+        self.fixed_values.hash_into(&mut h);
         word(&mut h,self.late_io.len());
         for &(io,a,c,i) in &self.late_io {for v in [io,a,c,i]{word(&mut h,v);}}
         word(&mut h,self.link_io.len());
@@ -5198,7 +5201,7 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         self.fixed_rows
     }
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
-        self.fixed_values.clone()
+        self.fixed_values.expanded()
     }
     fn wallet_rows(&self) -> usize {
         self.wallet_rows

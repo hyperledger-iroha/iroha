@@ -39,6 +39,11 @@
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
+            android:name="org.hyperledger.iroha.sdk.offline.wallet.KagemushaSpartanRuntimeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
             android:name="org.hyperledger.iroha.sdk.offline.wallet.KagemushaSpartanConfirmationActivity"
             android:exported="false"
             android:excludeFromRecents="true"

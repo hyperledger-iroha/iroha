@@ -161,6 +161,11 @@ pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitnes
     };
     let input = &boot.input;
     let c = &input.credential;
+    // Reserve the first post-genesis block for this exact Load event. The
+    // `new` fixture already certifies H2 and would make next_header() select H3.
+    let mut consensus =
+        NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
+    let header = consensus.next_header();
     let receipt = KagemushaWalletLoadReceiptV1 {
         version: 1,
         scheme_id: c.body[2..34].try_into().unwrap(),
@@ -172,7 +177,7 @@ pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitnes
         online_charge: 0,
         charge_quote: [0; 32],
         transaction_hash: [0x56; 32],
-        block_height: 2,
+        block_height: header.height.get(),
         payer_account_digest: c.body[98..130].try_into().unwrap(),
     };
     let events = [EventBox::Data(
@@ -183,8 +188,7 @@ pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitnes
         .into(),
     )];
     let tree: MerkleTree<EventBox> = events.iter().map(HashOf::new).collect();
-    let mut consensus = NativeFinalityFixture::new_with_explicit_parameters();
-    let block = consensus.block_with_submitted_work(consensus.next_header());
+    let block = consensus.block_with_submitted_work(header);
     let proof = consensus.certify_with_events(block, &events);
     let finality = KagemushaWalletLoadFinalityV1 {
         version: 1,
@@ -244,6 +248,56 @@ pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitnes
             .map_err(|e| Error::Rejected(e.to_string()))?
             .into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
+
+    #[test]
+    fn load_fixture_verifies_exact_receipt_height_and_event() {
+        let chain = crate::chain_fixture::new(&crate::ipa::Gens::<iroha_pasta::Eq>::new(4096));
+        let bootstrap = ExactOperationWitness::Bootstrap(Box::new(BootstrapWitness {
+            scheme: chain.sender_context.root.scheme,
+            root: chain.sender_context.root.root.clone(),
+            relation: chain.sender_context.relation,
+            input: chain.sender_bootstrap,
+        }));
+        let load = load100(&bootstrap).expect("actual fixture Load");
+        let ExactOperationWitness::Load {
+            step,
+            receipt_original,
+            finality_original,
+        } = &load
+        else {
+            unreachable!()
+        };
+        let receipt = KagemushaWalletLoadReceiptV1::decode_canonical(&receipt_original).unwrap();
+        let evidence = KagemushaWalletLoadFinalityV1::decode_canonical(&finality_original).unwrap();
+        let fixture = NativeFinalityFixture::new_with_explicit_parameters();
+        let mut verifier = SumeragiCommitVerifierV1::new(&fixture.verifier()).unwrap();
+        evidence
+            .verify_with(&mut verifier, &receipt)
+            .expect("real checkpoint-rooted BLS and exact event inclusion");
+        assert_eq!(receipt.block_height, 2);
+        assert_eq!(step.ordinary, receipt.transcript().unwrap());
+        assert_eq!(step.ordinary, chain.load.ordinary);
+        assert_eq!(step.after_core, chain.load.after_core);
+        assert_eq!(step.after_rest, chain.load.after_rest);
+        let mut changed = receipt;
+        changed.block_height += 1;
+        let mut changed_evidence = evidence;
+        changed_evidence.receipt_digest = changed.receipt_digest().unwrap();
+        let mut fresh = SumeragiCommitVerifierV1::new(&fixture.verifier()).unwrap();
+        let error = changed_evidence
+            .verify_with(&mut fresh, &changed)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("certificate height differs"),
+            "{error}"
+        );
+    }
 }
 
 /// Exact Request body for an isolated self-transfer. The caller obtains its

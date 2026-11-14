@@ -19,6 +19,72 @@ fn failure(reason: impl Into<String>) -> CatalogError {
     }
 }
 
+/// Recompose a touched-storage list compiled over the baseline family for another family: keep
+/// the storage the definition adds itself, take every namespace the family's bundle provides from
+/// that bundle (Ironwood replaces several storage owners), and add the capture's own storage, so
+/// the selection never installs one namespace twice.
+fn recompose_touched(
+    definitions: &BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    touched: &mut Vec<DefinitionId>,
+    inherited: &[DefinitionId],
+    capture: DefinitionId,
+) {
+    let inherited_namespaces: BTreeSet<&str> = inherited
+        .iter()
+        .filter_map(|id| storage_namespace(definitions, id))
+        .collect();
+    touched.retain(|id| {
+        storage_namespace(definitions, id)
+            .is_none_or(|namespace| !inherited_namespaces.contains(namespace))
+    });
+    touched.extend(inherited.iter().copied().chain([capture]));
+    *touched = sorted(core::mem::take(touched));
+}
+
+/// Rebind interfaces invoked by a definition compiled over the baseline family to the interface
+/// the family's bundle provides for the same wire ID (Ironwood republishes several), keeping the
+/// invoked wire set unchanged, so the selection never activates two interfaces for one wire.
+fn rebind_invokes(
+    definitions: &BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    invokes: &mut Vec<DefinitionId>,
+    family: &[DefinitionId],
+) {
+    let by_wire: BTreeMap<&str, DefinitionId> = family
+        .iter()
+        .filter_map(|id| interface_wire(definitions, id).map(|wire| (wire, *id)))
+        .collect();
+    for id in invokes.iter_mut() {
+        if let Some(replacement) =
+            interface_wire(definitions, id).and_then(|wire| by_wire.get(wire))
+        {
+            *id = *replacement;
+        }
+    }
+    *invokes = sorted(core::mem::take(invokes));
+}
+
+/// Wire ID of a compiled interface definition; `None` for every other definition kind.
+fn interface_wire<'a>(
+    definitions: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    id: &DefinitionId,
+) -> Option<&'a str> {
+    match definitions.get(id) {
+        Some(DefinitionDescriptorV1::Interface(interface)) => Some(interface.wire_id.as_str()),
+        _ => None,
+    }
+}
+
+/// Namespace of a compiled storage definition; `None` for every other definition kind.
+fn storage_namespace<'a>(
+    definitions: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    id: &DefinitionId,
+) -> Option<&'a str> {
+    match definitions.get(id) {
+        Some(DefinitionDescriptorV1::Storage(storage)) => Some(storage.namespace.as_str()),
+        _ => None,
+    }
+}
+
 impl ReleaseCatalog {
     /// Compile every currently supported native service family before publishing migrations.
     pub(super) fn compile_native_game_capture(&mut self) -> Result<(), CatalogError> {
@@ -106,9 +172,9 @@ impl ReleaseCatalog {
                     (&mut implementation.writes, &bundle.writes),
                     (&mut implementation.scans, &bundle.scans),
                 ] {
-                    touched.extend(inherited.iter().copied().chain([storage]));
-                    *touched = sorted(core::mem::take(touched));
+                    recompose_touched(&original, touched, inherited, storage);
                 }
+                rebind_invokes(&original, &mut implementation.invokes, &bundle.invokes);
                 let mut prerequisite = prerequisite.clone();
                 prerequisite.implementation =
                     self.publish(DefinitionDescriptorV1::Implementation(implementation))?;
@@ -146,8 +212,7 @@ impl ReleaseCatalog {
                 (&mut implementation.writes, &bundle.writes),
                 (&mut implementation.scans, &bundle.scans),
             ] {
-                touched.extend(inherited.iter().copied().chain([storage]));
-                *touched = sorted(core::mem::take(touched));
+                recompose_touched(&original, touched, inherited, storage);
             }
             implementation.events = bundle.events;
             implementation.permissions = bundle.permissions;
@@ -155,6 +220,7 @@ impl ReleaseCatalog {
             implementation
                 .invokes
                 .retain(|id| !base.interfaces.values().any(|old| old == id));
+            rebind_invokes(&original, &mut implementation.invokes, &bundle.invokes);
             implementation.invokes.extend(bundle.invokes);
             implementation.invokes.extend(interfaces.values().copied());
             implementation.invokes = sorted(implementation.invokes);
@@ -591,6 +657,56 @@ mod tests {
             .unwrap()
             .reference_closure = [91; 32];
         assert!(!selected_capture(&selected, &changed));
+    }
+
+    #[test]
+    fn recomposed_capture_and_prerequisites_touch_each_storage_namespace_once() {
+        // Over Ironwood the capture and its prerequisites inherit the replaced storage owners,
+        // never both copies.
+        let catalog = release_catalog().unwrap();
+        assert!(!catalog.native_game_capture_compositions.is_empty());
+        for composition in catalog.native_game_capture_compositions.values() {
+            for prerequisite in composition
+                .prerequisites
+                .iter()
+                .chain(core::iter::once(&composition.addition))
+            {
+                let Some(DefinitionDescriptorV1::Implementation(implementation)) =
+                    catalog.definitions.get(&prerequisite.implementation)
+                else {
+                    panic!(
+                        "{}: recomposed prerequisite is not compiled",
+                        prerequisite.module
+                    );
+                };
+                let mut wires = BTreeSet::new();
+                for id in &implementation.invokes {
+                    if let Some(wire) = interface_wire(&catalog.definitions, id) {
+                        assert!(
+                            wires.insert(wire),
+                            "{}: {wire} is invoked through two interfaces",
+                            prerequisite.module
+                        );
+                    }
+                }
+                for touched in [
+                    &implementation.reads,
+                    &implementation.writes,
+                    &implementation.scans,
+                ] {
+                    let mut namespaces = BTreeSet::new();
+                    for id in touched {
+                        if let Some(namespace) = storage_namespace(&catalog.definitions, id) {
+                            assert!(
+                                namespaces.insert(namespace),
+                                "{}: {namespace} is touched twice",
+                                prerequisite.module
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

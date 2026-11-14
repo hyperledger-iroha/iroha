@@ -16,10 +16,10 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 
 #[path = "engine.rs"]
 pub(crate) mod engine;
-#[cfg(test)]
-pub(crate) use engine::test_full_chain_native;
 pub use engine::{NativeEngine, ParameterManifest};
-#[cfg(feature = "device-fixture")]
+#[cfg(test)]
+pub(crate) use engine::{test_full_chain_native, test_measure_chain_native};
+#[cfg(any(test, feature = "device-fixture"))]
 #[path = "native_device_fixture.rs"]
 pub mod device_fixture;
 #[cfg(test)]
@@ -74,21 +74,28 @@ impl ProgramBundle {
         if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
             return Err(Error::ResourceLimit);
         }
-        let view = norito::core::from_bytes_view(bytes)
-            .map_err(|_| Error::Malformed("program bundle frame"))?;
-        if view.flags() != norito::core::V1_LAYOUT_FLAGS {
-            return Err(Error::Malformed("program bundle layout"));
-        }
-        let bundle: Self = norito::decode_from_bytes_with_limits(
-            bytes,
-            norito::DecodeLimits::new(
-                MAX_PROGRAM_BUNDLE_BYTES,
-                MAX_PROGRAM_BUNDLE_BYTES,
-                2 * MAX_PROGRAM_BUNDLE_BYTES,
-                4 * MAX_PROGRAM_BUNDLE_BYTES,
-                16,
-            ),
-        )
+        let limits = norito::DecodeLimits::new(
+            MAX_PROGRAM_BUNDLE_BYTES,
+            MAX_PROGRAM_BUNDLE_BYTES,
+            2 * MAX_PROGRAM_BUNDLE_BYTES,
+            4 * MAX_PROGRAM_BUNDLE_BYTES,
+            16,
+        );
+        // Use the object-specific archive bound without changing Norito's
+        // process default; the payload still inherits stricter caller budgets.
+        let bundle: Self = norito::core::with_decode_limits(limits, || {
+            let payload = norito::canonical_frame_payload_with_archive_limit::<Self>(
+                bytes,
+                norito::core::V1_LAYOUT_FLAGS,
+                MAX_PROGRAM_BUNDLE_BYTES as u64,
+            )?;
+            let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
+            let (value, used) = norito::core::decode_field_canonical(payload)?;
+            if used != payload.len() {
+                return Err(norito::Error::LengthMismatch);
+            }
+            Ok(value)
+        })
         .map_err(|_| Error::Malformed("bounded program bundle"))?;
         if bundle.encode()? != bytes {
             return Err(Error::Malformed("canonical program bundle"));

@@ -1,10 +1,11 @@
-//! The committed content-bundle limits and settlement router inputs of a root
-//! (`specs/genesis_bound_node_configuration.md`, "Frozen-baseline constraint on G2";
-//! `specs/live_runtime_upgrades.md` §4, §6, §7.1).
+//! The committed content-bundle limits, settlement router inputs and uploaded-model and DA ingest
+//! quotas of a root (`specs/genesis_bound_node_configuration.md`, "Frozen-baseline constraint on
+//! G2"; `specs/live_runtime_upgrades.md` §4, §6, §7.1).
 //!
-//! The typed custom parameters `content_policy_v1` ([`ContentPolicyV1`]) and
-//! `settlement_router_policy_v1` ([`SettlementRouterPolicyV1`]) are behaviour this release adds
-//! after its frozen baseline. A root recognizes one only while its selection activates the
+//! The typed custom parameters `content_policy_v1` ([`ContentPolicyV1`]),
+//! `settlement_router_policy_v1` ([`SettlementRouterPolicyV1`]) and `nexus_quota_policy_v1`
+//! ([`NexusQuotaPolicyV1`]) are behaviour this release adds after its frozen baseline. A root
+//! recognizes one only while its selection activates the
 //! Parameter definition this release publishes for it ([`super::catalog::parameters`]) and no
 //! `Disabled` restriction names that definition. Recognition is never stored: every reader derives
 //! it from the exact selection and parameters version it reads, so a block, a view and both sides
@@ -38,13 +39,16 @@ use iroha_config::parameters::actual::{Content, Router, Settlement};
 use iroha_data_model::{
     content_policy::ContentPolicyV1,
     da::prelude::DaStripeLayout,
+    nexus_quota_policy::NexusQuotaPolicyV1,
     parameter::{CustomParameter, CustomParameterId, Parameters},
     runtime::definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},
     settlement_router_policy::SettlementRouterPolicyV1,
 };
 use mv::storage::StorageReadOnly as _;
 
-use super::catalog::parameters::{CONTENT_POLICY, ParameterAddition, SETTLEMENT_ROUTER_POLICY};
+use super::catalog::parameters::{
+    CONTENT_POLICY, NEXUS_QUOTA_POLICY, ParameterAddition, SETTLEMENT_ROUTER_POLICY,
+};
 use crate::{
     pipeline_gas_policy::{ParameterIngressError, ParameterRetentionError},
     state::{StateStorageAdmissionError, StateTransaction, WorldReadOnly, WorldTransaction},
@@ -93,9 +97,10 @@ impl Recognized {
 static CONTENT: LazyLock<Recognized> = LazyLock::new(|| Recognized::of(&CONTENT_POLICY));
 static SETTLEMENT_ROUTER: LazyLock<Recognized> =
     LazyLock::new(|| Recognized::of(&SETTLEMENT_ROUTER_POLICY));
+static NEXUS_QUOTAS: LazyLock<Recognized> = LazyLock::new(|| Recognized::of(&NEXUS_QUOTA_POLICY));
 
-fn all() -> [&'static Recognized; 2] {
-    [&*CONTENT, &*SETTLEMENT_ROUTER]
+fn all() -> [&'static Recognized; 3] {
+    [&*CONTENT, &*SETTLEMENT_ROUTER, &*NEXUS_QUOTAS]
 }
 
 /// The readers' identities of the typed parameter named `name`, if this release adds it.
@@ -115,6 +120,12 @@ pub fn content_recognized(selection: &RootSelectionV1) -> bool {
 #[must_use]
 pub fn settlement_router_recognized(selection: &RootSelectionV1) -> bool {
     SETTLEMENT_ROUTER.by(selection)
+}
+
+/// Whether the root running `selection` recognizes `nexus_quota_policy_v1`.
+#[must_use]
+pub fn nexus_quotas_recognized(selection: &RootSelectionV1) -> bool {
+    NEXUS_QUOTAS.by(selection)
 }
 
 /// The committed content-bundle limits of a root running `selection` with `parameters`, if it
@@ -151,6 +162,38 @@ pub fn settlement_router_policy(
             })
             .unwrap_or_else(SettlementRouterPolicyV1::protocol_default)
     })
+}
+
+/// The committed uploaded-model and DA ingest quotas of a root running `selection` with
+/// `parameters`, if it recognizes them; absent or malformed values read as in
+/// [`content_policy`].
+#[must_use]
+pub fn nexus_quota_policy(
+    selection: &RootSelectionV1,
+    parameters: &Parameters,
+) -> Option<NexusQuotaPolicyV1> {
+    NEXUS_QUOTAS.by(selection).then(|| {
+        NEXUS_QUOTAS
+            .stored(parameters)
+            .and_then(|custom| {
+                NexusQuotaPolicyV1::from_custom_parameter(custom).and_then(Result::ok)
+            })
+            .unwrap_or_else(NexusQuotaPolicyV1::protocol_default)
+    })
+}
+
+/// The uploaded-model and DA ingest quotas a root running `selection` with `parameters`
+/// applies: the committed quotas when the root recognizes them, the protocol default otherwise.
+///
+/// No node setting contributes. A block applies the value of its predecessor, frozen when the
+/// block is constructed ([`crate::state::StaticExecutionPolicy::nexus_quotas`]); a view applies
+/// the value of the State it reads.
+#[must_use]
+pub fn effective_nexus_quotas(
+    selection: &RootSelectionV1,
+    parameters: &Parameters,
+) -> NexusQuotaPolicyV1 {
+    nexus_quota_policy(selection, parameters).unwrap_or_else(NexusQuotaPolicyV1::protocol_default)
 }
 
 /// The content settings a root running `selection` with `parameters` applies: `installed`, the
@@ -418,6 +461,43 @@ pub(super) fn install(
         *wtx.parameters.get_mut() = successor;
     }
     Ok(())
+}
+
+/// Make the universal root of `world` recognize every typed committed parameter of this release,
+/// as the change set drafted under [`super::catalog::parameters::MODULE`] does at block start:
+/// publish the Parameter definitions, write their initial values and move the selection.
+///
+/// Fixtures only. A network recognizes a parameter only through a governed change set.
+///
+/// # Panics
+/// The release catalog cannot be built, the root already recognizes every parameter, or the
+/// activation does not apply to `world`'s selection.
+#[cfg(test)]
+pub(crate) fn activate_for_testing(world: &crate::state::World) {
+    let catalog = super::release_catalog().expect("release catalog");
+    // A change set's network scope does not shape the selection it produces.
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0; 32])),
+    );
+    let mut block = world.block();
+    let mut wtx = block
+        .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
+    let current = wtx.runtime_selection.get().clone();
+    let applied = {
+        let published = super::change_set::PublishedDefinitions(&wtx.runtime_definitions);
+        catalog
+            .parameter_activation(&current, &published, network, 1, [0; 32])
+            .expect("draft the parameter activation")
+            .apply(&current, &published)
+            .expect("the parameter activation applies")
+    };
+    for (definition, descriptor) in applied.published {
+        wtx.runtime_definitions.insert(definition, descriptor);
+    }
+    install(&mut wtx, &applied.selection, catalog, 1).expect("the initial values install");
+    *wtx.runtime_selection.get_mut() = applied.selection;
+    wtx.apply();
+    block.commit();
 }
 
 #[cfg(test)]

@@ -15004,32 +15004,18 @@ impl Execute for isi::RegisterSoracloudUploadedModelBundle {
                 .into(),
             ));
         }
-        if bundle.plaintext_bytes
-            > state_transaction
-                .nexus
-                .uploaded_models
-                .max_plaintext_bytes_per_model
-        {
+        // The committed quotas this block froze from its predecessor (`nexus_quota_policy_v1`).
+        let quotas = state_transaction.nexus_quotas;
+        if bundle.plaintext_bytes > quotas.max_uploaded_model_plaintext_bytes {
             return Err(invalid_parameter(format!(
-                "plaintext_bytes exceeds nexus.uploaded_models.max_plaintext_bytes_per_model ({})",
-                state_transaction
-                    .nexus
-                    .uploaded_models
-                    .max_plaintext_bytes_per_model
+                "plaintext_bytes exceeds the committed max_uploaded_model_plaintext_bytes ({})",
+                quotas.max_uploaded_model_plaintext_bytes
             )));
         }
-        if bundle.chunk_count
-            > state_transaction
-                .nexus
-                .uploaded_models
-                .max_chunk_count_per_model
-        {
+        if bundle.chunk_count > quotas.max_uploaded_model_chunks {
             return Err(invalid_parameter(format!(
-                "chunk_count exceeds nexus.uploaded_models.max_chunk_count_per_model ({})",
-                state_transaction
-                    .nexus
-                    .uploaded_models
-                    .max_chunk_count_per_model
+                "chunk_count exceeds the committed max_uploaded_model_chunks ({})",
+                quotas.max_uploaded_model_chunks
             )));
         }
         let bundle_key = (

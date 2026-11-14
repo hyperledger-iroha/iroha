@@ -389,11 +389,12 @@ pub(crate) mod tests {
         let digest = state.execution_policy_digest_v1().unwrap();
         let content = state.content_snapshot();
         let mut staged = state.block(genesis_header());
-        // The frozen baseline interprets neither name: a payload that is no
+        // The frozen baseline interprets none of these names: a payload that is no
         // policy at all is stored like any other custom parameter.
         for (name, payload) in [
             ("content_policy_v1", Json::new("not a policy")),
             ("settlement_router_policy_v1", Json::new(7_u32)),
+            ("nexus_quota_policy_v1", Json::new("not a policy")),
         ] {
             staged
                 .world
@@ -416,8 +417,16 @@ pub(crate) mod tests {
         assert!(state.settlement_engine.matches_router_config(
             &iroha_config::parameters::actual::Settlement::default().router
         ));
+        assert_eq!(
+            state.block(genesis_header()).nexus_quotas,
+            iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1::protocol_default()
+        );
         let parameters = state.world.parameters.view();
-        for name in ["content_policy_v1", "settlement_router_policy_v1"] {
+        for name in [
+            "content_policy_v1",
+            "settlement_router_policy_v1",
+            "nexus_quota_policy_v1",
+        ] {
             assert!(
                 parameters
                     .custom()

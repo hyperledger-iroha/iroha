@@ -70,34 +70,30 @@ fn fixed_field_bound(count: usize) -> Result<(), String> {
     }
     Ok(())
 }
-fn pack_fixed_fields<F: Scalar>(values: &[F]) -> Result<Vec<u8>, String> {
+fn pack_fixed_fields<F: Scalar>(values: &FixedValues<F>) -> Result<Vec<u8>, String> {
     fixed_field_bound(values.len())?;
     let mut bytes = Vec::new();
-    let mut start = 0;
-    while start < values.len() {
-        let zero = bool::from(values[start].is_zero());
-        let mut end = start + 1;
-        while end < values.len() && bool::from(values[end].is_zero()) == zero {
-            end += 1;
-        }
-        bytes.push(u8::from(!zero));
+    values.visit_runs::<String>(|count, literal| {
+        bytes.push(u8::from(literal.is_some()));
         bytes.extend_from_slice(
-            &u32::try_from(end - start)
+            &u32::try_from(count)
                 .map_err(|_| "fixed run bound")?
                 .to_le_bytes(),
         );
-        if !zero {
-            for value in &values[start..end] {
+        if let Some(literal) = literal {
+            for value in literal {
                 bytes.extend_from_slice(&value.to_repr());
             }
         }
-        start = end;
-    }
+        Ok(())
+    })?;
     Ok(bytes)
 }
-fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<Vec<F>, String> {
+fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<FixedValues<F>, String> {
     fixed_field_bound(count)?;
-    let mut fields = Vec::with_capacity(count);
+    let mut fields = Vec::new();
+    let mut spans = Vec::new();
+    let mut expanded = 0;
     let mut at = 0;
     let mut previous = None;
     while at < bytes.len() {
@@ -107,17 +103,20 @@ fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<Vec<F>, 
         let tag = bytes[at];
         let length = u32::from_le_bytes(bytes[at + 1..at + 5].try_into().unwrap()) as usize;
         at += 5;
-        if tag > 1 || previous == Some(tag) || length == 0 || length > count - fields.len() {
+        if tag > 1 || previous == Some(tag) || length == 0 || length > count - expanded {
             return Err("noncanonical fixed program run".into());
         }
         previous = Some(tag);
-        if tag == 0 {
-            fields.resize(fields.len() + length, F::ZERO);
-        } else {
+        if tag == 1 {
             let byte_count = length.checked_mul(32).ok_or("fixed literal byte bound")?;
             if byte_count > bytes.len() - at {
                 return Err("partial fixed program literal".into());
             }
+            spans.push(fixed_values::LiteralSpan {
+                start: expanded,
+                offset: fields.len(),
+                len: length,
+            });
             for value in bytes[at..at + byte_count].chunks_exact(32) {
                 let field = Option::<F>::from(F::from_repr(value.try_into().unwrap()))
                     .ok_or("noncanonical fixed program field")?;
@@ -128,11 +127,16 @@ fn unpack_fixed_fields<F: Scalar>(bytes: &[u8], count: usize) -> Result<Vec<F>, 
             }
             at += byte_count;
         }
+        expanded += length;
     }
-    if fields.len() != count {
+    if expanded != count {
         return Err("fixed program field count".into());
     }
-    Ok(fields)
+    Ok(FixedValues::Runs {
+        len: count,
+        spans: spans.into_boxed_slice(),
+        literals: fields.into_boxed_slice(),
+    })
 }
 impl<F: Scalar> UniformCircuit<F> {
     /// Serialize only exact public verification instructions and constants.
@@ -220,13 +224,7 @@ impl<F: Scalar> UniformCircuit<F> {
         if bytes.len() > MAX_PROGRAM_BYTES {
             return Err("public program exceeds device bound".into());
         }
-        let view = norito::core::from_bytes_view(bytes)
-            .map_err(|e| format!("public program frame: {e}"))?;
-        if view.flags() != norito::core::V1_LAYOUT_FLAGS {
-            return Err("public program layout".into());
-        }
-        let p: PublicProgram = norito::decode_from_bytes_with_limits(
-            bytes,
+        let p: PublicProgram = norito::core::with_decode_limits(
             norito::DecodeLimits::new(
                 MAX_PROGRAM_BYTES,
                 MAX_PROGRAM_BYTES,
@@ -234,6 +232,19 @@ impl<F: Scalar> UniformCircuit<F> {
                 4 * MAX_PROGRAM_BYTES,
                 16,
             ),
+            || {
+                let payload = norito::canonical_frame_payload_with_archive_limit::<PublicProgram>(
+                    bytes,
+                    norito::core::V1_LAYOUT_FLAGS,
+                    MAX_PROGRAM_BYTES as u64,
+                )?;
+                let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
+                let (value, used) = norito::core::decode_field_canonical(payload)?;
+                if used != payload.len() {
+                    return Err(norito::Error::LengthMismatch);
+                }
+                Ok(value)
+            },
         )
         .map_err(|e| format!("public program decode: {e}"))?;
         if encode(&p)? != bytes {
@@ -526,8 +537,10 @@ mod tests {
         assert_eq!(packed.operations.len(), c.plan().ops.len() * 12);
         assert_eq!(packed.constants.len(), c.plan().pool.len() * 32);
         assert_eq!(
-            unpack_fixed_fields::<F>(&packed.fixed, c.fixed_values.len()).unwrap(),
-            c.fixed_values
+            unpack_fixed_fields::<F>(&packed.fixed, c.fixed_values.len())
+                .unwrap()
+                .expanded(),
+            c.fixed_values.expanded()
         );
         assert!(
             bytes.len()
@@ -597,9 +610,11 @@ mod tests {
             vec![Fp::ONE; 4096],
             vec![Fp::ZERO, Fp::ONE, Fp::from(2), Fp::ZERO, Fp::ONE],
         ] {
-            let encoded = pack_fixed_fields(&values).unwrap();
+            let encoded = pack_fixed_fields(&FixedValues::Dense(values.clone())).unwrap();
             assert_eq!(
-                unpack_fixed_fields::<Fp>(&encoded, values.len()).unwrap(),
+                unpack_fixed_fields::<Fp>(&encoded, values.len())
+                    .unwrap()
+                    .expanded(),
                 values
             );
             assert_eq!(
@@ -608,7 +623,12 @@ mod tests {
                 encoded
             );
         }
-        assert_eq!(pack_fixed_fields(&vec![Fp::ZERO; 4096]).unwrap().len(), 5);
+        assert_eq!(
+            pack_fixed_fields(&FixedValues::Dense(vec![Fp::ZERO; 4096]))
+                .unwrap()
+                .len(),
+            5
+        );
         let zero = [0, 1, 0, 0, 0];
         for bad in [
             vec![0],
@@ -627,5 +647,125 @@ mod tests {
         }
         assert!(unpack_fixed_fields::<Fp>(&zero, 0).is_err());
         assert!(unpack_fixed_fields::<Fp>(&[], MAX_PROGRAM_BYTES / 32 + 1).is_err());
+    }
+
+    /// Read the actual eight-program closed profile. No compiler warm-up or
+    /// private witness is needed, and the retained artifact bytes are never changed.
+    #[test]
+    #[ignore = "requires saved authenticated full-backend-chain public programs"]
+    fn all_eight_saved_programs_preserve_bytes_digests_and_reduce_fixed_residency() {
+        let directory = std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("output/full-backend-chain/native-device")
+            });
+        let manifest_bytes = std::fs::read(directory.join("parameter-manifest.norito")).unwrap();
+        assert_eq!(
+            norito::core::from_bytes_view(&manifest_bytes)
+                .unwrap()
+                .flags(),
+            norito::core::V1_LAYOUT_FLAGS
+        );
+        let manifest: crate::native::ParameterManifest = norito::decode_from_bytes_with_limits(
+            &manifest_bytes,
+            norito::canonical_decode_limits(manifest_bytes.len()),
+        )
+        .unwrap();
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
+            assert_eq!(norito::to_bytes(&manifest).unwrap(), manifest_bytes);
+        }
+        let root = directory.parent().unwrap();
+        fn check<F: Scalar>(
+            path: &std::path::Path,
+            primary: bool,
+            expected: [u8; 32],
+        ) -> (u128, u128) {
+            let bytes = std::fs::read(path).unwrap();
+            let mut loaded = UniformCircuit::<F>::import_program(&bytes, primary).unwrap();
+            assert_eq!(
+                loaded.program_digest(),
+                expected,
+                "exact saved manifest program pin"
+            );
+            assert_eq!(
+                loaded.export_program().unwrap(),
+                bytes,
+                "unchanged canonical wire bytes"
+            );
+            let heap = loaded.fixed_values.heap_bytes();
+            let FixedValues::Runs {
+                spans,
+                literals,
+                len,
+            } = &loaded.fixed_values
+            else {
+                panic!("import must stay compact")
+            };
+            assert_eq!(
+                heap,
+                (spans.len() * std::mem::size_of::<fixed_values::LiteralSpan>()
+                    + literals.len() * std::mem::size_of::<F>()) as u128
+            );
+            let expanded_bytes = (*len * std::mem::size_of::<F>()) as u128;
+            eprintln!(
+                "fixed tail {}: logical_fields={} literals={} spans={} retained_bytes={} expanded_bytes={}",
+                path.file_name().unwrap().to_string_lossy(),
+                len,
+                literals.len(),
+                spans.len(),
+                heap,
+                expanded_bytes
+            );
+            let compact_accounting = loaded.proving_memory_accounting().retained_bytes;
+            // Keep the unchanged Circuit API honest and compare accounting with
+            // precisely the same program in its former dense representation.
+            let expanded = Circuit::fixed_values(&loaded, &loaded.shape);
+            let dense_heap = (expanded.capacity() * std::mem::size_of::<F>()) as u128;
+            loaded.fixed_values = FixedValues::Dense(expanded);
+            assert_eq!(
+                loaded.proving_memory_accounting().retained_bytes as u128 + heap,
+                compact_accounting as u128 + dense_heap,
+                "exact retained accounting delta"
+            );
+            assert_eq!(
+                loaded.program_digest(),
+                expected,
+                "identical dense logical digest"
+            );
+            assert_eq!(
+                loaded.export_program().unwrap(),
+                bytes,
+                "identical dense codec"
+            );
+            (heap, expanded_bytes)
+        }
+        let (mut heap, mut expanded) = (0, 0);
+        for kind in 0..4 {
+            for (h, e) in [
+                check::<Fp>(
+                    &root.join(format!("research-kind-{kind}-primary.norito")),
+                    true,
+                    manifest.primary[kind],
+                ),
+                check::<Fq>(
+                    &root.join(format!("research-kind-{kind}-secondary.norito")),
+                    false,
+                    manifest.secondary[kind],
+                ),
+            ] {
+                heap += h;
+                expanded += e;
+            }
+        }
+        eprintln!(
+            "all eight fixed tails: retained={heap} expanded={expanded} saved={}",
+            expanded - heap
+        );
+        assert!(
+            heap < expanded / 10,
+            "the actual closed profile must retain its measured sparse tails"
+        );
     }
 }

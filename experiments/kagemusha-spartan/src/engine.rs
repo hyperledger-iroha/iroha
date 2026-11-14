@@ -22,6 +22,10 @@ use iroha_data_model::{
 };
 use iroha_pasta::{Ep, Eq, Fq};
 
+#[cfg(test)]
+#[path = "engine_adversarial_tests.rs"]
+mod adversarial_tests;
+
 #[derive(Default)]
 pub struct NativeEngine {
     time: Option<Arc<dyn TimeSource>>,
@@ -686,7 +690,7 @@ fn check_constraints(
     );
     let c = PrivateCircuit(c);
     if let Some(source) = source {
-        let required = c.proving_memory_accounting().additional_peak_bytes as u64;
+        let required = c.preparation_memory_bytes();
         let available = source.available_memory_bytes()?;
         if available < required {
             return Err(Error::NotEnoughMemory {
@@ -717,6 +721,26 @@ fn check_constraints(
     }
 }
 impl NativeEngine {
+    fn require_stage_memory(&self, workspace: u64, cold_commitments: u64) -> Result<()> {
+        if let Some(source) = &self.time {
+            let required = workspace
+                .checked_add(cold_commitments)
+                .ok_or(Error::ResourceLimit)?
+                .checked_add(
+                    u64::try_from(iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES)
+                        .map_err(|_| Error::ResourceLimit)?,
+                )
+                .ok_or(Error::ResourceLimit)?;
+            let available = source.available_memory_bytes()?;
+            if available < required {
+                return Err(Error::NotEnoughMemory {
+                    required,
+                    available,
+                });
+            }
+        }
+        Ok(())
+    }
     fn require_minimum_memory(
         &self,
         parameters: &AuthenticatedParameters,
@@ -1352,29 +1376,14 @@ impl Engine for NativeEngine {
         {
             return Err(Error::AuthorityMismatch("operation compiled program"));
         }
-        // Both actual builders are resident. The primary prefix allocates no
-        // matrix plans; the secondary is dropped before the full primary proof.
-        // Only one circuit's additional workspace is live at either full proof.
-        // This accounted estimate is not a complete process peak
-        // (closures and allocator overhead remain opaque).
-        if let Some(source) = &self.time {
-            let required = cp
-                .proving_memory_accounting()
-                .additional_peak_bytes
-                .max(cs.proving_memory_accounting().additional_peak_bytes)
-                .checked_add(
-                    u64::try_from(iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES)
-                        .map_err(|_| Error::ResourceLimit)?,
-                )
-                .ok_or(Error::ResourceLimit)?;
-            let available = source.available_memory_bytes()?;
-            if available < required {
-                return Err(Error::NotEnoughMemory {
-                    required,
-                    available,
-                });
-            }
-        }
+        // Caller witnesses and both builders are already resident. Admit the
+        // actual next stage, then resample OS headroom before each full proof.
+        // S is dropped before P, so its released storage is available to P.
+        // These accounted workspaces exclude opaque closure/allocator overhead.
+        self.require_stage_memory(
+            cp.phase_memory_accounting().phase1_bytes,
+            p.generators.p.commitment_cache_bytes(&cp.shape, false),
+        )?;
         let d = spartan::prepare_linked_phase1(
             &cp.shape,
             &p.generators.p,
@@ -1384,6 +1393,10 @@ impl Engine for NativeEngine {
             &*cp,
         );
         let rlc = |_: &[u8; 32]| [0; 32];
+        self.require_stage_memory(
+            cs.phase_memory_accounting().additional_peak_bytes,
+            p.generators.s.commitment_cache_bytes(&cs.shape, true),
+        )?;
         let (ps, rho, r) = spartan::prove_linked_circuit(
             &cs.shape,
             &p.generators.s,
@@ -1398,6 +1411,10 @@ impl Engine for NativeEngine {
         // proof only increased memory; the completion needs its proof and IO.
         drop(ws);
         drop(cs);
+        self.require_stage_memory(
+            cp.phase_memory_accounting().additional_peak_bytes,
+            p.generators.p.commitment_cache_bytes(&cp.shape, true),
+        )?;
         let (pp, d2, _) = spartan::prove_linked_circuit(
             &cp.shape,
             &p.generators.p,
@@ -1533,12 +1550,40 @@ pub(crate) fn test_full_chain_native(
     pairs: &[full::UniformPair; 4],
     receiver_boot: &full::UniformPair,
     dimensions: ((usize, usize), (usize, usize)),
+    artifacts: &std::path::Path,
+) -> std::result::Result<(), String> {
+    test_chain_native(chain, pairs, receiver_boot, dimensions, artifacts, true)
+}
+
+/// Candidate measurement only; the selected layout must also pass the complete
+/// native containment test, including every independent invalid-payment case.
+#[cfg(test)]
+pub(crate) fn test_measure_chain_native(
+    chain: &crate::chain_fixture::Chain,
+    pairs: &[full::UniformPair; 4],
+    receiver_boot: &full::UniformPair,
+    dimensions: ((usize, usize), (usize, usize)),
+    artifacts: &std::path::Path,
+) -> std::result::Result<(), String> {
+    test_chain_native(chain, pairs, receiver_boot, dimensions, artifacts, false)
+}
+
+#[cfg(test)]
+fn test_chain_native(
+    chain: &crate::chain_fixture::Chain,
+    pairs: &[full::UniformPair; 4],
+    receiver_boot: &full::UniformPair,
+    dimensions: ((usize, usize), (usize, usize)),
+    artifacts: &std::path::Path,
+    complete_validation: bool,
 ) -> std::result::Result<(), String> {
     fn run(
         chain: &crate::chain_fixture::Chain,
         pairs: &[full::UniformPair; 4],
         receiver_boot: &full::UniformPair,
         dimensions: ((usize, usize), (usize, usize)),
+        artifacts: &std::path::Path,
+        complete_validation: bool,
     ) -> Result<()> {
         use iroha_data_model::sumeragi_finality::{
             SumeragiCommitVerifierV1, test_fixtures::NativeFinalityFixture,
@@ -1574,9 +1619,10 @@ pub(crate) fn test_full_chain_native(
             chain.sender_context.root.root.clone(),
             finality.clone(),
         )?;
+        adversarial_tests::reject_wrong_program_digests(&parameters, &manifest)?;
         let bundle_bytes = parameters.export_program_bundle()?;
-        if let Ok(path) = std::env::var("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS") {
-            let path = std::path::Path::new(&path);
+        {
+            let path = artifacts;
             std::fs::create_dir_all(path).map_err(|e| Error::Rejected(e.to_string()))?;
             for (name, bytes) in [
                 ("program-bundle.norito", bundle_bytes.as_slice()),
@@ -1785,8 +1831,31 @@ pub(crate) fn test_full_chain_native(
                 "native malformed Payment must burn ten",
             ));
         }
-        eprintln!("native full-chain: sealed prepare/finalize/verify/resume/retention passed");
+        if complete_validation {
+            adversarial_tests::burn_and_successors(
+                &engine,
+                &parameters,
+                chain,
+                &receiver,
+                &sender,
+                &actual_send,
+                &payment,
+            )?;
+            eprintln!("native full-chain: sealed prepare/finalize/verify/resume/retention passed");
+        } else {
+            eprintln!(
+                "native candidate measurement: positive Send/Receive and malformed-R Burn passed; full containment gate not run"
+            );
+        }
         Ok(())
     }
-    run(chain, pairs, receiver_boot, dimensions).map_err(|e| e.to_string())
+    run(
+        chain,
+        pairs,
+        receiver_boot,
+        dimensions,
+        artifacts,
+        complete_validation,
+    )
+    .map_err(|e| e.to_string())
 }

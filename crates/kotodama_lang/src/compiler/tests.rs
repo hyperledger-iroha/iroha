@@ -7201,8 +7201,16 @@ fn entry_spills_use_stack_frame() {
 /// Every syscall word emitted in an artifact's code section, in program order.
 fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
     let parsed = ProgramMetadata::parse(bytes).expect("parse metadata");
-    bytes[parsed.code_offset..]
-        .as_chunks::<4>()
+    code_syscalls(&bytes[parsed.code_offset..])
+}
+/// Every syscall word emitted in an artifact compiled under `host_policy`, in program order.
+fn emitted_syscalls_for(bytes: &[u8], host_policy: crate::SyscallPolicy) -> Vec<u32> {
+    let parsed = ProgramMetadata::parse_for_policy(bytes, host_policy).expect("parse metadata");
+    code_syscalls(&bytes[parsed.code_offset..])
+}
+/// Every syscall word in a code section, in program order.
+fn code_syscalls(code: &[u8]) -> Vec<u32> {
+    code.as_chunks::<4>()
         .0
         .iter()
         .filter_map(|word| {
@@ -7513,6 +7521,11 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
                     | Builtin::CreateNftsForAllUsers
                     | Builtin::SubscriptionBill
                     | Builtin::SubscriptionRecordUsage
+                    // Runtime obligation calls compile only under the runtime-lifecycle host
+                    // profile; every_builtin_codegen_matches_its_registry_operation_syscalls
+                    // checks their syscalls there.
+                    | Builtin::RegisterRuntimeObligation
+                    | Builtin::CompleteRuntimeObligation
             )
         {
             assert!(
@@ -7561,19 +7574,37 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         DataSpaceId dataspace, DomainId domain, Json value, Name key, bytes evidence, NftId nft, \
         Option<quantity> cap, Option<string> note, bool enabled, int quorum, quantity amount, \
         string name";
-    let compile = |body: &str| {
+    let compile = |body: &str, host_policy: crate::SyscallPolicy| {
         let source = format!(
             "seiyaku Probe {{ permission ProbeAccess; error enum ProbeError {{ Rejected = 1 }} \
              kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ {body} }} }}"
         );
-        Compiler::new()
-            .compile_source(&source)
-            .map(|bytes| emitted_syscalls(&bytes))
+        Compiler::new_with_options(CompilerOptions {
+            host_policy,
+            ..CompilerOptions::default()
+        })
+        .compile_source(&source)
+        .map(|bytes| emitted_syscalls_for(&bytes, host_policy))
     };
-    let baseline = compile("")
-        .expect("empty probe compiles")
-        .into_iter()
-        .collect::<HashSet<_>>();
+    // Runtime obligation calls compile only under the runtime-lifecycle host profile.
+    let host_policy = |builtin: Builtin| {
+        if matches!(
+            builtin,
+            Builtin::RegisterRuntimeObligation | Builtin::CompleteRuntimeObligation
+        ) {
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle
+        } else {
+            CompilerOptions::default().host_policy
+        }
+    };
+    let baseline_for = |host_policy: crate::SyscallPolicy| {
+        compile("", host_policy)
+            .expect("empty probe compiles")
+            .into_iter()
+            .collect::<HashSet<_>>()
+    };
+    let baseline = baseline_for(CompilerOptions::default().host_policy);
+    let lifecycle_baseline = baseline_for(crate::SyscallPolicy::AbiV1RuntimeLifecycle);
     // Pointer publication, normalization and encoding, heap allocation,
     // checked `int` narrowing and its trap are compiler-owned plumbing unless
     // the builtin declares them as its operation.
@@ -7640,7 +7671,13 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         } else {
             format!("let _probe = {call};")
         };
-        let emitted = match compile(&statement) {
+        let policy = host_policy(builtin);
+        let baseline = if policy == crate::SyscallPolicy::AbiV1RuntimeLifecycle {
+            &lifecycle_baseline
+        } else {
+            &baseline
+        };
+        let emitted = match compile(&statement, policy) {
             Ok(emitted) => emitted,
             Err(error) => {
                 failures.push(format!(

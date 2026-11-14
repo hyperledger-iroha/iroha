@@ -732,7 +732,8 @@ pub(crate) fn kura_read_attempt_error<E>(
 /// Scoped JSON errors delegate to the existing exact active-observer classifier. Rejected
 /// scope tags remain unchanged; a saved sibling error cannot gain retry authority from a fresh
 /// refusal. Malformed input, intrinsic parser bounds and recursive depth remain completed errors.
-pub(crate) fn json_decode_attempt_error<E>(
+/// The node's runtime-checkpoint receiver classifies its transport JSON with the same rule.
+pub fn json_decode_attempt_error<E>(
     error: norito::json::Error,
     rejected: impl FnOnce(norito::json::Error) -> E,
 ) -> ExecutionAttemptError<E> {

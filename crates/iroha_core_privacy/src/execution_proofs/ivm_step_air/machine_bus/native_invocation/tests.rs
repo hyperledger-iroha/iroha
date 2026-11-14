@@ -141,7 +141,7 @@ fn public_scalars_literals_and_memory_compose_with_original_root_return_and_hist
         enc::encode_literal(wide::memory::LDI64, 5, 1),
     ];
     body.extend((u8::MIN..=u8::MAX).filter_map(|opcode| {
-        let word = enc::encode_rr(opcode, 6, 4, 5);
+        let word = instructions::tests::canonical_rr(opcode, 6, 4, 5);
         ivm::execution_packets::public_scalar_operands(word).map(|_| word)
     }));
     body.extend([

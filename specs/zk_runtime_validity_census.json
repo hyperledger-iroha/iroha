@@ -2194,18 +2194,118 @@
   {
    "id": "cfg.nexus.bounds",
    "kind": "node_local_config",
-   "status": "open",
+   "status": "done",
    "owner": "F.4",
-   "path": "crates/iroha_config/src/parameters/actual.rs",
-   "symbol": "pub fn nexus_consensus_policy_preimage_with_runtime_policies(",
-   "gates": "Four remaining [nexus] limits: uploaded-model plaintext bytes and chunk count (C.9), and DA ingest quota count and bytes.",
-   "decided_by": "Typed committed parameters, read through the State view.",
+   "path": "crates/iroha_core/src/runtime/committed_policy.rs",
+   "symbol": "pub fn effective_nexus_quotas(",
+   "gates": "Four [nexus] validity limits: the plaintext-byte and chunk ceilings RegisterSoracloudUploadedModelBundle applies to one uploaded-model bundle (C.9), and the count and byte ceilings of one account's accepted DA ingests in one quota window.",
+   "decided_by": "Removed from node configuration, and made chain-settable only through a governed addition. On a root that does not recognize the typed parameter `nexus_quota_policy_v1` (iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1; every root until a governed change set activates it) the four ceilings are its protocol default, which equals the former defaults: the node schema has no `[nexus.uploaded_models]` section, `[nexus.da]` keeps only the length of the quota window, and the Nexus settings value has no quota field. The release publishes a Parameter definition for it beside `content_policy_v1` and `settlement_router_policy_v1`, drafted under the same module (runtime::catalog::parameters); a root recognizes it under the same rules (runtime::committed_policy): the change set that makes it recognized writes the protocol default, SetParameter then admits only a valid policy (both DA ceilings non-zero), and block construction freezes the predecessor's value (StaticExecutionPolicy::nexus_quotas). Static block validation reads the value of the State the block builds on, the predecessor of a same-height replacement included (StateQueryView::nexus_quotas_for_validation). A change set that stops recognizing it lapses unless the committed value is back at the default.",
    "attribution": "read",
-   "open_reason": "Uploaded-model and DA validity bounds remain in the State projection of node configuration and require typed committed owners with regenerated authoring artifacts and current-candidate validation. Private-settlement validity bounds use PrivateSettlementPolicyV1 in the typed private_settlement_policy_v1 custom Parameters extension, with immutable native semantics for authenticated absence; node settings retain only local sidecar storage capacities.",
-   "note": "Private-settlement participant, carrier, proof and capsule bounds are consumed from PrivateSettlementPolicyV1.current_limits in the authenticated Parameters cell in Core and Torii. A malformed present custom payload never selects the absence profile. Their phase windows and pending drain are recorded under private_settlement.committed_windows. The signed V1 SORA Nexus consensus-policy preimage preserves its original fixed bytes across this owner move; current node-local sidecar record and byte capacities do not supply validity authority.",
-   "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_chunk_count_per_model", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2]
+   "note": "The signed V1 commitments keep their bytes: the Nexus consensus-policy preimage (hashed into execution_policy_digest_v1 as nexus.policy_digest), Core's borrowed State encoding of it and the Nexus/AMX context hold the four quota slots at the frozen V1 values of NexusConsensusQuotaSlotsV1::FROZEN, as the atomic private-settlement slots already do, so a governed quota change moves no signed commitment, and the AMX context reports the two DA slots as protocol-fixed fields. Neither tracked network template sets a quota key, and the protocol default equals the frozen slots, so activation alone changes no committed byte. The quota window length stays a [nexus.da] setting bound by the consensus-policy digest (cfg.nexus.policy).",
+   "sites": [],
+   "tests": [
+    {
+     "path": "crates/iroha_config/tests/committed_nexus_quota_keys.rs",
+     "name": "configuration_file_cannot_set_a_nexus_quota"
+    },
+    {
+     "path": "crates/iroha_config/tests/committed_nexus_quota_keys.rs",
+     "name": "signed_quota_slots_are_the_protocol_default"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/actual/tests.rs",
+     "name": "frozen_quota_slots_v1_match_original_commitment_bytes_and_position"
+    },
+    {
+     "path": "crates/iroha_data_model/src/nexus_quota_policy.rs",
+     "name": "rules_reject_each_invalid_value"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/committed_policy/tests.rs",
+     "name": "an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/committed_policy/tests.rs",
+     "name": "activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committed_policy"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/committed_policy/tests.rs",
+     "name": "committed_quotas_move_no_signed_commitment_and_retire_only_at_the_default"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/committed_policy/tests.rs",
+     "name": "readers_treat_absent_and_malformed_values_of_a_recognizing_root_as_the_default"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/committed_policy/tests.rs",
+     "name": "the_protocol_defaults_are_the_constants_an_unrecognizing_root_applies"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/catalog/parameters.rs",
+     "name": "each_parameter_is_published_once_outside_the_baseline"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/catalog/parameters.rs",
+     "name": "the_draft_activates_only_the_parameters_a_root_does_not_recognize"
+    },
+    {
+     "path": "crates/iroha_core/src/sumeragi/genesis_meta.rs",
+     "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "soracloud_uploaded_model_register_applies_committed_quotas"
+    },
+    {
+     "path": "crates/iroha_core/src/block/native_da_validation_tests.rs",
+     "name": "native_validation_enforces_consensus_da_ingest_quota"
+    },
+    {
+     "path": "crates/iroha_core/src/da/quota.rs",
+     "name": "quota_counts_all_intents_for_one_owner_transactionally"
+    }
+   ],
+   "removed": [
+    {
+     "path": "crates/iroha_config/src/parameters/user.rs",
+     "contains": "pub struct NexusUploadedModels"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/user.rs",
+     "contains": "ingest_quota_max_count_per_account"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/user.rs",
+     "contains": "ingest_quota_max_bytes_per_account"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "contains": "pub uploaded_models: NexusUploadedModels"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "contains": "pub ingest_quota_max_count_per_account: NonZeroU64"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "contains": "pub ingest_quota_max_bytes_per_account: NonZeroU64"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/defaults.rs",
+     "contains": "pub mod uploaded_models {"
+    },
+    {
+     "path": "crates/iroha_config/src/parameters/defaults.rs",
+     "contains": "INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud.rs",
+     "contains": ".uploaded_models"
+    },
+    {
+     "path": "crates/iroha_core/src/da/quota.rs",
+     "contains": "Da as DaPolicy"
+    }
    ]
   },
   {
@@ -2270,7 +2370,7 @@
    "attribution": "read",
    "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement and autoscale settings. PublicLaneStakingPolicy owns monetary terms in original committed Parameters, and PrivateSettlementPolicyV1 in the typed custom Parameters extension owns private-settlement validity. Those migrations do not close the remaining validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
    "sites": [
-    ["crates/iroha_core/src/block.rs", "node_policy_read", "da.*", 1],
+    ["crates/iroha_core/src/block.rs", "node_policy_read", "da.ingest_quota_window_blocks", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "endorsement.quorum", 1],
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "hf_shared_leases.drain_grace.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.max_validators", 1],
@@ -2279,7 +2379,7 @@
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.quorum", 3],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.per_lane_target_tps", 1],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "da.*", 1],
+    ["crates/iroha_core/src/state.rs", "node_policy_read", "da.ingest_quota_window_blocks", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "staking.*", 2],
     ["crates/iroha_core/src/state/output_publication.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state/runtime_catalog_commit.rs", "node_policy_read", "autoscale.*", 1],
@@ -7040,7 +7140,8 @@
   "connect_norito_bridge": {
    "cuda": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
    "dev-tools": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
-   "privacy-production-enabled": {"class": "packaging", "reason": "An empty provenance marker of the native bridge build: its manifest states that privacy support is compiled unconditionally and that the feature grants no proving, provider, hardware or release qualification; no source is compiled under it."}
+   "privacy-production-enabled": {"class": "packaging", "reason": "An empty provenance marker of the native bridge build: its manifest states that privacy support is compiled unconditionally and that the feature grants no proving, provider, hardware or release qualification; no source is compiled under it."},
+   "spartan-device-fixture": {"class": "development_or_test", "reason": "Isolated integration-harness fixture: it retains an already authenticated native experimental owner to drive the production C boundary and is never shipped in a bridge release."}
   },
   "fastpq_prover": {
    "bench": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
@@ -7269,8 +7370,8 @@
  },
  "summary": {
   "entries": 243,
-  "sites": 1555,
-  "by_status": {"done": 16, "local_resource": 24, "not_a_gate": 125, "open": 38, "out_of_plan": 21, "unsupported": 19},
+  "sites": 1553,
+  "by_status": {"done": 17, "local_resource": 24, "not_a_gate": 125, "open": 37, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 146, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

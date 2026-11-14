@@ -4382,10 +4382,12 @@ mod named_source_profile_tests {
             ivm::SyscallPolicy::AbiV1
         );
         block
-            .contract_manifests
+            .contract_manifests_mut_for_testing()
             .insert(id, verified.manifest.clone());
         assert_eq!(verified_source_host_policy(&block, id).unwrap(), policy);
-        block.contract_code.insert(id, compiled.artifact.clone());
+        block
+            .contract_code_mut_for_testing()
+            .insert(id, compiled.artifact.clone());
         assert_eq!(verified_source_host_policy(&block, id).unwrap(), policy);
         let replay = compile_verified_source_for_policy(
             policy,
@@ -4398,12 +4400,20 @@ mod named_source_profile_tests {
         )
         .unwrap();
         assert_eq!(canonical_code_hash(&replay.artifact).unwrap(), id.code_hash);
-        block.contract_manifests.get_mut(&id).unwrap().abi_hash = Some(Hash::prehashed(
-            ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        ));
+        block
+            .contract_manifests_mut_for_testing()
+            .get_mut(&id)
+            .unwrap()
+            .abi_hash = Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
+            ivm::SyscallPolicy::AbiV1,
+        )));
         assert!(verified_source_host_policy(&block, id).is_err());
-        block.contract_code.remove(id);
-        block.contract_manifests.get_mut(&id).unwrap().abi_hash = Some(Hash::prehashed([7; 32]));
+        block.contract_code_mut_for_testing().remove(id);
+        block
+            .contract_manifests_mut_for_testing()
+            .get_mut(&id)
+            .unwrap()
+            .abi_hash = Some(Hash::prehashed([7; 32]));
         assert!(verified_source_host_policy(&block, id).is_err());
     }
     #[test]

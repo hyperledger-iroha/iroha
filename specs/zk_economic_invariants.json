@@ -7424,7 +7424,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "match effects.into_ledger() {",
    "within": "fn execute_after_admission(",
-   "line": 4789,
+   "line": 4793,
    "summary": "The proof handler applies checks to a verified effect (Orchard, FCMP++, Anonymous PGC, ZK-ACE) inline after its verifier call. PGC bootstrap checks the native verifier outputs inside the original-invocation consumer and applies State changes in execute_pgc_bootstrap. No test-only entry point injects an erroneously accepted effect at either boundary to observe the remaining ledger checks. Only the public reserve bridge and the private-note apply function are reachable that way today.",
    "required": "Split the handler into verification and an apply function over the verified effect (the single state executor per role of P.1), and give every ledger effect a test-only constructor like the proof-managed one (P.3)."
   },

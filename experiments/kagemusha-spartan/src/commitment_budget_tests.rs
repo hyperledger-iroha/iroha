@@ -82,3 +82,55 @@ fn oversized_table_uses_bounded_secret_commitments_on_both_curves() {
     check::<iroha_pasta::Ep>();
     check::<iroha_pasta::Eq>();
 }
+
+fn cache_accounting<C: PastaCurve>() {
+    let shape = Shape {
+        label: "cold commitment cache",
+        sx: 8,
+        row_bits: 2,
+        col_bits: 10,
+        k: 2,
+    };
+    shape.check();
+    let gens = Gens::<C>::new(shape.cols());
+    let row_bytes = gens.commitment_cache_bytes(&shape, false);
+    let all_bytes = gens.commitment_cache_bytes(&shape, true);
+    assert!(all_bytes > row_bytes && row_bytes > 0);
+    assert!(gens.tables.lock().unwrap().is_empty());
+    assert!(gens.round_tables.lock().unwrap().is_empty());
+    let (table, _) = gens
+        .table(shape.active_cols(), table_window::<C>())
+        .unwrap();
+    assert_eq!(row_bytes, (table.table_bytes() + table.len()) as u64);
+    assert_eq!(gens.commitment_cache_bytes(&shape, false), 0);
+    assert_eq!(
+        gens.commitment_cache_bytes(&shape, true),
+        all_bytes - row_bytes
+    );
+    warm_table(&gens, &shape);
+    assert_eq!(gens.commitment_cache_bytes(&shape, true), 0);
+    let actual = gens
+        .tables
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, _, t)| (t.table_bytes() + t.len()) as u64)
+        .sum::<u64>()
+        + gens
+            .round_tables
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, _, t)| (t.table_bytes() + t.len()) as u64)
+            .sum::<u64>();
+    assert_eq!(
+        all_bytes, actual,
+        "exact newly retained canonical table storage"
+    );
+}
+
+#[test]
+fn cold_commitment_cache_accounting_matches_both_curve_allocations() {
+    cache_accounting::<iroha_pasta::Ep>();
+    cache_accounting::<iroha_pasta::Eq>();
+}

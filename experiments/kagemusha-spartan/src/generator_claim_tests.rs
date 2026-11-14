@@ -301,7 +301,11 @@ where
         }
         let outer = Gens::<D>::new(built.0.shape.cols());
         let start = std::time::Instant::now();
-        eprintln!("private generator fold proof case {case}: shape={:?}, memory={:?}", built.0.shape, built.0.proving_memory_accounting());
+        eprintln!(
+            "private generator fold proof case {case}: shape={:?}, memory={:?}",
+            built.0.shape,
+            built.0.proving_memory_accounting()
+        );
         let (proof, _) = crate::spartan::prove_circuit(
             &built.0.shape,
             &outer,
@@ -320,7 +324,10 @@ where
             )
             .is_ok()
         );
-        eprintln!("private generator fold proof case {case} verified in {:?}", start.elapsed());
+        eprintln!(
+            "private generator fold proof case {case} verified in {:?}",
+            start.elapsed()
+        );
         let mut forged = built.1.clone();
         forged.io[4] = C::Base::ONE - forged.io[4];
         assert!(
@@ -342,4 +349,204 @@ fn exact_private_generator_fold_points_pallas() {
 #[test]
 fn exact_private_generator_fold_points_vesta() {
     points::<Vesta, Pallas>();
+}
+
+/// Component-only isolation of the final generator decision. This is not an
+/// authenticated monetary lineage: both component proofs honestly satisfy the
+/// same folding relation, whose exported claim still needs a native MSM check.
+fn independent_decision<C, D>()
+where
+    C: PastaCurve,
+    D: PastaCurve<ScalarExt = C::Base>,
+    C::Base: Scalar + PoseidonField,
+    F<C>: Scalar + PoseidonField,
+    D::Base: Scalar + PoseidonField,
+{
+    let gens = Gens::<C>::new(8);
+    let relation = [29; 32];
+    let (honest, honest_trace) = prove_with_rng(
+        &gens,
+        relation,
+        sources(&gens, 3),
+        &mut SpikeRng::new(b"generator independent decision"),
+    );
+    assert!(verify(&gens, relation, &honest));
+    // Preserve every committed input, mask, point and Fiat-Shamir challenge.
+    // The final output G is deferred, so an adversary can solve the last group
+    // equation for a different nonzero c without knowing any discrete log.
+    let mut forged = honest.clone();
+    forged.c = if honest.c == F::<C>::ONE {
+        F::<C>::from(2)
+    } else {
+        F::<C>::ONE
+    };
+    let mut folded =
+        honest_trace.commitment + C::from(gens.u) * (honest_trace.value * honest_trace.zeta);
+    for ((l, r), u) in honest.lr.iter().zip(&honest.output.us) {
+        folded = folded * u + C::from(*l) * u.square() + C::from(*r);
+    }
+    forged.output.g = ((folded
+        - C::from(gens.u) * (forged.c * honest_trace.b_final * honest_trace.zeta)
+        - C::from(gens.h) * honest_trace.gamma)
+        * forged.c.invert().unwrap())
+    .to_affine();
+    let forged_trace = trace(&gens, relation, &forged)
+        .expect("the exact transcript and every folding equation accept");
+    assert_eq!(forged.output.us, honest.output.us);
+    assert_eq!(forged_trace.digest, honest_trace.digest);
+    assert_eq!(forged_trace.challenges, honest_trace.challenges);
+    assert!(
+        !decide(&gens, &forged.output),
+        "only the final MSM exposes the false claim"
+    );
+    assert!(!verify(&gens, relation, &forged));
+
+    let mut scalar_program = None;
+    let mut point_program = None;
+    let mut scalar_key = None;
+    let mut point_key = None;
+    for (case, fold, tr) in [
+        ("honest", &honest, &honest_trace),
+        ("false", &forged, &forged_trace),
+    ] {
+        let mut w = Wiring::<F<C>>::default();
+        let family = w.family(0, 1);
+        let shared = shared_array(&mut w, family, &tr.shared);
+        let ports = append_scalar(&mut w, family, shared, 0, fold, tr);
+        let mut public_sources = (0..tr.shared.len())
+            .map(|i| (shared, 0, i))
+            .collect::<Vec<_>>();
+        public_sources.extend(ports.output);
+        public(&mut w, family, public_sources);
+        let (a, p, n, t, c) = w.finish();
+        let built = UniformCircuit::build_with_copies(
+            "generator decision scalar",
+            a,
+            p,
+            n,
+            t,
+            c,
+            12,
+            1024,
+            b"generator decision scalar",
+        );
+        let scalar_gens = Gens::<C>::new(built.0.shape.cols());
+        let digest = built.0.program_digest();
+        let fixed = crate::spartan::fixed_commitments(&built.0.shape, &scalar_gens, &built.0);
+        if let Some(expected) = &scalar_program {
+            assert_eq!(
+                &digest, expected,
+                "same exact scalar program for true/false accumulator"
+            );
+            assert_eq!(scalar_key.as_ref().unwrap(), &fixed, "same scalar fixed VK");
+        } else {
+            scalar_program = Some(digest);
+            scalar_key = Some(fixed);
+        }
+        let (proof, _) = crate::spartan::prove_circuit(
+            &built.0.shape,
+            &scalar_gens,
+            &built.1,
+            &built.2,
+            &mut SpikeRng::new(b"generator decision scalar proof"),
+            &built.0,
+        );
+        assert!(
+            crate::spartan::verify_circuit(
+                &built.0.shape,
+                &scalar_gens,
+                &built.1,
+                &proof.to_bytes(),
+                &built.0,
+            )
+            .is_ok(),
+            "{case}: honest scalar proof verifies independently of final MSM"
+        );
+        drop(built);
+
+        let mut w = Wiring::<C::Base>::default();
+        let family = w.family(0, 1);
+        let e_out = w.reserve();
+        let e_v = w.reserve();
+        let e_zero = constant_entries(&mut w, family, "zero", &[vec![C::Base::ZERO]]);
+        let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+        let mut points = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+        let output = points.generator_fold(&mut pool, &gens, fold, tr, 0);
+        let mut shared_values = tr.shared.clone();
+        push_point::<C>(&mut shared_values, fold.sources[0].g);
+        let source_equality = points.generator_source_equals_inherited(
+            &output,
+            0,
+            fold.sources[0].g,
+            std::array::from_fn(|i| tr.shared.len() + i),
+        );
+        let shared = shared_array(&mut w, family, &shared_values);
+        w.set_export(
+            e_v,
+            shared,
+            vec![own(0, shared_values.len().next_power_of_two())],
+        );
+        pool.build(
+            &mut w,
+            e_out,
+            &mut SpikeRng::new(b"generator decision points pool"),
+        );
+        let built_points = points.build(&mut w, family, shared, true);
+        let mut public_sources = (0..shared_values.len())
+            .map(|i| (shared, 0, i))
+            .collect::<Vec<_>>();
+        public_sources.extend(output.output(&built_points));
+        public_sources.push(source_equality.validity(&built_points));
+        public(&mut w, family, public_sources);
+        let (a, p, n, t, c) = w.finish();
+        let built = UniformCircuit::build_with_copies(
+            "generator decision points",
+            a,
+            p,
+            n,
+            t,
+            c,
+            13,
+            1024,
+            b"generator decision points",
+        );
+        let point_gens = Gens::<D>::new(built.0.shape.cols());
+        let digest = built.0.program_digest();
+        let fixed = crate::spartan::fixed_commitments(&built.0.shape, &point_gens, &built.0);
+        if let Some(expected) = &point_program {
+            assert_eq!(
+                &digest, expected,
+                "same exact point program for true/false accumulator"
+            );
+            assert_eq!(point_key.as_ref().unwrap(), &fixed, "same point fixed VK");
+        } else {
+            point_program = Some(digest);
+            point_key = Some(fixed);
+        }
+        let (proof, _) = crate::spartan::prove_circuit(
+            &built.0.shape,
+            &point_gens,
+            &built.1,
+            &built.2,
+            &mut SpikeRng::new(b"generator decision points proof"),
+            &built.0,
+        );
+        assert!(
+            crate::spartan::verify_circuit(
+                &built.0.shape,
+                &point_gens,
+                &built.1,
+                &proof.to_bytes(),
+                &built.0,
+            )
+            .is_ok(),
+            "{case}: honest point proof verifies independently of final MSM"
+        );
+    }
+}
+
+#[test]
+fn inherited_generator_decision_is_independent_of_component_proofs_both_curves() {
+    independent_decision::<Pallas, Vesta>();
+    independent_decision::<Vesta, Pallas>();
 }

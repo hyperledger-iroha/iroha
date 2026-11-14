@@ -114,8 +114,14 @@ fn replaced_terminal_snapshot_is_retained_then_erased_in_its_original_box() {
             padding_cycles: 3,
             outcome: Ok(()),
         });
-        assert_eq!(recorder.end().unwrap().state.registers, [value; crate::parallel::REGISTER_COUNT]);
-        assert_eq!(recorder.end().unwrap().state.tags, [true; crate::parallel::REGISTER_COUNT]);
+        assert_eq!(
+            recorder.end().unwrap().state.registers,
+            [value; crate::parallel::REGISTER_COUNT]
+        );
+        assert_eq!(
+            recorder.end().unwrap().state.tags,
+            [true; crate::parallel::REGISTER_COUNT]
+        );
         assert!(matches!(recorder.end().unwrap().outcome, Ok(())));
     }
     let base = (&raw const *recorder).cast::<u8>();

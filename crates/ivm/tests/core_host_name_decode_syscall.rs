@@ -26,10 +26,8 @@ fn name_decode_rejects_invalid_utf8() {
     // Program: publish TLV; NAME_DECODE; HALT
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -50,10 +48,8 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
         .unwrap();
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -74,10 +70,8 @@ fn name_decode_rejects_reserved_chars() {
         .unwrap();
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -100,10 +94,8 @@ fn name_decode_accepts_valid_utf8() {
         .unwrap();
     let prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE)
-            .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_NAME_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),

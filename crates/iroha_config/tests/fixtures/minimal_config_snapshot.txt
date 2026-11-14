@@ -384,6 +384,16 @@ Root {
             64000000,
         ),
         data_dir: "./storage/torii",
+        runtime_checkpoint: ToriiRuntimeCheckpoint {
+            package_dir: None,
+            max_artifacts: 1048576,
+            max_total_bytes: 68719476736,
+            max_artifact_bytes: 17179869184,
+            chunk_bytes: 1048576,
+            source_memory_bytes: 268435456,
+            request_timeout: 30s,
+            transfer_timeout: 1800s,
+        },
         receipt_signer: [REDACTED; 0 configured],
         query_max_inflight: 256,
         query_heavy_max_inflight: 64,
@@ -890,10 +900,6 @@ Root {
         hf_shared_leases: NexusHfSharedLeases {
             drain_grace: 5s,
         },
-        uploaded_models: NexusUploadedModels {
-            max_plaintext_bytes_per_model: 68719476736,
-            max_chunk_count_per_model: 16384,
-        },
         endorsement: NexusEndorsement {
             committee_keys: {},
             quorum: 0,
@@ -1077,8 +1083,6 @@ Root {
             threshold_base: 43,
             per_attester_shards: 25,
             ingest_quota_window_blocks: 100,
-            ingest_quota_max_count_per_account: 1024,
-            ingest_quota_max_bytes_per_account: 68719476736,
             audit: DaAudit {
                 sample_size: 32,
                 window_count: 20,

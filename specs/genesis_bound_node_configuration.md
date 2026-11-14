@@ -6,8 +6,11 @@ validity keys of `[content]` are removed from the node schema (owner decision
 of 2026-11-11) and their values are protocol constants until a governed change
 set activates the typed parameters `content_policy_v1` and
 `settlement_router_policy_v1` (implemented, see "Frozen-baseline constraint on
-G2"). G1 and the other typed parameters of G2 are not implemented. G2 as first
-written is superseded by the frozen-baseline constraint below.
+G2"). The `[nexus.uploaded_models]` section and the two DA ingest quota
+ceilings of `[nexus.da]` are removed the same way, until a change set
+activates `nexus_quota_policy_v1`. G1 and the other typed parameters of G2 are
+not implemented. G2 as first written is superseded by the frozen-baseline
+constraint below.
 
 ## Problem
 
@@ -56,6 +59,7 @@ protocol constant, which equals the former `iroha_config` default.
 | --- | --- | --- |
 | Settlement router inputs | former `[settlement.router]` defaults, until a change set activates `settlement_router_policy_v1` | `cfg.settlement_router` (done) |
 | Content-bundle limits and defaults | former `[content]` defaults, until a change set activates `content_policy_v1` | `cfg.content` (done) |
+| Uploaded-model ceilings and per-account DA ingest quotas | former `[nexus.uploaded_models]` and `[nexus.da]` quota defaults, until a change set activates `nexus_quota_policy_v1` | `cfg.nexus.bounds` (done) |
 | Content publisher allow-list | empty: publishing is the executor's admission decision | `cfg.content` (done) |
 | Content default read authorization mode | `Public`: a bundle manifest states any other mode | `cfg.content` (done) |
 
@@ -80,7 +84,7 @@ named by `nexus_amx_context_fields_v1`:
 | `[nexus.fusion]` | `floor_teu`, `exit_teu`, `observation_slots`, `max_window_slots` |
 | `[nexus.autoscale]` | `enabled`, `min_lane_id`, `max_lane_id_exclusive`, `target_block_ms`, `scale_out_latency_ratio`, `scale_in_latency_ratio`, `scale_out_utilization_ratio`, `scale_in_utilization_ratio`, `scale_out_window_blocks`, `scale_in_window_blocks`, `cooldown_blocks`, `per_lane_target_tps` |
 | `[nexus.commit]` | `window_slots` |
-| `[nexus.da]` | `q_in_slot_total`, `q_in_slot_per_ds_min`, `sample_size_base`, `sample_size_max`, `threshold_base`, `per_attester_shards`, `ingest_quota_window_blocks`, `ingest_quota_max_count_per_account`, `ingest_quota_max_bytes_per_account` |
+| `[nexus.da]` | `q_in_slot_total`, `q_in_slot_per_ds_min`, `sample_size_base`, `sample_size_max`, `threshold_base`, `per_attester_shards`, `ingest_quota_window_blocks` |
 | `[nexus.da.audit]` | `sample_size`, `window_count`, `interval_ms` |
 | `[nexus.da.recovery]` | `request_timeout_ms` |
 | `[nexus.da.rotation]` | `max_hits_per_window`, `window_slots`, `seed_tag`, `latency_decay` |
@@ -88,7 +92,11 @@ named by `nexus_amx_context_fields_v1`:
 The context also holds protocol-fixed projection versions and reserved autoscale
 metadata, which are not editable node configuration, and values genesis execution fixes (root fee policy,
 committed AMX budgets, public-lane validators, lane lineage, autoscale
-transition height). Execution recomputes those; no node file sets them.
+transition height). Execution recomputes those; no node file sets them. Its two
+DA ingest quota ceilings (`nexus.da.ingest_quota_max_count_per_account`,
+`nexus.da.ingest_quota_max_bytes_per_account`) keep their signed first-release
+values (`NexusConsensusQuotaSlotsV1::FROZEN`); the quotas a chain applies are
+its committed `nexus_quota_policy_v1` or that policy's protocol default.
 
 ### Execution policy outside the context (G2 scope)
 
@@ -102,10 +110,13 @@ counts are fields in that catalog.
 | `[nexus.endorsement]` | `committee_keys`, `quorum` | `cfg.nexus.policy` |
 | `[nexus.governance]` | `default_module`, `modules` | `cfg.nexus.policy` |
 | `[nexus.hf_shared_leases]` | `drain_grace` | `cfg.nexus.policy` |
-| `[nexus.uploaded_models]` | `max_plaintext_bytes_per_model`, `max_chunk_count_per_model` | `cfg.nexus.bounds` |
-| `[nexus.atomic_private_settlement]` | 15 (policy and bounds) | `cfg.nexus.policy`, `cfg.nexus.bounds`, `cfg.nexus.settlement_activation` |
 | `[nexus.compliance]` | `enabled`, `audit_only`, loaded policy-set digest | `cfg.nexus.policy` |
 | `[nexus.registry]` | loaded lane-manifest policy-set digest | `cfg.nexus.policy` |
+
+The Nexus consensus-policy preimage still carries the atomic private-settlement
+and uploaded-model and DA ingest quota slots, at their frozen first-release
+values; no node file restates them. Private-settlement validity is the
+committed privacy policy, and the quotas are `nexus_quota_policy_v1`.
 
 ## Step 1: field-level diagnostics (implemented)
 
@@ -229,7 +240,8 @@ with one that does not while both execute the same selection. Two rules follow.
 Removing a node key and fixing its value at the former default is not new
 behaviour for a chain whose configuration never set the key: both binaries
 compute the same results, and the digest and State-cell terms keep their bytes.
-`[settlement.router]` and the `[content]` validity keys were removed this way.
+`[settlement.router]`, the `[content]` validity keys, `[nexus.uploaded_models]`
+and the two DA ingest quota ceilings of `[nexus.da]` were removed this way.
 Neither `configs/soranexus/nexus/config.toml` (Minamoto) nor
 `configs/soranexus/taira/config.toml` sets one; a chain whose signed genesis
 bound another value fails its genesis policy check at startup, and a validator
@@ -282,6 +294,36 @@ follow rule 1.
   parameter owner. A finite-pool refusal stays a local storage refusal the node
   retries; any other refusal is a release defect and stops the node at that
   height. Neither turns an activation into a lapse.
+
+### Implemented: uploaded-model and DA ingest quotas
+
+`nexus_quota_policy_v1` (`iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1`)
+carries the plaintext-byte and chunk ceilings of one uploaded-model bundle and
+the count and byte ceilings of one account's DA ingests in a quota window. It
+follows rule 1 exactly as the two parameters above: the release publishes its
+Parameter definition beside theirs, the change set drafted under the same
+module activates whichever of the three a root does not recognize yet, and
+recognition, the initial value, admission and retirement follow the same rules.
+Validation refuses a zero DA ceiling; a zero uploaded-model ceiling refuses
+every bundle.
+
+- **Freezing.** Block construction freezes the quotas of the predecessor with
+  the other construction inputs (`StaticExecutionPolicy::nexus_quotas`).
+  Uploaded-model registration and DA ingest staging read that value; static
+  block validation reads the value of the State the block builds on, the
+  predecessor's selection and parameters for a same-height replacement
+  (`StateQueryView::nexus_quotas_for_validation`).
+- **Signed commitments.** The Nexus consensus-policy preimage, its State
+  encoding and the Nexus/AMX context keep the four quota slots at their
+  first-release values (`NexusConsensusQuotaSlotsV1::FROZEN` in
+  `iroha_config`), as the atomic private-settlement slots already are. The
+  execution-policy digest, the `state.nexus` cell and the signed context
+  therefore never move with a governed quota change, and the protocol default
+  equals the frozen slots, so a chain that never set a quota key keeps every
+  signed byte.
+- **Node configuration.** The node schema has no `[nexus.uploaded_models]`
+  section, and `[nexus.da]` keeps only `ingest_quota_window_blocks`, which the
+  consensus-policy digest still binds.
 
 ### Implemented: content publishers
 

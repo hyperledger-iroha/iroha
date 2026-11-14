@@ -2023,6 +2023,7 @@ CONSTRUCTION_POLICY_PATH = "crates/iroha_core/src/state/canonical_runtime/static
     (CONSTRUCTION_POLICY_PATH, "gov: state.gov.clone(),", "gov: foreign.gov.clone(),"),
     (CONSTRUCTION_POLICY_PATH, "                &state.content,", "                &foreign.content,"),
     (CONSTRUCTION_POLICY_PATH, "                &state.settlement,", "                &foreign.settlement,"),
+    (CONSTRUCTION_POLICY_PATH, "                selection, parameters,", "                foreign_selection, parameters,"),
     (CONSTRUCTION_POLICY_PATH, "let selection = world.runtime_selection();",
      "let selection = foreign.runtime_selection();"),
     (CONSTRUCTION_POLICY_PATH, "let parameters = world.parameters();", "let parameters = foreign.parameters();"),

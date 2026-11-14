@@ -1636,7 +1636,7 @@ def require_block_start_construction(state: str) -> None:
     for location, expected in (
         (path, "cabcd14a5126e6496321ffc104ddf98e18c3b7bf45554e32100cdd594a1a56c2"),
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
-        (policy_path, "95e29efa980f923489f440950d351c69d514b929a0aa52ca687a7b50775cedc8"),
+        (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
         (hydration_path, "d2259450d7526a8b5ba4c5ed04ce1a9816ded6e814190c95e7012800377c4615"),
     ):

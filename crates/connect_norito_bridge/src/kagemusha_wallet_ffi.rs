@@ -42,6 +42,8 @@ pub use exchange::{
 mod exports;
 pub(crate) mod spartan;
 pub use spartan::*;
+#[cfg(feature = "spartan-device-fixture")]
+pub use spartan::device_fixture as spartan_device_fixture;
 mod maintenance;
 pub(crate) mod observation;
 pub use observation::{

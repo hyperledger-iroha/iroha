@@ -105,6 +105,14 @@ none alone establishes a complete device payment or the 12,000-byte carrier targ
 Physical validation must use the same complete profile with actual platform custody,
 account admission, hardware keys, restart and exact-byte recovery.
 
+The native containment suite additionally requires independent P/S matrix,
+own/inherited generator, malformed-word, group/scalar-equation and Request-signature
+failures to produce Burn within the admitted transport profile. Each case starts
+from a genuinely proved receiver Load100, must preserve that existing spendable
+value, and must complete a subsequent Send10 with 90 remaining. A valid incoming
+Payment must credit and must reject a witness that tries to force Burn. These are
+required full-chain checks; their presence in source does not establish a passing run.
+
 The isolated device fixture collects real platform enrollment originals, then its
 independent test issuer signs the future credential. It does not run the FI-side
 attestation verifier before that signature. Its assertions cover native runtime,

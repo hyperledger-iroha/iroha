@@ -256,18 +256,22 @@ fn full_word_aliases_and_missing_initialization_are_native_faults_without_owners
             VMError::DecodeError,
         ),
         (root::PublicLeafKind::Unit, 1, true, VMError::DecodeError),
+        // A root that never initializes its result word breaks the call-table protocol.
         (
             root::PublicLeafKind::Bool,
             0,
             false,
-            VMError::AssertionFailed,
+            VMError::ControlFlowViolation,
         ),
     ] {
         let contract = artifact(kind, word, 0, initialized, false);
         assert!(matches!(
             (ordinary(&contract, 10_000).run(), &expected),
             (Err(VMError::DecodeError), VMError::DecodeError)
-                | (Err(VMError::AssertionFailed), VMError::AssertionFailed)
+                | (
+                    Err(VMError::ControlFlowViolation),
+                    VMError::ControlFlowViolation
+                )
         ));
         let budget = AllocationBudget::new(128 * 1024 * 1024);
         let mut parent =
@@ -291,9 +295,9 @@ fn full_word_aliases_and_missing_initialization_are_native_faults_without_owners
                 VMError::DecodeError
             ) | (
                 Err(ivm::execution_packets::CaptureError::Execution(
-                    VMError::AssertionFailed
+                    VMError::ControlFlowViolation
                 )),
-                VMError::AssertionFailed
+                VMError::ControlFlowViolation
             )
         ));
         assert_eq!(budget.reserved_bytes(), 0);

@@ -16,7 +16,11 @@ fn machine(words: &[u32], mode: u8, gas: u64) -> IVM {
 
 fn machine_with_max_cycles(words: &[u32], mode: u8, gas: u64, max_cycles: u64) -> IVM {
     // Only ZK headers carry a trace bound.
-    let max_cycles = if mode & ivm_mode::ZK != 0 { max_cycles } else { 0 };
+    let max_cycles = if mode & ivm_mode::ZK != 0 {
+        max_cycles
+    } else {
+        0
+    };
     let mut program = ProgramMetadata {
         mode,
         max_cycles,
@@ -31,7 +35,12 @@ fn machine_with_max_cycles(words: &[u32], mode: u8, gas: u64, max_cycles: u64) -
     vm
 }
 
-fn registers(vm: &IVM) -> ([u64; ivm::parallel::REGISTER_COUNT], [bool; ivm::parallel::REGISTER_COUNT]) {
+fn registers(
+    vm: &IVM,
+) -> (
+    [u64; ivm::parallel::REGISTER_COUNT],
+    [bool; ivm::parallel::REGISTER_COUNT],
+) {
     (
         core::array::from_fn(|i| vm.registers.get(i)),
         core::array::from_fn(|i| vm.registers.tag(i)),

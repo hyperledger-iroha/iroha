@@ -3050,21 +3050,6 @@ impl_default!(NexusHfSharedLeases => {
             drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
         }
 });
-/// Encrypted uploaded-model registry quota policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NexusUploadedModels {
-    /// Maximum plaintext bytes admitted for one uploaded model.
-    pub max_plaintext_bytes_per_model: u64,
-    /// Maximum encrypted chunk count admitted for one uploaded model.
-    pub max_chunk_count_per_model: u32,
-}
-impl_default!(NexusUploadedModels => {
-        Self {
-            max_plaintext_bytes_per_model:
-                defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
-            max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-        }
-});
 /// Committee and quorum settings for protected-domain endorsements.
 #[derive(Debug, Clone)]
 pub struct NexusEndorsement {
@@ -3349,8 +3334,6 @@ pub struct Nexus {
     pub fees: iroha_data_model::block::consensus::RootFeePolicy,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
-    /// Uploaded-model registry quota policy.
-    pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     pub endorsement: NexusEndorsement,
     /// AXT execution and expiry configuration.
@@ -3402,7 +3385,6 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             staking: NexusStaking::default(),
             fees: defaults::nexus::fees::genesis_policy(),
             hf_shared_leases: NexusHfSharedLeases::default(),
-            uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
             atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
@@ -3672,6 +3654,39 @@ impl NexusConsensusAtomicPrivateSettlementV1 {
         }
     }
 }
+/// Immutable quota slots of the original V1 signed commitments: the uploaded-model ceilings and
+/// the two DA ingest ceilings of the Nexus consensus-policy preimage, which the Nexus/AMX context
+/// also carries.
+///
+/// These values identify the canonical first-release baseline; they are not admission settings.
+/// The quotas a chain applies are its committed `nexus_quota_policy_v1`
+/// ([`iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1`]), or that policy's protocol
+/// default on a root that does not recognize it; no node setting supplies them. Every
+/// first-release network signed these values, so the slots keep the bytes of every signed
+/// genesis, and a governed change of a quota changes no signed commitment.
+///
+/// The borrowed Nexus authority encoder writes these same values, so both encodings of the
+/// consensus preimage stay byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NexusConsensusQuotaSlotsV1 {
+    /// Slot `uploaded_models.max_plaintext_bytes_per_model`.
+    pub max_plaintext_bytes_per_model: u64,
+    /// Slot `uploaded_models.max_chunk_count_per_model`.
+    pub max_chunk_count_per_model: u32,
+    /// Slot `da.ingest_quota_max_count_per_account`.
+    pub ingest_quota_max_count_per_account: u64,
+    /// Slot `da.ingest_quota_max_bytes_per_account`.
+    pub ingest_quota_max_bytes_per_account: u64,
+}
+impl NexusConsensusQuotaSlotsV1 {
+    /// Exact signed V1 values, independent of the committed quota policy and of configuration.
+    pub const FROZEN: Self = Self {
+        max_plaintext_bytes_per_model: 68_719_476_736,
+        max_chunk_count_per_model: 16_384,
+        ingest_quota_max_count_per_account: 1_024,
+        ingest_quota_max_bytes_per_account: 68_719_476_736,
+    };
+}
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
     default_module: Option<String>,
@@ -3867,6 +3882,8 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
     if nexus.compliance.enabled && compliance_policy_digest.is_none() {
         return Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest);
     }
+    // The quota slots keep their signed V1 values; quotas are committed policy.
+    let quotas = NexusConsensusQuotaSlotsV1::FROZEN;
     let rules = nexus
         .routing_policy
         .rules
@@ -3945,8 +3962,8 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             drain_grace: nexus.hf_shared_leases.drain_grace.into(),
         },
         uploaded_models: NexusConsensusUploadedModelsV1 {
-            max_plaintext_bytes_per_model: nexus.uploaded_models.max_plaintext_bytes_per_model,
-            max_chunk_count_per_model: nexus.uploaded_models.max_chunk_count_per_model,
+            max_plaintext_bytes_per_model: quotas.max_plaintext_bytes_per_model,
+            max_chunk_count_per_model: quotas.max_chunk_count_per_model,
         },
         endorsement: NexusConsensusEndorsementV1 {
             committee_keys: endorsement_committee_keys,
@@ -4008,8 +4025,8 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             threshold_base: nexus.da.threshold_base.get(),
             per_attester_shards: nexus.da.per_attester_shards.get(),
             ingest_quota_window_blocks: nexus.da.ingest_quota_window_blocks.get(),
-            ingest_quota_max_count_per_account: nexus.da.ingest_quota_max_count_per_account.get(),
-            ingest_quota_max_bytes_per_account: nexus.da.ingest_quota_max_bytes_per_account.get(),
+            ingest_quota_max_count_per_account: quotas.ingest_quota_max_count_per_account,
+            ingest_quota_max_bytes_per_account: quotas.ingest_quota_max_bytes_per_account,
             audit_sample_size: nexus.da.audit.sample_size.get(),
             audit_window_count: nexus.da.audit.window_count.get(),
             audit_interval: nexus.da.audit.interval.into(),
@@ -5187,11 +5204,10 @@ pub struct Da {
     /// Number of shards each attester must verify per slot.
     pub per_attester_shards: NonZeroU16,
     /// Number of consecutive block heights in one deterministic ingest quota window.
+    ///
+    /// The count and byte ceilings of a window are committed policy
+    /// (`nexus_quota_policy_v1`), not node configuration.
     pub ingest_quota_window_blocks: NonZeroU64,
-    /// Maximum accepted DA ingests per account in one quota window.
-    pub ingest_quota_max_count_per_account: NonZeroU64,
-    /// Maximum canonical DA payload bytes per account in one quota window.
-    pub ingest_quota_max_bytes_per_account: NonZeroU64,
     /// Rolling audit configuration.
     pub audit: DaAudit,
     /// Recovery deadline configuration.
@@ -5217,14 +5233,6 @@ impl_default!(Da => {
                 defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
             )
             .expect("default ingest quota window > 0"),
-            ingest_quota_max_count_per_account: NonZeroU64::new(
-                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-            )
-            .expect("default ingest quota count > 0"),
-            ingest_quota_max_bytes_per_account: NonZeroU64::new(
-                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
-            )
-            .expect("default ingest quota bytes > 0"),
             audit: DaAudit::default(),
             recovery: DaRecovery::default(),
             rotation: DaRotation::default(),
@@ -5737,13 +5745,15 @@ pub fn sumeragi_nexus_amx_context_preimage(
         tag::DA_INGEST_QUOTA_WINDOW_BLOCKS,
         &da.ingest_quota_window_blocks.get(),
     );
+    // The quota ceilings keep their signed V1 values; quotas are committed policy.
+    let quotas = NexusConsensusQuotaSlotsV1::FROZEN;
     preimage.field(
         tag::DA_INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-        &da.ingest_quota_max_count_per_account.get(),
+        &quotas.ingest_quota_max_count_per_account,
     );
     preimage.field(
         tag::DA_INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
-        &da.ingest_quota_max_bytes_per_account.get(),
+        &quotas.ingest_quota_max_bytes_per_account,
     );
     preimage.field(tag::DA_AUDIT_SAMPLE_SIZE, &da.audit.sample_size.get());
     preimage.field(tag::DA_AUDIT_WINDOW_COUNT, &da.audit.window_count.get());

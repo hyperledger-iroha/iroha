@@ -1,12 +1,17 @@
 //! Deterministic consensus accounting for authenticated DA ingest.
+//!
+//! An account may have at most the count and byte ceilings of the committed quota policy
+//! (`nexus_quota_policy_v1`, frozen per block) accepted in one quota window. The window length is
+//! the `[nexus.da]` setting bound into the signed Nexus consensus policy.
 use super::DaPinIntentValidationError;
-use iroha_config::parameters::actual::Da as DaPolicy;
 use iroha_crypto::blake3_256;
-use iroha_data_model::{account::AccountId, da::pin_intent::DaPinIntentBundle};
+use iroha_data_model::{
+    account::AccountId, da::pin_intent::DaPinIntentBundle, nexus_quota_policy::NexusQuotaPolicyV1,
+};
 use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{Decode, Encode, decode_from_bytes, to_bytes};
-use std::{collections::BTreeMap, str::FromStr};
+use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 const QUOTA_USAGE_KEY_PREFIX_V1: &str = "da_ingest_quota_v1/authority/";
 const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
@@ -85,7 +90,7 @@ fn charge(
     owner: &AccountId,
     usage: &mut DaIngestQuotaUsageV1,
     payload_bytes: u64,
-    policy: &DaPolicy,
+    quotas: &NexusQuotaPolicyV1,
 ) -> Result<(), DaPinIntentValidationError> {
     usage.count =
         usage
@@ -99,8 +104,8 @@ fn charge(
             owner: owner.clone(),
         }
     })?;
-    let max_count = policy.ingest_quota_max_count_per_account.get();
-    let max_bytes = policy.ingest_quota_max_bytes_per_account.get();
+    let max_count = quotas.max_da_ingests_per_account;
+    let max_bytes = quotas.max_da_ingest_bytes_per_account;
     if usage.count > max_count || usage.bytes > max_bytes {
         return Err(DaPinIntentValidationError::QuotaExceeded {
             owner: owner.clone(),
@@ -116,7 +121,8 @@ fn charge(
 fn prepare_with_lookup(
     bundle: &DaPinIntentBundle,
     block_height: u64,
-    policy: &DaPolicy,
+    window_blocks: NonZeroU64,
+    quotas: &NexusQuotaPolicyV1,
     mut read: impl FnMut(&StatePath) -> Option<Vec<u8>>,
 ) -> Result<DaIngestQuotaWrites, DaPinIntentValidationError> {
     let Some(first_intent) = bundle.intents.first() else {
@@ -128,7 +134,7 @@ fn prepare_with_lookup(
             owner: first_authorization.owner.clone(),
             reason: "block height must be non-zero".to_owned(),
         }
-    })? / policy.ingest_quota_window_blocks.get();
+    })? / window_blocks.get();
     let mut usages = BTreeMap::<AccountId, (StatePath, DaIngestQuotaUsageV1)>::new();
     for intent in &bundle.intents {
         let authorization = &intent.authorization;
@@ -160,7 +166,7 @@ fn prepare_with_lookup(
         let (_, usage) = usages
             .get_mut(owner)
             .expect("owner usage was inserted immediately above");
-        charge(owner, usage, authorization.payload_bytes, policy)?;
+        charge(owner, usage, authorization.payload_bytes, quotas)?;
     }
     usages
         .into_iter()
@@ -177,6 +183,10 @@ fn prepare_with_lookup(
 }
 /// Prepare deterministic per-account count and byte charges for one block.
 ///
+/// `window_blocks` is the quota window length and `quotas` the committed quota
+/// policy the block applies: the value it froze from its predecessor, never a
+/// node setting.
+///
 /// The returned writes must be committed through the same `WorldBlock` as the
 /// pin-intent indexes. Merely checking this function without applying its
 /// result would allow later blocks to reuse the same quota window.
@@ -184,9 +194,12 @@ pub fn prepare_ingest_quota_writes(
     state: &impl StorageReadOnly<StatePath, Vec<u8>>,
     bundle: &DaPinIntentBundle,
     block_height: u64,
-    policy: &DaPolicy,
+    window_blocks: NonZeroU64,
+    quotas: &NexusQuotaPolicyV1,
 ) -> Result<DaIngestQuotaWrites, DaPinIntentValidationError> {
-    prepare_with_lookup(bundle, block_height, policy, |key| state.get(key).cloned())
+    prepare_with_lookup(bundle, block_height, window_blocks, quotas, |key| {
+        state.get(key).cloned()
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -203,7 +216,10 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use iroha_model_base::topology::LaneId;
-    use std::num::NonZeroU64;
+    /// The quota window length of a default node configuration.
+    fn default_window() -> NonZeroU64 {
+        iroha_config::parameters::actual::Da::default().ingest_quota_window_blocks
+    }
     fn authorized_intent(owner_seed: u8, sequence: u64, payload_bytes: u64) -> DaPinIntent {
         let key_pair = KeyPair::try_from_seed(vec![owner_seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic key");
@@ -269,19 +285,19 @@ mod tests {
     }
     #[test]
     fn quota_counts_all_intents_for_one_owner_transactionally() {
-        let policy = DaPolicy {
-            ingest_quota_max_count_per_account: NonZeroU64::new(2).expect("nonzero"),
-            ingest_quota_max_bytes_per_account: NonZeroU64::new(10).expect("nonzero"),
-            ..Default::default()
+        let quotas = NexusQuotaPolicyV1 {
+            max_da_ingests_per_account: 2,
+            max_da_ingest_bytes_per_account: 10,
+            ..NexusQuotaPolicyV1::protocol_default()
         };
         let bundle =
             DaPinIntentBundle::new(vec![authorized_intent(7, 1, 4), authorized_intent(7, 2, 6)]);
-        let writes = prepare_with_lookup(&bundle, 1, &policy, |_| None)
+        let writes = prepare_with_lookup(&bundle, 1, default_window(), &quotas, |_| None)
             .expect("exact count and byte ceilings are admitted");
         assert_eq!(writes.len(), 1);
         let mut exceeded = bundle.clone();
         exceeded.intents.push(authorized_intent(7, 3, 1));
-        let error = prepare_with_lookup(&exceeded, 1, &policy, |_| None)
+        let error = prepare_with_lookup(&exceeded, 1, default_window(), &quotas, |_| None)
             .expect_err("the whole block must share one transactional accumulator");
         assert!(matches!(
             error,
@@ -290,26 +306,28 @@ mod tests {
     }
     #[test]
     fn quota_window_rollover_resets_prior_usage() {
-        let policy = DaPolicy {
-            ingest_quota_window_blocks: NonZeroU64::new(2).expect("nonzero"),
-            ingest_quota_max_count_per_account: NonZeroU64::new(1).expect("nonzero"),
-            ..Default::default()
+        let window = NonZeroU64::new(2).expect("nonzero");
+        let quotas = NexusQuotaPolicyV1 {
+            max_da_ingests_per_account: 1,
+            ..NexusQuotaPolicyV1::protocol_default()
         };
         let first = DaPinIntentBundle::new(vec![authorized_intent(9, 1, 1)]);
-        let writes = prepare_with_lookup(&first, 1, &policy, |_| None).expect("first window");
+        let writes =
+            prepare_with_lookup(&first, 1, window, &quotas, |_| None).expect("first window");
         let second = DaPinIntentBundle::new(vec![authorized_intent(9, 2, 1)]);
-        let error = prepare_with_lookup(&second, 2, &policy, |key| writes.get(key).cloned())
-            .expect_err("height two is still in the first window");
+        let error =
+            prepare_with_lookup(&second, 2, window, &quotas, |key| writes.get(key).cloned())
+                .expect_err("height two is still in the first window");
         assert!(matches!(
             error,
             DaPinIntentValidationError::QuotaExceeded { .. }
         ));
-        prepare_with_lookup(&second, 3, &policy, |key| writes.get(key).cloned())
+        prepare_with_lookup(&second, 3, window, &quotas, |key| writes.get(key).cloned())
             .expect("height three starts a fresh deterministic window");
     }
     #[test]
     fn quota_rejects_checked_counter_overflow() {
-        let policy = DaPolicy::default();
+        let quotas = NexusQuotaPolicyV1::protocol_default();
         let bundle = DaPinIntentBundle::new(vec![authorized_intent(10, 1, 1)]);
         let stored = to_bytes(&DaIngestQuotaUsageV1 {
             version: QUOTA_USAGE_VERSION_V1,
@@ -318,8 +336,10 @@ mod tests {
             bytes: 0,
         })
         .expect("encode overflow fixture");
-        let error = prepare_with_lookup(&bundle, 1, &policy, |_| Some(stored.clone()))
-            .expect_err("quota arithmetic must never wrap");
+        let error = prepare_with_lookup(&bundle, 1, default_window(), &quotas, |_| {
+            Some(stored.clone())
+        })
+        .expect_err("quota arithmetic must never wrap");
         assert!(matches!(
             error,
             DaPinIntentValidationError::QuotaOverflow { .. }
@@ -327,11 +347,13 @@ mod tests {
     }
     #[test]
     fn quota_rejects_noncanonical_or_future_state() {
-        let policy = DaPolicy::default();
+        let quotas = NexusQuotaPolicyV1::protocol_default();
         let bundle = DaPinIntentBundle::new(vec![authorized_intent(11, 1, 1)]);
         let malformed = vec![0xFF; MAX_QUOTA_USAGE_BYTES + 1];
-        let error = prepare_with_lookup(&bundle, 1, &policy, |_| Some(malformed.clone()))
-            .expect_err("oversized state must fail closed");
+        let error = prepare_with_lookup(&bundle, 1, default_window(), &quotas, |_| {
+            Some(malformed.clone())
+        })
+        .expect_err("oversized state must fail closed");
         assert!(matches!(
             error,
             DaPinIntentValidationError::QuotaStateCorrupt { .. }
@@ -343,8 +365,10 @@ mod tests {
             bytes: 0,
         })
         .expect("encode future-window fixture");
-        let error = prepare_with_lookup(&bundle, 1, &policy, |_| Some(future.clone()))
-            .expect_err("a future persisted window must fail closed");
+        let error = prepare_with_lookup(&bundle, 1, default_window(), &quotas, |_| {
+            Some(future.clone())
+        })
+        .expect_err("a future persisted window must fail closed");
         assert!(matches!(
             error,
             DaPinIntentValidationError::QuotaStateCorrupt { .. }

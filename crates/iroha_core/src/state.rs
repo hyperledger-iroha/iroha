@@ -6289,6 +6289,27 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl<'world> WorldBlock<'world> {
+    /// Mutable contract manifests of a caller-owned test World block, for fixtures outside this
+    /// crate that seed or corrupt retained manifest records.
+    pub fn contract_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageField<
+        'world,
+        ContractArtifactId,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    > {
+        &mut self.contract_manifests
+    }
+    /// Mutable retained contract code of a caller-owned test World block, for fixtures outside
+    /// this crate that seed or remove an immutable artifact.
+    pub fn contract_code_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageField<'world, ContractArtifactId, Vec<u8>> {
+        &mut self.contract_code
+    }
+}
 impl WorldBlock<'_> {
     #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {
@@ -15444,6 +15465,10 @@ pub struct StateQueryView<'state> {
     /// Original undo value captured with current Parameters in the same publication generation.
     /// `None` denotes an unchanged latest block, not missing policy history.
     parameters_before_latest_block: CellView<'state, Option<RetainedStateParameters>>,
+    /// Original undo value of the root selection, captured like
+    /// `parameters_before_latest_block`. `None` denotes an unchanged latest block.
+    selection_before_latest_block:
+        CellView<'state, Option<iroha_data_model::runtime::definition::RootSelectionV1>>,
     /// Snapshot of committed block hashes.
     pub block_hashes: BlockHashesView<'state>,
     /// Topology used to commit latest block.
@@ -15643,6 +15668,33 @@ impl<'state> StateQueryView<'state> {
             self.world.parameters.get()
         };
         parameters.require_crypto_policy()
+    }
+
+    /// The uploaded-model and DA ingest quotas a block of this original current or same-height
+    /// replacement cut applies: those of the State the block builds on, as its construction
+    /// freezes them (`runtime::committed_policy::effective_nexus_quotas`).
+    pub(crate) fn nexus_quotas_for_validation(
+        &self,
+        replacement: bool,
+    ) -> iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1 {
+        let (selection, parameters) = if replacement {
+            (
+                self.selection_before_latest_block
+                    .get()
+                    .as_ref()
+                    .unwrap_or_else(|| self.world.runtime_selection.get()),
+                self.parameters_before_latest_block
+                    .get()
+                    .as_ref()
+                    .unwrap_or_else(|| self.world.parameters.get()),
+            )
+        } else {
+            (
+                self.world.runtime_selection.get(),
+                self.world.parameters.get(),
+            )
+        };
+        crate::runtime::committed_policy::effective_nexus_quotas(selection, parameters)
     }
 
     /// Returns the world view for this read-only snapshot.
@@ -27406,8 +27458,9 @@ impl State {
                 ))
             })
     }
-    /// Return the block storage backend used by state recovery and consensus sidecars.
-    pub(crate) fn kura(&self) -> &Kura {
+    /// Return the block storage backend used by state recovery, consensus sidecars and the
+    /// node's runtime-checkpoint delivery. Every [`StateReadOnly`] view exposes the same one.
+    pub fn kura(&self) -> &Kura {
         &self.kura
     }
     /// Return whether the node is running the bounded, read-only emergency startup posture.
@@ -31358,6 +31411,7 @@ impl State {
         let (
             world,
             parameters_before_latest_block,
+            selection_before_latest_block,
             native_execution_tip,
             block_hashes,
             block_hashes_wait,
@@ -31382,6 +31436,7 @@ impl State {
             let world_start = Instant::now();
             let mut world = self.world.view();
             let parameters_before_latest_block = self.world.parameters.predecessor_view();
+            let selection_before_latest_block = self.world.runtime_selection.predecessor_view();
             let runtime = self.canonical_runtime.view();
             let native_execution_tip = self.native_execution_tip.view();
             let projection = self.project_canonical_runtime(runtime.get(), &world);
@@ -31400,6 +31455,7 @@ impl State {
                 break (
                     world,
                     parameters_before_latest_block,
+                    selection_before_latest_block,
                     native_execution_tip,
                     block_hashes,
                     block_hashes_wait,
@@ -31445,6 +31501,7 @@ impl State {
         }
         StateQueryView {
             parameters_before_latest_block,
+            selection_before_latest_block,
             native_execution_tip,
             block_hashes,
             commit_topology,
@@ -40005,11 +40062,13 @@ impl<'state> StateBlock<'state> {
         intents: Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
     ) -> Result<(), MergeLedgerCommitError> {
         let bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(intents.clone());
+        // The ceilings are the committed quotas this block froze from its predecessor.
         let quota_writes = crate::da::quota::prepare_ingest_quota_writes(
             &self.world.smart_contract_state,
             &bundle,
             block_height,
-            &self.nexus.da,
+            self.nexus.da.ingest_quota_window_blocks,
+            &self.nexus_quotas,
         )
         .map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(

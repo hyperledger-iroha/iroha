@@ -208,8 +208,9 @@ impl Execute for ReserveGameUnitImportV1 {
         let intent = &self.proof.record;
         intent.validate().map_err(invalid)?;
         let partition = read(state, &intent.world_id)?;
-        if intent.destination != partition.local_instance
-            || intent.kernel_hash != partition.kernel_hash
+        // The destination executing here is this partition's own signed-root instance.
+        if (intent.destination, intent.kernel_hash)
+            != (partition.local_instance, partition.kernel_hash)
         {
             return Err(invalid(
                 "native game intent names another destination or kernel",

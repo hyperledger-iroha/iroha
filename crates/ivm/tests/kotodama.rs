@@ -1024,8 +1024,7 @@ fn non_json_pointer_constructors_accept_string_variables() {
             .any(|w| w == encoding::wide::encode_scall(number).to_le_bytes())
     };
     assert!(
-        has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
-            && has(syscalls::SYSCALL_TRANSFER_DOMAIN),
+        has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL) && has(syscalls::SYSCALL_TRANSFER_DOMAIN),
         "expected set detail and transfer domain syscalls"
     );
 }

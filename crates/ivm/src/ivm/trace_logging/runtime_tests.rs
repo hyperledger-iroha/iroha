@@ -164,7 +164,10 @@ fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
         assert_eq!(vm.pc, initial + 4);
         assert_eq!(vm.trace_log.len(), cycles as usize);
         assert!(vm.trace_log.entries().all(|row| row.pc == initial + 4));
-        assert_eq!(vm.trace_log.entry(0).unwrap().changes.len(), crate::parallel::REGISTER_COUNT);
+        assert_eq!(
+            vm.trace_log.entry(0).unwrap().changes.len(),
+            crate::parallel::REGISTER_COUNT
+        );
         assert!(
             vm.trace_log
                 .entries()
@@ -343,11 +346,9 @@ fn pc_growth_refusal_keeps_the_preceding_observations_and_prevents_next_effect()
         exit: false,
         calls: 0,
     };
-    assert!(
-        matches!(vm.run_with_host(&mut host),
+    assert!(matches!(vm.run_with_host(&mut host),
         Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }))
-        if requested_bytes == 8 * std::mem::size_of::<u64>())
-    );
+        if requested_bytes == 8 * std::mem::size_of::<u64>()));
     assert_eq!(host.calls, 1);
     assert_eq!(vm.trace_pcs(), &[start, start + 4, start + 8, start + 12]);
     assert_eq!(vm.pc, start + 12);

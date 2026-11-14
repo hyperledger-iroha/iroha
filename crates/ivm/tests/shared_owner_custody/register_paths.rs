@@ -32,8 +32,7 @@ fn all_register_paths_include_cold_dirty_rebuilds_without_any_heap_request() {
         let (root, path): (
             HashOf<MerkleTree<[u8; 32]>>,
             [[u8; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
-        ) =
-            vm.registers.merkle_root_and_path(index).unwrap();
+        ) = vm.registers.merkle_root_and_path(index).unwrap();
         assert_eq!(vm.registers.merkle_path(index).unwrap(), path);
         assert_eq!(vm.registers.merkle_root(), root);
         let mut bytes = [0; 9];

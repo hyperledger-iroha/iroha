@@ -57,9 +57,10 @@ source and receipt. Commit signature verification remains an external prerequisi
 
 ## Ordinary suites and dedicated qualification
 
-Ordinary Swift/JUnit discovery skips the activation-corpus test only when **all
-four selection keys are absent**. Any partial, empty or malformed selection fails.
-The separate selection-policy tests need no corpus or native library.
+Ordinary Swift/JUnit runs do not skip the activation-corpus test: it refuses
+unless **all four selection keys** name a valid external corpus, so a run without
+one reports that test as failed, and any partial, empty or malformed selection
+fails too. The separate selection-policy tests need no corpus or native library.
 
 Use `qualify_platform.py --platform swift` or `--platform kotlin` with the required
 paths and pins shown by `--help` for dedicated qualification. It requires all four

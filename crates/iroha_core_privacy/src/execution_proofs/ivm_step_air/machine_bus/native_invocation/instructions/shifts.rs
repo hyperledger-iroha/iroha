@@ -198,7 +198,9 @@ fn shifts_preserve_read_order_atomic_aliases_and_r0_reads_without_writes() {
             (0, 4, 5),
             (4, 4, 4),
             (6, 0, 5),
-            (0, 31, 0),
+            // r30/r31 are the frame and stack pointers that the strict return
+            // checks; r29 is the highest register a leaf root may freely write.
+            (0, 29, 0),
         ] {
             let mut body = Vec::new();
             for opcode in REGISTER.into_iter().chain(IMMEDIATE) {

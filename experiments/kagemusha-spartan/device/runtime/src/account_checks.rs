@@ -8,15 +8,15 @@ pub(super) struct Admitted {
     signature: Vec<u8>,
 }
 
-pub(super) fn authorize<F: advance::KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static>(
-    runtime: &mut FutureRuntime<F, P, ()>,
+pub(super) fn authorize(
+    runtime: &mut SessionAdapter,
     originals: [&[u8]; 4],
     sign: impl Fn(&[u8]) -> Vec<u8>,
     previous: Option<&Admitted>,
 ) -> Result<Admitted> {
     let [credential, certificate, account, asset] = originals;
     let challenge = runtime
-        .begin_account(credential, certificate, account, asset)
+        .begin_account([credential, certificate, account, asset])
         .map_err(fail)?;
     if let Some(previous) = previous {
         if challenge == previous.challenge {
@@ -41,13 +41,13 @@ pub(super) fn authorize<F: advance::KagemushaWalletFsV1, P: KagemushaWalletPlatf
     };
     *first ^= 1;
     if runtime
-        .begin_account(&changed_credential, certificate, account, asset)
+        .begin_account([&changed_credential, certificate, account, asset])
         .is_ok()
     {
         return Err("changed credential replaced retained admission originals".into());
     }
     let retried = runtime
-        .begin_account(credential, certificate, account, asset)
+        .begin_account([credential, certificate, account, asset])
         .map_err(fail)?;
     if retried != challenge {
         return Err("refused account attempt replaced the issued challenge".into());

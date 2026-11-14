@@ -6,6 +6,40 @@ fn fixture() -> crate::chain_fixture::Chain {
 }
 
 #[test]
+fn program_bundle_frame_uses_its_explicit_bound() {
+    let default_archive_limit = norito::core::max_archive_len();
+    let mut bundle = ProgramBundle {
+        version: 1,
+        primary: std::array::from_fn(|_| vec![1]),
+        secondary: std::array::from_fn(|_| vec![2]),
+    };
+    bundle.primary[0] = vec![0x5a; 65 * 1024 * 1024];
+    let mut bytes = bundle.encode().unwrap();
+    assert!(bytes.len() > 64 * 1024 * 1024);
+    let decoded =
+        ProgramBundle::decode(&bytes).expect("bounded bundle above the default frame cap");
+    assert_eq!(decoded.version, bundle.version);
+    assert_eq!(decoded.primary, bundle.primary);
+    assert_eq!(decoded.secondary, bundle.secondary);
+    drop(decoded);
+    assert_eq!(norito::core::max_archive_len(), default_archive_limit);
+    if bytes.len().saturating_sub(norito::core::Header::SIZE) as u64 > default_archive_limit {
+        assert!(norito::core::from_bytes_view(&bytes).is_err());
+    }
+    // The explicit object budget cannot relax a stricter surrounding admission
+    // budget, and the larger frame allowance does not weaken exact framing.
+    let strict = norito::DecodeLimits::new(1024, 1024, 4096, 4096, 16);
+    assert!(
+        norito::core::with_decode_limits_scope(strict, || ProgramBundle::decode(&bytes)).is_err()
+    );
+    bytes.push(0);
+    assert!(ProgramBundle::decode(&bytes).is_err());
+    bytes.pop();
+    *bytes.last_mut().unwrap() ^= 1;
+    assert!(ProgramBundle::decode(&bytes).is_err());
+}
+
+#[test]
 fn parameter_manifest_requires_exact_root_signature() {
     let secret = BigUint::from(12345u64);
     let root = p256::mul(&p256::generator(), &secret).unwrap();

@@ -3,6 +3,7 @@ import LocalAuthentication
 import NoritoBridge
 import SpartanDeviceFixture
 import SwiftUI
+import UIKit
 @testable import IrohaSwift
 
 #if !DEBUG || !os(iOS) || targetEnvironment(simulator)
@@ -133,9 +134,11 @@ private final class RuntimeBridge: @unchecked Sendable {
       }
       do {
         let reason = "Confirm experimental Send of \(decimal(review.amount)) plus fee \(decimal(review.fee)) to wallet \(hex(review.receiverWalletId))."
+        FileHandle.standardError.write(Data("SPARTAN_CONFIRMATION_REQUIRED\n".utf8))
         guard try await authentication.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) else {
           throw FixtureFailure("Device confirmation was not granted")
         }
+        FileHandle.standardError.write(Data("SPARTAN_CONFIRMATION_GRANTED\n".utf8))
         result.finish(.success(true))
       } catch { result.finish(.failure(FixtureFailure("Device confirmation: \(error)"))) }
       authentication.invalidate()
@@ -202,9 +205,16 @@ private final class RuntimeBridge: @unchecked Sendable {
   @Published var status = "Ready to run the complete experimental wallet on this iPhone"
   @Published var review: KagemushaSpartanReviewProjectionV1?
   @Published var running = false
+  @Published var waitingForBuild = false
+  func waitForBuild() {
+    waitingForBuild = true
+    status = "Preparing the final device build. The wallet test has not started."
+    UIApplication.shared.isIdleTimerDisabled = true
+  }
   func start() {
-    guard !running else { return }
+    guard !running && !waitingForBuild else { return }
     running = true; status = "Opening authenticated programs and actual protected custody"
+    UIApplication.shared.isIdleTimerDisabled = true
     do {
       let bridge = try RuntimeBridge(update: { [weak self] text in
         Task { @MainActor in self?.status = text }
@@ -213,6 +223,7 @@ private final class RuntimeBridge: @unchecked Sendable {
         let result: String
         do { result = "PASS: \(try bridge.run())" } catch { result = "FAILED: \(error)" }
         Task { @MainActor in
+          UIApplication.shared.isIdleTimerDisabled = false
           self?.status = result; self?.running = false
           let record: [String: String] = ["schema": "kagemusha-spartan-device-runtime-v1",
             "result": result, "finished": ISO8601DateFormatter().string(from: Date())]
@@ -221,7 +232,10 @@ private final class RuntimeBridge: @unchecked Sendable {
           }
         }
       }
-    } catch { status = "FAILED: \(error)"; running = false }
+    } catch {
+      UIApplication.shared.isIdleTimerDisabled = false
+      status = "FAILED: \(error)"; running = false
+    }
   }
 }
 
@@ -239,11 +253,17 @@ private final class RuntimeBridge: @unchecked Sendable {
             Text("Operation\n\(hex(review.operationId))")
             Text("Bound capsule\n\(hex(review.capsuleDigest))")
           }
-          Button(model.running ? "Running" : "Run / resume retained operation") { model.start() }
-            .disabled(model.running)
+          if !model.waitingForBuild {
+            Button(model.running ? "Running" : "Run / resume retained operation") { model.start() }
+              .disabled(model.running)
+          }
         }.font(.system(.body, design: .monospaced)).padding()
       }
-      .task { if ProcessInfo.processInfo.arguments.contains("-spartan-run") { model.start() } }
+      .task {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-spartan-wait-for-build") { model.waitForBuild() }
+        else if arguments.contains("-spartan-run") { model.start() }
+      }
     }
   }
 }

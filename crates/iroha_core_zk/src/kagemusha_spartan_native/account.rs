@@ -99,14 +99,14 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let held = self
             .account
             .as_ref()
-            .ok_or(rejected("missing future account attempt"))?;
+            .ok_or_else(|| rejected("missing future account attempt"))?;
         let slot = held.slot;
         let credential = held.credential.clone();
         let marker = self.account_source(&slot, &credential)?;
         let held = self
             .account
             .as_mut()
-            .ok_or(rejected("missing future account attempt"))?;
+            .ok_or_else(|| rejected("missing future account attempt"))?;
         if marker.marker_file_digest() != &held.marker_file_digest {
             return Err(rejected("future account source changed"));
         }
@@ -138,7 +138,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let held = self
             .account
             .as_ref()
-            .ok_or(rejected("future account begin required"))?;
+            .ok_or_else(|| rejected("future account begin required"))?;
         if held.challenge == [0; 32] {
             return Err(rejected("future account challenge missing"));
         }
@@ -156,7 +156,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         }
         self.account
             .as_mut()
-            .ok_or(rejected("future account attempt lost"))?
+            .ok_or_else(|| rejected("future account attempt lost"))?
             .authorized = true;
         Ok(slot.0)
     }
@@ -170,7 +170,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             .account
             .as_ref()
             .filter(|held| held.authorized && &held.slot == slot)
-            .ok_or(rejected("future account authorization required"))?;
+            .ok_or_else(|| rejected("future account authorization required"))?;
         if credential.is_some_and(|credential| !same_credential(credential, &held.credential)) {
             return Err(rejected("future account credential changed"));
         }
@@ -180,7 +180,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         self.account
             .as_ref()
             .filter(|held| held.authorized && held.credential.body[66..98] == *wallet)
-            .ok_or(rejected("future account wallet authorization required"))?;
+            .ok_or_else(|| rejected("future account wallet authorization required"))?;
         Ok(())
     }
 
@@ -207,7 +207,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 selected = Some((slot, *marker.marker_file_digest()));
             }
         }
-        selected.ok_or(rejected("future account has no enrolled custody"))
+        selected.ok_or_else(|| rejected("future account has no enrolled custody"))
     }
 
     fn account_source(
@@ -228,7 +228,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let intent = self
             .provider
             .read_intent(slot)?
-            .ok_or(rejected("future account enrollment intent"))?;
+            .ok_or_else(|| rejected("future account enrollment intent"))?;
         let challenge = &intent.challenge;
         challenge
             .validate()
@@ -250,7 +250,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let enrollment = self
             .provider
             .enrollment_record(slot)?
-            .ok_or(rejected("future account enrollment request"))?;
+            .ok_or_else(|| rejected("future account enrollment request"))?;
         let original_marker = KagemushaWalletMarkerV1::enrollment(challenge, key)
             .map_err(|_| rejected("future account enrollment marker"))?;
         if enrollment.request.is_empty()

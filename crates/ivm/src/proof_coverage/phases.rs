@@ -87,7 +87,7 @@ pub const RUN_PHASES: &[RunPhase] = &[
         id: "step_preamble",
         path: INTERPRETER,
         function: RUN,
-        summary: "between loop entry and dispatch, before every step: publishes trace cycles, stops on halt, traps at end of code without a terminator and, in ZK mode only, at the trace bound, fetches the instruction, rejects an unadmitted opcode or a set reserved bit, prices the step, traps on an unaffordable debit and debits base gas",
+        summary: "between loop entry and dispatch, before every step: refuses an incomplete program image, publishes trace cycles, stops on halt, traps at end of code without a terminator and, in ZK mode only, at the trace bound, fetches the instruction, rejects an unadmitted opcode or a set reserved bit, prices the step, traps on an unaffordable debit and debits base gas",
         obligations: &[
             Obligation::Fetch,
             Obligation::Faults,
@@ -101,14 +101,13 @@ pub const RUN_PHASES: &[RunPhase] = &[
             "OutOfGas",
         ],
         fallible_helpers: &[
-            "budget.reserve",
+            "ensure_complete_program_image",
             "fetch_instruction",
             "finish_step",
             "prepare_trace_instruction",
             "publish_trace_cycles",
             "record_trace_prefetch",
             "recorder.begin_step",
-            "reservation.complete",
             "vm.native_preflight_step",
             "vm.prepare_instruction_register_events",
         ],
@@ -128,16 +127,13 @@ pub const RUN_PHASES: &[RunPhase] = &[
         ],
         direct_traps: &["AssertionFailed", "OutOfGas"],
         fallible_helpers: &[
-            "budget.reserve",
             "call_result_word_count",
-            "complete",
             "finish_step",
             "prepare_trace_padding",
             "publish_trace_cycles",
             "recorder.finish_step",
-            "reservation.complete",
         ],
-        result_sources: &["contract_abort_error", "ensure_healthy", "into_vm_error"],
+        result_sources: &["contract_abort_error", "into_vm_error"],
     },
 ];
 

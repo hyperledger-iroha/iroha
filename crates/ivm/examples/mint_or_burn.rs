@@ -106,13 +106,11 @@ fn build_program() -> Vec<u8> {
     let branch = encoding::wide::encode_branch(instruction::wide::control::BGEU, 13, 14, 2);
     prog.extend_from_slice(&branch.to_le_bytes());
     prog.extend_from_slice(
-        &encoding::wide::encode_scall(syscalls::SYSCALL_MINT_ASSET)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(syscalls::SYSCALL_MINT_ASSET).to_le_bytes(),
     );
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog.extend_from_slice(
-        &encoding::wide::encode_scall(syscalls::SYSCALL_BURN_ASSET)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(syscalls::SYSCALL_BURN_ASSET).to_le_bytes(),
     );
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog

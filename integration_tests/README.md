@@ -259,6 +259,12 @@ Run one case with the daemon built first:
 IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_REQUIRE_NETWORK=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p integration_tests --test sumeragi_npos_committee_transition double_signing_voter_is_slashed -- --test-threads=1 --nocapture
 ```
 
+The complete rotation keeps its original deadlines: 600 seconds per progress window
+and the ceremony transport and runtime bounds. On a heavily loaded host, debug-profile
+daemons can miss them (they did above load 300 on a 16-core machine). Daemons built from
+the same source with `--profile local-release` passed at load 550–690; the test binary
+itself can stay a debug build.
+
 No staking reward can exist on these fresh networks; both cases assert that the
 node refuses to prepare a reward claim with its typed HTTP 409
 `staking_preparation_refused` and the absent-entitlement reason. Positive funded

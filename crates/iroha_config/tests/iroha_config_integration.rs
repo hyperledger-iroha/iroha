@@ -5,6 +5,8 @@ mod autoscale_config;
 mod checked_in_profiles_parse;
 #[path = "committed_content_and_settlement_keys.rs"]
 mod committed_content_and_settlement_keys;
+#[path = "committed_nexus_quota_keys.rs"]
+mod committed_nexus_quota_keys;
 #[path = "compute_economics.rs"]
 mod compute_economics;
 #[path = "connect_relay_strategy_hard_cut.rs"]

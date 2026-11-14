@@ -381,11 +381,11 @@ fn root_and_ceiling_exact_cycle_carries_and_limit_crossing_match_native_ordering
 
 fn maximum(tail_gas: u64) -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let mut body = vec![
-        enc::encode_rr(wide::arithmetic::ISQRT, 8, 6, 7),
+        register_word(wide::arithmetic::ISQRT, 8, 6, 7),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 9, 6, 7),
         enc::encode_ri(wide::arithmetic::ADDI, 2, 2, -1),
         enc::encode_branch(wide::control::BNE, 2, 0, -3),
-        enc::encode_rr(wide::arithmetic::ISQRT, 8, 6, 7),
+        register_word(wide::arithmetic::ISQRT, 8, 6, 7),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 9, 6, 7),
         enc::encode_rr(wide::arithmetic::MEAN, 10, 6, 7),
         enc::encode_rr(wide::arithmetic::DIV_CEIL, 0, 6, 0),

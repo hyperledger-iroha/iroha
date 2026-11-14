@@ -3,13 +3,14 @@
 use super::*;
 use iroha_model_base::state_path::StatePath;
 
-fn addresses(policy: &StaticExecutionPolicy) -> [usize; 7] {
+fn addresses(policy: &StaticExecutionPolicy) -> [usize; 8] {
     [
         std::ptr::from_ref(policy) as usize,
         std::ptr::from_ref(&policy.oracle) as usize,
         std::ptr::from_ref(&policy.gov) as usize,
         std::ptr::from_ref(&policy.content) as usize,
         std::ptr::from_ref(&policy.settlement) as usize,
+        std::ptr::from_ref(&policy.nexus_quotas) as usize,
         std::ptr::from_ref(&policy.crypto) as usize,
         Arc::as_ptr(&policy.crypto) as usize,
     ]

@@ -11,6 +11,11 @@ and 30-field monetary Core. The installed credential generation remains separate
 An authenticated experimental credential and program bundle are required; installing
 public verifier programs cannot convert an existing credential or wallet state.
 
+[DESIGN.md](DESIGN.md) consolidates the construction, its assumptions and the
+source-bound validation status. This README covers the current implementation and
+how to run it; historical research measurements do not establish complete-backend
+or physical-device performance.
+
 ## Complete proof path
 
 Each operation produces a linked Pallas/Vesta Spartan pair under a fixed program
@@ -89,12 +94,26 @@ Run from this directory and preserve the warm target across iterations:
 
 ```sh
 export CARGO_TARGET_DIR="$PWD/target"
-cargo iroha-fast -- test --locked --offline --release --lib
-KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS="$PWD/output/full-backend-chain/native-device" \
+cargo iroha-fast -- test --locked --offline --release --lib -- --test-threads=1
+run_dir="$PWD/output/full-backend-run-$(date -u +%Y%m%dT%H%M%SZ)"
+KAGEMUSHA_SPARTAN_TEST_LAYOUT=p18-s17 \
+  KAGEMUSHA_SPARTAN_TEST_OUTPUT="$run_dir" \
   cargo iroha-fast -- test --locked --offline --release --lib \
   full::backend_chain_tests::complete_recursive_bootstrap_load_send_receive \
   -- --ignored --exact --nocapture --test-threads=1
 ```
+
+A full-chain run reserves a new output directory and refuses to overwrite an
+earlier run. It writes the authenticated device bundle under `native-device/`.
+The test-only layout choices are `p18-s17`, `p17-s17` and `p18-s16`; the selected
+layout must pass complete validation. The separately named
+`measure_recursive_layout_candidate` test records candidate costs and runs the
+actual monetary chain, but does not run the fifteen-case native containment gate.
+
+The saved bundle can independently drive fresh native proof and containment
+checks with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS="$run_dir/native-device"` and
+the ignored test
+`native::engine::adversarial_tests::authenticated_native_containment_from_bundle`.
 
 A fresh checkout may need an initial dependency fetch before `--offline` works.
 The isolated physical fixture lives under `device/runtime`; the iOS runtime UI is

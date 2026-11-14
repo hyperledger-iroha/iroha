@@ -614,7 +614,7 @@ impl LiveObligations {
         // An invalid or incomplete capture set never weakens the old conservative graph pin.
         if super::native_amx_capture::enabled(world.runtime_selection.canonical()).ok()
             == Some(true)
-            && super::native_amx_capture::validate_persistence(&*world).is_ok()
+            && super::native_amx_capture::validate_persistence(world).is_ok()
         {
             amx.amx_decisions = 0;
             amx.amx_settlements = 0;

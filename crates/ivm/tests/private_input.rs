@@ -9,8 +9,7 @@ fn private_input_program() -> Vec<u8> {
     }
     .encode();
     program.extend_from_slice(
-        &encoding::wide::encode_scall(syscalls::SYSCALL_GET_PRIVATE_INPUT)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(syscalls::SYSCALL_GET_PRIVATE_INPUT).to_le_bytes(),
     );
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program

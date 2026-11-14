@@ -418,6 +418,8 @@ game.sessions.list	GET	/v1/games/sessions	public	torii_default	public	read	http	
 game.verifications.get	GET	/v1/games/verifications/{verification_id}	public	torii_default	public	read	http	always	false	false	false	false
 game_partition.export_proof.read	GET	/v1/game-partitions/{world}/exports/{receipt}/proof	public	torii_default	public	read	http	always	true	false	false	false
 game_partition.state.read	GET	/v1/game-partitions/{world}/state	public	torii_default	public	read	http	always	true	false	false	false
+game_partition.transfer.read	GET	/v1/game-partitions/{world}/transfers/{transfer}/state	public	torii_default	public	read	http	always	true	false	false	false
+game_partition.transfer_proof.read	GET	/v1/game-partitions/{world}/transfers/{transfer}/proof/{kind}	public	torii_default	public	read	http	always	true	false	false	false
 governance.ballot.plain	POST	/v1/gov/ballots/plain	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1	POST	/v1/gov/ballots/zk-v1	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1_proof	POST	/v1/gov/ballots/zk-v1/ballot-proof	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
@@ -524,6 +526,10 @@ operator.node.query_projection.shard_export	GET	/v1/node/query/projection/shards
 operator.runtime.boundary.anchor.attest	POST	/v1/runtime/boundaries/anchor/attest	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.boundary.floor.attest	POST	/v1/runtime/boundaries/floor/attest	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.boundary.list	GET	/v1/runtime/boundaries	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.checkpoint.artifact	POST	/v1/runtime/checkpoint/artifact	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.checkpoint.finish	POST	/v1/runtime/checkpoint/finish	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.checkpoint.package	GET	/v1/runtime/checkpoint/package	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.checkpoint.range	POST	/v1/runtime/checkpoint/range	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.containment.list	GET	/v1/runtime/containments	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.migration.draft	POST	/v1/runtime/migrations/draft	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.release	GET	/v1/runtime/release	operator	operator_signature	operator	read	http	always	false	true	false	true

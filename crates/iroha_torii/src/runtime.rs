@@ -2882,9 +2882,10 @@ mod tests {
             }),
         )
         .await
-        .expect("draft the committed content and router policies");
+        .expect("draft the committed content, router and quota policies");
         assert_eq!(policies.change_set.predecessor, catalog.baseline_id);
-        assert_eq!(policies.change_set.transitions.len(), 2);
+        // `content_policy_v1`, `settlement_router_policy_v1` and `nexus_quota_policy_v1`.
+        assert_eq!(policies.change_set.transitions.len(), 3);
         for definition in catalog.parameter_definitions() {
             assert!(
                 policies

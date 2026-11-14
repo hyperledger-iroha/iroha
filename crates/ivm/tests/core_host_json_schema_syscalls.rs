@@ -10,8 +10,7 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, encoding,
-    syscalls,
+    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, encoding, syscalls,
 };
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
@@ -172,10 +171,8 @@ fn json_encode_decode_roundtrip() {
     // ENCODE
     let enc_prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_ENCODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_ENCODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -189,10 +186,8 @@ fn json_encode_decode_roundtrip() {
     // DECODE
     let dec_prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -212,10 +207,8 @@ fn json_decode_rejects_retired_blob_carrier() {
     let p_blob = vm.alloc_input_tlv(&tlv(PointerType::Blob, json)).unwrap();
     let dec_prog = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-            .to_le_bytes(),
-            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV).to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_JSON_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -304,8 +297,7 @@ fn schema_encode_decode_roundtrip() {
     // ENCODE (inputs are already in INPUT via alloc_input_tlv)
     let enc = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -320,8 +312,7 @@ fn schema_encode_decode_roundtrip() {
     // DECODE (inputs are already in INPUT via alloc_input_tlv)
     let dec = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -344,8 +335,7 @@ fn schema_decode_rejects_blob() {
     let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
     let enc = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -361,8 +351,7 @@ fn schema_decode_rejects_blob() {
         .unwrap();
     let dec = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -391,8 +380,7 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
             .unwrap();
         let dec = common::assemble(
             &[
-                encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE)
-                .to_le_bytes(),
+                encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_DECODE).to_le_bytes(),
                 encoding::wide::encode_halt().to_le_bytes(),
             ]
             .concat(),
@@ -414,8 +402,7 @@ fn schema_unknown_and_malformed_inputs_fail_closed() {
         .unwrap();
     let enc = common::assemble(
         &[
-            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE)
-                .to_le_bytes(),
+            encoding::wide::encode_scall(syscalls::SYSCALL_SCHEMA_ENCODE).to_le_bytes(),
             encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat(),
@@ -779,10 +766,8 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_owner = vm
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();
-    vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_OBJECT
-    ]))
-    .unwrap();
+    vm.load_program(&common::assemble_syscalls(&[syscalls::SYSCALL_JSON_OBJECT]))
+        .unwrap();
     vm.run().unwrap();
     let p_payload = vm.register(10);
     vm.set_register(10, p_payload);

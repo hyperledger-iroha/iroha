@@ -36,12 +36,52 @@ class KagemushaSpartanRuntimeDeviceTest {
                 File(artifacts, name).outputStream().use { output -> input.copyTo(output) }
             }
         }
-        System.loadLibrary("kagemusha_spartan_device_fixture")
-        val report = SpartanDeviceRuntimeNative.run(KagemushaWalletAndroidPlatformV1.create(context),
-            root.absolutePath, artifacts.absolutePath, SpartanDeviceConfirmation())
-        File(context.filesDir, "spartan-native-runtime-report.txt").writeText(report)
-        instrumentation.sendStatus(0, Bundle().apply { putString("spartanRuntime", report) })
-        assertTrue(report, report.startsWith("PASS:"))
+        instrumentation.runOnMainSync { SpartanRuntimeWindow.running = true }
+        try {
+            instrumentation.startActivitySync(
+                Intent(instrumentation.context, KagemushaSpartanRuntimeActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            System.loadLibrary("kagemusha_spartan_device_fixture")
+            val report = SpartanDeviceRuntimeNative.run(KagemushaWalletAndroidPlatformV1.create(context),
+                root.absolutePath, artifacts.absolutePath, SpartanDeviceConfirmation())
+            File(context.filesDir, "spartan-native-runtime-report.txt").writeText(report)
+            instrumentation.sendStatus(0, Bundle().apply { putString("spartanRuntime", report) })
+            assertTrue(report, report.startsWith("PASS:"))
+        } finally {
+            instrumentation.runOnMainSync {
+                SpartanRuntimeWindow.running = false
+                SpartanRuntimeWindow.activity?.finish()
+                SpartanRuntimeWindow.activity = null
+            }
+        }
+    }
+}
+
+/** Keep only this fixture's visible window awake while its native run is active. */
+private object SpartanRuntimeWindow {
+    // Accessed only on the main thread. Process death resets the active-run gate.
+    var running = false
+    var activity: KagemushaSpartanRuntimeActivity? = null
+}
+
+/** A recreated window cannot outlive the active instrumentation run. */
+class KagemushaSpartanRuntimeActivity : Activity() {
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        if (!SpartanRuntimeWindow.running) { finish(); return }
+        SpartanRuntimeWindow.activity = this
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContentView(TextView(this).apply {
+            textSize = 18f; setPadding(32, 48, 32, 32)
+            text = "Experimental KAGEMUSHA native fixture\n\n" +
+                "Verifying hardware custody and complete payment proofs.\n\n" +
+                "The isolated Send will request Android authentication."
+        })
+    }
+    override fun onDestroy() {
+        if (SpartanRuntimeWindow.activity === this) SpartanRuntimeWindow.activity = null
+        super.onDestroy()
     }
 }
 
@@ -62,10 +102,15 @@ internal class SpartanDeviceConfirmation {
         val request = SpartanDevicePrompt.Request(review.copyOf(), projection)
         SpartanDevicePrompt.register(request)
         try {
+            android.util.Log.i("SpartanDeviceFixture", "confirmation-required review=${request.digest}")
             val context = InstrumentationRegistry.getInstrumentation().context
             context.startActivity(Intent(context, KagemushaSpartanConfirmationActivity::class.java)
                 .putExtra("ticket", request.ticket.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return request.ticket.await(120, TimeUnit.SECONDS)
+            val confirmed = request.ticket.await(120, TimeUnit.SECONDS)
+            if (confirmed) {
+                android.util.Log.i("SpartanDeviceFixture", "confirmation-granted review=${request.digest}")
+            }
+            return confirmed
         } finally {
             request.ticket.fail(IllegalStateException("Hardware confirmation closed"))
             SpartanDevicePrompt.clear(request)
@@ -97,7 +142,8 @@ class KagemushaSpartanConfirmationActivity : Activity() {
         val selected = intent.getStringExtra("ticket")?.let(SpartanDevicePrompt::claim)
             ?: run { finish(); return }
         request = selected; selected.activity = this
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(TextView(this).apply {
             textSize = 18f; setPadding(32, 48, 32, 32)
             text = "Experimental KAGEMUSHA hardware fixture\n\n" +

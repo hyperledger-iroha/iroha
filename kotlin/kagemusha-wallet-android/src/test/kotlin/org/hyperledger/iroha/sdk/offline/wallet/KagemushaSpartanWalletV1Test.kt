@@ -6,6 +6,18 @@ import kotlin.test.*
 import org.junit.jupiter.api.Test
 
 class KagemushaSpartanWalletV1Test {
+    @Test fun `completed non Send has no Payment but head and completion remain required`() {
+        fun reply(status: Int, data: ByteArray = byteArrayOf()) =
+            KagemushaSpartanReplyV1(status, -1, 0, 0, 0, 0, data).checked()
+        val output = KagemushaSpartanRetainedOutputV1.from(reply(1), KagemushaSpartanOutputV1.PAYMENT)
+        assertContentEquals(byteArrayOf(), assertIs<KagemushaSpartanRetainedOutputV1.Released>(output).bytes())
+        for (part in listOf(KagemushaSpartanOutputV1.HEAD, KagemushaSpartanOutputV1.COMPLETION)) {
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanRetainedOutputV1.from(reply(1), part) }
+        }
+        assertFailsWith<KagemushaWalletExceptionV1> {
+            KagemushaSpartanRetainedOutputV1.from(reply(2, byteArrayOf(1)), KagemushaSpartanOutputV1.PAYMENT)
+        }
+    }
     @Test fun `admission refuses another credential profile before Native`() {
         for (count in listOf(0, 532, 595, 597)) assertFails {
             KagemushaSpartanAccountOriginalsV1(ByteArray(count), ByteArray(172), byteArrayOf(1), byteArrayOf(2))

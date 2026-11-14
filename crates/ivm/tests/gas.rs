@@ -182,9 +182,7 @@ fn test_syscall_additional_gas() {
     vm.set_host(ExtraCostHost);
     vm.set_register(10, 5);
     let mut prog = Vec::new();
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(1).to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(1).to_le_bytes());
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -198,9 +196,7 @@ fn syscall_quote_is_debited_before_host_side_effects() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = SideEffectHost { calls: 0 };
     let mut prog = Vec::new();
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(1).to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(1).to_le_bytes());
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -241,9 +237,7 @@ fn syscall_refunds_unused_quote_and_preserves_host_budget_view() {
         observed_remaining: 0,
     };
     let mut prog = Vec::new();
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(1).to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(1).to_le_bytes());
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -257,9 +251,7 @@ fn syscall_rejects_a_host_cost_above_its_quote() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = UnderquotingHost;
     let mut prog = Vec::new();
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(1).to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(1).to_le_bytes());
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
@@ -288,8 +280,7 @@ fn metered_syscall_error_debits_gas_and_preserves_error() {
     vm.set_host(MeteredErrorHost);
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_scall(ivm::syscalls::SYSCALL_EXIT)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm::syscalls::SYSCALL_EXIT).to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
@@ -305,8 +296,7 @@ fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
     vm.set_host(MeteredErrorHost);
     let mut prog = Vec::new();
     prog.extend_from_slice(
-        &encoding::wide::encode_scall(ivm::syscalls::SYSCALL_EXIT)
-        .to_le_bytes(),
+        &encoding::wide::encode_scall(ivm::syscalls::SYSCALL_EXIT).to_le_bytes(),
     );
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
@@ -321,9 +311,7 @@ fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = UnmeteredErrorHost { calls: 0 };
     let mut prog = Vec::new();
-    prog.extend_from_slice(
-        &encoding::wide::encode_scall(1).to_le_bytes(),
-    );
+    prog.extend_from_slice(&encoding::wide::encode_scall(1).to_le_bytes());
     prog.extend_from_slice(&HALT);
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();

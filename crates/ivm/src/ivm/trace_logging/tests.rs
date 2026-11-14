@@ -232,9 +232,11 @@ fn snapshot_preserves_independent_pending_capacity_and_reset_keeps_pool_identity
         .unwrap();
     assert_eq!(original.reserved_bytes(), before + demand);
     original.set_limit_bytes(0);
-    copies
-        .cycles
-        .record_reserved(vm.pc, [9; crate::parallel::REGISTER_COUNT], [true; crate::parallel::REGISTER_COUNT]);
+    copies.cycles.record_reserved(
+        vm.pc,
+        [9; crate::parallel::REGISTER_COUNT],
+        [true; crate::parallel::REGISTER_COUNT],
+    );
     let mut copied_registers = vm.registers.snapshot();
     copied_registers[7] = 23;
     copies

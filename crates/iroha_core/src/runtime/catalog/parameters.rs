@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use iroha_data_model::{
     NetworkId,
     content_policy::ContentPolicyV1,
+    nexus_quota_policy::NexusQuotaPolicyV1,
     parameter::CustomParameter,
     runtime::{
         definition::{
@@ -31,7 +32,8 @@ use iroha_data_model::{
 use super::{CatalogError, ReleaseCatalog, layout_suffix, sorted};
 
 /// Module name an operator drafts the activation of [`PARAMETERS`] under
-/// ([`crate::runtime::draft_addition`]).
+/// ([`crate::runtime::draft_addition`]). It names the first two parameters it published; the
+/// draft activates every parameter of [`PARAMETERS`] the root does not recognize yet.
 pub const MODULE: &str = "iroha.parameter.content_and_router_policy.v1";
 
 /// One typed committed parameter a release adds after the frozen baseline.
@@ -55,7 +57,8 @@ pub struct ParameterAddition {
 pub type ParameterInstaller = fn(&[u8]) -> Result<CustomParameter, String>;
 
 /// The typed committed parameters this release adds, in publication order.
-pub const PARAMETERS: &[ParameterAddition] = &[CONTENT_POLICY, SETTLEMENT_ROUTER_POLICY];
+pub const PARAMETERS: &[ParameterAddition] =
+    &[CONTENT_POLICY, SETTLEMENT_ROUTER_POLICY, NEXUS_QUOTA_POLICY];
 
 /// The committed content-bundle limits `PublishContentBundle` applies (`content_policy_v1`).
 pub const CONTENT_POLICY: ParameterAddition = ParameterAddition {
@@ -101,6 +104,31 @@ pub const SETTLEMENT_ROUTER_POLICY: ParameterAddition = ParameterAddition {
         Some(Err(error)) => Err(error.to_string()),
         None => Err(format!(
             "{} is not the settlement router policy parameter",
+            parameter.id().name()
+        )),
+    },
+};
+
+/// The committed uploaded-model ceilings `RegisterSoracloudUploadedModelBundle` applies and the
+/// per-account DA ingest quota ceilings (`nexus_quota_policy_v1`).
+pub const NEXUS_QUOTA_POLICY: ParameterAddition = ParameterAddition {
+    name: NexusQuotaPolicyV1::PARAMETER_ID_STR,
+    nominal: || norito::schema::identity::nominal_name::<NexusQuotaPolicyV1>().into_owned(),
+    initial: || {
+        norito::encode_canonical(&NexusQuotaPolicyV1::protocol_default())
+            .map_err(|error| error.to_string())
+    },
+    install: |bytes| {
+        let policy = norito::decode_canonical::<NexusQuotaPolicyV1>(bytes)
+            .map_err(|error| error.to_string())?;
+        policy.validate().map_err(|error| error.to_string())?;
+        Ok(policy.into_custom_parameter())
+    },
+    canonical: |parameter| match NexusQuotaPolicyV1::from_custom_parameter(parameter) {
+        Some(Ok(policy)) => norito::encode_canonical(&policy).map_err(|error| error.to_string()),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err(format!(
+            "{} is not the Nexus quota policy parameter",
             parameter.id().name()
         )),
     },
@@ -315,6 +343,25 @@ mod tests {
         );
         // Malformed initial bytes are refused, never installed.
         assert!((CONTENT_POLICY.install)(&[0, 1, 2]).is_err());
+
+        let quotas =
+            (NEXUS_QUOTA_POLICY.install)(&(NEXUS_QUOTA_POLICY.initial)().unwrap()).unwrap();
+        assert_eq!(
+            quotas,
+            NexusQuotaPolicyV1::protocol_default().into_custom_parameter()
+        );
+        let invalid_quotas = NexusQuotaPolicyV1 {
+            max_da_ingest_bytes_per_account: 0,
+            ..NexusQuotaPolicyV1::protocol_default()
+        };
+        assert!((NEXUS_QUOTA_POLICY.canonical)(&invalid_quotas.into_custom_parameter()).is_err());
+        assert!(
+            (NEXUS_QUOTA_POLICY.canonical)(
+                &ContentPolicyV1::protocol_default().into_custom_parameter()
+            )
+            .is_err()
+        );
+        assert!((NEXUS_QUOTA_POLICY.install)(&[0, 1, 2]).is_err());
     }
 
     #[test]
@@ -357,8 +404,42 @@ mod tests {
             catalog
                 .parameter_activation(&applied.selection, &after, network(), 10, [3; 32])
                 .is_err(),
-            "a root that recognizes both parameters has nothing to activate"
+            "a root that recognizes every parameter has nothing to activate"
         );
+    }
+
+    #[test]
+    fn the_draft_activates_only_the_parameters_a_root_does_not_recognize() {
+        // A root that activated the content and router policies before this release added the
+        // quota policy drafts the quota policy alone.
+        let catalog = release_catalog().expect("release catalog");
+        let mut published: BTreeMap<DefinitionId, DefinitionDescriptorV1> = catalog
+            .baseline_definitions
+            .iter()
+            .map(|id| (*id, catalog.definitions[id].clone()))
+            .collect();
+        let mut current = catalog.baseline.clone();
+        for addition in [CONTENT_POLICY, SETTLEMENT_ROUTER_POLICY] {
+            let id = addition.definition_id().expect("definition");
+            published.insert(id, catalog.definitions[&id].clone());
+            current.active.push(id);
+        }
+        current.active = sorted(current.active);
+        let quotas = NEXUS_QUOTA_POLICY.definition_id().expect("definition");
+        let change = catalog
+            .parameter_activation(&current, &published, network(), 9, [3; 32])
+            .expect("draft");
+        assert_eq!(
+            change.transitions,
+            [SelectionTransitionV1::Activate(quotas)]
+        );
+        assert_eq!(change.publish, [catalog.definitions[&quotas].clone()]);
+        let applied = change
+            .apply(&current, &published)
+            .expect("the draft applies to a root that recognizes two parameters");
+        for id in catalog.parameter_definitions() {
+            assert!(applied.selection.active.binary_search(&id).is_ok());
+        }
     }
 
     #[test]

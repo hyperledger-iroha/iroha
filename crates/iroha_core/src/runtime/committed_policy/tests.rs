@@ -1,10 +1,10 @@
-//! Recognition, activation and retirement of the committed content and router policies at the
-//! level the kernel drives them: governed change sets activated at block start, `SetParameter`
-//! executed in blocks, and the values blocks, views and digests read.
+//! Recognition, activation and retirement of the committed content, router and quota policies at
+//! the level the kernel drives them: governed change sets activated at block start,
+//! `SetParameter` executed in blocks, and the values blocks, views and digests read.
 
 use std::num::NonZeroU64;
 
-use iroha_config::parameters::actual::Settlement;
+use iroha_config::parameters::actual::{NexusConsensusQuotaSlotsV1, Settlement};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
@@ -104,6 +104,15 @@ fn router() -> SettlementRouterPolicyV1 {
         buffer_xor_only_pct: 12,
         buffer_halt_pct: 3,
         buffer_horizon_hours: 48,
+    }
+}
+
+fn quotas() -> NexusQuotaPolicyV1 {
+    NexusQuotaPolicyV1 {
+        max_uploaded_model_plaintext_bytes: 4_096,
+        max_uploaded_model_chunks: 2,
+        max_da_ingests_per_account: 3,
+        max_da_ingest_bytes_per_account: 8_192,
     }
 }
 
@@ -217,9 +226,15 @@ fn activate(state: &State, height: u64) {
 
 /// The change set that disables and deactivates the content policy definition at `height`.
 fn retire_content(state: &State, height: u64) -> ChangeSetV1 {
+    retire(state, &CONTENT_POLICY, height)
+}
+
+/// The change set that disables and deactivates the Parameter definition of `addition` at
+/// `height`.
+fn retire(state: &State, addition: &ParameterAddition, height: u64) -> ChangeSetV1 {
     let view = state.world.view();
     let current = view.runtime_selection().clone();
-    let definition = CONTENT_POLICY.definition_id().unwrap();
+    let definition = addition.definition_id().unwrap();
     let mut successor = current.clone();
     successor.active.retain(|id| *id != definition);
     let change = ChangeSetV1 {
@@ -256,6 +271,7 @@ fn an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing()
     let installed_settlement = state.settlement_snapshot();
     assert!(!content_recognized(&selection(&state)));
     assert!(!settlement_router_recognized(&selection(&state)));
+    assert!(!nexus_quotas_recognized(&selection(&state)));
 
     // Valid and malformed values are stored exactly as the frozen baseline stores them.
     set(
@@ -264,9 +280,14 @@ fn an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing()
             opaque(ContentPolicyV1::PARAMETER_ID_STR, Json::new("not a policy")),
             content().into_custom_parameter(),
             opaque(SettlementRouterPolicyV1::PARAMETER_ID_STR, Json::new(7_u32)),
+            quotas().into_custom_parameter(),
         ],
     )
     .expect("an unrecognized identifier is an ordinary custom parameter");
+    assert_eq!(
+        stored(&state, NexusQuotaPolicyV1::PARAMETER_ID_STR),
+        Some(quotas().into_custom_parameter())
+    );
     assert_eq!(
         stored(&state, ContentPolicyV1::PARAMETER_ID_STR),
         Some(content().into_custom_parameter())
@@ -287,14 +308,24 @@ fn an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing()
         settlement_router_policy(&view_selection, parameters.get()),
         None
     );
+    assert_eq!(nexus_quota_policy(&view_selection, parameters.get()), None);
+    assert_eq!(
+        effective_nexus_quotas(&view_selection, parameters.get()),
+        NexusQuotaPolicyV1::protocol_default()
+    );
     drop(parameters);
     for name in [
         ContentPolicyV1::PARAMETER_ID_STR,
         SettlementRouterPolicyV1::PARAMETER_ID_STR,
+        NexusQuotaPolicyV1::PARAMETER_ID_STR,
     ] {
         assert!(!consensus_owned(&view_selection, &name.parse().unwrap()));
     }
     assert_eq!(state.execution_policy_digest_v1().unwrap(), digest);
+    assert_eq!(
+        state.query_view().nexus_quotas_for_validation(false),
+        NexusQuotaPolicyV1::protocol_default()
+    );
     assert_eq!(
         content_policy_of(&state.content_snapshot()),
         content_policy_of(&installed_content)
@@ -322,6 +353,7 @@ fn an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing()
         settlement_router_policy_of(&block.settlement),
         settlement_router_policy_of(&installed_settlement)
     );
+    assert_eq!(block.nexus_quotas, NexusQuotaPolicyV1::protocol_default());
 }
 
 #[test]
@@ -338,6 +370,7 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
                 SettlementRouterPolicyV1::PARAMETER_ID_STR,
                 Json::new("halt"),
             ),
+            quotas().into_custom_parameter(),
         ],
     )
     .unwrap();
@@ -346,6 +379,7 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
     let current = selection(&state);
     assert!(content_recognized(&current));
     assert!(settlement_router_recognized(&current));
+    assert!(nexus_quotas_recognized(&current));
     // Activation wrote the initial values over the opaque ones.
     assert_eq!(
         stored(&state, ContentPolicyV1::PARAMETER_ID_STR),
@@ -354,6 +388,16 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
     assert_eq!(
         stored(&state, SettlementRouterPolicyV1::PARAMETER_ID_STR),
         Some(SettlementRouterPolicyV1::protocol_default().into_custom_parameter())
+    );
+    assert_eq!(
+        stored(&state, NexusQuotaPolicyV1::PARAMETER_ID_STR),
+        Some(NexusQuotaPolicyV1::protocol_default().into_custom_parameter())
+    );
+    // A block that replaces the activating one is validated under the root before it, which
+    // did not recognize the opaque value.
+    assert_eq!(
+        state.query_view().nexus_quotas_for_validation(true),
+        NexusQuotaPolicyV1::protocol_default()
     );
     // The initial values are the constants, so nothing a chain commits to moves.
     assert_eq!(state.execution_policy_digest_v1().unwrap(), digest);
@@ -368,6 +412,7 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
     for name in [
         ContentPolicyV1::PARAMETER_ID_STR,
         SettlementRouterPolicyV1::PARAMETER_ID_STR,
+        NexusQuotaPolicyV1::PARAMETER_ID_STR,
     ] {
         assert!(consensus_owned(&current, &name.parse().unwrap()));
     }
@@ -378,6 +423,11 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
         ..content()
     };
     assert!(set(&state, [invalid.into_custom_parameter()]).is_err());
+    let invalid_quotas = NexusQuotaPolicyV1 {
+        max_da_ingests_per_account: 0,
+        ..quotas()
+    };
+    assert!(set(&state, [invalid_quotas.into_custom_parameter()]).is_err());
     assert!(
         set(
             &state,
@@ -400,6 +450,7 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
         for parameter in [
             content().into_custom_parameter(),
             router().into_custom_parameter(),
+            quotas().into_custom_parameter(),
         ] {
             SetParameter::new(Parameter::Custom(parameter))
                 .execute(&authority(), &mut transaction)
@@ -410,6 +461,7 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
             content_policy_of(&block.content),
             ContentPolicyV1::protocol_default()
         );
+        assert_eq!(block.nexus_quotas, NexusQuotaPolicyV1::protocol_default());
         assert_eq!(
             settlement_router_policy_of(&block.settlement),
             SettlementRouterPolicyV1::protocol_default()
@@ -421,10 +473,19 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
         );
         block.commit_world_overlay_for_testing().unwrap();
     }
-    // Every later block, view and digest applies the committed value.
+    // Every later block, view and digest applies the committed value. A block that replaces the
+    // committing one is validated under the value before it.
+    let query = state.query_view();
+    assert_eq!(query.nexus_quotas_for_validation(false), quotas());
+    assert_eq!(
+        query.nexus_quotas_for_validation(true),
+        NexusQuotaPolicyV1::protocol_default()
+    );
+    drop(query);
     let next = state.block(header());
     assert_eq!(content_policy_of(&next.content), content());
     assert_eq!(settlement_router_policy_of(&next.settlement), router());
+    assert_eq!(next.nexus_quotas, quotas());
     assert!(
         next.settlement_engine
             .matches_router_config(&settlement_of(&router()).router)
@@ -442,6 +503,55 @@ fn activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committ
     drop(view);
     assert_eq!(content_policy_of(&state.content_snapshot()), content());
     assert_ne!(state.execution_policy_digest_v1().unwrap(), digest);
+}
+
+#[test]
+fn committed_quotas_move_no_signed_commitment_and_retire_only_at_the_default() {
+    let state = state();
+    let digest = state.execution_policy_digest_v1().unwrap();
+    activate(&state, 2);
+    set(&state, [quotas().into_custom_parameter()]).unwrap();
+    // The quota slots of the signed commitments hold their frozen V1 values.
+    assert_eq!(state.execution_policy_digest_v1().unwrap(), digest);
+    assert_eq!(state.block(header()).nexus_quotas, quotas());
+
+    // A retirement that would leave its own block under a non-default value lapses.
+    let early = retire(&state, &NEXUS_QUOTA_POLICY, 3);
+    schedule(&state.world, &early);
+    assert_eq!(
+        start_block(&state.world, 3, &early),
+        ChangeSetStatusV1::Lapsed(3)
+    );
+    assert!(nexus_quotas_recognized(&selection(&state)));
+    set(
+        &state,
+        [NexusQuotaPolicyV1::protocol_default().into_custom_parameter()],
+    )
+    .unwrap();
+    let retirement = retire(&state, &NEXUS_QUOTA_POLICY, 4);
+    schedule(&state.world, &retirement);
+    assert_eq!(
+        start_block(&state.world, 4, &retirement),
+        ChangeSetStatusV1::Activated(4)
+    );
+    let retired = selection(&state);
+    assert!(!nexus_quotas_recognized(&retired));
+    assert!(content_recognized(&retired));
+    // The identifier is opaque again: a stored value applies nowhere.
+    set(&state, [quotas().into_custom_parameter()]).unwrap();
+    assert_eq!(
+        state.block(header()).nexus_quotas,
+        NexusQuotaPolicyV1::protocol_default()
+    );
+    assert_eq!(
+        state.query_view().nexus_quotas_for_validation(false),
+        NexusQuotaPolicyV1::protocol_default()
+    );
+    assert!(!consensus_owned(
+        &retired,
+        &NexusQuotaPolicyV1::PARAMETER_ID_STR.parse().unwrap()
+    ));
+    assert_eq!(state.execution_policy_digest_v1().unwrap(), digest);
 }
 
 #[test]
@@ -535,7 +645,17 @@ fn a_disabled_definition_is_not_recognized_and_other_restrictions_change_nothing
             "{restriction:?}"
         );
         assert!(settlement_router_recognized(&restricted));
+        assert!(nexus_quotas_recognized(&restricted));
     }
+    // A `Disabled` restriction of the quota definition stops recognizing it alone.
+    let mut disabled = active.clone();
+    disabled.restrictions.push(RestrictionEntryV1 {
+        definition: NEXUS_QUOTA_POLICY.definition_id().unwrap(),
+        restriction: RestrictionV1::Disabled(1),
+    });
+    disabled.restrictions.sort_by_key(|entry| entry.definition);
+    assert!(!nexus_quotas_recognized(&disabled));
+    assert!(content_recognized(&disabled));
 }
 
 #[test]
@@ -578,6 +698,24 @@ fn readers_treat_absent_and_malformed_values_of_a_recognizing_root_as_the_defaul
         )),
         settlement_router_policy_of(&Settlement::default())
     );
+    assert_eq!(
+        nexus_quota_policy(&active, &parameters),
+        Some(NexusQuotaPolicyV1::protocol_default())
+    );
+    parameters.set_parameter(Parameter::Custom(opaque(
+        NexusQuotaPolicyV1::PARAMETER_ID_STR,
+        Json::new("not a policy"),
+    )));
+    assert_eq!(
+        effective_nexus_quotas(&active, &parameters),
+        NexusQuotaPolicyV1::protocol_default()
+    );
+    parameters.set_parameter(Parameter::Custom(quotas().into_custom_parameter()));
+    assert_eq!(effective_nexus_quotas(&active, &parameters), quotas());
+    assert_eq!(
+        effective_nexus_quotas(&catalog.baseline, &parameters),
+        NexusQuotaPolicyV1::protocol_default()
+    );
 }
 
 #[test]
@@ -587,6 +725,28 @@ fn the_protocol_defaults_are_the_constants_an_unrecognizing_root_applies() {
     assert_eq!(
         content_policy_of(&state.content_snapshot()),
         ContentPolicyV1::protocol_default()
+    );
+    // The quotas of an unrecognizing root are the protocol default, which equals the slots every
+    // first-release genesis signed.
+    assert_eq!(
+        state.block(header()).nexus_quotas,
+        NexusQuotaPolicyV1::protocol_default()
+    );
+    let default = NexusQuotaPolicyV1::protocol_default();
+    let slots = NexusConsensusQuotaSlotsV1::FROZEN;
+    assert_eq!(
+        (
+            slots.max_plaintext_bytes_per_model,
+            slots.max_chunk_count_per_model,
+            slots.ingest_quota_max_count_per_account,
+            slots.ingest_quota_max_bytes_per_account,
+        ),
+        (
+            default.max_uploaded_model_plaintext_bytes,
+            default.max_uploaded_model_chunks,
+            default.max_da_ingests_per_account,
+            default.max_da_ingest_bytes_per_account,
+        )
     );
     assert_eq!(
         settlement_router_policy_of(&state.settlement_snapshot()),

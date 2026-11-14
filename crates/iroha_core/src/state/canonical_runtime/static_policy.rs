@@ -4,8 +4,9 @@
 //! Keeping the existing block snapshots here removes transaction copies and makes
 //! a temporary policy substitution impossible through the execution-scope API.
 //! This is original input custody, not a policy digest or publication authority.
-//! The content limits and router inputs of a root that recognizes them are its
-//! committed policy (`runtime::committed_policy`), frozen from the predecessor.
+//! The content limits, router inputs and uploaded-model and DA ingest quotas of a
+//! root that recognizes them are its committed policy (`runtime::committed_policy`),
+//! frozen from the predecessor.
 //! TODO: migrate the remaining node-configuration families (oracle, governance)
 //! into the existing committed policy owners. Immutable capture alone does not
 //! make local policies consensus parameters or complete the keyed State
@@ -69,6 +70,10 @@ pub struct StaticExecutionPolicy {
     /// Settlement router inputs of the predecessor, committed when its root
     /// recognizes them.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Uploaded-model and DA ingest quotas of the predecessor: its committed
+    /// `nexus_quota_policy_v1` when its root recognizes it, the protocol default
+    /// otherwise. No node setting contributes.
+    pub nexus_quotas: iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1,
     // Keep construction in this module, including from other modules in this crate.
     _original: (),
 }
@@ -76,8 +81,8 @@ pub struct StaticExecutionPolicy {
 impl StaticExecutionPolicy {
     /// Move the existing construction snapshots into their immutable owner.
     ///
-    /// `world` is the predecessor the block freezes: the content limits and
-    /// router inputs of a root that recognizes them are its committed values.
+    /// `world` is the predecessor the block freezes: the content limits, router
+    /// inputs and quotas of a root that recognizes them are its committed values.
     pub(super) fn capture(state: &State, world: &impl crate::state::WorldReadOnly) -> Self {
         let selection = world.runtime_selection();
         let parameters = world.parameters();
@@ -94,6 +99,9 @@ impl StaticExecutionPolicy {
                 &state.settlement,
                 selection,
                 parameters,
+            ),
+            nexus_quotas: crate::runtime::committed_policy::effective_nexus_quotas(
+                selection, parameters,
             ),
             _original: (),
         }

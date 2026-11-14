@@ -123,7 +123,7 @@ impl CheckpointPrefixExport {
         }
         let verifier = verifier(&genesis, state.chain_id_ref(), *state.network_id_ref())?;
         let instance =
-            crate::sumeragi::node::root_instance(&genesis, &state.chain_id_ref().to_string())
+            crate::sumeragi::node::root_instance(&genesis, state.chain_id_ref().as_ref())
                 .map_err(|error| error.map_rejection(Error::Invalid))?;
         let crypto = Arc::new(BlsCrypto::new());
         let availability = Arc::new(

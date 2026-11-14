@@ -3,6 +3,18 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaSpartanWalletV1Tests: XCTestCase {
+  func testCompletedNonSendHasNoPaymentButHeadAndCompletionRemainRequired() throws {
+    let empty = KagemushaSpartanReplyV1(status: 1, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data())
+    guard case .released(let bytes) = try KagemushaSpartanRetainedOutputV1(empty, part: .payment) else {
+      return XCTFail("Completed operation must remain released when it has no outgoing Payment")
+    }
+    XCTAssertTrue(bytes.isEmpty)
+    for part: KagemushaSpartanOutputV1 in [.head, .completion] {
+      XCTAssertThrowsError(try KagemushaSpartanRetainedOutputV1(empty, part: part))
+    }
+    let pending = KagemushaSpartanReplyV1(status: 2, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data([1]))
+    XCTAssertThrowsError(try KagemushaSpartanRetainedOutputV1(pending, part: .payment))
+  }
   func testAdmissionRejectsAnotherCredentialProfileBeforeNative() throws {
     for count in [0, 532, 595, 597] {
       XCTAssertThrowsError(try KagemushaSpartanAccountOriginalsV1(credential: Data(repeating: 0, count: count),

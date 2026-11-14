@@ -75,9 +75,15 @@ fn public_capacities_ignore_private_logical_change_counts() {
     assert_eq!(demand(&changed), same_bytes);
     assert_eq!(same.0.pcs.capacity(), 8);
     assert_eq!(same.0.rows.capacity(), 4);
-    assert_eq!(same.0.changes.capacity(), 2 * crate::parallel::REGISTER_COUNT - 1);
+    assert_eq!(
+        same.0.changes.capacity(),
+        2 * crate::parallel::REGISTER_COUNT - 1
+    );
     assert!(same.delta(1).unwrap().changes.is_empty());
-    assert_eq!(changed.delta(1).unwrap().changes.len(), crate::parallel::REGISTER_COUNT - 1);
+    assert_eq!(
+        changed.delta(1).unwrap().changes.len(),
+        crate::parallel::REGISTER_COUNT - 1
+    );
     assert_eq!(same.delta(0), same_delta.entry(0));
     assert_eq!(changed.delta(1), changed_delta.entry(1));
     assert_ne!(same.pcs().as_ptr(), same_pc.as_slice().as_ptr());
@@ -160,7 +166,10 @@ fn combine_prepays_old_and_new_peak_and_keeps_refused_checkpoints() {
     assert!(combined.delta(1).unwrap().changes.is_empty());
     assert_eq!(combined.delta(2).unwrap().changes[7], (7, 40, true));
     assert_eq!(combined.delta(3).unwrap().changes[6], (7, 41, false));
-    assert_eq!(combined.0.changes.capacity(), 1022);
+    assert_eq!(
+        combined.0.changes.capacity(),
+        4 * crate::parallel::REGISTER_COUNT - 2
+    );
     drop((a, b));
     assert_eq!(original.reserved_bytes(), wanted + demand(&checkpoint));
     assert_eq!(checkpoint.delta_len(), 2);
@@ -283,7 +292,10 @@ fn capture_retains_unobserved_capacity_without_consuming_source_batch() {
     assert_eq!(capture.delta_len(), 0);
     assert_eq!(capture.0.pcs.capacity(), 19);
     assert_eq!(capture.0.rows.capacity(), 4);
-    assert_eq!(capture.0.changes.capacity(), 258);
+    assert_eq!(
+        capture.0.changes.capacity(),
+        crate::parallel::REGISTER_COUNT + 2
+    );
     original.set_limit_bytes(0);
     let mut registers = [0; crate::parallel::REGISTER_COUNT];
     for pc in [4, 8, 12] {

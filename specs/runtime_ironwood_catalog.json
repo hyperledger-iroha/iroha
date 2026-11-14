@@ -1,7 +1,7 @@
 {
   "note": "Ironwood successor only; predecessor identities remain in runtime_baseline_catalog.json. See ironwood_runtime_transition.md.",
-  "predecessor": "11bc31dcbf492f25ce99e3f96ebdd4bd5f2d7afab68d123b147cf87e62a396d9",
-  "selection": "4a7ba772d1d9c049842a2a6c03619061c2323e5a06df9f0c4dcc1eb410de041d",
+  "predecessor": "ee00a2c330f0bc29c5af7fa7d414162b1763a64ac40c9207bb6976ae29af093f",
+  "selection": "b9c4daf018998cf985ef523894aa4525338d73c2e9faceb05e7f5b3aba0155d9",
   "migration": "214d5243f645b6ddfbba27f23d84235d79f94eb21d0c9d8f26f4168a4f17fed1",
   "definitions": 429,
   "canonical_definitions_hash": "3475b1cc9fa389c2c0599c3db2cb17b93956a6f796dcb87985dce29afdc5960f"

@@ -191,43 +191,6 @@ fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
     );
 }
 #[test]
-fn nexus_uploaded_models_defaults_apply() {
-    let actual = load_root(base_table());
-    assert_eq!(
-        actual.nexus.uploaded_models.max_plaintext_bytes_per_model,
-        defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL
-    );
-    assert_eq!(
-        actual.nexus.uploaded_models.max_chunk_count_per_model,
-        defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL
-    );
-}
-#[test]
-fn nexus_uploaded_models_parse_applies_explicit_overrides() {
-    let mut table = base_table();
-    let nexus = table
-        .entry("nexus")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("nexus table");
-    let mut uploaded_models = Table::new();
-    uploaded_models.insert(
-        "max_plaintext_bytes_per_model".into(),
-        Value::Integer(2_097_152),
-    );
-    uploaded_models.insert("max_chunk_count_per_model".into(), Value::Integer(4_096));
-    nexus.insert("uploaded_models".into(), Value::Table(uploaded_models));
-    let actual = load_root(table);
-    assert_eq!(
-        actual.nexus.uploaded_models.max_plaintext_bytes_per_model,
-        2_097_152
-    );
-    assert_eq!(
-        actual.nexus.uploaded_models.max_chunk_count_per_model,
-        4_096
-    );
-}
-#[test]
 fn tiered_state_parse_accepts_da_store_root() {
     let mut table = base_table();
     let tiered = table

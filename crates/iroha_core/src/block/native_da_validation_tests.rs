@@ -8,6 +8,18 @@ impl NativeValidationFixture {
         storage_ticket: StorageTicketId,
         manifest_hash: ManifestDigest,
     ) -> DaPinIntent {
+        self.sized_pin_intent(lane_id, epoch, sequence, storage_ticket, manifest_hash, 1)
+    }
+
+    fn sized_pin_intent(
+        &self,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        storage_ticket: StorageTicketId,
+        manifest_hash: ManifestDigest,
+        payload_bytes: u64,
+    ) -> DaPinIntent {
         crate::da::signed_test_pin_intent(
             crate::da::signed_test_ingest_authorization(
                 self.chain.network_id(),
@@ -15,7 +27,7 @@ impl NativeValidationFixture {
                 lane_id,
                 epoch,
                 sequence,
-                1,
+                payload_bytes,
             ),
             &self.user,
             storage_ticket,
@@ -348,41 +360,45 @@ fn native_validation_rejects_stale_geometry_da_pin_intent_lane() {
 
 #[test]
 fn native_validation_enforces_consensus_da_ingest_quota() {
+    // The chain does not recognize `nexus_quota_policy_v1`, so its blocks apply the protocol
+    // default ceilings; no node setting can change them.
+    let ceiling = iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1::protocol_default()
+        .max_da_ingest_bytes_per_account;
     let mut fixture = NativeValidationFixture::new();
     fixture.install_da_policy();
-    fixture
-        .chain
-        .state()
-        .nexus
-        .write()
-        .da
-        .ingest_quota_max_count_per_account = nonzero!(1_u64);
     let mut proposal = fixture.proposal(vec![fixture.transaction(2_001, None)], fixture.cadence());
+    // Two intents that together declare two bytes more than one account may ingest in a window.
     proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![
-        fixture.pin_intent(
+        fixture.sized_pin_intent(
             LaneId::SINGLE,
             1,
             1,
             StorageTicketId::new([0xC1; 32]),
             ManifestDigest::new([0xD1; 32]),
+            ceiling / 2 + 1,
         ),
-        fixture.pin_intent(
+        fixture.sized_pin_intent(
             LaneId::SINGLE,
             1,
             2,
             StorageTicketId::new([0xC2; 32]),
             ManifestDigest::new([0xD2; 32]),
+            ceiling / 2 + 1,
         ),
     ])));
     let (_, error) = fixture.validate(proposal).unpack(|_| {}).err().unwrap();
-    assert!(matches!(
-        *error,
-        BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::QuotaExceeded {
-            count: 2,
-            max_count: 1,
-            ..
-        })
-    ));
+    assert!(
+        matches!(
+            *error,
+            BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::QuotaExceeded {
+                count: 2,
+                bytes,
+                max_bytes,
+                ..
+            }) if bytes == ceiling + 2 && max_bytes == ceiling
+        ),
+        "{error:?}"
+    );
     assert_eq!(fixture.chain.state().view().height(), 3);
 }
 

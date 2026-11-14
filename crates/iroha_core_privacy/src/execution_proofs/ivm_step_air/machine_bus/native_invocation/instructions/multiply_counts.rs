@@ -138,7 +138,9 @@ fn native_products_match_independent_full_width_signed_and_unsigned_arithmetic()
             (0, 4, 5),
             (4, 4, 4),
             (6, 0, 5),
-            (0, 31, 0),
+            // r30/r31 are the frame and stack pointers that the strict return
+            // checks; r29 is the highest register a leaf root may freely write.
+            (0, 29, 0),
         ] {
             let mut body = Vec::new();
             for opcode in PRODUCTS {
@@ -225,7 +227,8 @@ fn native_counts_cover_every_bit_and_zero_with_full_sixty_four_results() {
 #[test]
 fn count_rs2_fields_are_reserved_and_aliases_keep_actual_packet_history() {
     for opcode in COUNTS {
-        for (destination, first) in [(6, 4), (4, 4), (0, 4), (6, 0), (0, 31)] {
+        // r29 is the highest freely writable register (r30/r31 are FP/SP).
+        for (destination, first) in [(6, 4), (4, 4), (0, 4), (6, 0), (0, 29)] {
             let left = if first == 0 { 0 } else { 0x8000_1234_0000_0000 };
             let words = |unused| {
                 [
@@ -264,7 +267,7 @@ fn count_rs2_fields_are_reserved_and_aliases_keep_actual_packet_history() {
 fn every_product_count_workspace_and_original_operand_cell_is_constrained() {
     use crate::execution_proofs::ivm_step_air::residues::{Scratch, Stream};
     for opcode in PRODUCTS.into_iter().chain(COUNTS) {
-        let word = enc::encode_rr(opcode, 4, 4, 5);
+        let word = canonical_rr(opcode, 4, 4, 5);
         let body = [
             enc::encode_literal(wide::memory::LDI64, 4, 0),
             enc::encode_literal(wide::memory::LDI64, 5, 1),
@@ -360,7 +363,7 @@ fn three_and_six_gas_operations_still_retire_exactly_one_cycle() {
         PRODUCTS
             .into_iter()
             .chain(COUNTS)
-            .map(|opcode| enc::encode_rr(opcode, 6, 4, 5)),
+            .map(|opcode| canonical_rr(opcode, 6, 4, 5)),
     );
     // Nine body instructions cost32 gas. Initializer/Unit cost25, and the
     // thirteen actual instructions leave51 padding cycles:108 gas exactly.
@@ -418,7 +421,7 @@ fn maximum_product_count_profile_retains_fixed_workspace_on_small_stack() {
             .chain(COUNTS)
             .cycle()
             .take(58)
-            .map(|opcode| enc::encode_rr(opcode, 6, 4, 5)),
+            .map(|opcode| canonical_rr(opcode, 6, 4, 5)),
     );
     let (native, budget) = native(artifact_with_literals(
         &body,

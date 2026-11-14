@@ -24103,40 +24103,62 @@ fn soracloud_uploaded_model_register_rejects_disallowed_service_plane() -> Resul
     Ok(())
 }
 #[test]
-fn soracloud_uploaded_model_register_rejects_nexus_limit_overrides() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    deploy_uploaded_model_service(&mut stx)?;
-    let plaintext_digest = ManifestDigest::new([0xCE; 32]);
-    insert_uploaded_model_pin(&mut stx, plaintext_digest, PinStatus::Approved(1));
-    stx.nexus.uploaded_models.max_plaintext_bytes_per_model = 1;
-    let plaintext_bundle = sample_uploaded_model_bundle("portal", plaintext_digest);
-    let plaintext_result = isi::RegisterSoracloudUploadedModelBundle {
-        bundle: plaintext_bundle.clone(),
-        provenance: uploaded_model_bundle_provenance(&plaintext_bundle),
+fn soracloud_uploaded_model_register_applies_committed_quotas() -> Result<(), eyre::Report> {
+    use iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1;
+    // The sample bundle declares 4 096 plaintext bytes in one chunk.
+    let limits = |plaintext: u64, chunks: u32| NexusQuotaPolicyV1 {
+        max_uploaded_model_plaintext_bytes: plaintext,
+        max_uploaded_model_chunks: chunks,
+        ..NexusQuotaPolicyV1::protocol_default()
+    };
+    for (recognized, quotas, admitted) in [
+        // One byte or one chunk below the bundle refuses it; the exact ceilings admit it.
+        (true, limits(4_095, 1), false),
+        (true, limits(4_096, 0), false),
+        (true, limits(4_096, 1), true),
+        // A root that does not recognize the policy stores the value opaquely and applies
+        // the protocol default.
+        (false, limits(1, 0), true),
+    ] {
+        permissioned_soracloud_state!(kura, state);
+        if recognized {
+            crate::runtime::committed_policy::activate_for_testing(&state.world);
+        }
+        // The quotas are committed before the block that registers the bundle.
+        let mut world = state.world.block();
+        world.set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            quotas.into_custom_parameter(),
+        ))?;
+        world.commit();
+        soracloud_transaction!(state, block_header, state_block, stx);
+        let applied = if recognized {
+            quotas
+        } else {
+            NexusQuotaPolicyV1::protocol_default()
+        };
+        assert_eq!(stx.nexus_quotas, applied);
+        deploy_uploaded_model_service(&mut stx)?;
+        let digest = ManifestDigest::new([0xCE; 32]);
+        insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
+        let bundle = sample_uploaded_model_bundle("portal", digest);
+        let result = isi::RegisterSoracloudUploadedModelBundle {
+            bundle: bundle.clone(),
+            provenance: uploaded_model_bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx);
+        assert_eq!(result.is_ok(), admitted, "{quotas:?}: {result:?}");
+        assert_eq!(
+            stx.world
+                .soracloud_uploaded_model_bundles
+                .get(&(
+                    "portal".to_string(),
+                    "vision_model".to_string(),
+                    "v1".to_string(),
+                ))
+                .is_some(),
+            admitted
+        );
     }
-    .execute(&ALICE_ID, &mut stx);
-    assert!(plaintext_result.is_err());
-    let chunk_digest = ManifestDigest::new([0xCF; 32]);
-    insert_uploaded_model_pin(&mut stx, chunk_digest, PinStatus::Approved(1));
-    stx.nexus.uploaded_models.max_plaintext_bytes_per_model = u64::MAX;
-    stx.nexus.uploaded_models.max_chunk_count_per_model = 0;
-    let chunk_bundle = sample_uploaded_model_bundle("portal", chunk_digest);
-    let chunk_result = isi::RegisterSoracloudUploadedModelBundle {
-        bundle: chunk_bundle.clone(),
-        provenance: uploaded_model_bundle_provenance(&chunk_bundle),
-    }
-    .execute(&ALICE_ID, &mut stx);
-    assert!(chunk_result.is_err());
-    assert!(
-        stx.world
-            .soracloud_uploaded_model_bundles
-            .get(&(
-                "portal".to_string(),
-                "vision_model".to_string(),
-                "v1".to_string(),
-            ))
-            .is_none()
-    );
     Ok(())
 }
 #[test]

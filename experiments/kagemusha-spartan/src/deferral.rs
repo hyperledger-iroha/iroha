@@ -11,16 +11,16 @@
 //! `P(c, rho, x, y) = (1 - c) P_0(rho, x, y) + c P_1(rho, x, y)`,
 //! `P_k = pad_k(x, y) (rho A_k + rho^2 B_k + rho^3 C_k)`,
 //!
-//! where `pad_k` zeroes the variables kind `k` does not have. With three
-//! kinds (Receive, Send, Bootstrap) the selector has two bits, `c0` (first
+//! where `pad_k` zeroes the variables kind `k` does not have. With three or
+//! four kinds (Receive, Send, Bootstrap, Load), the selector has two bits, `c0` (first
 //! coordinate) and `c1` (last): kind `k` sits at the corner
 //! `(k & 1, k >> 1)` and `P = sum_k eq((c0, c1), corner_k) P_k`. The fourth
-//! corner `(1, 1)` selects no kind, so `P` vanishes there whatever the other
-//! coordinates: that is the empty claim a chain starts from
-//! (`MatPoly::empty_claim`). Every proof
+//! corner `(1, 1)` selects Load when four kinds are installed. The empty claim
+//! also sets `rho = 0`, making every kind's term zero for both the three-kind
+//! and four-kind profiles (`MatPoly::empty_claim`). Every proof
 //! carries one accumulated claim on it; a native verifier checks that claim
-//! with one matrix evaluation per kind (the compiled program, 0.2 ms on the
-//! Mac for a uniform circuit).
+//! against every exact authenticated compiled program. Its cost depends on
+//! the complete selected program set; small component timings do not measure it.
 //!
 //! A circuit folds four claims (the two verified proofs' accumulators and
 //! their two fresh claims) into its own accumulator in one step: the cubic
@@ -57,9 +57,9 @@ pub struct Kind<F> {
     pub eval_many: Option<Box<dyn Fn(&[(&[F], &[F], &[F])]) -> Vec<(F, F, F)> + Send + Sync>>,
 }
 
-/// The combined matrix polynomial of two or three circuit kinds, over
+/// The combined matrix polynomial of two, three or four circuit kinds, over
 /// `(c0, rho, alpha, beta, x, y)`, with a second selector bit `c1` after `y`
-/// when there are three kinds.
+/// when there are three or four kinds.
 pub struct MatPoly<F> {
     pub kinds: Vec<Kind<F>>,
     pub x: usize,
@@ -67,7 +67,7 @@ pub struct MatPoly<F> {
 }
 
 /// Kind `kind`'s selector corner `(c0, c1)`: Receive (0, 0), Send (1, 0),
-/// Bootstrap (0, 1). The corner (1, 1) is no kind's (the empty claim's).
+/// Bootstrap (0, 1), Load (1, 1). Empty claims also set rho to zero.
 pub fn kind_bits(kind: usize) -> (u64, u64) {
     assert!(kind < 4, "four kinds at most");
     ((kind & 1) as u64, (kind >> 1) as u64)
@@ -96,15 +96,15 @@ impl<F: PrimeField> MatPoly<F> {
         let y = kinds.iter().map(|k| k.sz).max().unwrap().max(y_min);
         MatPoly { kinds, x, y }
     }
-    /// The selector's bits: `c0`, and `c1` with three kinds.
+    /// The selector's bits: `c0`, and `c1` with three or four kinds.
     pub fn selector_bits(&self) -> usize {
         if self.kinds.len() > 2 { 2 } else { 1 }
     }
-    /// Variables: c0, rho, alpha, beta, then x and y, then c1 (three kinds).
+    /// Variables: c0, rho, alpha, beta, then x and y, then c1 (three or four kinds).
     pub fn n(&self) -> usize {
         3 + self.selector_bits() + self.x + self.y
     }
-    /// The coordinate of the second selector bit `c1` (three kinds).
+    /// The coordinate of the second selector bit `c1` (three or four kinds).
     pub fn c1_at(&self) -> Option<usize> {
         (self.kinds.len() > 2).then_some(4 + self.x + self.y)
     }
@@ -800,6 +800,10 @@ pub fn read_output<F: Scalar>(
         value: w[c.cell_index(fold.q, Q_HT, 0)],
     }
 }
+
+#[cfg(test)]
+#[path = "deferral_decision_tests.rs"]
+mod decision_tests;
 
 #[cfg(test)]
 mod tests {

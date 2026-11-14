@@ -161,9 +161,9 @@ fn verify_child(
     .map_err(proof_error)?;
     let verified = tracker.verify_block(&proof.block).map_err(proof_error)?;
     let cursor = record.anchor.cursor();
-    if verified.height != cursor.height
-        || verified.block_hash != cursor.consensus_hash
-        || verified.result != cursor.result
+    // The cursor's consensus hash is the child block's hash.
+    if (verified.height, verified.block_hash, verified.result)
+        != (cursor.height, cursor.consensus_hash, cursor.result)
     {
         return Err(
             invalid("retirement carrier differs from the registered child decision").into(),
