@@ -554,7 +554,7 @@ pub fn prove(
                                 &beta_tables_powers,
                                 &alphas,
                             )
-                                .mul_base(zerofier_inverse),
+                            .mul_base(zerofier_inverse),
                         );
                     }
                 }

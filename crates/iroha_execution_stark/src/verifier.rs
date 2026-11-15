@@ -145,9 +145,8 @@ pub fn verify(
     // sums below equal the integer sums.
     if has_lookups {
         let (range_total, table_total) = crate::params::lookup_occurrences_by_argument(circuit)?;
-        let (range_counts, table_counts) = proof
-            .multiplicities
-            .split_at(1usize << circuit.range_bits);
+        let (range_counts, table_counts) =
+            proof.multiplicities.split_at(1usize << circuit.range_bits);
         for (counts, expected) in [(range_counts, range_total), (table_counts, table_total)] {
             let expected = u128::from(expected);
             let mut sum = 0u128;
@@ -236,8 +235,7 @@ pub fn verify(
             &BetaPowers::new(beta),
             &BetaPowers::new(beta_tables),
             &alphas,
-        )
-            * zerofier_inverse
+        ) * zerofier_inverse
     } else {
         Fp4::ZERO
     };

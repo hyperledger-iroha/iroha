@@ -110,9 +110,7 @@ pub fn lookup_occurrences(circuit: &crate::Circuit) -> Result<u64, ParamsError> 
 ///
 /// # Errors
 /// Rejects counts that overflow or reach the field characteristic.
-pub fn lookup_occurrences_by_argument(
-    circuit: &crate::Circuit,
-) -> Result<(u64, u64), ParamsError> {
+pub fn lookup_occurrences_by_argument(circuit: &crate::Circuit) -> Result<(u64, u64), ParamsError> {
     let rows = 1u64
         .checked_shl(circuit.log_rows)
         .filter(|_| circuit.log_rows < 64)

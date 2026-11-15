@@ -646,22 +646,14 @@ fn motion(
 
     // The real road's bend under the old position: station = floor((p + lead) / 5 m), whose remainder
     // check pins it inside the table, then K * speed^2 / 2^24 truncated toward zero.
-    let station = b.div_floor(
-        &car.progress.offset(LEAD_MM),
-        STATION_MM,
-        &label("station"),
-    );
+    let station = b.div_floor(&car.progress.offset(LEAD_MM), STATION_MM, &label("station"));
     let coefficient = b.lookup_table(road, &station, &label("bend coefficient"));
     let speed_squared = b.mul(&speed1, &speed1, &label("speed^2"));
     let bend_term = b.mul(&coefficient, &speed_squared, &label("bend * speed^2"));
     let bend_force = b.div_trunc(&bend_term, FORCE_DIVISOR, &label("bend force"));
     let wind_term = b.mul(wind, &speed1, &label("wind * speed"));
     let wind_force = b.div_trunc_with_sign(&wind_term, 2_400, wind_negative, &label("wind /2400"));
-    let drift = car
-        .lateral
-        .add(&velocity)
-        .add(&bend_force)
-        .add(&wind_force);
+    let drift = car.lateral.add(&velocity).add(&bend_force).add(&wind_force);
     let lateral2 = b.clamp(
         &drift,
         &Expr::constant(-RAIL_MM),

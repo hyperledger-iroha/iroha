@@ -582,11 +582,7 @@ impl Circuit {
             .map(Constraint::degree)
             .max()
             .unwrap_or(1)
-            .max(if self.has_lookups() {
-                helper_degree
-            } else {
-                2
-            })
+            .max(if self.has_lookups() { helper_degree } else { 2 })
             .max(2)
     }
 
@@ -936,11 +932,12 @@ impl Builder {
         let value = Lin::var(Var::Main(column));
         self.lookups
             .push(value.combine(1, &Lin::constant(minus_min), 1));
-        self.table_lookups.push(
-            value
-                .combine(1, &key.lin, 1i64 << self.range_bits)
-                .combine(1, &Lin::constant(offset), 1),
-        );
+        self.table_lookups
+            .push(value.combine(1, &key.lin, 1i64 << self.range_bits).combine(
+                1,
+                &Lin::constant(offset),
+                1,
+            ));
         Expr::new(value, i128::from(min), i128::from(max), false)
     }
 

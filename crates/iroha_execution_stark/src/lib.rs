@@ -507,7 +507,9 @@ mod tests {
         let mut states = vec![vec![0i64]];
         for row in 0..steps {
             let last = states.last().unwrap()[0];
-            states.push(vec![last + a[row % a.len()] + b_values[row % b_values.len()]]);
+            states.push(vec![
+                last + a[row % a.len()] + b_values[row % b_values.len()],
+            ]);
         }
         let statement = Statement {
             steps,
@@ -634,7 +636,10 @@ mod tests {
         }
         assert_eq!(circuit.fixed_row_index(0), None);
         assert_eq!(circuit.fixed_row_index((1 << 16) - 1), None);
-        assert_eq!(circuit.fixed_row_index(values[values.len() - 1] + (1 << 16)), None);
+        assert_eq!(
+            circuit.fixed_row_index(values[values.len() - 1] + (1 << 16)),
+            None
+        );
         assert_eq!(circuit.fixed_row_index(u64::MAX), None);
         let mut distinct = values.clone();
         distinct.sort_unstable();
@@ -707,7 +712,13 @@ mod tests {
     /// Evaluates every AIR identity (circuit, boundary, both LogUp helper groups and the shared accumulator) on
     /// a main trace with the auxiliary columns `cheat` commits. Returns the failing rows and whether each
     /// argument's counts are still the exact totals the verifier requires.
-    fn audit(circuit: &Circuit, statement: &Statement, public: &[Vec<i64>], main: &[Vec<Fp>], cheat: Cheat) -> (Vec<usize>, bool) {
+    fn audit(
+        circuit: &Circuit,
+        statement: &Statement,
+        public: &[Vec<i64>],
+        main: &[Vec<Fp>],
+        cheat: Cheat,
+    ) -> (Vec<usize>, bool) {
         use crate::air::{BetaPowers, CompiledAir};
         let air = CompiledAir::new(
             circuit,
@@ -732,8 +743,18 @@ mod tests {
             }
             row
         };
-        let beta = Fp4([Fp::new(0x0123_4567), Fp::new(89), Fp::new(0xabcd), Fp::new(3)]);
-        let beta_tables = Fp4([Fp::new(0x7654_3210), Fp::new(11), Fp::new(5), Fp::new(0xfeed)]);
+        let beta = Fp4([
+            Fp::new(0x0123_4567),
+            Fp::new(89),
+            Fp::new(0xabcd),
+            Fp::new(3),
+        ]);
+        let beta_tables = Fp4([
+            Fp::new(0x7654_3210),
+            Fp::new(11),
+            Fp::new(5),
+            Fp::new(0xfeed),
+        ]);
         let range = 1u64 << circuit.range_bits;
         let range_lookups = air.range_lookups();
         let mut counts = vec![0u64; circuit.table_len()];
@@ -746,14 +767,28 @@ mod tests {
             for (i, value) in values.iter().enumerate() {
                 let v = value.as_u64();
                 let challenge = if i < range_lookups { beta } else { beta_tables };
-                inverses.push((challenge - Fp4::from_base(*value)).inverse().expect("not a challenge"));
+                inverses.push(
+                    (challenge - Fp4::from_base(*value))
+                        .inverse()
+                        .expect("not a challenge"),
+                );
                 let in_range = (v < range).then(|| usize::try_from(v).unwrap());
                 let in_tables = circuit.fixed_row_index(v).map(|p| p + range as usize);
                 let cross = matches!(cheat, Cheat::Cross);
                 let slot = if i < range_lookups {
-                    in_range.or_else(|| cross.then_some(in_tables).flatten().inspect(|_| exact = false))
+                    in_range.or_else(|| {
+                        cross
+                            .then_some(in_tables)
+                            .flatten()
+                            .inspect(|_| exact = false)
+                    })
                 } else {
-                    in_tables.or_else(|| cross.then_some(in_range).flatten().inspect(|_| exact = false))
+                    in_tables.or_else(|| {
+                        cross
+                            .then_some(in_range)
+                            .flatten()
+                            .inspect(|_| exact = false)
+                    })
                 };
                 counts[slot.unwrap_or(if i < range_lookups { 0 } else { range as usize })] += 1;
             }
@@ -770,7 +805,8 @@ mod tests {
         let accumulate = |helpers: &[Vec<Fp4>]| {
             let mut running = vec![Fp4::ZERO];
             for row in helpers {
-                let next = *running.last().unwrap() + row.iter().fold(Fp4::ZERO, |a, h| a + *h) - table_per_row;
+                let next = *running.last().unwrap() + row.iter().fold(Fp4::ZERO, |a, h| a + *h)
+                    - table_per_row;
                 running.push(next);
             }
             running
@@ -828,11 +864,26 @@ mod tests {
             assert_eq!((circuit.lookups.len(), circuit.table_lookups.len()), (8, 2));
             let public = crate::trace::public_columns(&circuit, steps, None, &[]).unwrap();
             let states = vec![vec![0]; steps + 1];
-            let honest = crate::trace::generate_inner(&circuit, &public, steps, &states, true).unwrap();
-            let (failing, exact) = audit(&circuit, &statement, &public, &honest.columns, Cheat::Honest);
-            assert!(failing.is_empty() && exact, "width {per}: the honest trace satisfies every identity");
-            let column = circuit.columns.iter().position(|c| c.label == "value a").unwrap();
-            let (first_table_helper, row_of) = (circuit.range_helper_count(), |key: usize| 21 + key);
+            let honest =
+                crate::trace::generate_inner(&circuit, &public, steps, &states, true).unwrap();
+            let (failing, exact) = audit(
+                &circuit,
+                &statement,
+                &public,
+                &honest.columns,
+                Cheat::Honest,
+            );
+            assert!(
+                failing.is_empty() && exact,
+                "width {per}: the honest trace satisfies every identity"
+            );
+            let column = circuit
+                .columns
+                .iter()
+                .position(|c| c.label == "value a")
+                .unwrap();
+            let (first_table_helper, row_of) =
+                (circuit.range_helper_count(), |key: usize| 21 + key);
             let packed = |key: usize, value: i64| {
                 let digit = i128::from(value) + 7; // min(A) = -7
                 u64::try_from(i128::from(1u64 << 16) + ((key as i128) << 16) + digit).ok()
@@ -849,7 +900,9 @@ mod tests {
                 match name {
                     // Only the range argument can catch a carry: the packed row exists.
                     "carry into the next key" | "carry into the next table" => assert!(
-                        packed(key, forged).and_then(|v| circuit.fixed_row_index(v)).is_some(),
+                        packed(key, forged)
+                            .and_then(|v| circuit.fixed_row_index(v))
+                            .is_some(),
                         "{name}: the carry packs to a real row"
                     ),
                     "table row below the range table" => assert_eq!(packed(key, forged), Some(5)),
@@ -858,13 +911,22 @@ mod tests {
                 for cheat in [
                     Cheat::Honest,
                     Cheat::Cross,
-                    Cheat::Close { row, index: first_table_helper },
+                    Cheat::Close {
+                        row,
+                        index: first_table_helper,
+                    },
                     Cheat::Close { row, index: 0 },
                 ] {
                     let (failing, exact) = audit(&circuit, &statement, &public, &main, cheat);
-                    assert!(!failing.is_empty(), "width {per}, {name}: a forged read satisfied every identity");
+                    assert!(
+                        !failing.is_empty(),
+                        "width {per}, {name}: a forged read satisfied every identity"
+                    );
                     if matches!(cheat, Cheat::Cross) && name == "table row below the range table" {
-                        assert!(!exact, "counting a table lookup as a range value breaks the exact counts");
+                        assert!(
+                            !exact,
+                            "counting a table lookup as a range value breaks the exact counts"
+                        );
                     }
                 }
             }
