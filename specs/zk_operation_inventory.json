@@ -12520,7 +12520,7 @@
     "test_evidence": "default",
     "open_defect": {
      "owner_task": "B.3",
-     "what": "A committed State key and an envelope field are a hash of source files (REQ-011, REQ-061). The 2026-11-03 move to iroha_execution_stark kept this source-hash identity, now over the engine sources as well; it must become the relation's semantic parameters."
+     "what": "A committed State key and an envelope field are a hash of source files (REQ-011, REQ-061). The 2026-11-03 move to iroha_execution_stark kept this source-hash identity, now over the engine sources as well, and the move to the real 1986 roads added the generated road table (games/race_v1_roads.rs) to the hashed sources; it must become the relation's semantic parameters."
     },
     "runtime_validity_note": "The runtime-validity census (F.4) has no entry for this identity: its digest-identity detector reads identifier names, and a profile id hashed from `include_bytes!` sources has none. The source-inclusion census of this inventory is the record."
    },
@@ -12866,7 +12866,7 @@
    "pattern": "include_(?:bytes|str)!\\(\\s*\"[^\"]*\\.rs\"\\s*\\)",
    "scope": "Test modules and test-gated items are not counted.",
    "files": [
-    {"path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs", "count": 22, "use": "identity", "site": "race.source_hash_profile"},
+    {"path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs", "count": 23, "use": "identity", "site": "race.source_hash_profile"},
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
      "count": 25,

@@ -19470,7 +19470,7 @@
             ],
             "exprs": {
               "EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1": "4 * 1024 * 1024",
-              "RACE_MAX_TICKS_V1": "5_400",
+              "RACE_MAX_TICKS_V1": "8_100",
               "RACE_MAX_PLAYERS_V1": "8"
             }
           },

@@ -666,7 +666,7 @@
       "id": "iroha-execution-stark",
       "class": "duplicate",
       "family": "fastpq-style-stark",
-      "summary": "Bounded-integer execution STARK (crates/iroha_execution_stark, specs/execution_stark_v1.md): a circuit builder for bounded-integer state machines, Goldilocks/Fp4 DEEP-ALI with LogUp range checks against a verifier-summed 16-bit table, BLAKE2b-384 Merkle commitments and transcript (48-byte digests, 512-bit chaining state), arity-8 FRI with grinding and no masking (public replays). RaceV1 proves on it since 2026-11-03.",
+      "summary": "Bounded-integer execution STARK (crates/iroha_execution_stark, specs/execution_stark_v1.md): a circuit builder for bounded-integer state machines, Goldilocks/Fp4 DEEP-ALI with LogUp range checks against a verifier-summed 16-bit table and fixed-table reads as a second verifier-summed LogUp argument with its own challenge, BLAKE2b-384 Merkle commitments and transcript (48-byte digests, 512-bit chaining state), arity-8 FRI with grinding and no masking (public replays). RaceV1 proves on it since 2026-11-03 and reads each track's real road (the bend under every 5 m, src/games/race_v1_roads.rs) through the fixed-table argument.",
       "components": {
         "field": "own Goldilocks base and quartic extension X^4 - 7 (src/field.rs)",
         "air": "bounded-integer circuit builder compiled to row identities with a split quotient (src/circuit.rs, src/air.rs)",
@@ -689,7 +689,15 @@
       ],
       "importers": [
         {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/environment.rs",
+          "role": "source"
+        },
+        {
           "path": "crates/iroha_core_privacy/src/execution_proofs/error.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/kernel_export.rs",
           "role": "source"
         },
         {
@@ -699,6 +707,10 @@
         {
           "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
           "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/race_air.rs",
+          "role": "source"
         }
       ],
       "note": "Added at the user's request as a generic prover for SORA Nexus games; whether B.3 consolidates it onto fastpq-q77 is open."
@@ -1544,7 +1556,7 @@
           "symbol": "fn lateral_velocity"
         }
       ],
-      "migration": "Moved off the execution fork to iroha-execution-stark on 2026-11-03 (bounded-integer RaceV1 circuit, BLAKE2b-384 commitments and transcript). race_air.rs and environment_air.rs remain only for the browser kernel export. Whether B.3 later moves it onto the shared FASTPQ backend is open.",
+      "migration": "Moved off the execution fork to iroha-execution-stark on 2026-11-03 (bounded-integer RaceV1 circuit, BLAKE2b-384 commitments and transcript). race_air.rs and environment_air.rs remain only for the browser kernel export. Since the move to the real 1986 roads the reference simulation (environment.rs), the kernel generator (race_air.rs) and the kernel export read the engine's generated road tables (games/race_v1_roads.rs), which the circuit reads through its fixed-table argument. Whether B.3 later moves it onto the shared FASTPQ backend is open.",
       "facade": {
         "detect": [
           {
