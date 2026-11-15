@@ -1,4 +1,9 @@
-//! Complete `RaceV1` integer transition relation for the native transparent proof driver.
+//! `RaceV1`'s integer transition graph, exported as the browser's race kernels.
+//!
+//! Proofs use `iroha_execution_stark`'s `RaceV1` circuit, which reads the real road's bend through a
+//! LogUp fixed-table argument. Here each car's bend coefficient (the road's bend under the car's 5 m
+//! station) is a per-car fixed value that the caller supplies, the browser from the exported road table:
+//! everything else in the tick is a bounded integer equation.
 
 #[cfg(test)]
 use super::integer_air::Source;
@@ -6,11 +11,39 @@ use super::{
     integer_air::{IntegerAirV1, Value},
     race::initial_race_state_v1,
 };
-use iroha_data_model::execution_proofs::{RaceCarStateV1, RaceReplayV1, RaceStateV1};
+use iroha_data_model::execution_proofs::{
+    RACE_MAX_TICKS_V1, RaceCarStateV1, RaceReplayV1, RaceStateV1,
+};
+use iroha_execution_stark::games::race_v1_roads::FORCE_DIVISOR;
 
 pub(super) const FIXED_PREFIX: usize = 9;
-pub(super) const FIXED_PER_CAR: usize = 4;
+/// Acceleration, steering, boost request, removal and the bend coefficient under the car.
+pub(super) const FIXED_PER_CAR: usize = 5;
 pub(super) const STATE_WIDTH: usize = 7;
+
+/// The bend coefficient under each car's current progress, the value its last per-car fixed column holds.
+#[cfg(test)]
+pub(super) fn bend_coefficients(state: &RaceStateV1) -> Vec<i64> {
+    state
+        .cars
+        .iter()
+        .map(|car| bend_coefficient(state.track, car.progress_mm))
+        .collect()
+}
+
+#[cfg(test)]
+fn bend_coefficient(track: iroha_data_model::execution_proofs::RaceTrackV1, progress: i64) -> i64 {
+    use iroha_execution_stark::games::race_v1_roads::{LEAD_MM, STATION_MM};
+    // A validated state's progress is on the road.
+    let station = usize::try_from(
+        progress
+            .checked_add(LEAD_MM)
+            .expect("validated progress")
+            .div_euclid(STATION_MM),
+    )
+    .expect("on the road");
+    i64::from(super::environment::road(track)[station])
+}
 
 /// Closed transition graph; one row contains one complete tick, including ordered contacts.
 pub(super) struct RaceAirV1 {
@@ -40,17 +73,21 @@ impl RaceAirV1 {
         let mut a = IntegerAirV1::default();
         let players = usize::from(replay.player_count);
         let finish = replay.track.length_mm() * 3;
-        let length = replay.track.length_mm();
+        let rail = i64::from(super::environment::RAIL_MM);
+        let max_ticks = i64::from(RACE_MAX_TICKS_V1);
+        let road = super::environment::road(replay.track);
+        let bend_low = i64::from(*road.iter().min().expect("a road"));
+        let bend_high = i64::from(*road.iter().max().expect("a road"));
         let inputs = (0..players)
             .map(|_| {
                 [
                     a.input(-12_000, finish),
-                    a.input(-16_200, 16_200),
+                    a.input(-rail, rail),
                     a.input(0, 3_000),
                     a.input(-320, 320),
                     a.input(0, 1_000),
-                    a.input(0, 5_400),
-                    a.input(0, 5_401),
+                    a.input(0, max_ticks),
+                    a.input(0, max_ticks + 1),
                 ]
             })
             .collect::<Vec<_>>();
@@ -86,6 +123,7 @@ impl RaceAirV1 {
             let steer = Value::fixed(base + 1, -28, 28);
             let boost_requested = Value::fixed(base + 2, 0, 1);
             let dnf_event = Value::fixed(base + 3, 0, 1);
+            let bend = Value::fixed(base + 4, bend_low, bend_high);
             let unfinished = a.less(car[5], one);
             let present = a.less(car[6], one);
             let remove = a.and(present, dnf_event);
@@ -119,23 +157,21 @@ impl RaceAirV1 {
                 steer,
             );
 
-            // Shift by one track length, so division is unsigned even on the staggered grid.
-            let shifted = a.add_constant(car[0], length);
-            let (_, wrapped) = a.divmod_unsigned(shifted, length);
-            let scaled = a.mul_constant(wrapped, 12);
-            let (segment, _) = a.divmod_unsigned(scaled, length);
-            let table = replay.track.curvature().map(i64::from);
-            let curvature = a.lookup(segment, &table);
-            let curve_speed = a.mul(curvature, speed);
-            let curve_force = a.divide(curve_speed, 120);
+            // The real road's bend under the car pushes it outward with the square of its speed.
+            let speed_squared = a.mul(speed, speed);
+            let bend_term = a.mul(bend, speed_squared);
+            let bend_force = a.divide(bend_term, FORCE_DIVISOR);
             let wind_force = a.mul(Value::fixed(8, -32, 32), speed);
             let wind_force = a.divide(wind_force, 2400);
-            let force = a.add(curve_force, wind_force);
+            let force = a.add(bend_force, wind_force);
             let steered = a.add(car[1], vx);
             let displaced = a.add(steered, force);
-            let x = a.clamp(displaced, -9_000, 9_000);
+            let x = a.clamp(displaced, -rail, rail);
             let abs_x = a.absolute(x);
-            let offroad = a.less(Value::constant(6_000), abs_x);
+            let offroad = a.less(
+                Value::constant(i64::from(super::environment::VERGE_MM)),
+                abs_x,
+            );
             let slowed = a.sub_constant(speed, 90);
             let slowed = a.maximum(slowed, zero);
             speed = a.select(offroad, slowed, speed);
@@ -183,10 +219,10 @@ impl RaceAirV1 {
                 outputs[i][1] = a.select(contact, ax, outputs[i][1]);
                 outputs[j][1] = a.select(contact, bx, outputs[j][1]);
                 // Every car can move by at most 900 mm in each of its seven pair visits.
-                outputs[i][1].low = -16_200;
-                outputs[i][1].high = 16_200;
-                outputs[j][1].low = -16_200;
-                outputs[j][1].high = 16_200;
+                outputs[i][1].low = -rail - 6_300;
+                outputs[i][1].high = rail + 6_300;
+                outputs[j][1].low = -rail - 6_300;
+                outputs[j][1].high = rail + 6_300;
                 for slot in [i, j] {
                     let slowed = a.sub_constant(outputs[slot][2], 120);
                     let slowed = a.maximum(slowed, zero);
@@ -195,6 +231,8 @@ impl RaceAirV1 {
             }
         }
         for (slot, car) in outputs.iter_mut().enumerate() {
+            // A contact cannot push a car through the rail.
+            car[1] = a.clamp(car[1], -rail, rail);
             let before_finish = a.less(car[0], Value::constant(finish));
             let crossed = a.not(before_finish);
             let crossed = a.and(crossed, active[slot]);
@@ -215,11 +253,13 @@ impl RaceAirV1 {
         }
     }
 
+    /// Public row values, plus each car's bend coefficient (`bends`, one per car, zero for none).
     pub(super) fn fixed_row(
         replay: &RaceReplayV1,
         row: usize,
         size: usize,
         checkpoint_tick: Option<u32>,
+        bends: &[i64],
     ) -> Vec<i64> {
         let mut fixed = vec![
             i64::try_from(row).expect("bounded circuit index"),
@@ -232,7 +272,7 @@ impl RaceAirV1 {
         ];
         let (rain, wind) = super::environment::weather(
             replay.track,
-            u32::try_from(row.min(5400)).expect("bounded circuit index"),
+            u32::try_from(row.min(RACE_MAX_TICKS_V1 as usize)).expect("bounded circuit index"),
         );
         fixed.extend([rain, wind]);
         for slot in 0..usize::from(replay.player_count) {
@@ -263,6 +303,7 @@ impl RaceAirV1 {
                 steer,
                 i64::from(control & 32 != 0),
                 i64::from(dnf),
+                bends.get(slot).copied().unwrap_or(0),
             ]);
         }
         fixed
@@ -322,7 +363,8 @@ mod tests {
             let mut state = initial_race_state_v1(track, 8).expect("grid");
             let mut inputs = state.cars.iter().flat_map(car_values).collect::<Vec<_>>();
             for row_index in 0..90 {
-                let fixed = RaceAirV1::fixed_row(&replay, row_index, 128, None);
+                let fixed =
+                    RaceAirV1::fixed_row(&replay, row_index, 128, None, &bend_coefficients(&state));
                 let row = compiled.air.witness(&inputs, &fixed);
                 inputs = compiled.next_inputs(&row);
                 if row_index == 31 {
@@ -335,7 +377,13 @@ mod tests {
                     "track {track:?}, tick {row_index}"
                 );
                 let fields = row.iter().copied().map(field).collect::<Vec<_>>();
-                let next_fixed = RaceAirV1::fixed_row(&replay, row_index + 1, 128, None);
+                let next_fixed = RaceAirV1::fixed_row(
+                    &replay,
+                    row_index + 1,
+                    128,
+                    None,
+                    &bend_coefficients(&state),
+                );
                 let next = compiled
                     .air
                     .witness(&inputs, &next_fixed)
@@ -364,8 +412,15 @@ mod tests {
         }
     }
 
+    fn bends_of(track: RaceTrackV1, inputs: &[i64]) -> Vec<i64> {
+        inputs
+            .chunks(STATE_WIDTH)
+            .map(|car| bend_coefficient(track, car[0]))
+            .collect()
+    }
+
     #[test]
-    fn full_duration_contacts_curvature_and_removal_match_reference() {
+    fn full_duration_contacts_bends_and_removal_match_reference() {
         let track = RaceTrackV1::Harbor;
         let mut replay = RaceReplayV1 {
             track,
@@ -377,8 +432,8 @@ mod tests {
             }],
         };
         let mut reference = initial_race_state_v1(track, 8).expect("grid");
-        let mut expected = Vec::with_capacity(5401);
-        for tick in 0..5400 {
+        let mut expected = Vec::with_capacity(RACE_MAX_TICKS_V1 as usize + 1);
+        for tick in 0..RACE_MAX_TICKS_V1 {
             if tick == 1200 {
                 apply_race_dnf_v1(&mut reference, &[7]).expect("removal");
             }
@@ -412,7 +467,11 @@ mod tests {
                 })
                 .collect();
             let frame = RaceInputFrameV1 { tick, controls };
-            step_race_v1(&mut reference, &frame).expect("reference tick");
+            match step_race_v1(&mut reference, &frame) {
+                Ok(()) => {}
+                Err(super::super::race::RaceSimulationErrorV1::Terminal) => break,
+                Err(error) => panic!("reference tick {tick}: {error:?}"),
+            }
             replay.frames.push(frame);
             expected.push(
                 reference
@@ -437,12 +496,19 @@ mod tests {
             .flat_map(car_values)
             .collect::<Vec<_>>();
         for (row_index, expected) in expected.iter().enumerate() {
-            let fixed = RaceAirV1::fixed_row(&replay, row_index, 8192, None);
+            let fixed =
+                RaceAirV1::fixed_row(&replay, row_index, 8192, None, &bends_of(track, &inputs));
             let row = compiled.air.witness(&inputs, &fixed);
             inputs = compiled.next_inputs(&row);
             assert_eq!(&inputs, expected, "complete transition at tick {row_index}");
             let fields = row.iter().copied().map(field).collect::<Vec<_>>();
-            let next_fixed = RaceAirV1::fixed_row(&replay, row_index + 1, 8192, None);
+            let next_fixed = RaceAirV1::fixed_row(
+                &replay,
+                row_index + 1,
+                8192,
+                None,
+                &bends_of(track, &inputs),
+            );
             let next = compiled
                 .air
                 .witness(&inputs, &next_fixed)

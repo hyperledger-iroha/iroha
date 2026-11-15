@@ -156,7 +156,8 @@ fn interpolate_columns(columns: &[Vec<Fp>], domain: &Domain) -> Vec<Vec<Fp>> {
         .collect()
 }
 
-/// Canonical bytes of the range-table multiplicities, absorbed before the LogUp challenge.
+/// Canonical bytes of the table multiplicities (range values, then fixed-table rows), absorbed before
+/// the LogUp challenges.
 pub fn encode_multiplicities(multiplicities: &[u64]) -> Vec<u8> {
     multiplicities
         .iter()
@@ -173,7 +174,39 @@ pub fn table_inverses(beta: Fp4, bits: u32) -> Vec<Fp4> {
     out
 }
 
-/// The table side of the LogUp identity: `sum_v m_v / (beta - v)`.
+/// `1/(beta_tables - t)` for every packed fixed-table row `t`, in multiplicity order.
+pub fn fixed_table_inverses(beta_tables: Fp4, circuit: &Circuit) -> Vec<Fp4> {
+    let mut out: Vec<Fp4> = circuit
+        .fixed_table_values()
+        .into_iter()
+        .map(|t| beta_tables - Fp4::from_base(Fp::new(t)))
+        .collect();
+    out.par_chunks_mut(1024).for_each(batch_inverse_ext);
+    out
+}
+
+/// The LogUp challenges: `beta` for the range argument and, only when the circuit has table lookups,
+/// `beta_tables` for the table argument (zero otherwise, so table-free transcripts are unchanged).
+pub(crate) fn logup_challenges(transcript: &mut Transcript, circuit: &Circuit) -> (Fp4, Fp4) {
+    let beta = transcript.challenge_fp4(b"logup-beta");
+    let beta_tables = if circuit.table_lookups.is_empty() {
+        Fp4::ZERO
+    } else {
+        transcript.challenge_fp4(b"logup-beta-tables")
+    };
+    (beta, beta_tables)
+}
+
+/// `1/(challenge - t)` for every table entry in multiplicity order: the range values against `beta`,
+/// then the fixed-table rows against `beta_tables`.
+pub fn all_table_inverses(beta: Fp4, beta_tables: Fp4, circuit: &Circuit) -> Vec<Fp4> {
+    let mut out = table_inverses(beta, circuit.range_bits);
+    out.extend(fixed_table_inverses(beta_tables, circuit));
+    out
+}
+
+/// The table side of the LogUp identity: `sum_v m_v / (beta - v)` over the range values plus
+/// `sum_t m_t / (beta_tables - t)` over the fixed-table rows, given [`all_table_inverses`].
 pub fn table_sum(multiplicities: &[u64], inverses: &[Fp4]) -> Fp4 {
     multiplicities
         .par_iter()
@@ -332,8 +365,8 @@ pub fn prove(
     transcript.absorb_digest(b"main-root", &main.tree.root());
     phases.mark("main commit (LDE+Merkle)");
 
-    // LogUp: multiplicities are absorbed before the challenge; the verifier sums the table side.
-    let has_lookups = !circuit.lookups.is_empty();
+    // LogUp: multiplicities are absorbed before the challenges; the verifier sums the table side.
+    let has_lookups = circuit.has_lookups();
     if has_lookups {
         transcript.absorb(
             b"multiplicities",
@@ -346,12 +379,13 @@ pub fn prove(
         .map(|c| c.iter().map(|v| Fp::from_i64(*v)).collect())
         .collect();
     let n_inverse = Fp::new(n as u64).inverse().expect("n != 0");
-    let (beta, table_per_row, aux_columns_ext) = if has_lookups {
-        let beta = transcript.challenge_fp4(b"logup-beta");
-        let table_inverses = table_inverses(beta, circuit.range_bits);
+    let (beta, beta_tables, table_per_row, aux_columns_ext) = if has_lookups {
+        let (beta, beta_tables) = logup_challenges(&mut transcript, circuit);
+        let table_inverses = all_table_inverses(beta, beta_tables, circuit);
         let table_per_row =
             table_sum(&main_trace.multiplicities, &table_inverses).mul_base(n_inverse);
         let helper_count = air.aux_columns() - 1;
+        let (range_lookups, range_table) = (air.range_lookups(), 1usize << circuit.range_bits);
         let rows: Vec<Vec<Fp4>> = (0..n)
             .into_par_iter()
             .map(|k| {
@@ -366,7 +400,18 @@ pub fn prove(
                 air.lookup_values(&row, &mut values);
                 let inverses: Vec<Fp4> = values
                     .iter()
-                    .map(|v| table_inverses[usize::try_from(v.as_u64()).expect("lookup in table")])
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let position = if i < range_lookups {
+                            usize::try_from(v.as_u64()).expect("range lookup in table")
+                        } else {
+                            range_table
+                                + circuit
+                                    .fixed_row_index(v.as_u64())
+                                    .expect("table lookup in table")
+                        };
+                        table_inverses[position]
+                    })
                     .collect();
                 let mut helpers = Vec::with_capacity(helper_count);
                 air.helper_values(&inverses, &mut helpers);
@@ -388,9 +433,9 @@ pub fn prove(
         if !running.is_zero() {
             return Err(ProveError::Unsatisfied);
         }
-        (beta, table_per_row, columns)
+        (beta, beta_tables, table_per_row, columns)
     } else {
-        (Fp4::ZERO, Fp4::ZERO, Vec::new())
+        (Fp4::ZERO, Fp4::ZERO, Fp4::ZERO, Vec::new())
     };
     let aux_base: Vec<Vec<Fp>> = aux_columns_ext
         .iter()
@@ -414,6 +459,7 @@ pub fn prove(
     }
     let shape = air.shape();
     let beta_powers = BetaPowers::new(beta);
+    let beta_tables_powers = BetaPowers::new(beta_tables);
     let (low_chunks, high_chunks) = (shape.low_chunks(), shape.high_chunks());
     let q_low_log = quotient_log_blowup(shape.low_degree);
     let q_high_log = if high_chunks > 0 {
@@ -501,7 +547,13 @@ pub fn prove(
                     }
                     if in_high {
                         high.push(
-                            air.combine_helpers(row, aux_row, &beta_powers, &alphas)
+                            air.combine_helpers(
+                                row,
+                                aux_row,
+                                &beta_powers,
+                                &beta_tables_powers,
+                                &alphas,
+                            )
                                 .mul_base(zerofier_inverse),
                         );
                     }

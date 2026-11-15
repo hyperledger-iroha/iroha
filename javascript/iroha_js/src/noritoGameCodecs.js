@@ -61,7 +61,7 @@ const VECTORS = Object.freeze({
   hashes: ["hash", 8],
   controls: ["control", 6],
   frameControls: ["control", 8],
-  frames: ["RaceInputFrameV1", 5400],
+  frames: ["RaceInputFrameV1", 8100],
   standings: ["RaceStandingV1", 8],
   slots: ["slot", 8],
   cars: ["RaceCarStateV1", 8],
@@ -103,7 +103,7 @@ function validateRecord(name, value) {
   if (name === "RaceRulesV1" && (Number(value.max_racers) < 2 || Number(value.max_racers) > 8)) throw new RangeError("RaceRulesV1.max_racers must be 2..8");
   if (name === "GameManifestV1" && (Number(value.max_participants) === 0 || Number(value.batch_ticks) === 0 || Number(value.max_ticks) === 0 || Number(value.max_input_bytes) === 0)) throw new RangeError("Game manifest bounds must be positive");
   if (name.startsWith("Race") && Object.hasOwn(value, "slot") && Number(value.slot) > 7) throw new RangeError(`${name}.slot must be 0..7`);
-  for (const field of ["tick", "ticks", "start_tick"]) if (name.startsWith("Race") && Object.hasOwn(value, field) && Number(value[field]) > 5400) throw new RangeError(`${name}.${field} exceeds the race tick limit`);
+  for (const field of ["tick", "ticks", "start_tick"]) if (name.startsWith("Race") && Object.hasOwn(value, field) && Number(value[field]) > 8100) throw new RangeError(`${name}.${field} exceeds the race tick limit`);
   if (name === "RaceInputRevealV1" && value.controls.length !== 6) throw new RangeError("Race input reveals require exactly six controls");
   if (name === "RaceReplayV1" && (Number(value.player_count) < 1 || Number(value.player_count) > 8 || value.frames.some((frame, index) => Number(frame.tick) !== index || frame.controls.length !== Number(value.player_count)))) throw new RangeError("Race replay frames must be consecutive and match the roster size");
   if (Object.hasOwn(value, "signatures") && value.signatures.some((item, index, all) => index > 0 && Number(item.slot) <= Number(all[index - 1].slot))) throw new RangeError("Race signatures must be unique and ordered by slot");

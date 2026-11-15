@@ -9,8 +9,8 @@ use crate::ntt::{Domain, barycentric_weights, evaluate_with_weights};
 use crate::params::Params;
 use crate::proof::{Proof, Statement};
 use crate::prover::{
-    DeepLayout, basis, encode_multiplicities, from_components, initial_transcript, table_inverses,
-    table_sum,
+    DeepLayout, all_table_inverses, basis, encode_multiplicities, from_components,
+    initial_transcript, logup_challenges, table_sum,
 };
 use crate::trace;
 
@@ -41,9 +41,9 @@ pub enum VerifyError {
     /// The parameters cannot be used with this circuit.
     #[error(transparent)]
     Parameters(#[from] crate::params::ParamsError),
-    /// The range-table multiplicities are not the exact lookup counts (each count at most the total
-    /// and summing to `rows * lookups`).
-    #[error("noncanonical range-table multiplicities")]
+    /// The table multiplicities are not the exact lookup counts: each argument's counts (range values,
+    /// then fixed-table rows) are each at most that argument's total and sum to `rows * lookups` of it.
+    #[error("noncanonical table multiplicities")]
     Multiplicities,
 }
 
@@ -113,7 +113,7 @@ pub fn verify(
     let blowup = 1usize << params.log_blowup;
     let log_lde = log_n + params.log_blowup;
     let shift = Fp::new(GENERATOR);
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let next_columns = circuit.next_columns();
     let aux_ext = air.aux_columns();
     let shape = air.shape();
@@ -134,31 +134,33 @@ pub fn verify(
         || (has_lookups && !width_ok(&proof.aux_rows, 4 * aux_ext))
         || (!has_lookups && (!proof.aux_rows.is_empty() || !proof.aux_siblings.is_empty()))
         || !width_ok(&proof.quotient_rows, 4 * chunks)
-        || proof.multiplicities.len()
-            != if has_lookups {
-                1usize << circuit.range_bits
-            } else {
-                0
-            }
+        || proof.multiplicities.len() != circuit.table_len()
     {
         return Err(VerifyError::Shape);
     }
 
-    // Multiplicities are exact integer counts: each at most the total and summing to every lookup
-    // of every row. `Params::check` keeps that total below the characteristic, so the field sums
-    // below equal the integer sums.
+    // Multiplicities are exact integer counts, per argument: the range values' counts sum to every
+    // range lookup of every row and the fixed-table rows' counts to every table lookup, each count at
+    // most its argument's total. `Params::check` keeps the totals below the characteristic, so the field
+    // sums below equal the integer sums.
     if has_lookups {
-        let expected = u128::from(crate::params::lookup_occurrences(circuit)?);
-        let mut sum = 0u128;
-        for count in &proof.multiplicities {
-            let count = u128::from(*count);
-            if count > expected {
+        let (range_total, table_total) = crate::params::lookup_occurrences_by_argument(circuit)?;
+        let (range_counts, table_counts) = proof
+            .multiplicities
+            .split_at(1usize << circuit.range_bits);
+        for (counts, expected) in [(range_counts, range_total), (table_counts, table_total)] {
+            let expected = u128::from(expected);
+            let mut sum = 0u128;
+            for count in counts {
+                let count = u128::from(*count);
+                if count > expected {
+                    return Err(VerifyError::Multiplicities);
+                }
+                sum += count;
+            }
+            if sum != expected {
                 return Err(VerifyError::Multiplicities);
             }
-            sum += count;
-        }
-        if sum != expected {
-            return Err(VerifyError::Multiplicities);
         }
     }
     let mut transcript = initial_transcript(circuit, params, statement, &public);
@@ -169,16 +171,16 @@ pub fn verify(
             &encode_multiplicities(&proof.multiplicities),
         );
     }
-    let (beta, table_per_row) = if has_lookups {
-        let beta = transcript.challenge_fp4(b"logup-beta");
+    let (beta, beta_tables, table_per_row) = if has_lookups {
+        let (beta, beta_tables) = logup_challenges(&mut transcript, circuit);
         let n_inverse = Fp::new(n as u64).inverse().expect("n != 0");
         let total = table_sum(
             &proof.multiplicities,
-            &table_inverses(beta, circuit.range_bits),
+            &all_table_inverses(beta, beta_tables, circuit),
         );
-        (beta, total.mul_base(n_inverse))
+        (beta, beta_tables, total.mul_base(n_inverse))
     } else {
-        (Fp4::ZERO, Fp4::ZERO)
+        (Fp4::ZERO, Fp4::ZERO, Fp4::ZERO)
     };
     if let Some(root) = &proof.aux_root {
         transcript.absorb_digest(b"aux-root", root);
@@ -228,7 +230,13 @@ pub fn verify(
     let zerofier_inverse = (zn - Fp4::ONE).inverse().ok_or(VerifyError::Sample)?;
     let expected_low = (every + transition * (z - last_point)) * zerofier_inverse;
     let expected_high = if has_lookups {
-        air.combine_helpers(&row, &proof.ood_aux, &BetaPowers::new(beta), &alphas)
+        air.combine_helpers(
+            &row,
+            &proof.ood_aux,
+            &BetaPowers::new(beta),
+            &BetaPowers::new(beta_tables),
+            &alphas,
+        )
             * zerofier_inverse
     } else {
         Fp4::ZERO

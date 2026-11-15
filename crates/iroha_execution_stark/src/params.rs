@@ -11,7 +11,8 @@
 //!   this base term is below `2^-153`. The estimator also accounts for DEEP batch width, folding
 //!   arity and round count; the base-term example is not a bound for every supported parameter set.
 //! - DEEP/ALI: `L+ (C + d (k+2) + k) / |F|` with list size `L+ = (m + 1/2)/sqrt(rho+)`.
-//! - LogUp (Haböck ePrint 2022/1530): `(lookups * rows + table) / |F|`.
+//! - LogUp (Haböck ePrint 2022/1530): `(lookups * rows + table) / |F|`, over the range argument and
+//!   the fixed-table argument together (each has its own challenge; the union bound adds the terms).
 //!
 //! Each round must stay below `2^-(lambda+1)` for `lambda` bits after Fiat–Shamir (ethSTARK v1.2
 //! Cor. 3), so queries are sized for 129 bits. Native 384-bit BLAKE2b digests give the BCS hash
@@ -90,21 +91,73 @@ pub enum SecurityError {
     InsufficientSecurity,
 }
 
-/// Lookup occurrences over every row, padding included (the exact sum of the multiplicities).
+/// Lookup occurrences over every row, padding included (the exact sum of the multiplicities), for
+/// both LogUp arguments together.
 ///
 /// # Errors
 /// Rejects counts that overflow or reach the field characteristic.
 pub fn lookup_occurrences(circuit: &crate::Circuit) -> Result<u64, ParamsError> {
-    let rows = 1u64
-        .checked_shl(circuit.log_rows)
-        .filter(|_| circuit.log_rows < 64)
-        .ok_or(ParamsError::Overflow)?;
-    let lookups = u64::try_from(circuit.lookups.len()).map_err(|_| ParamsError::Overflow)?;
-    let total = rows.checked_mul(lookups).ok_or(ParamsError::Overflow)?;
+    let (range, tables) = lookup_occurrences_by_argument(circuit)?;
+    let total = range.checked_add(tables).ok_or(ParamsError::Overflow)?;
     if total >= crate::field::MODULUS {
         return Err(ParamsError::Circuit);
     }
     Ok(total)
+}
+
+/// Lookup occurrences over every row of the range argument and of the table argument (the exact sums
+/// of each argument's multiplicities).
+///
+/// # Errors
+/// Rejects counts that overflow or reach the field characteristic.
+pub fn lookup_occurrences_by_argument(
+    circuit: &crate::Circuit,
+) -> Result<(u64, u64), ParamsError> {
+    let rows = 1u64
+        .checked_shl(circuit.log_rows)
+        .filter(|_| circuit.log_rows < 64)
+        .ok_or(ParamsError::Overflow)?;
+    let count = |lookups: usize| -> Result<u64, ParamsError> {
+        let lookups = u64::try_from(lookups).map_err(|_| ParamsError::Overflow)?;
+        let total = rows.checked_mul(lookups).ok_or(ParamsError::Overflow)?;
+        if total >= crate::field::MODULUS {
+            return Err(ParamsError::Circuit);
+        }
+        Ok(total)
+    };
+    Ok((
+        count(circuit.lookups.len())?,
+        count(circuit.table_lookups.len())?,
+    ))
+}
+
+/// Checks the fixed tables a circuit reads: each nonempty with its recorded minimum, spanning less
+/// than the range table, all together at most [`crate::circuit::MAX_FIXED_TABLE_ROWS`] rows, and
+/// present whenever there are table lookups. The packing then stays below `2^62`.
+fn check_tables(circuit: &crate::Circuit) -> Result<(), ParamsError> {
+    if !circuit.table_lookups.is_empty() && circuit.tables.is_empty() {
+        return Err(ParamsError::Circuit);
+    }
+    let mut rows = 0usize;
+    for table in &circuit.tables {
+        let (Some(min), Some(max)) = (table.values.iter().min(), table.values.iter().max()) else {
+            return Err(ParamsError::Circuit);
+        };
+        if *min != table.min
+            || i128::from(*min) < -crate::circuit::MAX_MAGNITUDE
+            || i128::from(*max) > crate::circuit::MAX_MAGNITUDE
+            || i128::from(*max) - i128::from(*min) >= 1i128 << circuit.range_bits
+        {
+            return Err(ParamsError::Circuit);
+        }
+        rows = rows
+            .checked_add(table.values.len())
+            .ok_or(ParamsError::Overflow)?;
+    }
+    if rows > crate::circuit::MAX_FIXED_TABLE_ROWS {
+        return Err(ParamsError::Circuit);
+    }
+    Ok(())
 }
 
 /// The dimensions of a circuit that enter its soundness bound.
@@ -116,10 +169,10 @@ pub struct SecurityShape {
     pub max_degree: u32,
     /// Identities combined in the composition (circuit, boundary and LogUp).
     pub identities: usize,
-    /// Lookups per row.
+    /// Lookups per row, range and table lookups together.
     pub lookups: usize,
-    /// `log2` of the range-table size.
-    pub table_bits: u32,
+    /// Entries of the LogUp tables: the `2^range_bits` range values plus every fixed-table row.
+    pub table: u64,
     /// Polynomials combined in the DEEP batch.
     pub batched: usize,
 }
@@ -128,7 +181,7 @@ impl SecurityShape {
     /// The shape of a circuit.
     pub fn of(circuit: &crate::Circuit) -> Self {
         let shape = crate::air::quotient_shape(circuit);
-        let has_lookups = !circuit.lookups.is_empty();
+        let has_lookups = circuit.has_lookups();
         let aux = if has_lookups {
             circuit.helper_count() + 1
         } else {
@@ -144,8 +197,8 @@ impl SecurityShape {
                 } else {
                     0
                 },
-            lookups: circuit.lookups.len(),
-            table_bits: circuit.range_bits,
+            lookups: circuit.lookups.len() + circuit.table_lookups.len(),
+            table: (1u64 << circuit.range_bits) + circuit.fixed_table_rows() as u64,
             batched: circuit.columns.len()
                 + aux
                 + shape.chunks()
@@ -204,10 +257,11 @@ impl Params {
                 .ok_or(ParamsError::FoldGeometry)?;
             log_degree = log_degree.saturating_sub(self.fri_log_arity);
         }
-        let aux_width = if circuit.lookups.is_empty() {
-            0
-        } else {
+        check_tables(circuit)?;
+        let aux_width = if circuit.has_lookups() {
             (circuit.helper_count() + 1) * 4
+        } else {
+            0
         };
         if [circuit.columns.len(), aux_width, shape.chunks() * 4]
             .into_iter()
@@ -324,8 +378,9 @@ impl Params {
             .log2()
             + list_log;
         let ali = EXTENSION_FIELD_BITS - ali_log;
-        // LogUp: (lookups * rows + table) / |F|.
-        let table = 2f64.powi(i32::try_from(shape.table_bits).expect("small"));
+        // LogUp: (lookups * rows + table) / |F|, summed over the range and table arguments (each has
+        // its own challenge, so the union bound adds their terms).
+        let table = shape.table as f64;
         let logup = EXTENSION_FIELD_BITS - (shape.lookups as f64).mul_add(rows, table).log2();
         query.min(commit).min(ali).min(logup) - 1.0
     }
@@ -385,7 +440,7 @@ mod tests {
                 max_degree: 5,
                 identities: 100_000,
                 lookups: 4_000,
-                table_bits: 16,
+                table: 1 << 16,
                 batched: 10_000,
             };
             let bits = params.proven_security_bits(&shape);
@@ -407,7 +462,7 @@ mod tests {
             max_degree: 3,
             identities: 1_000,
             lookups: 1_000,
-            table_bits: 16,
+            table: 1 << 16,
             batched: 2_000,
         };
         assert!(fewer.proven_security_bits(&shape) < 128.0);

@@ -5,9 +5,12 @@ use super::{
         RaceSimulationErrorV1, apply_race_dnf_v1, initial_race_state_v1, race_result_v1,
         step_race_v1,
     },
-    race_air::{FIXED_PREFIX, RaceAirV1},
+    race_air::{FIXED_PER_CAR, FIXED_PREFIX, RaceAirV1},
 };
-use iroha_data_model::execution_proofs::{RaceInputFrameV1, RaceReplayV1, RaceTrackV1};
+use iroha_data_model::execution_proofs::{
+    RACE_MAX_TICKS_V1, RaceInputFrameV1, RaceReplayV1, RaceTrackV1,
+};
+use iroha_execution_stark::games::race_v1_roads::{LEAD_MM, STATION_MM};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
@@ -52,7 +55,7 @@ pub fn export_race_kernels_json_v1() -> String {
         .collect::<std::collections::BTreeMap<_, _>>();
     let environment = [RaceTrackV1::NeonTokyo, RaceTrackV1::Harbor, RaceTrackV1::Sakura].into_iter().map(|track| {
         use super::environment as env;
-        norito::json!({"length_mm":(track.length_mm()),"centers":(env::centers(track).to_vec()),"kinds":(env::kinds(track).to_vec()),"laterals":(env::laterals(track).to_vec()),"rain_pattern":(env::rain_pattern(track).to_vec()),"wind_pattern":(env::WIND_PATTERN.to_vec()),"rain_ticks":(env::WEATHER_TICKS),"wind_ticks":(env::WIND_TICKS),"wind_strength":(env::wind_strength(track)),"oil_half_length":(env::OIL_HALF_LENGTH),"oil_half_width":(env::OIL_HALF_WIDTH),"tree_radius":1400,"sign_radius":1300,"tree_speed_loss":600,"sign_speed_loss":260,"tree_push":1800})
+        norito::json!({"length_mm":(track.length_mm()),"road":(env::road(track).to_vec()),"road_station_mm":STATION_MM,"road_lead_mm":LEAD_MM,"rail_mm":(env::RAIL_MM),"centers":(env::centers(track).to_vec()),"kinds":(env::kinds(track).to_vec()),"laterals":(env::laterals(track).to_vec()),"rain_pattern":(env::rain_pattern(track).to_vec()),"wind_pattern":(env::WIND_PATTERN.to_vec()),"rain_ticks":(env::WEATHER_TICKS),"wind_ticks":(env::WIND_TICKS),"wind_strength":(env::wind_strength(track)),"oil_half_length":(env::OIL_HALF_LENGTH),"oil_half_width":(env::OIL_HALF_WIDTH),"tree_radius":1400,"sign_radius":1300,"tree_speed_loss":600,"sign_speed_loss":260,"tree_push":1800})
     }).collect::<Vec<_>>();
     write!(
         output,
@@ -101,7 +104,7 @@ pub fn export_race_kernels_json_v1() -> String {
                         tick: 0,
                         controls: vec![control; usize::from(players)],
                     }];
-                    let fixed = RaceAirV1::fixed_row(&replay, 0, 2, None);
+                    let fixed = RaceAirV1::fixed_row(&replay, 0, 2, None, &[]);
                     [
                         fixed[FIXED_PREFIX],
                         fixed[FIXED_PREFIX + 1],
@@ -109,7 +112,7 @@ pub fn export_race_kernels_json_v1() -> String {
                     ]
                 })
                 .collect::<Vec<_>>();
-            write!(output,"{{\"track\":{track_id},\"player_count\":{players},\"input_count\":{},\"fixed_count\":{},\"control_table\":{control_table:?},\"nodes\":{nodes:?},\"outputs\":{outputs:?},\"events\":{events:?}}}",7*usize::from(players),FIXED_PREFIX+4*usize::from(players)).expect("string write");
+            write!(output,"{{\"track\":{track_id},\"player_count\":{players},\"input_count\":{},\"fixed_count\":{},\"control_table\":{control_table:?},\"nodes\":{nodes:?},\"outputs\":{outputs:?},\"events\":{events:?}}}",7*usize::from(players),FIXED_PREFIX+FIXED_PER_CAR*usize::from(players)).expect("string write");
         }
     }
     output.push_str("]}\n");
@@ -119,7 +122,8 @@ pub fn export_race_kernels_json_v1() -> String {
 /// Generate all 21 native reference transcripts, snapshots and terminal outcomes for browser parity.
 ///
 /// Inputs intentionally cause early contacts, drift, boost exhaustion and consensus removals.
-/// Eight-car cases continue to the 5,400-tick bound; smaller grids end in technical wins.
+/// Eight-car cases continue to the 8,100-tick bound, alternating flat-out stretches with a crawl;
+/// smaller grids end in technical wins.
 /// Snapshots include current-boundary removals before that tick's controls are applied.
 ///
 /// # Errors
@@ -150,7 +154,7 @@ pub fn export_race_parity_json_v1() -> Result<norito::json::Value, RaceSimulatio
                     apply_race_dnf_v1(&mut state, &removed)?;
                     dnf_events.push(json!({"tick":(state.tick),"slots":removed}));
                 }
-                let terminal = state.tick == 5400
+                let terminal = state.tick == RACE_MAX_TICKS_V1
                     || state.tick % 6 == 0
                         && (state
                             .cars
@@ -195,7 +199,19 @@ pub fn export_race_parity_json_v1() -> Result<norito::json::Value, RaceSimulatio
                         } else {
                             0
                         };
-                        1 | 16
+                        // Eight cars must still be racing at the tick limit: every 1,500 ticks they run
+                        // 300 flat out through the bends and onto the rails, then crawl, so no road (Nikko's
+                        // 5.4 km is the shortest) is finished before 8,100 ticks.
+                        let pedal = if players == 8
+                            && (state.tick / 300) % 5 != 0
+                            && car.speed_mm_per_tick > 100
+                        {
+                            2
+                        } else {
+                            1
+                        };
+                        pedal
+                            | 16
                             | steer
                             | if (state.tick
                                 + u32::try_from(slot).expect("validated player or port count") * 11)
@@ -265,6 +281,45 @@ mod tests {
             );
         }
     }
+    /// The JavaScript SDK's outcome corpus is the native result of every state it lists (its timeout
+    /// vectors moved to the 8,100-tick limit with the real roads).
+    #[test]
+    fn sdk_outcome_corpus_is_the_native_result() {
+        use iroha_data_model::execution_proofs::{RaceResultV1, RaceStateV1};
+        let corpus: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../../javascript/iroha_js/test/fixtures/race-outcomes-v1.json"
+        ))
+        .expect("corpus JSON");
+        let rows = |key: &str| {
+            corpus
+                .get(key)
+                .and_then(norito::json::Value::as_array)
+                .expect("corpus rows")
+                .clone()
+        };
+        let state = |row: &norito::json::Value| -> RaceStateV1 {
+            norito::json::from_value(row.get("state").expect("state").clone()).expect("state")
+        };
+        for row in rows("valid") {
+            let expected: RaceResultV1 =
+                norito::json::from_value(row.get("result").expect("result").clone())
+                    .expect("result");
+            assert_eq!(
+                super::super::race::race_result_v1(&state(&row)).expect("valid state"),
+                expected,
+                "{:?}",
+                row.get("name")
+            );
+        }
+        for row in rows("invalid") {
+            assert!(
+                super::super::race::race_result_v1(&state(&row)).is_err(),
+                "{:?}",
+                row.get("name")
+            );
+        }
+    }
+
     #[test]
     fn native_reference_corpus_covers_every_grid_and_full_duration() {
         let value = export_race_parity_json_v1().expect("native reference export");
@@ -276,7 +331,7 @@ mod tests {
             assert_eq!(
                 inputs.len(),
                 if players == 8 {
-                    5400
+                    RACE_MAX_TICKS_V1 as usize
                 } else if players == 2 {
                     1200
                 } else {

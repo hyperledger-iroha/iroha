@@ -25,6 +25,36 @@ fn admission(players: u8) -> GameAdmissionBodyV1 {
     }
 }
 
+/// Controls that finish a real road: brake while the sharpest bend within 40 m would push the car
+/// more than 150 mm a tick, otherwise accelerate, and drift-steer back towards the centre line.
+/// Flat out with no steering, the first bend leaves a car parked on the verge.
+fn careful_control(track: RaceTrackV1, car: &RaceCarStateV1) -> u16 {
+    use iroha_execution_stark::games::race_v1_roads::{FORCE_DIVISOR, LEAD_MM, STATION_MM};
+    let road = crate::execution_proofs::environment::road(track);
+    let station = usize::try_from((car.progress_mm + LEAD_MM).div_euclid(STATION_MM))
+        .expect("a validated car is on the road");
+    let sharpest = road[station..road.len().min(station + 9)]
+        .iter()
+        .map(|bend| i64::from(bend.unsigned_abs()))
+        .max()
+        .expect("a station under the car");
+    let speed = i64::from(car.speed_mm_per_tick);
+    let pedal = if sharpest * speed * speed > 150 * FORCE_DIVISOR {
+        2
+    } else {
+        1
+    };
+    let aim = car.lateral_mm + 8 * car.lateral_velocity_mm_per_tick;
+    let steer = if aim > 150 {
+        4
+    } else if aim < -150 {
+        8
+    } else {
+        0
+    };
+    pedal | 16 | steer
+}
+
 fn late_finisher_forfeit_request(all_forfeit: bool) -> RaceProverRequestV1 {
     let mut request = request(2);
     let mut state = initial_race_state_v1(request.replay.track, 2).unwrap();
@@ -32,7 +62,7 @@ fn late_finisher_forfeit_request(all_forfeit: bool) -> RaceProverRequestV1 {
     while state.cars[0].finish_tick.is_none() || !state.tick.is_multiple_of(6) {
         let frame = RaceInputFrameV1 {
             tick: state.tick,
-            controls: vec![1 | 32, 0],
+            controls: vec![careful_control(state.track, &state.cars[0]), 0],
         };
         crate::execution_proofs::race::step_race_v1(&mut state, &frame).unwrap();
         frames.push(frame);
@@ -113,7 +143,7 @@ fn late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected() {
     assert!(crate::execution_proofs::verify_execution_proof_v1(&wrong_profile).is_err());
 }
 
-/// Eight cars on zero controls for all 5,400 ticks, a multiple of the six-tick batch: the timeout
+/// Eight cars on zero controls for all 8,100 ticks, a multiple of the six-tick batch: the timeout
 /// path, where the two front-row cars share the distance award.
 fn timeout_request() -> RaceProverRequestV1 {
     let mut request = request(8);
@@ -136,13 +166,13 @@ fn timeout_request() -> RaceProverRequestV1 {
     request
 }
 
-/// Release gate: a genuine eight-car, 5,400-tick proof is byte-identical at 1, 2 and 16 Rayon
+/// Release gate: a genuine eight-car, 8,100-tick proof is byte-identical at 1, 2 and 16 Rayon
 /// threads (engine proofs carry no masking), round-trips the complete envelope codec, stays within
 /// every size bound, and verifies through both the adapter and the registry entry.
 /// `IROHA_EXECUTION_PARITY_OUTPUT=<dir>` retains `request.nrt` and `proof.nrt`;
 /// `IROHA_EXECUTION_PARITY_REQUEST=<file>` proves a retained request instead.
 #[test]
-#[ignore = "release gate: three full eight-car, 5,400-tick proofs; run with --release --include-ignored"]
+#[ignore = "release gate: three full eight-car, 8,100-tick proofs; run with --release --include-ignored"]
 fn full_duration_eight_car_proof_is_thread_deterministic_and_round_trips() {
     use std::{fs, path::PathBuf, time::Instant};
     let request =
@@ -266,7 +296,7 @@ fn request(players: u8) -> RaceProverRequestV1 {
         min_participants: 2,
         max_participants: players,
         batch_ticks: 6,
-        max_ticks: 5400,
+        max_ticks: RACE_MAX_TICKS_V1,
         max_input_bytes: 12,
         max_participant_data_bytes: 1,
         access: iroha_data_model::game::GameAccessV1::Public,
@@ -385,8 +415,9 @@ fn immutable_admission_is_recomputed_and_stock_entitlements_are_exact() {
     assert!(validate_payload(&statement, &wagered).is_err());
 }
 
-/// Largest computed engine wire bound over the closed track/roster catalog (eight-car circuits).
-const MAXIMUM_STARK_WIRE_BYTES: usize = 2_044_445;
+/// Largest computed engine wire bound over the closed track/roster catalog. The real roads' table
+/// lookups and rail clamps make Harbor's eight-car circuit the largest.
+const MAXIMUM_STARK_WIRE_BYTES: usize = 2_158_833;
 
 fn maximum_stark_wire_bytes() -> usize {
     let params = Params::standard();

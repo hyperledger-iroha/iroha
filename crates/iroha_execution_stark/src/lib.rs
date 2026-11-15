@@ -480,5 +480,421 @@ mod tests {
         assert!(prove(&circuit, &fast_params(), &statement, &public, &states).is_err());
     }
 
+    /// A walk over fixed tables: `sum += a[row mod a.len()] + b[row mod b.len()]`, the keys from checked
+    /// remainders of the row index.
+    fn table_walk(a: &[i64], b_values: &[i64]) -> Circuit {
+        let mut b = Builder::new("table walk v1", 8);
+        b.set_lookups_per_helper(2);
+        let sum = b.register("sum", -1_000_000, 1_000_000);
+        let first = b.fixed_table("first", a);
+        let second = b.fixed_table("second", b_values);
+        let row = b.step_index();
+        let (_, key_a) = b.div_rem_floor(&row, i64::try_from(a.len()).unwrap(), "key a");
+        let (_, key_b) = b.div_rem_floor(&row, i64::try_from(b_values.len()).unwrap(), "key b");
+        let value_a = b.lookup_table(first, &key_a, "value a");
+        let value_b = b.lookup_table(second, &key_b, "value b");
+        let next = b.narrow(
+            &sum.add(&value_a).add(&value_b),
+            -1_000_000,
+            1_000_000,
+            "sum bound",
+        );
+        b.set_next(&sum, &next);
+        b.finish()
+    }
+
+    fn table_walk_run(a: &[i64], b_values: &[i64], steps: usize) -> (Statement, Vec<Vec<i64>>) {
+        let mut states = vec![vec![0i64]];
+        for row in 0..steps {
+            let last = states.last().unwrap()[0];
+            states.push(vec![last + a[row % a.len()] + b_values[row % b_values.len()]]);
+        }
+        let statement = Statement {
+            steps,
+            initial: vec![0],
+            final_state: states[steps].clone(),
+            checkpoint: None,
+            binding: b"table walk".to_vec(),
+        };
+        (statement, states)
+    }
+
+    const WALK_A: [i64; 7] = [3, -7, 12, 0, 5, -7, 9];
+    const WALK_B: [i64; 5] = [-30_000, 0, 30_000, 17, -1];
+
+    #[test]
+    fn fixed_tables_prove_and_bind_their_rows() {
+        let circuit = table_walk(&WALK_A, &WALK_B);
+        assert_eq!(circuit.tables.len(), 2);
+        assert_eq!(circuit.table_lookups.len(), 2);
+        assert_eq!(circuit.table_len(), (1 << 16) + WALK_A.len() + WALK_B.len());
+        let (statement, states) = table_walk_run(&WALK_A, &WALK_B, 200);
+        check_trace(&circuit, &statement, &[], &states).unwrap();
+        let params = fast_params();
+        let proof = prove(&circuit, &params, &statement, &[], &states).unwrap();
+        verify(&circuit, &params, &statement, &[], &proof).unwrap();
+        let bytes = proof.to_bytes();
+        assert_eq!(Proof::from_bytes(&bytes).unwrap(), proof);
+        assert!(bytes.len() <= max_proof_bytes(&circuit, &params).unwrap());
+        // Every row reads one row of each table, padding included.
+        let fixed = &proof.multiplicities[1 << 16..];
+        assert_eq!(fixed.iter().sum::<u64>(), 2 * circuit.rows() as u64);
+        assert!(fixed.iter().all(|count| *count > 0));
+
+        // The table contents are part of the circuit: change one value (and the run that reads it) and
+        // the old proof no longer verifies.
+        let mut changed = WALK_A;
+        changed[2] += 1;
+        let other = table_walk(&changed, &WALK_B);
+        assert_ne!(circuit_id(&other), circuit_id(&circuit));
+        assert!(verify(&other, &params, &statement, &[], &proof).is_err());
+        let (other_statement, _) = table_walk_run(&changed, &WALK_B, 200);
+        assert!(verify(&other, &params, &other_statement, &[], &proof).is_err());
+        // A statement that adds up a different table is not proved by this proof.
+        assert!(verify(&circuit, &params, &other_statement, &[], &proof).is_err());
+    }
+
+    #[test]
+    fn fixed_table_counts_are_exact_per_argument() {
+        let circuit = table_walk(&WALK_A, &WALK_B);
+        let (statement, states) = table_walk_run(&WALK_A, &WALK_B, 150);
+        let params = fast_params();
+        let proof = prove(&circuit, &params, &statement, &[], &states).unwrap();
+        verify(&circuit, &params, &statement, &[], &proof).unwrap();
+        let range = 1usize << 16;
+        let used_range = proof.multiplicities[..range]
+            .iter()
+            .position(|m| *m > 0)
+            .unwrap();
+        // Moving a count between the arguments keeps the overall sum but breaks both arguments' sums.
+        let mut across = proof.clone();
+        across.multiplicities[used_range] -= 1;
+        across.multiplicities[range] += 1;
+        assert_eq!(
+            verify(&circuit, &params, &statement, &[], &across),
+            Err(VerifyError::Multiplicities)
+        );
+        // Moving a count between two rows of the table argument keeps its sum but not the identity.
+        let mut moved = proof.clone();
+        moved.multiplicities[range] -= 1;
+        moved.multiplicities[range + 1] += 1;
+        assert!(verify(&circuit, &params, &statement, &[], &moved).is_err());
+        // The table rows' counts must be present.
+        let mut short = proof;
+        short.multiplicities.truncate(range);
+        assert_eq!(
+            verify(&circuit, &params, &statement, &[], &short),
+            Err(VerifyError::Shape)
+        );
+    }
+
+    #[test]
+    fn honest_prover_refuses_a_value_off_its_table_row() {
+        let mut circuit = table_walk(&WALK_A, &WALK_B);
+        let (statement, states) = table_walk_run(&WALK_A, &WALK_B, 100);
+        // Replace the read of table `first` by a constant that is a value of the table, but not the
+        // value of every key: its packed row then names a row that does not exist.
+        let column = circuit
+            .columns
+            .iter()
+            .position(|c| c.label == "value a")
+            .unwrap();
+        circuit.columns[column].hint = crate::circuit::Hint::Quad(crate::circuit::Quad {
+            lin: crate::circuit::Lin::constant(12),
+            products: Vec::new(),
+        });
+        assert!(check_trace(&circuit, &statement, &[], &states).is_err());
+        assert!(prove(&circuit, &fast_params(), &statement, &[], &states).is_err());
+        // With the transition check off, the table lookup itself refuses the row.
+        let public = crate::trace::public_columns(&circuit, statement.steps, None, &[]).unwrap();
+        let error =
+            crate::trace::generate_inner(&circuit, &public, statement.steps, &states, false)
+                .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                crate::trace::TraceError::LookupOutOfRange { lookup, .. }
+                    if lookup >= circuit.lookups.len()
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn packed_rows_decode_to_exactly_one_row() {
+        let circuit = table_walk(&WALK_A, &WALK_B);
+        let values = circuit.fixed_table_values();
+        assert_eq!(values.len(), WALK_A.len() + WALK_B.len());
+        for (position, value) in values.iter().enumerate() {
+            assert_eq!(circuit.fixed_row_index(*value), Some(position));
+            assert!(*value >= 1 << 16, "rows pack above the range values");
+            // The neighbouring digits are no row.
+            assert_eq!(circuit.fixed_row_index(value + 1), None);
+            assert_eq!(circuit.fixed_row_index(value - 1), None);
+        }
+        assert_eq!(circuit.fixed_row_index(0), None);
+        assert_eq!(circuit.fixed_row_index((1 << 16) - 1), None);
+        assert_eq!(circuit.fixed_row_index(values[values.len() - 1] + (1 << 16)), None);
+        assert_eq!(circuit.fixed_row_index(u64::MAX), None);
+        let mut distinct = values.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), values.len());
+    }
+
+    #[test]
+    fn malformed_fixed_tables_are_rejected_before_any_work() {
+        use crate::params::{ParamsError, SecurityShape};
+        let circuit = table_walk(&WALK_A, &WALK_B);
+        let params = fast_params();
+        params.check(&circuit).unwrap();
+        assert_eq!(
+            SecurityShape::of(&circuit).table,
+            (1 << 16) + (WALK_A.len() + WALK_B.len()) as u64
+        );
+        let mut wrong_min = circuit.clone();
+        wrong_min.tables[0].min -= 1;
+        let mut empty = circuit.clone();
+        empty.tables[1].values.clear();
+        let mut wide = circuit.clone();
+        wide.tables[1].values[2] = wide.tables[1].min + (1 << 16);
+        let mut orphan = circuit;
+        orphan.tables.clear();
+        for (name, bad) in [
+            ("minimum", wrong_min),
+            ("empty", empty),
+            ("span", wide),
+            ("no tables", orphan),
+        ] {
+            assert_eq!(params.check(&bad), Err(ParamsError::Circuit), "{name}");
+        }
+    }
+
+    /// The adversarial harness's tables. `A[2] == A[3]`, so a carry out of key 2's offset packs to key 3's
+    /// row; `B[0] - min(B) == A[6] - min(A)`, so a carry out of A's last key packs to B's first row.
+    const PROBE_A: [i64; 7] = [3, -7, 12, 12, 5, -7, 9];
+    const PROBE_B: [i64; 5] = [10, -6, 30, 4, -6];
+
+    /// Reads both tables on every row without using the values, so a forged value changes only the two
+    /// lookups of its own read.
+    fn table_probe(per: usize) -> Circuit {
+        let mut b = Builder::new("table probe v1", 8);
+        b.set_lookups_per_helper(per);
+        let held = b.register("held", 0, 0);
+        let first = b.fixed_table("first", &PROBE_A);
+        let second = b.fixed_table("second", &PROBE_B);
+        let row = b.step_index();
+        let (_, key_a) = b.div_rem_floor(&row, 7, "key a");
+        let (_, key_b) = b.div_rem_floor(&row, 5, "key b");
+        let _ = b.lookup_table(first, &key_a, "value a");
+        let _ = b.lookup_table(second, &key_b, "value b");
+        b.set_next(&held, &held);
+        b.finish()
+    }
+
+    /// How a cheating prover commits the auxiliary columns for a main trace it chose.
+    #[derive(Clone, Copy)]
+    enum Cheat {
+        /// Helpers honestly invert the trace's lookups; each argument's counts stay exact by charging a value
+        /// outside its table to that table's first entry.
+        Honest,
+        /// As `Honest`, but a value of one argument that is an entry of the other is counted there.
+        Cross,
+        /// As `Honest`, then helper `index` of row `row` absorbs the accumulator's discrepancy, so it closes.
+        Close { row: usize, index: usize },
+    }
+
+    /// Evaluates every AIR identity (circuit, boundary, both LogUp helper groups and the shared accumulator) on
+    /// a main trace with the auxiliary columns `cheat` commits. Returns the failing rows and whether each
+    /// argument's counts are still the exact totals the verifier requires.
+    fn audit(circuit: &Circuit, statement: &Statement, public: &[Vec<i64>], main: &[Vec<Fp>], cheat: Cheat) -> (Vec<usize>, bool) {
+        use crate::air::{BetaPowers, CompiledAir};
+        let air = CompiledAir::new(
+            circuit,
+            &statement.initial,
+            &statement.final_state,
+            &statement.checkpoint_registers(circuit.registers.len()),
+        );
+        let (n, layout) = (circuit.rows(), air.layout());
+        let public_fp: Vec<Vec<Fp>> = public
+            .iter()
+            .map(|column| column.iter().map(|v| Fp::from_i64(*v)).collect())
+            .collect();
+        let row_buffer = |k: usize| {
+            let mut row = vec![Fp::ZERO; layout.width()];
+            for (offset, at) in [(0, k), (layout.row(), (k + 1) % n)] {
+                for (c, column) in main.iter().enumerate() {
+                    row[offset + c] = column[at];
+                }
+                for (p, column) in public_fp.iter().enumerate() {
+                    row[offset + layout.main + p] = column[at];
+                }
+            }
+            row
+        };
+        let beta = Fp4([Fp::new(0x0123_4567), Fp::new(89), Fp::new(0xabcd), Fp::new(3)]);
+        let beta_tables = Fp4([Fp::new(0x7654_3210), Fp::new(11), Fp::new(5), Fp::new(0xfeed)]);
+        let range = 1u64 << circuit.range_bits;
+        let range_lookups = air.range_lookups();
+        let mut counts = vec![0u64; circuit.table_len()];
+        let mut exact = true;
+        let mut helpers = Vec::with_capacity(n);
+        let mut values = Vec::new();
+        for k in 0..n {
+            air.lookup_values(&row_buffer(k), &mut values);
+            let mut inverses = Vec::with_capacity(values.len());
+            for (i, value) in values.iter().enumerate() {
+                let v = value.as_u64();
+                let challenge = if i < range_lookups { beta } else { beta_tables };
+                inverses.push((challenge - Fp4::from_base(*value)).inverse().expect("not a challenge"));
+                let in_range = (v < range).then(|| usize::try_from(v).unwrap());
+                let in_tables = circuit.fixed_row_index(v).map(|p| p + range as usize);
+                let cross = matches!(cheat, Cheat::Cross);
+                let slot = if i < range_lookups {
+                    in_range.or_else(|| cross.then_some(in_tables).flatten().inspect(|_| exact = false))
+                } else {
+                    in_tables.or_else(|| cross.then_some(in_range).flatten().inspect(|_| exact = false))
+                };
+                counts[slot.unwrap_or(if i < range_lookups { 0 } else { range as usize })] += 1;
+            }
+            let mut row_helpers = Vec::new();
+            air.helper_values(&inverses, &mut row_helpers);
+            helpers.push(row_helpers);
+        }
+        let n_inverse = Fp::new(n as u64).inverse().unwrap();
+        let table_per_row = crate::prover::table_sum(
+            &counts,
+            &crate::prover::all_table_inverses(beta, beta_tables, circuit),
+        )
+        .mul_base(n_inverse);
+        let accumulate = |helpers: &[Vec<Fp4>]| {
+            let mut running = vec![Fp4::ZERO];
+            for row in helpers {
+                let next = *running.last().unwrap() + row.iter().fold(Fp4::ZERO, |a, h| a + *h) - table_per_row;
+                running.push(next);
+            }
+            running
+        };
+        let mut accumulator = accumulate(&helpers);
+        if let Cheat::Close { row, index } = cheat {
+            let discrepancy = accumulator[n];
+            helpers[row][index] -= discrepancy;
+            accumulator = accumulate(&helpers);
+            assert!(accumulator[n].is_zero(), "the accumulator closes");
+        }
+        let alphas: Vec<Fp4> = (0..air.total_constraints)
+            .scan(Fp4::ONE, |power, _| {
+                let current = *power;
+                *power *= Fp4([Fp::new(31), Fp::new(7), Fp::new(2), Fp::new(9)]);
+                Some(current)
+            })
+            .collect();
+        let failing = (0..n)
+            .filter(|&k| {
+                let row = row_buffer(k);
+                let aux: Vec<Fp4> = helpers[k].iter().copied().chain([accumulator[k]]).collect();
+                let (every, transition) =
+                    air.combine_low(&row, &aux, accumulator[(k + 1) % n], table_per_row, &alphas);
+                let helper = air.combine_helpers(
+                    &row,
+                    &aux,
+                    &BetaPowers::new(beta),
+                    &BetaPowers::new(beta_tables),
+                    &alphas,
+                );
+                !every.is_zero() || (k + 1 < n && !transition.is_zero()) || !helper.is_zero()
+            })
+            .collect();
+        (failing, exact)
+    }
+
+    /// A malicious prover bypasses the honest witness checks: wrong values, offset carries into the next key
+    /// or the next table, and lookups counted in the other argument. Every forgery breaks an AIR identity at
+    /// every helper width, whether the helpers invert honestly (the accumulator cannot close) or a range or
+    /// table helper is bent to close it (that helper's identity fails).
+    #[test]
+    fn forged_table_reads_break_an_air_identity_at_every_helper_width() {
+        let steps = 100;
+        let statement = Statement {
+            steps,
+            initial: vec![0],
+            final_state: vec![0],
+            checkpoint: None,
+            binding: b"table probe".to_vec(),
+        };
+        for per in 1..=4 {
+            let circuit = table_probe(per);
+            // Eight range lookups and two table lookups: widths 3 and 4 leave partial helper groups.
+            assert_eq!((circuit.lookups.len(), circuit.table_lookups.len()), (8, 2));
+            let public = crate::trace::public_columns(&circuit, steps, None, &[]).unwrap();
+            let states = vec![vec![0]; steps + 1];
+            let honest = crate::trace::generate_inner(&circuit, &public, steps, &states, true).unwrap();
+            let (failing, exact) = audit(&circuit, &statement, &public, &honest.columns, Cheat::Honest);
+            assert!(failing.is_empty() && exact, "width {per}: the honest trace satisfies every identity");
+            let column = circuit.columns.iter().position(|c| c.label == "value a").unwrap();
+            let (first_table_helper, row_of) = (circuit.range_helper_count(), |key: usize| 21 + key);
+            let packed = |key: usize, value: i64| {
+                let digit = i128::from(value) + 7; // min(A) = -7
+                u64::try_from(i128::from(1u64 << 16) + ((key as i128) << 16) + digit).ok()
+            };
+            for (name, key, forged) in [
+                ("wrong value", 1, PROBE_A[4]),
+                ("carry into the next key", 2, PROBE_A[2] + (1 << 16)),
+                ("carry into the next table", 6, PROBE_A[6] + (1 << 16)),
+                ("table row below the range table", 0, 5 - 7 - (1 << 16)),
+            ] {
+                let row = row_of(key);
+                let mut main = honest.columns.clone();
+                main[column][row] = Fp::from_i64(forged);
+                match name {
+                    // Only the range argument can catch a carry: the packed row exists.
+                    "carry into the next key" | "carry into the next table" => assert!(
+                        packed(key, forged).and_then(|v| circuit.fixed_row_index(v)).is_some(),
+                        "{name}: the carry packs to a real row"
+                    ),
+                    "table row below the range table" => assert_eq!(packed(key, forged), Some(5)),
+                    _ => {}
+                }
+                for cheat in [
+                    Cheat::Honest,
+                    Cheat::Cross,
+                    Cheat::Close { row, index: first_table_helper },
+                    Cheat::Close { row, index: 0 },
+                ] {
+                    let (failing, exact) = audit(&circuit, &statement, &public, &main, cheat);
+                    assert!(!failing.is_empty(), "width {per}, {name}: a forged read satisfied every identity");
+                    if matches!(cheat, Cheat::Cross) && name == "table row below the range table" {
+                        assert!(!exact, "counting a table lookup as a range value breaks the exact counts");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "beyond the safe integer range")]
+    fn table_values_beyond_the_safe_range_are_refused_before_any_arithmetic() {
+        let mut b = Builder::new("extreme table", 8);
+        let _ = b.fixed_table("extreme", &[i64::MIN, i64::MIN + 1]);
+    }
+
+    #[test]
+    fn params_refuse_a_table_beyond_the_safe_range() {
+        use crate::params::ParamsError;
+        let mut circuit = table_walk(&WALK_A, &WALK_B);
+        circuit.tables[0].values = vec![i64::MIN, i64::MIN + 1];
+        circuit.tables[0].min = i64::MIN;
+        assert_eq!(fast_params().check(&circuit), Err(ParamsError::Circuit));
+    }
+
+    #[test]
+    #[should_panic(expected = "leaves fixed table")]
+    fn keys_must_stay_inside_their_table() {
+        let mut b = Builder::new("bad key", 8);
+        let table = b.fixed_table("short", &[1, 2, 3]);
+        let row = b.step_index();
+        let _ = b.lookup_table(table, &row, "value");
+    }
+
     use crate::field::{Fp, Fp4};
 }

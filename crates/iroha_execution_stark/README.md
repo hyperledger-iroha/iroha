@@ -14,6 +14,10 @@ are in [`specs/execution_stark_v1.md`](../../specs/execution_stark_v1.md).
 
 ## Full RaceV1 race (8 cars, 5,400 ticks), Apple M4 Max
 
+These measurements predate RaceV1's move to the real roads (2026-11-12: 8,100 ticks in the same 2^13
+rows, the road read through a fixed table). Prototype measurements of that circuit's cost are in
+`sora-cars/docs/live-races-real-roads.md`.
+
 The two provers were measured on different replays with the same geometry (8 cars, 5,400 ticks),
 so this is not a controlled same-input comparison. This crate's trace dimensions are fixed by the
 circuit shape (2^13 rows); instruction counts varied by under 1% across the measured replays.
@@ -57,10 +61,22 @@ Where the speed comes from, in order of effect:
    masking (replays are public). The current suite uses native BLAKE2b-384; the retained timings
    above used BLAKE3.
 3. **Lookups.** LogUp range checks on 16-bit limbs with a verifier-summed table, four lookups per
-   helper column, comparisons as one lookup of `(a - b) + 2^K * bit`.
+   helper column, comparisons as one lookup of `(a - b) + 2^K * bit`. Fixed tables (a game's map)
+   are a second LogUp argument with its own challenge: one column and two lookups per read, instead
+   of one selector column per table row.
 4. **Engine.** Quotient split into a degree-3 group on a 2n domain and a degree-5 helper group on a
    4n domain; coefficient-space DEEP batching; cache-tiled constraint evaluation; shared coset
    powers and per-stage twiddles in the NTT; parallel everything.
+
+## Fixed tables
+
+`Builder::fixed_table(label, values)` binds an integer table into the circuit identity, and
+`Builder::lookup_table(table, key, label)` reads `values[key]` for a key whose interval is already
+enforced (for example `div_floor(progress, 5_000)`, whose remainder check pins it). Each read is one
+committed column, a range lookup of the value's offset from the table's minimum, and a lookup of the
+packed row `base + key * 2^range_bits + offset` in a separate LogUp argument whose challenge and
+helpers it shares with nothing else; the verifier sums both tables itself. RaceV1 reads each track's
+real road this way: 1,100–1,460 rows of bend coefficients for about 5 extra columns per car.
 
 ## Writing a circuit
 

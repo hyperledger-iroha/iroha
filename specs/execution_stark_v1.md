@@ -46,8 +46,8 @@ One row per step. Columns:
   built from public data. The verifier builds them and
   evaluates them only at the out-of-domain point by barycentric interpolation; every value must lie
   in its declared interval (checked by prover and verifier).
-- **Auxiliary** (committed after the LogUp challenge, `Fp4`): one helper per four lookups and a
-  running accumulator.
+- **Auxiliary** (committed after the LogUp challenges, `Fp4`): one helper per four lookups of
+  one argument (range helpers first, then fixed-table helpers) and a running accumulator.
 
 Every expression carries an integer interval below `2^60`. Gadgets (see the crate README)
 add only columns that their constraints determine:
@@ -59,10 +59,18 @@ add only columns that their constraints determine:
   stays below `2^60`) and the remainder checked on both sides (sign-adjusted for truncation); exact
   integer division follows because no term can wrap;
 - one-hot selectors: Booleans summing to one, with the index fixed by an exact remainder check;
+- fixed-table reads `v = T[k]`: one column `v`, a range lookup of `v - min(T)` and a table lookup
+  of the packed row `base_T + k * 2^range_bits + (v - min(T))` (section 4). The key `k` must carry
+  an enforced interval inside `T` (for example a quotient pinned by its remainder check);
 - `narrow`: an enforced interval; `assume_interval`/`assume_boolean`: trusted assertions that the
   prover re-checks on honest rows but the AIR does not enforce.
 
 Range checks use limbs of `range_bits` (default 16) bits looked up in the table `[0, 2^range_bits)`.
+Fixed tables (for example a game's map) are integer lists bound into the circuit identity. Each row
+`k` of table `T` packs to `base_T + k * 2^range_bits + (T[k] - min(T))`, where the first table's base
+is `2^range_bits` and each table spans `len(T) * 2^range_bits` values, so no two rows pack alike.
+A table's values span less than `2^range_bits`, and all tables together hold at most `2^20` rows,
+which keeps every packed row below `2^62`.
 
 Registers transition by `next - cur - active * (step - cur) = 0` on every row but the last domain
 row; boundary identities are `first * (reg - initial) = 0`, `last * (reg - final) = 0` and
@@ -70,19 +78,33 @@ row; boundary identities are `first * (reg - initial) = 0`, `last * (reg - final
 
 ## 4. LogUp
 
-The prover sends the table multiplicities `m_v` (`u64`, varint-encoded) after the main root and
-before the challenge `beta`. Before using them the verifier requires each `m_v <= rows * lookups`
-and the exact integer sum `sum_v m_v = rows * lookups` (every lookup of every row, padding
-included), with that total below `p`; field-equal aliases such as `m_v + p` are rejected. With `T_beta = sum_v m_v / (beta - v)` computed by the verifier:
+There are two lookup arguments: range lookups into `[0, 2^range_bits)` and, when a circuit reads
+fixed tables, table lookups into the set of packed fixed-table rows. They share the accumulator but
+never a challenge or a helper, so a range lookup cannot be satisfied by a packed row (which would
+otherwise break every range-checked gadget) and a table lookup cannot be satisfied by a range value.
 
-- helper identity for lookups `a_1..a_k` (`k <= 4`): `h * prod(beta - a_i) - sum_i prod_{j != i}(beta - a_j) = 0`
-  (the prover evaluates it with elementary symmetric sums of the base-field `a_i`);
-- accumulator identity on every row, the last included: `S(wx) - S(x) - sum_j h_j(x) + T_beta / n = 0`.
+The prover sends the multiplicities (`u64`, varint-encoded) after the main root and before the
+challenges: one per range value `v`, then one per fixed-table row `t` in table order. Before using
+them the verifier requires, for each argument separately, each count at most that argument's
+`rows * lookups` and the exact integer sum `rows * lookups` (every lookup of every row, padding
+included), with both totals below `p`; field-equal aliases such as `m + p` are rejected. The
+challenges are `beta` (range) and, only for circuits with table lookups, `beta_T` (tables), so
+table-free transcripts are unchanged. With
+`T = sum_v m_v / (beta - v) + sum_t m_t / (beta_T - t)` computed by the verifier:
 
-Telescoping over `H` forces `sum_rows sum_lookups 1/(beta - a) = T_beta`; with lookups and
-multiplicities fixed before `beta` and fewer than `p` lookups, every looked-up value is in the
-table except with probability `(lookups_per_row * n + 2^range_bits) / |Fp4|` (Haböck,
-ePrint 2022/1530). The count includes padding rows; `range_bits` is the circuit's actual table width.
+- helper identity for the lookups `a_1..a_k` (`k <= 4`) of one argument, with its challenge `c`:
+  `h * prod(c - a_i) - sum_i prod_{j != i}(c - a_j) = 0` (the prover evaluates it with elementary
+  symmetric sums of the base-field `a_i`);
+- accumulator identity on every row, the last included: `S(wx) - S(x) - sum_j h_j(x) + T / n = 0`.
+
+Telescoping over `H` forces `sum_range 1/(beta - a) - sum_v m_v/(beta - v) =
+-(sum_tables 1/(beta_T - b) - sum_t m_t/(beta_T - t))`. The left side is a rational function of
+`beta` alone and the right side of `beta_T` alone, both vanishing at infinity; for independent
+challenges drawn after the lookups and multiplicities are fixed, equality forces both to be zero
+except with negligible probability, so each argument holds on its own: every range lookup is in
+`[0, 2^range_bits)` and every table lookup is a packed row. The union bound over both arguments
+gives `(lookups_per_row * n + 2^range_bits + table_rows) / |Fp4|` (Haböck, ePrint 2022/1530), with
+`lookups_per_row` counting both kinds. The count includes padding rows.
 
 ## 5. Protocol and transcript order
 
@@ -91,7 +113,8 @@ Transcript: `Transcript::new("iroha_execution_stark blake2b-384 v1")`, then in o
 1. `circuit` (circuit identity), `params` (blowup, queries, arity, final degree, grinding),
    `steps`, `initial`, `final`, `checkpoint` (absent, or step and registers), `binding`, `public`
    (public-column digest);
-2. `main-root`; `multiplicities` (if lookups); challenge `logup-beta`;
+2. `main-root`; `multiplicities` (if lookups); challenge `logup-beta`; challenge
+   `logup-beta-tables` (only with table lookups);
 3. `aux-root`; challenge `composition-alpha` (one sequence: circuit and boundary identities, the
    accumulator, then helpers);
 4. `quotient-root`; challenge `ood-z` (rejected if `z^n = 1` or `z`, `wz` lie in the LDE domain);
@@ -138,7 +161,7 @@ Per-round errors (each must stay below `2^-(lambda+1)`; ethSTARK v1.2 Corollary 
   it does not apply that numeric example to every supported parameter combination. BCHKS25
   (ePrint 2025/2055) provides a tighter bound linear in `N`;
 - DEEP/ALI: `L+ (C + d (n + 2) + n) / |F|`, `L+ = (m + 1/2)/sqrt(rho+)`;
-- LogUp: `(lookups_per_row * n + 2^range_bits) / |F|`.
+- LogUp: `(lookups_per_row * n + 2^range_bits + table_rows) / |F|`, both arguments together.
 
 The standard query budget targets 129 bits. At the smallest trace its raw query-phase bound is
 129.522 bits; when that is the weakest term, `Params::proven_security_bits` reports 128.522 bits
@@ -165,7 +188,7 @@ mapping or release qualification; the qualification gate remains separate.
 
 ## 8. RaceV1 adapter obligations
 
-`race_v1::validate_replay` checks what the proof does not: 1..=8 players, `T <= 5400`, one control
+`race_v1::validate_replay` checks what the proof does not: 1..=8 players, `T <= 8100`, one control
 mask per car per tick with no reserved bits, removal events with ascending ticks `<= T`, nonempty
 ascending in-range slots, no slot removed twice, and the public half of the six-tick terminal rule
 (two or more cars must stay unremoved at every stepped six-tick boundary). The circuit enforces the

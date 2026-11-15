@@ -62,7 +62,7 @@ fn manifest() -> GameManifestV1 {
         min_participants: 2,
         max_participants: 2,
         batch_ticks: 6,
-        max_ticks: 5400,
+        max_ticks: iroha_data_model::execution_proofs::RACE_MAX_TICKS_V1,
         max_input_bytes: 12,
         max_participant_data_bytes: 1,
         access: GameAccessV1::Public,

@@ -7,7 +7,8 @@
 //!
 //! One trace row holds the state before a step plus every intermediate of that step. Rows after the
 //! last step repeat the final state (the public `active` selector freezes transitions). Range checks
-//! are LogUp lookups of `L = log2(rows)`-bit limbs into the row-index column.
+//! are LogUp lookups of `L = log2(rows)`-bit limbs into the row-index column. Fixed tables (for example a
+//! game map) are a second LogUp argument over packed `(key, value)` rows with its own challenge.
 //!
 //! Gadget soundness summary (every new column is fully determined by its constraints):
 //! - products and selects: one degree-2 equation;
@@ -15,7 +16,8 @@
 //! - divisions by constants: quotient and remainder are both range-checked, which forces exact
 //!   integer division (`c*q = a - r` with small `q`, `r`);
 //! - one-hot selectors: Booleans summing to one whose weighted sum is the index;
-//! - nonzero assertions: an inverse witness.
+//! - nonzero assertions: an inverse witness;
+//! - fixed-table reads: a range-checked offset plus a packed `(key, value)` row in the table argument.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -330,6 +332,13 @@ pub enum Hint {
     },
     /// Field inverse of a quadratic expression, or zero.
     Inverse(Quad),
+    /// `values[key]` of a fixed table.
+    Table {
+        /// Index into [`Circuit::tables`].
+        table: u32,
+        /// The key.
+        key: Lin,
+    },
 }
 
 /// A committed main column.
@@ -365,6 +374,33 @@ pub struct PublicColumn {
     pub hi: i64,
     /// Diagnostics label.
     pub label: String,
+}
+
+/// A fixed integer table that lookups can read: `values[key]` for keys `0..values.len()`, part of the
+/// circuit's identity.
+///
+/// Each row is packed as `base + key * 2^range_bits + (value - min)`, so one lookup proves a whole
+/// `(key, value)` row (see [`Builder::lookup_table`]). The packed rows form their own verifier-summed
+/// LogUp table, separate from the range table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FixedTable {
+    /// Diagnostics label.
+    pub label: String,
+    /// The value of each key.
+    pub values: Vec<i64>,
+    /// The smallest value, subtracted when packing a row.
+    pub min: i64,
+}
+
+/// Most rows all fixed tables of one circuit may hold together: the verifier sums every row.
+pub const MAX_FIXED_TABLE_ROWS: usize = 1 << 20;
+
+/// First packed value of the fixed table that follows `before`: packed rows start at `2^range_bits`, and each
+/// table spans `rows << range_bits` values, so no two rows pack alike.
+fn fixed_table_base(range_bits: u32, before: &[FixedTable]) -> u64 {
+    before.iter().fold(1u64 << range_bits, |base, table| {
+        base + ((table.values.len() as u64) << range_bits)
+    })
 }
 
 /// Engine-provided public column: `1` on rows `< steps`.
@@ -404,6 +440,12 @@ pub struct Circuit {
     /// Interval facts the application asserted from its own constraints. The honest prover re-checks them
     /// on every row, but the AIR does not enforce them: they are trusted compiler assertions.
     pub assumptions: Vec<Assumption>,
+    /// Fixed tables read by [`Self::table_lookups`].
+    pub tables: Vec<FixedTable>,
+    /// Packed values that must be rows of the fixed tables. They form a second LogUp argument with its own
+    /// challenge and helper columns, so a range lookup can never be satisfied by a table row or a table
+    /// lookup by a range value.
+    pub table_lookups: Vec<Lin>,
 }
 
 /// A prover-checked interval fact `lo <= value <= hi`.
@@ -430,9 +472,78 @@ impl Circuit {
         self.rows() - 1
     }
 
-    /// Number of LogUp helper columns.
+    /// Whether the circuit has a LogUp argument (range or table lookups).
+    pub fn has_lookups(&self) -> bool {
+        !self.lookups.is_empty() || !self.table_lookups.is_empty()
+    }
+
+    /// Number of LogUp helper columns: the range lookups' helpers, then the table lookups'.
     pub fn helper_count(&self) -> usize {
+        self.range_helper_count() + self.table_lookups.len().div_ceil(self.lookups_per_helper)
+    }
+
+    /// Helper columns of the range lookups, which come first.
+    pub fn range_helper_count(&self) -> usize {
         self.lookups.len().div_ceil(self.lookups_per_helper)
+    }
+
+    /// Rows of all fixed tables together.
+    pub fn fixed_table_rows(&self) -> usize {
+        self.tables.iter().map(|table| table.values.len()).sum()
+    }
+
+    /// Multiplicities a proof carries, in order: one per range value `[0, 2^range_bits)`, then one per
+    /// fixed-table row. None without lookups.
+    pub fn table_len(&self) -> usize {
+        if !self.has_lookups() {
+            0
+        } else {
+            (1usize << self.range_bits) + self.fixed_table_rows()
+        }
+    }
+
+    /// The packed value of row `key` of fixed table `table`: `base + key * 2^range_bits + (value - min)`.
+    ///
+    /// # Panics
+    /// Panics if the table or key does not exist.
+    pub fn fixed_table_entry(&self, table: usize, key: usize) -> u64 {
+        let fixed = &self.tables[table];
+        let digit = u64::try_from(i128::from(fixed.values[key]) - i128::from(fixed.min))
+            .expect("the minimum is a lower bound");
+        fixed_table_base(self.range_bits, &self.tables[..table])
+            + ((key as u64) << self.range_bits)
+            + digit
+    }
+
+    /// Every fixed-table row, packed, in multiplicity order.
+    pub fn fixed_table_values(&self) -> Vec<u64> {
+        let mut out = Vec::with_capacity(self.fixed_table_rows());
+        for (table, fixed) in self.tables.iter().enumerate() {
+            out.extend((0..fixed.values.len()).map(|key| self.fixed_table_entry(table, key)));
+        }
+        out
+    }
+
+    /// The position of a packed value among [`Self::fixed_table_values`], or `None` if no row packs to it.
+    pub fn fixed_row_index(&self, value: u64) -> Option<usize> {
+        let range = 1u64 << self.range_bits;
+        let (mut base, mut index) = (range, 0usize);
+        if value < base {
+            return None;
+        }
+        for fixed in &self.tables {
+            let span = (fixed.values.len() as u64) << self.range_bits;
+            let offset = value - base;
+            if offset < span {
+                let key = usize::try_from(offset >> self.range_bits).ok()?;
+                let digit = i128::from(offset & (range - 1));
+                return (i128::from(fixed.values[key]) - i128::from(fixed.min) == digit)
+                    .then_some(index + key);
+            }
+            base += span;
+            index += fixed.values.len();
+        }
+        None
     }
 
     /// Main columns referenced at the next row.
@@ -471,10 +582,10 @@ impl Circuit {
             .map(Constraint::degree)
             .max()
             .unwrap_or(1)
-            .max(if self.lookups.is_empty() {
-                2
-            } else {
+            .max(if self.has_lookups() {
                 helper_degree
+            } else {
+                2
             })
             .max(2)
     }
@@ -550,6 +661,23 @@ impl Circuit {
             push_lin(&mut out, l);
         }
         push_u64(&mut out, self.lookups_per_helper as u64);
+        // Every field above is length-framed, so this optional trailing section cannot collide with a
+        // table-free circuit, whose identity stays as it was.
+        if !self.tables.is_empty() || !self.table_lookups.is_empty() {
+            push_str(&mut out, "fixed tables");
+            push_u64(&mut out, self.tables.len() as u64);
+            for table in &self.tables {
+                push_i64(&mut out, table.min);
+                push_u64(&mut out, table.values.len() as u64);
+                for value in &table.values {
+                    push_i64(&mut out, *value);
+                }
+            }
+            push_u64(&mut out, self.table_lookups.len() as u64);
+            for l in &self.table_lookups {
+                push_lin(&mut out, l);
+            }
+        }
         out
     }
 }
@@ -567,7 +695,17 @@ impl fmt::Display for Circuit {
             self.constraints.len(),
             self.lookups.len(),
             self.helper_count()
-        )
+        )?;
+        if !self.tables.is_empty() {
+            write!(
+                f,
+                ", {} fixed tables of {} rows, {} table lookups",
+                self.tables.len(),
+                self.fixed_table_rows(),
+                self.table_lookups.len()
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -650,6 +788,8 @@ pub struct Builder {
     lookups: Vec<Lin>,
     lookups_per_helper: usize,
     assumptions: Vec<Assumption>,
+    tables: Vec<FixedTable>,
+    table_lookups: Vec<Lin>,
 }
 
 fn bit_length(value: i128) -> u32 {
@@ -691,6 +831,8 @@ impl Builder {
             lookups: Vec::new(),
             lookups_per_helper: 2,
             assumptions: Vec::new(),
+            tables: Vec::new(),
+            table_lookups: Vec::new(),
         }
     }
 
@@ -716,10 +858,90 @@ impl Builder {
     pub fn set_range_bits(&mut self, bits: u32) {
         assert!((8..=16).contains(&bits));
         assert!(
-            self.lookups.is_empty(),
-            "set the range width before adding gadgets"
+            self.lookups.is_empty() && self.tables.is_empty(),
+            "set the range width before adding gadgets or fixed tables"
         );
         self.range_bits = bits;
+    }
+
+    /// Declares a fixed table, `values[key]` for keys `0..values.len()`, bound into the circuit identity;
+    /// returns its index for [`Self::lookup_table`].
+    ///
+    /// # Panics
+    /// Panics if the table is empty, a value lies beyond `±MAX_MAGNITUDE`, its values span
+    /// `2^range_bits` or more, or the circuit's tables would hold more than [`MAX_FIXED_TABLE_ROWS`]
+    /// rows. Nothing is added to the builder when it panics.
+    pub fn fixed_table(&mut self, label: impl Into<String>, values: &[i64]) -> usize {
+        let label = label.into();
+        let (Some(min), Some(max)) = (values.iter().min(), values.iter().max()) else {
+            panic!("fixed table {label} has no rows");
+        };
+        assert!(
+            i128::from(*min) >= -MAX_MAGNITUDE && i128::from(*max) <= MAX_MAGNITUDE,
+            "fixed table {label} holds a value beyond the safe integer range"
+        );
+        assert!(
+            i128::from(*max) - i128::from(*min) < 1i128 << self.range_bits,
+            "fixed table {label} spans the range table"
+        );
+        let rows = self.tables.iter().map(|t| t.values.len()).sum::<usize>() + values.len();
+        assert!(rows <= MAX_FIXED_TABLE_ROWS, "too many fixed-table rows");
+        self.tables.push(FixedTable {
+            label,
+            values: values.to_vec(),
+            min: *min,
+        });
+        self.tables.len() - 1
+    }
+
+    /// `table[key]` as one column and two lookups: a range lookup puts the value's offset from the table's
+    /// minimum in `[0, 2^range_bits)`, and a table lookup puts the packed row
+    /// `base + key * 2^range_bits + (value - min)` among the fixed tables' rows.
+    ///
+    /// Sound because both digits are bounded (the key by its enforced interval, the offset by the range
+    /// lookup), so the packed integer lies in this table's span below `2^62` without carries and equals
+    /// exactly one row there: the `(key, value)` row. The key must already carry an enforced interval inside
+    /// the table (for example a quotient whose remainder is checked).
+    ///
+    /// # Panics
+    /// Panics if `table` is unknown or the key's interval leaves the table.
+    pub fn lookup_table(&mut self, table: usize, key: &Expr, label: &str) -> Expr {
+        let fixed = &self.tables[table];
+        let rows = fixed.values.len();
+        assert!(
+            key.lo >= 0 && key.hi < i128::try_from(rows).expect("small table"),
+            "{label}: key interval [{}, {}] leaves fixed table {}",
+            key.lo,
+            key.hi,
+            fixed.label
+        );
+        let (min, max) = (
+            fixed.min,
+            *fixed.values.iter().max().expect("tables have rows"),
+        );
+        if let Some(key) = key.as_constant() {
+            return Expr::constant(fixed.values[usize::try_from(key).expect("in the table")]);
+        }
+        // Packing constants in i128: `base - min` stays below 2^62 for every admitted table.
+        let base = i128::from(fixed_table_base(self.range_bits, &self.tables[..table]));
+        let offset = i64::try_from(base - i128::from(min)).expect("tables stay below 2^62");
+        let minus_min = i64::try_from(-i128::from(min)).expect("|min| <= MAX_MAGNITUDE");
+        let column = self.new_column(
+            Hint::Table {
+                table: u32::try_from(table).expect("small"),
+                key: key.lin.clone(),
+            },
+            label,
+        );
+        let value = Lin::var(Var::Main(column));
+        self.lookups
+            .push(value.combine(1, &Lin::constant(minus_min), 1));
+        self.table_lookups.push(
+            value
+                .combine(1, &key.lin, 1i64 << self.range_bits)
+                .combine(1, &Lin::constant(offset), 1),
+        );
+        Expr::new(value, i128::from(min), i128::from(max), false)
     }
 
     /// The engine's `active` selector (1 while steps are being applied).
@@ -1483,6 +1705,8 @@ impl Builder {
             lookups: self.lookups,
             lookups_per_helper: self.lookups_per_helper,
             assumptions: self.assumptions,
+            tables: self.tables,
+            table_lookups: self.table_lookups,
         }
     }
 

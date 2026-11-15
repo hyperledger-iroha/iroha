@@ -65,7 +65,8 @@ fn validate_state_v1(state: &RaceStateV1) -> Result<(), RaceSimulationErrorV1> {
     if state.tick > RACE_MAX_TICKS_V1
         || state.cars.iter().any(|car| {
             !(-12_000..=finish).contains(&car.progress_mm)
-                || !(-16_200..=16_200).contains(&car.lateral_mm)
+                || !(-super::environment::RAIL_MM..=super::environment::RAIL_MM)
+                    .contains(&car.lateral_mm)
                 || !(0..=3_000).contains(&car.speed_mm_per_tick)
                 || !(-320..=320).contains(&car.lateral_velocity_mm_per_tick)
                 || car.boost_energy > 1_000
@@ -120,7 +121,6 @@ pub fn step_race_v1(
         return Err(RaceSimulationErrorV1::ControlBits);
     }
     let length = state.track.length_mm();
-    let curves = state.track.curvature();
     let (_, wind) = super::environment::weather(state.track, state.tick);
     for (car, control) in state.cars.iter_mut().zip(&frame.controls) {
         if car.finish_tick.is_some() || car.dnf_tick.is_some() {
@@ -151,19 +151,21 @@ pub fn step_race_v1(
             car.lateral_velocity_mm_per_tick,
             steer * steering_force,
         );
-        let segment = usize::try_from(car.progress_mm.rem_euclid(length) * 12 / length)
-            .map_err(|_| RaceSimulationErrorV1::StateBounds)?;
-        let curvature_force = curves[segment] * car.speed_mm_per_tick / 120
+        // The real road's bend under the car pushes it outward with the square of its speed.
+        let bend_force =
+            super::environment::bend_force(state.track, car.progress_mm, car.speed_mm_per_tick)
+                .ok_or(RaceSimulationErrorV1::StateBounds)?;
+        let force = bend_force
             + (i32::try_from(wind).expect("bounded weather coefficient") * car.speed_mm_per_tick
                 / 2400);
-        car.lateral_mm = (car.lateral_mm + car.lateral_velocity_mm_per_tick + curvature_force)
-            .clamp(-9_000, 9_000);
-        if car.lateral_mm.abs() > 6_000 {
+        car.lateral_mm = (car.lateral_mm + car.lateral_velocity_mm_per_tick + force)
+            .clamp(-super::environment::RAIL_MM, super::environment::RAIL_MM);
+        if car.lateral_mm.abs() > super::environment::VERGE_MM {
             car.speed_mm_per_tick = (car.speed_mm_per_tick - 90).max(0);
         }
         let old_progress = car.progress_mm;
         car.progress_mm += i64::from(car.speed_mm_per_tick);
-        (car.lateral_mm, car.speed_mm_per_tick) = super::environment::impact(
+        car.speed_mm_per_tick = super::environment::impact(
             state.track,
             old_progress,
             car.progress_mm,
@@ -197,6 +199,12 @@ pub fn step_race_v1(
             a.speed_mm_per_tick = (a.speed_mm_per_tick - 120).max(0);
             b.speed_mm_per_tick = (b.speed_mm_per_tick - 120).max(0);
         }
+    }
+    // A contact cannot push a car through the rail.
+    for car in &mut state.cars {
+        car.lateral_mm = car
+            .lateral_mm
+            .clamp(-super::environment::RAIL_MM, super::environment::RAIL_MM);
     }
     state.tick += 1;
     let finish = length * i64::from(RACE_LAPS_V1);
@@ -503,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn curvature_and_negative_division_are_exact() {
+    fn real_road_bend_and_negative_division_are_exact() {
         let mut state = initial_race_state_v1(RaceTrackV1::NeonTokyo, 1).expect("grid");
         state.cars[0].progress_mm = 400_000;
         state.cars[0].speed_mm_per_tick = 1_200;
@@ -516,8 +524,37 @@ mod tests {
             },
         )
         .expect("tick");
+        // trunc((-3 - 18) * 7 / 8) = -18; coasting leaves 1,188 mm/tick; station 100 bends the road.
+        let coefficient = i64::from(super::super::environment::road(RaceTrackV1::NeonTokyo)[100]);
+        let bend = (coefficient * 1_188 * 1_188 / (1 << 24)) as i32;
         assert_eq!(state.cars[0].lateral_velocity_mm_per_tick, -18);
-        assert_eq!(state.cars[0].lateral_mm, -1_799);
+        assert_eq!(state.cars[0].lateral_mm, -1_800 - 18 + bend);
+        assert_eq!(state.cars[0].speed_mm_per_tick, 1_188);
+    }
+
+    #[test]
+    fn rails_hold_a_car_and_contacts_cannot_push_through_them() {
+        let mut state = initial_race_state_v1(RaceTrackV1::Harbor, 2).expect("grid");
+        for car in &mut state.cars {
+            car.progress_mm = 1_000_000;
+            car.speed_mm_per_tick = 1_000;
+        }
+        state.cars[0].lateral_mm = 6_400;
+        state.cars[0].lateral_velocity_mm_per_tick = 300;
+        state.cars[1].lateral_mm = 6_000;
+        step_race_v1(
+            &mut state,
+            &RaceInputFrameV1 {
+                tick: 0,
+                controls: vec![1 | 8, 1],
+            },
+        )
+        .expect("tick");
+        assert!(state.cars.iter().all(|car| car.lateral_mm.abs() <= 6_520));
+        assert_eq!(
+            state.cars[0].lateral_mm, 6_520,
+            "the outer car stays at the rail"
+        );
     }
 
     #[test]

@@ -66,8 +66,8 @@ impl Statement {
 /// An upper bound on the encoded size of any proof for `circuit` under `params`.
 ///
 /// Every variable-length part is bounded by its worst case: one Merkle path per query and layer,
-/// one FRI leaf per query, and multiplicities no larger than the total lookup count (which the
-/// verifier enforces).
+/// one FRI leaf per query, and multiplicities (one per range value and fixed-table row) no larger than
+/// the total lookup count (which the verifier enforces).
 ///
 /// # Errors
 /// Rejects parameters the circuit cannot use and sizes not representable on this platform.
@@ -80,7 +80,7 @@ pub fn max_proof_bytes(
     let queries = as_wide(params.queries);
     let log_lde = u128::from(circuit.log_rows + params.log_blowup);
     let width = as_wide(circuit.columns.len());
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let aux_ext = if has_lookups {
         as_wide(circuit.helper_count() + 1)
     } else {
@@ -93,7 +93,7 @@ pub fn max_proof_bytes(
     if has_lookups {
         let max_count = crate::params::lookup_occurrences(circuit)?;
         let varint = u128::from((64 - max_count.leading_zeros()).div_ceil(7).max(1));
-        total += (1u128 << circuit.range_bits) * varint;
+        total += as_wide(circuit.table_len()) * varint;
     }
     let next = as_wide(circuit.next_columns().len());
     total += 5 * len + (width + next + aux_ext + u128::from(has_lookups) + chunks) * fp4;
@@ -134,7 +134,7 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
     let queries = params.queries as u128;
     let log_lde = circuit.log_rows + params.log_blowup;
     let width = circuit.columns.len() as u128;
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let aux = if has_lookups {
         (circuit.helper_count() + 1) as u128
     } else {
@@ -142,11 +142,7 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
     };
     let chunks = crate::air::quotient_shape(circuit).chunks() as u128;
     let next = circuit.next_columns().len() as u128;
-    let mut total = if has_lookups {
-        1u128 << circuit.range_bits
-    } else {
-        0
-    };
+    let mut total = circuit.table_len() as u128;
     // The five OOD vectors, all opened main/auxiliary/quotient rows, and their batch siblings.
     total += width + next + aux + u128::from(has_lookups) + chunks;
     total += queries * (width + 4 * aux + 4 * chunks);
@@ -170,7 +166,8 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
 pub struct Proof {
     /// Main-trace commitment.
     pub main_root: Digest,
-    /// Range-table multiplicities (sent before the LogUp challenge; empty without lookups).
+    /// Table multiplicities, range values then fixed-table rows (sent before the LogUp challenges;
+    /// empty without lookups).
     pub multiplicities: Vec<u64>,
     /// LogUp-column commitment (absent without lookups).
     pub aux_root: Option<Digest>,

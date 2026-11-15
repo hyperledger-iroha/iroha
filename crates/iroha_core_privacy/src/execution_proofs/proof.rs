@@ -35,11 +35,11 @@ use norito::codec::{Decode, Encode};
 /// This does not raise any deployment's independent transaction or transport bounds.
 pub const RACE_MAX_PROOF_BYTES_V1: usize = EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1;
 /// Rounded bound on the cryptographic wire alone, excluding replay and envelope. Every RaceV1
-/// circuit's computed worst case (`iroha_execution_stark::max_proof_bytes`, 2,044,445 bytes for
-/// eight cars) is below it; actual eight-car proofs are about 1.66 MB.
+/// circuit's computed worst case (`iroha_execution_stark::max_proof_bytes`, 2,158,833 bytes for
+/// eight cars on Harbor) is below it; actual eight-car proofs are about 1.78 MB.
 pub const RACE_MAX_STARK_BYTES_V1: usize = 3_250_000;
-const RULES:&[u8]=b"iroha-race-rules-v1:ticks=30:max=5400:players=1..8:multiplayer=2..8:laps=3:batch=6:skins=6:grid-progress=-floor(slot/2)*4000:grid-x=even?-1800:1800:grid-speed=0:grid-vx=0:grid-energy=1000:controls=throttle,brake,left,right,drift,boost:boost=bit5&&energy>=25:energy=boost?-25:min(1000,+4):top=boost?3000:2400:accel=brake?-100:throttle?40:-12:speed=clamp(speed+accel,0,top):steer=right-left:vx=clamp(trunc((vx+steer*(drift?28:18))*7/8),-320,320):curve-cell=floor(remEuclid(oldProgress,length)*12/length):force=trunc(curve*speed/120):x=clamp(x+vx+force,-9000,9000):abs(x)>6000=>speed=max(0,speed-90):progress+=speed:contacts=ascending-i-j,abs(dp)<3600&&abs(dx)<1800,push=ceil((1800-abs(dx))/2),low-x-or-low-slot-tie-goes-left,speed=max(0,speed-120):finish=after-contacts,progress>=3*length,clamp-and-freeze:dnf=before-exact-tick,record-key-inactivity-even-after-finish,preserve-earlier-finish-as-history-only,freeze-and-ghost:finished-ghost:terminal=(tick%6==0&&(all-finished-or-dnf||active-keys<2))||tick5400:ranking=eligible-before-all-dnf,then-finish-time,then-distance,slot-display-only:winners=eligible-earliest-finish-ties-else-sole-eligible-survivor-else-tick5400-max-eligible-progress-ties-else-all-forfeit-refund:environment=12-cell-center-floor((2i+1)*length/24):kinds-tree0-sign1-oil2:Tokyo-kinds=0,1,0,2,0,1,2,0,1,0,2,1:Harbor-kinds=1,2,0,1,0,2,1,0,2,1,0,2:Sakura-kinds=0,0,2,1,0,2,0,1,0,2,0,1:object-x=even-negative-odd-positive,magnitudes7400,5600,1800:rain-patterns=Tokyo0010,Harbor0110,Sakura0001:wind-pattern=0,1,2,1,0,-1,-2,-1:wind-strengths=Tokyo4,Harbor16,Sakura8:tree-radius=1400:tree-loss=600:tree-push=1800-clamp9000:sign-radius=1300:sign-loss=260:oil-half-length=9000:oil-half-width=1400:oil-steer=trunc(steer/2):rain-steer=trunc(steer*3/4):slippery-damping=15/16:rain-vx-limit=280:wind=trunc(public90tick8table*speed/2400):rain=public300tick4table:impact=swept-progress-before-ordered-contacts:tracks=NeonTokyo/2000000/[0,1,2,1,0,-1,-2,-1,0,2,-2,0];Harbor/2400000/[0,-2,-2,0,1,3,1,0,-1,-3,-1,0];Sakura/1800000/[0,1,1,0,-2,-1,0,2,3,1,-2,0]";
-const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=IEB1/1:engine=iroha_execution_stark:bounded-integer-air:goldilocks-fp4-deep-ali-fri:blake2b-384-merkle-and-transcript:digest-bytes=48:public-replay:no-masking:trace=2^13:one-row-per-tick:state=progress,x,speed,vx,energy,finished,finish-tick:dnf=public-columns:boundaries=initial,checkpoint,final:logup=16-bit-verifier-summed-table,4-lookups-per-helper:blowup=8:queries=87:fri-arity=8:final-degree=16:grinding=20:round-target=129:security-target=128:envelope-max=4194304:stark-max=3250000:all-car-dynamics:all-ordered-contacts:deferred-contact-slowing";
+const RULES:&[u8]=b"iroha-race-rules-v1:ticks=30:max=8100:players=1..8:multiplayer=2..8:laps=3:batch=6:skins=6:grid-progress=-floor(slot/2)*4000:grid-x=even?-1800:1800:grid-speed=0:grid-vx=0:grid-energy=1000:controls=throttle,brake,left,right,drift,boost:boost=bit5&&energy>=25:energy=boost?-25:min(1000,+4):top=boost?3000:2400:accel=brake?-100:throttle?40:-12:speed=clamp(speed+accel,0,top):steer=right-left:vx=clamp(trunc((vx+steer*(drift?28:18))*7/8),-320,320):road-station=floor((oldProgress+100000)/5000):force=trunc(road[station]*speed*speed/16777216):x=clamp(x+vx+force,-6520,6520):abs(x)>6000=>speed=max(0,speed-90):progress+=speed:contacts=ascending-i-j,abs(dp)<3600&&abs(dx)<1800,push=ceil((1800-abs(dx))/2),low-x-or-low-slot-tie-goes-left,speed=max(0,speed-120):rails=after-contacts-x=clamp(x,-6520,6520):finish=after-contacts,progress>=3*length,clamp-and-freeze:dnf=before-exact-tick,record-key-inactivity-even-after-finish,preserve-earlier-finish-as-history-only,freeze-and-ghost:finished-ghost:terminal=(tick%6==0&&(all-finished-or-dnf||active-keys<2))||tick8100:ranking=eligible-before-all-dnf,then-finish-time,then-distance,slot-display-only:winners=eligible-earliest-finish-ties-else-sole-eligible-survivor-else-tick8100-max-eligible-progress-ties-else-all-forfeit-refund:environment=12-cell-center-floor((2i+1)*length/24):kinds-tree0-sign1-oil2:Tokyo-kinds=0,1,0,2,0,1,2,0,1,0,2,1:Harbor-kinds=1,2,0,1,0,2,1,0,2,1,0,2:Sakura-kinds=0,0,2,1,0,2,0,1,0,2,0,1:object-x=even-negative-odd-positive,magnitudes7400,5600,1800:rain-patterns=Tokyo0010,Harbor0110,Sakura0001:wind-pattern=0,1,2,1,0,-1,-2,-1:wind-strengths=Tokyo4,Harbor16,Sakura8:trees-beyond-rails-never-hit:sign-radius=1300:sign-loss=260:oil-half-length=9000:oil-half-width=1400:oil-steer=trunc(steer/2):rain-steer=trunc(steer*3/4):slippery-damping=15/16:rain-vx-limit=280:wind=trunc(public90tick8table*speed/2400):rain=public300tick4table:impact=swept-progress-before-ordered-contacts:tracks=NeonTokyo/2000000;Harbor/2400000;Sakura/1800000:roads=real-1986-roads,5000mm-stations-from-100000mm-before-the-line,sha256-of-little-endian-i16:NeonTokyo/1221/5a79b1bff09f9b38cb08eafca89c4e9c5b266a3d7da0a56908afa9319981e835;Harbor/1461/d8c6a71ec0789666bafe997a17ad69cd77d990a8e4c3189adc3d9692bf432b2f;Sakura/1101/95f0afeb280dfa4cfa8bd92ba1bcf351b3eab6e5ce18a52ffb7d91968a7a6e2a";
+const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=IEB1/1:engine=iroha_execution_stark:bounded-integer-air:goldilocks-fp4-deep-ali-fri:blake2b-384-merkle-and-transcript:digest-bytes=48:public-replay:no-masking:trace=2^13:one-row-per-tick:state=progress,x,speed,vx,energy,finished,finish-tick:dnf=public-columns:boundaries=initial,checkpoint,final:logup=16-bit-verifier-summed-range-table,4-lookups-per-helper:road-table=verifier-summed-fixed-table-own-challenge:blowup=8:queries=87:fri-arity=8:final-degree=16:grinding=20:round-target=129:security-target=128:envelope-max=4194304:stark-max=3250000:all-car-dynamics:all-ordered-contacts:deferred-contact-slowing";
 /// Classical soundness target of this profile, enforced by every proof and verification against
 /// the exact circuit. Meeting it is necessary for, but separate from, release qualification.
 const RACE_TARGET_SECURITY_BITS_V1: u16 = 128;
@@ -160,6 +160,10 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
         "crates/iroha_execution_stark/src/games/race_v1.rs",
         include_bytes!("../../../iroha_execution_stark/src/games/race_v1.rs"),
     ),
+    (
+        "crates/iroha_execution_stark/src/games/race_v1_roads.rs",
+        include_bytes!("../../../iroha_execution_stark/src/games/race_v1_roads.rs"),
+    ),
 ];
 /// Commitment to the complete frozen `RaceV1` verifier and native outcome semantics.
 ///
@@ -259,7 +263,7 @@ pub fn validate_race_manifest_v1(manifest: &GameManifestV1) -> Result<(), Execut
         || manifest.min_participants != 2
         || !(2..=8).contains(&manifest.max_participants)
         || manifest.batch_ticks != 6
-        || manifest.max_ticks != 5400
+        || manifest.max_ticks != RACE_MAX_TICKS_V1
         || manifest.max_input_bytes != 12
         || manifest.max_participant_data_bytes != 1
     {
@@ -397,7 +401,7 @@ fn validate_payload(
     )?;
     if payload.replay.player_count < 2
         || payload.replay.player_count > 8
-        || payload.replay.frames.len() > 5400
+        || payload.replay.frames.len() > RACE_MAX_TICKS_V1 as usize
         || payload
             .replay
             .frames
@@ -943,6 +947,41 @@ pub fn verify_race_proof_for_history_v1(
         return Err(ExecutionProofErrorV1::History);
     }
     verify_engine_proof(statement, &payload)
+}
+
+#[cfg(test)]
+mod road_rules_tests {
+    use sha2::{Digest, Sha256};
+
+    /// The rules string names every real road's exact table, so the rules hash and profile ID bind the
+    /// roads the circuit and the reference simulation read.
+    #[test]
+    fn rules_commit_to_every_road_table() {
+        let rules = std::str::from_utf8(super::RULES).expect("ASCII rules");
+        for (name, road) in [
+            (
+                "NeonTokyo",
+                &iroha_execution_stark::games::race_v1_roads::NEON_TOKYO[..],
+            ),
+            (
+                "Harbor",
+                &iroha_execution_stark::games::race_v1_roads::HARBOR[..],
+            ),
+            (
+                "Sakura",
+                &iroha_execution_stark::games::race_v1_roads::SAKURA[..],
+            ),
+        ] {
+            let bytes: Vec<u8> = road.iter().flat_map(|k| k.to_le_bytes()).collect();
+            let entry = format!(
+                "{name}/{}/{}",
+                road.len(),
+                hex::encode(Sha256::digest(&bytes))
+            );
+            assert!(rules.contains(&entry), "rules must name {entry}");
+        }
+        assert!(rules.contains(":max=8100:"));
+    }
 }
 
 #[cfg(test)]

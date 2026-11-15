@@ -68,8 +68,9 @@ pub enum TraceError {
         /// Assumption index.
         assumption: usize,
     },
-    /// A range-checked value is outside its range (the step's arithmetic left its proven bounds).
-    #[error("row {row}: lookup {lookup} value {value} is out of range")]
+    /// A range-checked value is outside its range (the step's arithmetic left its proven bounds), or a
+    /// table lookup (numbered after the range lookups) packs no fixed-table row.
+    #[error("row {row}: lookup {lookup} value {value} is not in its table")]
     LookupOutOfRange {
         /// Row.
         row: usize,
@@ -142,12 +143,13 @@ pub fn public_columns(
     Ok(out)
 }
 
-/// The main trace, column-major, with the range-table multiplicities of its lookups.
+/// The main trace, column-major, with the table multiplicities of its lookups.
 #[derive(Clone, Debug)]
 pub struct MainTrace {
     /// `columns[c][row]`.
     pub columns: Vec<Vec<Fp>>,
-    /// `multiplicities[v]` = number of lookups of `v` over all rows (empty without lookups).
+    /// Lookup counts over all rows in [`Circuit::table_len`] order: `multiplicities[v]` for range value
+    /// `v`, then one per fixed-table row (empty without lookups).
     pub multiplicities: Vec<u64>,
 }
 
@@ -200,6 +202,14 @@ fn eval_row(
                 let v = Fp::from_i128(q.eval_i(|x| lookup(values, x)));
                 (0, Some(v.inverse().unwrap_or(Fp::ZERO)))
             }
+            // A key outside the table reads zero; its packed row then fails the table lookup below.
+            Hint::Table { table, key } => (
+                usize::try_from(key.eval_i(|v| lookup(values, v)))
+                    .ok()
+                    .and_then(|key| circuit.tables[*table as usize].values.get(key))
+                    .map_or(0, |value| i128::from(*value)),
+                None,
+            ),
         };
         values[index] = value;
         field[index] = field_value.unwrap_or_else(|| Fp::from_i128(value));
@@ -249,8 +259,8 @@ pub(crate) fn generate_inner(
     }
     let width = circuit.columns.len();
     let limb_limit = 1i128 << circuit.range_bits;
-    let has_lookups = !circuit.lookups.is_empty();
-    let rows: Vec<Result<(Vec<Fp>, Vec<u32>), TraceError>> = (0..n)
+    let has_lookups = circuit.has_lookups();
+    let rows: Vec<Result<(Vec<Fp>, Vec<usize>), TraceError>> = (0..n)
         .into_par_iter()
         .map(|row| {
             let state = &states[if per_row { row } else { row.min(steps) }];
@@ -294,14 +304,18 @@ pub(crate) fn generate_inner(
                     });
                 }
             }
+            // Multiplicity positions: range values first, then fixed-table rows.
             let mut lookups = Vec::new();
             if has_lookups {
-                for (index, lin) in circuit.lookups.iter().enumerate() {
-                    let v = lin.eval_i(|var| match var {
+                let eval = |lin: &crate::circuit::Lin| {
+                    lin.eval_i(|var| match var {
                         Var::Main(i) => values[i as usize],
                         Var::Public(i) => i128::from(public[i as usize][row]),
                         Var::Next(_) => unreachable!(),
-                    });
+                    })
+                };
+                for (index, lin) in circuit.lookups.iter().enumerate() {
+                    let v = eval(lin);
                     if v < 0 || v >= limb_limit {
                         return Err(TraceError::LookupOutOfRange {
                             row,
@@ -309,28 +323,35 @@ pub(crate) fn generate_inner(
                             value: v,
                         });
                     }
-                    lookups.push(v as u32);
+                    lookups.push(v as usize);
+                }
+                for (index, lin) in circuit.table_lookups.iter().enumerate() {
+                    let v = eval(lin);
+                    let Some(position) = u64::try_from(v)
+                        .ok()
+                        .and_then(|packed| circuit.fixed_row_index(packed))
+                    else {
+                        return Err(TraceError::LookupOutOfRange {
+                            row,
+                            lookup: circuit.lookups.len() + index,
+                            value: v,
+                        });
+                    };
+                    lookups.push(position + (1usize << circuit.range_bits));
                 }
             }
             Ok((field, lookups))
         })
         .collect();
     let mut columns = vec![vec![Fp::ZERO; n]; width];
-    let mut counts = vec![
-        0u64;
-        if has_lookups {
-            1usize << circuit.range_bits
-        } else {
-            0
-        }
-    ];
+    let mut counts = vec![0u64; circuit.table_len()];
     for (row, result) in rows.into_iter().enumerate() {
         let (field, lookups) = result?;
         for (column, value) in columns.iter_mut().zip(field) {
             column[row] = value;
         }
-        for v in lookups {
-            counts[v as usize] += 1;
+        for position in lookups {
+            counts[position] += 1;
         }
     }
     Ok(MainTrace {

@@ -36,7 +36,7 @@
             "speed_mm_per_tick": 0
           }
         ],
-        "tick": 5401,
+        "tick": 8101,
         "track": {
           "kind": "neon_tokyo",
           "value": null
@@ -484,7 +484,7 @@
             "slot": 3
           }
         ],
-        "ticks": 5400,
+        "ticks": 8100,
         "winners": [
           1,
           2
@@ -529,7 +529,7 @@
             "speed_mm_per_tick": 0
           }
         ],
-        "tick": 5400,
+        "tick": 8100,
         "track": {
           "kind": "harbor",
           "value": null
