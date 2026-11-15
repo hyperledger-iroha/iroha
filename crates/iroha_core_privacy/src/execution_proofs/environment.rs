@@ -182,14 +182,17 @@ mod tests {
             let table = road(track);
             let finish = track.length_mm() * 3;
             // Station 0 begins 100 m before the line; the finish lies in the last station.
-            assert_eq!(table.len() as i64, (finish + 100_000) / 5_000 + 1);
+            assert_eq!(
+                i64::try_from(table.len()).unwrap(),
+                (finish + 100_000) / 5_000 + 1
+            );
             assert_eq!(bend_force(track, -100_001, 1_000), None);
             assert!(bend_force(track, finish, 3_000).is_some());
             assert_eq!(bend_force(track, finish + 5_000, 1_000), None);
             assert_eq!(bend_force(track, i64::MAX, 1_000), None);
             assert_eq!(bend_force(track, i64::MIN, 1_000), None);
             for (station, coefficient) in table.iter().enumerate() {
-                let start = station as i64 * 5_000 - 100_000;
+                let start = i64::try_from(station).unwrap() * 5_000 - 100_000;
                 for progress in [start, start + 4_999] {
                     let expected = i64::from(*coefficient) * 2_000 * 2_000 / (1 << 24);
                     assert_eq!(
@@ -201,7 +204,7 @@ mod tests {
             }
             // A negative push truncates toward zero, like the positive one.
             let negative = table.iter().position(|k| *k < -100).expect("a left push");
-            let at = negative as i64 * 5_000 - 100_000;
+            let at = i64::try_from(negative).unwrap() * 5_000 - 100_000;
             let k = i64::from(table[negative]);
             assert_eq!(
                 bend_force(track, at, 1_500),
