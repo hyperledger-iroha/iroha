@@ -39,15 +39,9 @@ use crate::{
     sumeragi::test_chain::fixture_keys,
 };
 
-/// The repaired selection this release reconstructs for Taira.
-///
-/// Taira read `f4f73c12…` from its authenticated runtime route at H12509. The
-/// 2026-11-13/14 gas-schedule and execution-policy changes (`c5511ebfc4`, `14e5a5e1f4`)
-/// regenerated the baseline `abi.v1` host profile, so this release builds
-/// `80ab7230…` instead: a Taira on the earlier selection takes this release only through a
-/// fresh genesis or the governed adoption in `specs/live_runtime_upgrades.md`, never a roll.
+/// Taira's selection as read from its authenticated runtime route and replayed State at H12509.
 const LIVE_REPAIRED_SELECTION: &str =
-    "80ab7230a8d1f825e09f60a409492d5d0741327cb8dd947b194d2afaba04cb21";
+    "f4f73c1261d087963bdfdd045b09551e9dbefbc889b9e735b62f72d9e49e07bb";
 
 fn network() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([0x25; 32])))
