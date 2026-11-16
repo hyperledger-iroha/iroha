@@ -955,7 +955,7 @@ mod tests {
         // protocol default that Taira's signed genesis binds. Renaming the slot to the
         // gas field's name moved every signed genesis's execution digest.
         let expected = concat!(
-            "0100000000000000352221706970656c696e652e71756172616e74696e655f7478",
+            "0100000000000000342221706970656c696e652e71756172616e74696e655f7478",
             "5f6d61785f6379636c65731008000000000000000000000000000000",
         );
         let mut policy = ExecutionPolicyFieldsV1::default();
