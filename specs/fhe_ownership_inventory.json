@@ -15356,8 +15356,14 @@
    "component": "iroha_core",
    "role": "consumer",
    "tasks": ["P.12"],
-   "summary": "Release-evidence descriptor of the Jindo polynomial commitment that names its compiled RNS factors.",
+   "summary": "Release-evidence descriptor of the Jindo polynomial commitment that names its compiled RNS factors; its tests also check that ZK-AMS compiles no profile before MKHE release readiness.",
    "files": [
+    {
+     "path": "crates/iroha_core/src/privacy_release_evidence/tests.rs",
+     "patterns": ["mkhe"],
+     "cfg": ["feature = \"privacy-release-evidence\"", "test"],
+     "test_only": true
+    },
     {
      "path": "crates/iroha_core/src/privacy_release_evidence/verange_and_rng.rs",
      "patterns": ["rns"],

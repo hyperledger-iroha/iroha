@@ -243,6 +243,7 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_runtime_memory_tests.rs",
         "executor_public_pin_admission_tests.rs",
         "executor_opaque_monetary_tests.rs",
+        "executor_runtime_obligation_profile_tests.rs",
         "executor/root_scope/tests/amx_approvals.rs",
         "executor/root_scope/tests/amx_roles.rs",
         "executor/root_scope/tests/contract_permissions.rs",

@@ -99,7 +99,7 @@
       "include_path": "compiler/fixtures/v1/c002.ko",
       "newline_count": 4,
       "ordinal": 8,
-      "owner_function": "selected_max_cycles_is_embedded_in_artifact",
+      "owner_function": "selected_zk_trace_bound_is_embedded_only_in_zk_artifacts",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -2049,7 +2049,7 @@
       "include_path": "compiler/fixtures/v1/c146.ko",
       "newline_count": 10,
       "ordinal": 158,
-      "owner_function": "native_json_construction_emits_one_extended_build_syscall",
+      "owner_function": "native_json_construction_emits_one_build_syscall",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -2465,7 +2465,7 @@
       "include_path": "compiler/fixtures/v1/c177.ko",
       "newline_count": 21,
       "ordinal": 190,
-      "owner_function": "test_mode_helpers_emit_private_scallx_syscalls",
+      "owner_function": "test_mode_helpers_emit_private_scall_syscalls",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -2478,7 +2478,7 @@
       "include_path": "compiler/fixtures/v1/c178.ko",
       "newline_count": 8,
       "ordinal": 191,
-      "owner_function": "decimal_operators_use_extended_nominal_syscalls",
+      "owner_function": "decimal_operators_use_nominal_numeric_syscalls",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -2517,7 +2517,7 @@
       "include_path": "compiler/fixtures/v1/c181.ko",
       "newline_count": 10,
       "ordinal": 194,
-      "owner_function": "quantity_div_round_uses_one_extended_nominal_syscall",
+      "owner_function": "quantity_div_round_uses_one_nominal_syscall",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -4109,7 +4109,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "5d285ed24660842ad6ed6a5f9f2aa9e1ce1e419ad8f12753d01f6830e333a282",
+  "fixtures_sha256": "66270e9e267fddac2b1dabb202e3776567c0f2069c9257c2fbd1c881a049758e",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [
@@ -4212,12 +4212,11 @@
         "instruction_access_hints_reject_direct_concrete_instruction_frames",
         "codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests",
         "shared_host_requests_drive_canonical_roots_and_tally_access_hints",
-        "default_max_cycles_matches_pipeline_bound",
+        "default_zk_trace_bound_matches_pipeline_bound",
         "expression_and_named_call_sugar_emit_identical_executable_bytecode",
         "source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes",
         "compiler_api_rejects_bare_fragments_and_implicit_main",
-        "selected_max_cycles_is_embedded_in_artifact",
-        "zero_max_cycles_is_rejected_before_artifact_generation",
+        "selected_zk_trace_bound_is_embedded_only_in_zk_artifacts",
         "loop_phi_lowering_is_deterministic",
         "emit_addi_zero_uses_addi_copy",
         "emit_addi_combines_a_small_immediate_with_the_initial_copy",
@@ -4258,6 +4257,8 @@
         "encode_load64_rejects_out_of_range_offset",
         "encode_store64_rejects_out_of_range_offset",
         "encode_branch_rejects_unaligned_offsets",
+        "encode_branch_reaches_the_complete_signed_14_bit_word_range",
+        "encode_jal_reaches_the_complete_signed_19_bit_word_range",
         "encode_jal_rejects_unaligned_offsets",
         "emit_load64_requires_scratch_when_rd_equals_base",
         "emit_store64_requires_distinct_scratch",
@@ -4400,7 +4401,7 @@
         "manifest_compilation_rejects_raw_call_contract",
         "compile_native_json_object_with_exact_int_and_pointer_values",
         "native_json_accepts_returned_state_cursors",
-        "native_json_construction_emits_one_extended_build_syscall",
+        "native_json_construction_emits_one_build_syscall",
         "manifest_access_set_hints_include_register_trigger_from_json",
         "manifest_access_set_hints_include_nft_set_metadata_literal",
         "manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata",
@@ -4459,7 +4460,7 @@
         "source_string_pointer_encoding_keeps_hex_prefix_literal",
         "state_codegen_rejects_legacy_name_literal_carrier",
         "entry_spills_use_stack_frame",
-        "json_string_and_bool_getters_emit_their_extended_syscalls",
+        "json_string_and_bool_getters_emit_their_registry_syscalls",
         "ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls",
         "every_builtin_codegen_matches_its_registry_operation_syscalls",
         "declared_authorization_inventory_is_authenticated_in_artifact_and_manifest",
@@ -4476,15 +4477,16 @@
         "each_native_settlement_lowers_both_dynamic_revisions_as_checked_u64",
         "each_settlement_accepts_full_u64_and_refuses_overflowing_literals",
         "each_settlement_is_effectful_and_keeps_revision_types_nominal",
+        "runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_manifest",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
         "test_and_production_entrypoints_use_the_same_argument_boundary",
         "production_rejects_tests_before_resolving_test_only_helpers",
-        "test_mode_helpers_emit_private_scallx_syscalls",
+        "test_mode_helpers_emit_private_scall_syscalls",
         "implicit_first_release_prelude_helpers_fail_closed",
-        "decimal_operators_use_extended_nominal_syscalls",
+        "decimal_operators_use_nominal_numeric_syscalls",
         "every_typed_query_page_compiles_with_a_structural_public_schema",
         "ordinary_struct_entrypoint_names_come_from_the_exact_abi_schema",
-        "quantity_div_round_uses_one_extended_nominal_syscall",
+        "quantity_div_round_uses_one_nominal_syscall",
         "manifest_state_descriptors_use_canonical_type_names",
         "compiler_enforces_the_exact_runtime_state_schema_node_limit",
         "used_state_reports_the_exact_runtime_schema_limit_before_lowering",
@@ -4503,7 +4505,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "d529ed69491856f28dff77aa98a7500f04205d81709358a204962ed7c6186483"
+      "test_names_sha256": "336dbc726478d06db3d557bce244fd0aa5908dfdb2953077fcd857e352c4eeea"
     },
     {
       "external_fixtures": [],
@@ -4918,5 +4920,5 @@
       "test_names_sha256": "cb555c333d8754cf1079a9f7b9c0a2b5085c27876cd79e8241e94f3ba79c86bd"
     }
   ],
-  "test_inventory_sha256": "03f9fff5d65f1ec5918ba3c2d45208e1f53452aed2288151a912c520c53c58ce"
+  "test_inventory_sha256": "3908afa02fa13b58a321f4f489335bca51d588047b63aea8f429e7132bf001cd"
 }

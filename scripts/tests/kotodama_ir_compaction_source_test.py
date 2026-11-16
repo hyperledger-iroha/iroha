@@ -348,9 +348,15 @@ def _validate_v1_lowering_contract(production: str) -> None:
     _require("Builtin::StageAnchoredSpend=>{letspend=lower_expr(ctx,&args[0],vars);"
              "ctx.current_instr(Instr::StageAnchoredSpend{spend});emit_i64_const(ctx,0)}"
              in surface, "anchored-spend lowering changed")
-    _require("Builtin::ScExecuteSubmitBallot=>{letpayload=lower_expr(ctx,&args[0],vars);"
-             "ctx.current_instr(Instr::VendorExecuteInstruction{payload,"
-             "kind:VendorInstructionKind::SubmitBallot,});emit_i64_const(ctx,0)}"
+    _require("Builtin::ScExecuteSubmitBallot|Builtin::RegisterRuntimeObligation"
+             "|Builtin::CompleteRuntimeObligation=>{letpayload=lower_expr(ctx,&args[0],vars);"
+             "letkind=matchbuiltin{Builtin::RegisterRuntimeObligation=>{"
+             "VendorInstructionKind::RegisterRuntimeObligation}"
+             "Builtin::CompleteRuntimeObligation=>{"
+             "VendorInstructionKind::CompleteRuntimeObligation}"
+             "_=>VendorInstructionKind::SubmitBallot,};"
+             "ctx.current_instr(Instr::VendorExecuteInstruction{payload,kind});"
+             "emit_i64_const(ctx,0)}"
              in surface, "typed submit-ballot instruction routing changed")
     _require("matched operation-specific instruction bridge" not in production,
              "typed submit-ballot lowering must not restore the panic lookup")
@@ -541,8 +547,8 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
              "lowered_args.push(lower_expr_as_i64(ctx, arg, vars));", "must not narrow"),
             ("ctx.current_instr(Instr::StageAnchoredSpend { spend });",
              "ctx.current_instr(Instr::AxtCommit);", "anchored-spend lowering"),
-            ("kind: VendorInstructionKind::SubmitBallot,",
-             "kind: vendor_instruction_kind_for_builtin(builtin),",
+            ("_ => VendorInstructionKind::SubmitBallot,",
+             "_ => vendor_instruction_kind_for_builtin(builtin),",
              "typed submit-ballot instruction routing"),
             ("let l = lower_expr(ctx, left, vars);\n            let r = lower_expr(ctx, right, vars);",
              "let r = lower_expr(ctx, right, vars);\n            let l = lower_expr(ctx, left, vars);",
