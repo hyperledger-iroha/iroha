@@ -590,12 +590,14 @@ only as the explicit `IvmProfileId::C10_ABI_V1`, which no root selects until pha
 - Frozen pins that C10 had re-derived from its own baseline are restored to the anchor values
   rather than re-pinned: `specs/runtime_ironwood_catalog.json` (predecessor `56c23286…`,
   selection `001a52cd…`) and the Ironwood change-set ids above.
-- `execution_policy_digest_v1` is unchanged: the pinned first-release history test reports the
-  same signed-genesis execution digest mismatch (`67502f37…` ≠ `ed32e924…`) as the live tree's own
-  Core run before this phase. `e562d91f81` renamed
-  `pipeline.quarantine_tx_max_cycles` to `quarantine_tx_max_gas` in its preimage before this
-  phase; the anchor's quarantine-lane cycle budget is therefore not restored (restoring it needs
-  the digest term, an owner decision); both engines keep the gas cap.
+- `execution_policy_digest_v1` keeps its signed V1 preimage (owner decision 2026-11-16: keep
+  Taira's digest). `e562d91f81` had renamed the quarantine slot
+  `pipeline.quarantine_tx_max_cycles` to `pipeline.quarantine_tx_max_gas`, which moved every
+  signed genesis's execution digest (`67502f37…` ≠ `ed32e924…` in the pinned first-release
+  history test, and Taira's genesis refused at `--check-config`). The slot is frozen under its
+  V1 name again (`push_frozen_quarantine_tx_budget_v1`) and binds the gas cap's u64 value, so
+  a signed genesis keeps its digest. The anchor's quarantine-lane cycle budget is not restored;
+  both engines keep the gas cap.
 - World import (`runtime_amx_captures`, `parliament_anonymous_attempts`, `runtime_retirements`)
   is untouched; phase 4 does not change that picture.
 - Core lib failures that are not this phase's, each failing identically in the live tree's own
@@ -648,8 +650,7 @@ binary ran alone from its package directory.
 ### Not done in phase 4, and what remains
 
 - Owner decisions, unchanged: `AbiV1RuntimeLifecycle` stays on C10 (both reconstruction tests
-  pass with it there); the quarantine-lane cycle budget needs the `execution_policy_digest_v1`
-  term `e562d91f81` renamed; mixed-profile nested calls; retirement and the activation
+  pass with it there); mixed-profile nested calls; retirement and the activation
   bootstrap authority.
 - Phase 5: `*C10V1` wire families for the C10 faults and admission errors that the baseline
   enums cannot name (`ControlFlowViolation`, `RegisterIntegerOverflow`, `MaxCyclesWithoutZk`;

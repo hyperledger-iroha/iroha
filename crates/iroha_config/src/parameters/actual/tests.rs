@@ -948,6 +948,31 @@ mod tests {
         policy.push_frozen_runtime_provenance_v1();
         assert_eq!(hex::encode(policy.fields.encode()), expected);
     }
+    #[test]
+    fn frozen_quarantine_tx_budget_v1_keeps_its_signed_slot_name() {
+        // Independently encoded from the signed V1 slot at a34b1e7a60: the name
+        // `pipeline.quarantine_tx_max_cycles` (33 bytes) with a u64 zero budget, the
+        // protocol default that Taira's signed genesis binds. Renaming the slot to the
+        // gas field's name moved every signed genesis's execution digest.
+        let expected = concat!(
+            "0100000000000000352221706970656c696e652e71756172616e74696e655f7478",
+            "5f6d61785f6379636c65731008000000000000000000000000000000",
+        );
+        let mut policy = ExecutionPolicyFieldsV1::default();
+        policy.push_frozen_quarantine_tx_budget_v1(0);
+        assert_eq!(hex::encode(policy.fields.encode()), expected);
+
+        // The slot still binds the budget's value.
+        let baseline = super::sora_profile_tests::minimal_root();
+        let mut changed = baseline.clone();
+        changed.pipeline.quarantine_tx_max_gas =
+            changed.pipeline.quarantine_tx_max_gas.saturating_add(1);
+        assert_ne!(
+            execution_policy_hash(&changed),
+            execution_policy_hash(&baseline),
+            "the quarantine gas cap must change the execution-policy identity"
+        );
+    }
 
     #[test]
     fn local_crypto_generation_and_backend_choices_cannot_change_execution_policy_digest() {
