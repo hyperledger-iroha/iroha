@@ -4478,6 +4478,8 @@
         "each_settlement_accepts_full_u64_and_refuses_overflowing_literals",
         "each_settlement_is_effectful_and_keeps_revision_types_nominal",
         "runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_manifest",
+        "target_profile_is_the_engine_profile_of_the_host_policy",
+        "baseline_target_header_and_contract_interface_follow_the_anchor",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
         "test_and_production_entrypoints_use_the_same_argument_boundary",
         "production_rejects_tests_before_resolving_test_only_helpers",
@@ -4505,7 +4507,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "336dbc726478d06db3d557bce244fd0aa5908dfdb2953077fcd857e352c4eeea"
+      "test_names_sha256": "561e99b05c85e1aba1c0a7f975b020282b1635eafd13c9ace834181220a15a81"
     },
     {
       "external_fixtures": [],
@@ -4920,5 +4922,5 @@
       "test_names_sha256": "cb555c333d8754cf1079a9f7b9c0a2b5085c27876cd79e8241e94f3ba79c86bd"
     }
   ],
-  "test_inventory_sha256": "3908afa02fa13b58a321f4f489335bca51d588047b63aea8f429e7132bf001cd"
+  "test_inventory_sha256": "a6ae68dc3a37c1853ef9a424189a59f23a9726992caecf8be7b08d4dc6330d52"
 }
