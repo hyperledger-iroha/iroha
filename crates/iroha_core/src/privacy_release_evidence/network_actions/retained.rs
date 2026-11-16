@@ -818,7 +818,8 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         },
     };
     let request = BootstrapPrivacyPgcAccountsV1::new(
-        bootstrap,
+        // The signed instruction carries the frozen Exact12 bootstrap.
+        bootstrap.try_into().map_err(|_| evidence_error())?,
         ActionAttachmentRefV1 {
             action_index: 0,
             slot_index: 0,

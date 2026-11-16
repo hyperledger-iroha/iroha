@@ -4101,7 +4101,7 @@ fn run_jindo_stage_v1(
     if observed.0.as_bytes() != &prepared.transaction_intent_digest() {
         return Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected);
     }
-    let envelope = &observed.1.envelope;
+    let envelope = observed.1.runtime_envelope();
     let PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
         &envelope.statement
     else {
