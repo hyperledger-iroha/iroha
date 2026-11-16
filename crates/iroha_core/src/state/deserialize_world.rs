@@ -7682,6 +7682,26 @@ mod validation_fee_registry_restore_tests {
     }
 
     #[test]
+    fn parliament_proposal_refusal_keeps_the_resolver_reason() {
+        use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+        let missing = || {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "Parliament proposal is missing".to_owned(),
+            ))
+        };
+        assert_eq!(
+            missing().to_string(),
+            "Invalid instruction parameter",
+            "the display alone drops the reason"
+        );
+        let message = restore_error_with_sources(&missing());
+        assert!(
+            message.contains("Parliament proposal is missing"),
+            "restore keeps the resolver's reason: {message}"
+        );
+    }
+
+    #[test]
     fn restore_validator_rejects_validation_fee_registry_with_missing_authorized_attempt() {
         let (world, registry) = registry_world(REGISTRY_CANDIDATE_SEED);
         let authorization = &registry.registered_policies[0].parliament_authorization;
@@ -10275,7 +10295,7 @@ fn validate_sorafs_authority_attempt_history(cut: &impl WorldReadOnly) -> Result
                 cut,
                 *attempt.proposal_content_id().as_bytes(),
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| restore_error_with_sources(&error))?;
         host.validate_bindings(attempt)
             .map_err(|error| error.to_string())?;
     }
