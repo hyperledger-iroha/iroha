@@ -43817,8 +43817,9 @@ pub mod validation_fee_torii_ingress_tests {
         ContractAddress::derive(state.network_id_ref(), user, 1, DataSpaceId::UNIVERSAL)
             .expect("derive original network pool address")
     }
+    /// The protected unit return in the frozen baseline encoding that ABI V1 artifacts run.
     fn unit_return_code() -> Vec<u8> {
-        use ivm::{
+        use ivm_abi::baseline::{
             encoding::wide,
             instruction::wide::{arithmetic, control, memory},
         };
@@ -43852,7 +43853,7 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -43918,7 +43919,8 @@ pub mod validation_fee_torii_ingress_tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = metadata.encode();
+        let mut artifact =
+            metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
         let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
@@ -43933,7 +43935,7 @@ pub mod validation_fee_torii_ingress_tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -43987,7 +43989,8 @@ pub mod validation_fee_torii_ingress_tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = metadata.encode();
+        let mut artifact =
+            metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
         let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)

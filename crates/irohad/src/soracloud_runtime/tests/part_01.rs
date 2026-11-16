@@ -2577,7 +2577,7 @@ fn soracloud_contract_artifact_with_functions(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 100_000,
         abi_version: 1,
     };
     let mut entrypoints = Vec::new();
@@ -2619,7 +2619,9 @@ fn soracloud_contract_artifact_with_functions(
         enum_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut bytes = metadata.encode();
+    // ABI V1 artifacts run on the frozen baseline engine: its header and encodings.
+    let mut bytes =
+        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
     bytes.extend_from_slice(&contract_interface.encode_section());
     for word in code_words {
         bytes.extend_from_slice(&word.to_le_bytes());
@@ -2627,7 +2629,7 @@ fn soracloud_contract_artifact_with_functions(
     bytes
 }
 fn soracloud_unit_return_words() -> Vec<u32> {
-    use ivm::{encoding::wide as enc, instruction::wide};
+    use ivm::baseline::{encoding::wide as enc, instruction::wide};
     vec![
         enc::encode_store(wide::memory::STORE64, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
@@ -2681,13 +2683,13 @@ fn soracloud_typed_entrypoint(
     entrypoint
 }
 fn soracloud_echo_return_words(argument_index: u8) -> Vec<u32> {
-    use ivm::{encoding::wide as enc, instruction::wide};
+    use ivm::baseline::{encoding::wide as enc, instruction::wide};
     vec![
         enc::encode_load(
             wide::memory::LOAD64,
             5,
             10,
-            i16::try_from(argument_index * 8).expect("fixture argument offset"),
+            i8::try_from(argument_index * 8).expect("fixture argument offset"),
         ),
         enc::encode_store(wide::memory::STORE64, 12, 5, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
