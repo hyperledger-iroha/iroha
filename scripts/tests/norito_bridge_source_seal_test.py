@@ -400,6 +400,8 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
             "crates/norito_derive/tests/ui/fail/json_enum_missing_tag.stderr",
             "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
+            "crates/norito_derive/tests/ui/fail/payload_ctx_guard_dangling_slice.stderr",
+            "crates/norito_derive/tests/ui/fail/payload_slice_outlives_buffer.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_tuple.stderr",
             "crates/norito_derive/tests/ui/fail/prepared_record_unit.stderr",
