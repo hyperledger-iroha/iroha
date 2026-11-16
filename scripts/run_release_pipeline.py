@@ -48,7 +48,7 @@ _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "7b639b29e9597537d0656b425df3092ec76660d8ad8f34354e68be348be28ec1",
+    "check_release_feature_graph": "a939e03d3c54e18a1ebac35697f5987ae2e4bfc67249eb52b46833425c291a47",
 }
 
 
