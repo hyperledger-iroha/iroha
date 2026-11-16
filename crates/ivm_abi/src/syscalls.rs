@@ -2171,6 +2171,18 @@ fn collect_abi_syscall_surface(
     Ok(surface)
 }
 fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> {
+    encode_abi_surface_with(surface, IsaRecord::Present)
+}
+/// Whether a descriptor binds the instruction-set record. The baseline descriptor predates it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IsaRecord {
+    Present,
+    Absent,
+}
+fn encode_abi_surface_with(
+    surface: &AbiSurface,
+    isa_record: IsaRecord,
+) -> Result<Vec<u8>, AbiSurfaceError> {
     if surface.syscalls.is_empty() {
         return Err(AbiSurfaceError::EmptySyscallSurface);
     }
@@ -2213,16 +2225,18 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     )?;
     descriptor.u8("policy_tag", surface.policy_tag)?;
     descriptor.text("program_header_layout", surface.program_header_layout)?;
-    descriptor.record("isa", |isa| {
-        isa.text("word_layout", surface.isa.word_layout)?;
-        isa.u8("register_count", surface.isa.register_count)?;
-        isa.sequence("opcodes", &surface.isa.opcodes, |record, opcode| {
-            record.u8("opcode", opcode.opcode)?;
-            record.text("layout", opcode.layout)
+    if isa_record == IsaRecord::Present {
+        descriptor.record("isa", |isa| {
+            isa.text("word_layout", surface.isa.word_layout)?;
+            isa.u8("register_count", surface.isa.register_count)?;
+            isa.sequence("opcodes", &surface.isa.opcodes, |record, opcode| {
+                record.u8("opcode", opcode.opcode)?;
+                record.text("layout", opcode.layout)
+            })?;
+            isa.text("tag_rule", surface.isa.tag_rule)?;
+            isa.text("fault_semantics", surface.isa.fault_semantics)
         })?;
-        isa.text("tag_rule", surface.isa.tag_rule)?;
-        isa.text("fault_semantics", surface.isa.fault_semantics)
-    })?;
+    }
     descriptor.record("generic_program", |generic| {
         generic.u8(
             "semantics_version",
@@ -3241,7 +3255,17 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
         Err(error) => Err(*error),
     }
 }
-/// Compute the stable first-release ABI hash for the complete allowed surface.
+/// ABI descriptor hash of a named host policy: the hash of the profile
+/// [`crate::IvmProfileId::of_policy`] binds it to.
+///
+/// [`crate::SyscallPolicy::AbiV1`] is the frozen baseline profile (`7531b45d…`,
+/// [`compute_baseline_abi_hash`]); the runtime-lifecycle policy is a C10 surface
+/// ([`compute_c10_abi_hash`]).
+#[must_use]
+pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
+    crate::IvmProfileId::of_policy(policy).abi_hash()
+}
+/// Compute the ABI hash of one named policy's surface on the C10 engine.
 ///
 /// The domain-separated, versioned, length-prefixed descriptor binds the ABI-v1 policy tag;
 /// indexed-literal opcodes, table kinds, and payload layouts; every sorted syscall signature and
@@ -3258,21 +3282,78 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 /// phase tags remain bound independently by the gas-schedule hash. A malformed compiled registry
 /// returns a diagnostic sentinel with an invalid Iroha-hash marker; release tests require that path
 /// to be unreachable, and a valid Iroha hash can never equal such a sentinel.
-pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
+#[must_use]
+pub fn compute_c10_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
     match abi_surface_descriptor(policy) {
         Ok(descriptor) => *iroha_crypto::Hash::new(descriptor).as_ref(),
         Err(error) => invalid_abi_surface_hash(error),
     }
 }
+/// Program-header layout bound by the baseline descriptor (anchor `77600a4840`).
+const BASELINE_PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8=1;version_minor:u8=1;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
+/// Descriptor format version of the baseline descriptor.
+const BASELINE_ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 10;
+/// Fault layout bound by the baseline descriptor: the original `IvmFaultKindV1` tags.
+const BASELINE_FAULT_LAYOUT_V1: &str = "IvmFaultV1={kind:IvmFaultKindV1,site:IvmFaultSiteV1};IvmFaultSiteV1={code_hash:Hash,selector:IvmInvocationSelectorV1,position:IvmFaultPositionV1};selector=Generic0|Entrypoint1(u32-CNTR-ordinal);position=Initialization0|Execute1{pc_offset:u64-executable-relative}|ReturnValidation2;kind=OutOfGas0|MemoryLimitExceeded1|MemoryAccessViolation2|MisalignedAccess3|MemoryOutOfBounds4|DecodeError5|InvalidOpcode6|UnknownSyscall7|UnsupportedSyscall8|GasCostOverflow9|Numeric10(NumericFaultV1)|PointerAbi11(PointerAbiFaultV1)|AssertionFailed12|ExceededMaxCycles13|InvalidMetadata14|InvalidVectorLength15|MissingHalt16|VectorExtensionDisabled17|ZkExtensionDisabled18|NullifierAlreadyUsed19|PermissionDenied20|PrivacyViolation21|RegisterOutOfBounds22|NoritoInvalid23|AbiTypeNotAllowed24|HostOutputItemsExceeded25|HostOutputBytesExceeded26|AmxBudgetExceeded27|ReentrantCall28|CallDepthExceeded29;numeric-and-pointer-tags=canonical-numeric-surface;JSON-enums=kind+value;structs=closed-required-fields";
+/// Surface of the frozen baseline profile.
+///
+/// The baseline descriptor is the anchor's: the same syscall, pointer, query, durable-state,
+/// entrypoint, numeric and private-input surface as ABI V1 today, with the original header layout,
+/// fault tags, numeric fault list (no `register_integer_overflow`) and descriptor format version,
+/// and without the instruction-set record that C10 added.
+fn collect_baseline_abi_surface() -> Result<AbiSurface, AbiSurfaceError> {
+    let mut surface = collect_abi_surface(crate::SyscallPolicy::AbiV1)?;
+    surface.descriptor_format_version = BASELINE_ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION;
+    surface.program_header_layout = BASELINE_PROGRAM_HEADER_LAYOUT_V1;
+    surface.entrypoint.fault_layout = BASELINE_FAULT_LAYOUT_V1;
+    let register_overflow = crate::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG;
+    surface
+        .numeric
+        .faults
+        .retain(|fault| fault.tag != register_overflow);
+    Ok(surface)
+}
+/// Canonical ABI descriptor bytes of the frozen baseline profile.
+///
+/// Returns `None` only for a malformed compiled registry, which release tests rule out.
+#[must_use]
+pub fn baseline_abi_surface_descriptor() -> Option<&'static [u8]> {
+    use std::sync::OnceLock;
+    static BASELINE: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
+    BASELINE
+        .get_or_init(|| {
+            encode_abi_surface_with(&collect_baseline_abi_surface()?, IsaRecord::Absent)
+        })
+        .as_ref()
+        .ok()
+        .map(Vec::as_slice)
+}
+/// ABI hash of the frozen baseline profile (`7531b45d…`).
+#[must_use]
+pub fn compute_baseline_abi_hash() -> [u8; 32] {
+    use std::sync::OnceLock;
+    static HASH: OnceLock<[u8; 32]> = OnceLock::new();
+    *HASH.get_or_init(|| {
+        let descriptor = encode_abi_surface_with(
+            &match collect_baseline_abi_surface() {
+                Ok(surface) => surface,
+                Err(error) => return invalid_abi_surface_hash(error),
+            },
+            IsaRecord::Absent,
+        );
+        match descriptor {
+            Ok(descriptor) => *iroha_crypto::Hash::new(descriptor).as_ref(),
+            Err(error) => invalid_abi_surface_hash(error),
+        }
+    })
+}
 /// Resolve an exact implemented ABI V1 host identity. Unknown identities never select a fallback.
 #[must_use]
 pub fn policy_for_abi_hash(hash: &[u8; 32]) -> Option<crate::SyscallPolicy> {
-    [
-        crate::SyscallPolicy::AbiV1,
-        crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-    ]
-    .into_iter()
-    .find(|policy| compute_abi_hash(*policy) == *hash)
+    crate::IvmProfileId::IMPLEMENTED
+        .into_iter()
+        .map(crate::IvmProfileId::policy)
+        .find(|policy| compute_abi_hash(*policy) == *hash)
 }
 
 #[cfg(test)]
@@ -3570,7 +3651,7 @@ mod tests {
         assert_eq!(surface.len(), allowed.len());
         assert!(build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1).is_ok());
         assert!(abi_surface_descriptor(crate::SyscallPolicy::AbiV1).is_ok());
-        let hash = compute_abi_hash(crate::SyscallPolicy::AbiV1);
+        let hash = compute_c10_abi_hash(crate::SyscallPolicy::AbiV1);
         assert_ne!(hash, INVALID_ABI_SURFACE_HASH);
         assert_eq!(hash[hash.len() - 1] & 1, 1, "valid Iroha hash marker");
     }
@@ -3591,6 +3672,49 @@ mod tests {
         assert_surface_mutation_changes_hash(|candidate| {
             candidate.entrypoint.invocation_outcome = "commit-error-returns-and-allow-reentry";
         });
+    }
+    #[test]
+    fn baseline_descriptor_is_the_anchor_surface_without_the_isa_record() {
+        let baseline = collect_baseline_abi_surface().unwrap();
+        let current = canonical_surface();
+        assert_eq!(baseline.descriptor_format_version, 10);
+        assert!(baseline.program_header_layout.starts_with("49-bytes:"));
+        assert!(baseline.program_header_layout.contains("vector_length:u8"));
+        assert!(
+            baseline
+                .entrypoint
+                .fault_layout
+                .contains("InvalidVectorLength15|MissingHalt16")
+        );
+        assert_eq!(
+            baseline.numeric.faults.len() + 1,
+            current.numeric.faults.len()
+        );
+        assert_eq!(baseline.syscalls, current.syscalls);
+        assert_eq!(baseline.pointer_type_ids, current.pointer_type_ids);
+        let descriptor = baseline_abi_surface_descriptor().unwrap();
+        assert_eq!(
+            *iroha_crypto::Hash::new(descriptor).as_ref(),
+            compute_baseline_abi_hash()
+        );
+        assert_ne!(
+            compute_baseline_abi_hash(),
+            compute_c10_abi_hash(crate::SyscallPolicy::AbiV1)
+        );
+        // The baseline descriptor never contains the C10 instruction-set record.
+        let isa_name = b"isa";
+        let mut with_isa = Vec::new();
+        append_abi_field(&mut with_isa, isa_name).unwrap();
+        assert!(
+            !descriptor
+                .windows(with_isa.len())
+                .any(|window| window == with_isa.as_slice())
+        );
+        assert_eq!(
+            compute_baseline_abi_hash(),
+            hex_literal::hex!("7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7"),
+            "the frozen baseline ABI hash of the installed selection"
+        );
     }
     #[test]
     fn abi_hash_binds_isa_layout_registers_tag_rule_and_fault_semantics() {
@@ -3727,7 +3851,7 @@ mod tests {
     fn abi_hash_descriptor_binds_every_semantic_surface_component() {
         let surface = canonical_surface();
         let canonical = descriptor_hash(&surface);
-        assert_eq!(canonical, compute_abi_hash(crate::SyscallPolicy::AbiV1));
+        assert_eq!(canonical, compute_c10_abi_hash(crate::SyscallPolicy::AbiV1));
         assert_surface_mutation_changes_hash(|changed| {
             changed.descriptor_format_version += 1;
         });
@@ -3781,7 +3905,7 @@ mod tests {
     fn abi_hash_uses_the_documented_iroha_hash_v1_commitment() {
         let descriptor = abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
             .expect("the canonical ABI-v1 descriptor must be available");
-        let hash = compute_abi_hash(crate::SyscallPolicy::AbiV1);
+        let hash = compute_c10_abi_hash(crate::SyscallPolicy::AbiV1);
         assert_eq!(hash, *iroha_crypto::Hash::new(descriptor).as_ref());
         assert_ne!(
             hash,

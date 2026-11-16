@@ -121,8 +121,10 @@ impl IVM {
                 stack_bytes_used,
             },
             entrypoint_pc: self.entrypoint_pc,
+            // TODO: the diagnostic context carries the C10 opcode byte; a baseline rejection
+            // reports its low 16 bits, which have no slot here.
             opcode: match error.as_unmetered() {
-                VMError::InvalidOpcode(op) => Some(*op),
+                VMError::InvalidOpcode(op) => u8::try_from(*op).ok(),
                 _ => None,
             },
             syscall: match error.as_unmetered() {
@@ -154,10 +156,19 @@ impl IVM {
         error: &VMError,
         position: IvmFaultPositionV1,
     ) -> Option<IvmFaultV1> {
-        let kind = error.fault_kind()?;
+        // The engine that ran this VM's image owns the projection of its failures.
+        let kind = super::engine::fault_kind(self.engine(), error)?;
         if let Some(fault) = self.last_diagnostic.and_then(|snapshot| snapshot.fault) {
             return Some(fault);
         }
+        Some(IvmFaultV1 {
+            kind,
+            site: self.fault_site(position)?,
+        })
+    }
+
+    /// Artifact, invocation selector and `position` of a fault raised by this VM.
+    fn fault_site(&self, position: IvmFaultPositionV1) -> Option<IvmFaultSiteV1> {
         let selector = match self.contract_interface() {
             None => IvmInvocationSelectorV1::Generic,
             Some(interface) => {
@@ -169,13 +180,10 @@ impl IVM {
                 IvmInvocationSelectorV1::Entrypoint(u32::try_from(index).ok()?)
             }
         };
-        Some(IvmFaultV1 {
-            kind,
-            site: IvmFaultSiteV1 {
-                code_hash: iroha_crypto::Hash::prehashed(self.code_hash),
-                selector,
-                position,
-            },
+        Some(IvmFaultSiteV1 {
+            code_hash: iroha_crypto::Hash::prehashed(self.code_hash),
+            selector,
+            position,
         })
     }
 
@@ -189,12 +197,13 @@ impl IVM {
         error: &VMError,
         position: IvmFaultPositionV1,
     ) {
-        let Some(fault) = child.execution_fault(error, position) else {
+        let fault = child.execution_fault(error, position);
+        if fault.is_none() {
             return;
-        };
+        }
         self.capture_trap(error);
         if let Some(snapshot) = self.last_diagnostic.as_mut() {
-            snapshot.fault = Some(fault);
+            snapshot.fault = fault;
             snapshot.propagated = true;
             snapshot.source_index = None;
         }
@@ -214,7 +223,7 @@ impl IVM {
             VMError::SyscallGasQuoteExceeded { .. } => VmTrapKind::SyscallGasQuoteExceeded,
             VMError::SyscallMeteringModeMismatch { .. } => VmTrapKind::SyscallMeteringModeMismatch,
             VMError::GasCostOverflow => VmTrapKind::GasCostOverflow,
-            VMError::NumericFault(_) => VmTrapKind::NumericFault,
+            VMError::NumericFault(_) | VMError::RegisterIntegerOverflow => VmTrapKind::NumericFault,
             VMError::PointerAbiFault(_) => VmTrapKind::PointerAbiFault,
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ContractAbort { .. } => VmTrapKind::ContractAbort,
@@ -229,6 +238,11 @@ impl IVM {
             }
             VMError::MissingMaxCycles => VmTrapKind::MissingMaxCycles,
             VMError::MaxCyclesWithoutZk { .. } => VmTrapKind::MaxCyclesWithoutZk,
+            VMError::ProgramVectorLengthTooLarge { .. } => VmTrapKind::ProgramVectorLengthTooLarge,
+            VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
+            VMError::VectorExtensionDisabled | VMError::ZkExtensionDisabled => {
+                VmTrapKind::PermissionDenied
+            }
             VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
             VMError::GenericSyscallNotAllowed { .. } => VmTrapKind::GenericSyscallNotAllowed,
             VMError::MissingHalt => VmTrapKind::MissingHalt,

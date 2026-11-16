@@ -17,7 +17,8 @@ fn decoded(words: &[u32]) -> Vec<DecodedOp> {
 
 fn measured_arrays(decoded: &[DecodedOp]) -> (usize, usize) {
     let budget = AllocationBudget::new(1024 * 1024);
-    let flow = PreparedControlFlow::from_decoded(decoded, Some(&budget)).unwrap();
+    let flow =
+        PreparedControlFlow::from_decoded(decoded, Some(&budget), crate::IvmEngine::C10).unwrap();
     let bytes = (
         flow.boundaries.allocation_bytes(),
         flow.nodes.allocation_bytes(),
@@ -85,8 +86,11 @@ fn every_control_opcode_preserves_successor_order_and_indirect_flags() {
     ];
     for (word, expected, indirect) in cases {
         let decoded = decoded(&[word, halt, halt]);
-        let funded = PreparedControlFlow::from_decoded(&decoded, Some(&budget)).unwrap();
-        let diagnostic = PreparedControlFlow::from_decoded(&decoded, None).unwrap();
+        let funded =
+            PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10)
+                .unwrap();
+        let diagnostic =
+            PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10).unwrap();
         assert_eq!(funded.boundaries.as_ref(), &[0, 4, 8]);
         let node = funded.node(0).unwrap();
         assert_eq!(node.successors(), expected);
@@ -102,8 +106,12 @@ fn every_control_opcode_preserves_successor_order_and_indirect_flags() {
         enc::encode_jump(wide::control::JAL, 1, -1),
         enc::encode_offset24(wide::control::JALS, -1),
     ] {
-        let flow = PreparedControlFlow::from_decoded(&decoded(&[halt, word, halt]), Some(&budget))
-            .unwrap();
+        let flow = PreparedControlFlow::from_decoded(
+            &decoded(&[halt, word, halt]),
+            Some(&budget),
+            crate::IvmEngine::C10,
+        )
+        .unwrap();
         assert_eq!(flow.node(4).unwrap().successors(), &[0, 8]);
     }
     assert_eq!(budget.reserved_bytes(), 0);
@@ -115,7 +123,7 @@ fn original_pool_refuses_before_construction_and_retries_exact_arrays() {
     let (boundaries, nodes) = measured_arrays(&decoded);
     let budget = AllocationBudget::new(0);
     assert!(matches!(
-        PreparedControlFlow::from_decoded(&decoded, Some(&budget)),
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
         Err(VMError::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
         ))
@@ -124,14 +132,15 @@ fn original_pool_refuses_before_construction_and_retries_exact_arrays() {
     budget.set_limit_bytes(boundaries + nodes);
     let occupied = budget.try_reserve_bytes(boundaries + nodes).unwrap();
     assert!(matches!(
-        PreparedControlFlow::from_decoded(&decoded, Some(&budget)),
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
         Err(VMError::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(budget.reserved_bytes(), boundaries + nodes);
     drop(occupied);
-    let flow = PreparedControlFlow::from_decoded(&decoded, Some(&budget)).unwrap();
+    let flow =
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10).unwrap();
     assert!(flow.boundaries.belongs_to(&budget));
     assert!(flow.nodes.belongs_to(&budget));
     assert_eq!(budget.reserved_bytes(), boundaries + nodes);
@@ -147,7 +156,7 @@ fn second_array_refusal_and_invalid_edges_refund_every_unpublished_owner() {
     let (boundaries, nodes) = measured_arrays(&decoded);
     let budget = AllocationBudget::new(boundaries + nodes - 1);
     assert!(matches!(
-        PreparedControlFlow::from_decoded(&decoded, Some(&budget)),
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
         Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
             if requested_bytes == nodes
     ));
@@ -164,16 +173,17 @@ fn second_array_refusal_and_invalid_edges_refund_every_unpublished_owner() {
     ] {
         let decoded = [DecodedOp { pc: 0, inst: word }];
         assert!(matches!(
-            PreparedControlFlow::from_decoded(&decoded, Some(&budget)),
+            PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10),
             Err(VMError::DecodeError)
         ));
         assert!(matches!(
-            PreparedControlFlow::from_decoded(&decoded, None),
+            PreparedControlFlow::from_decoded(&decoded, None, crate::IvmEngine::C10),
             Err(VMError::DecodeError)
         ));
         assert_eq!(budget.reserved_bytes(), 0);
     }
-    let flow = PreparedControlFlow::from_decoded(&decoded, Some(&budget)).unwrap();
+    let flow =
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10).unwrap();
     assert!(flow.node(0).unwrap().successors().is_empty());
 }
 
@@ -187,7 +197,8 @@ fn zero_retention_and_pool_shrink_keep_each_array_until_its_final_borrower() {
     let decoded = decoded(&[enc::encode_halt()]);
     let (boundary_bytes, node_bytes) = measured_arrays(&decoded);
     let budget = AllocationBudget::new(boundary_bytes + node_bytes);
-    let flow = PreparedControlFlow::from_decoded(&decoded, Some(&budget)).unwrap();
+    let flow =
+        PreparedControlFlow::from_decoded(&decoded, Some(&budget), crate::IvmEngine::C10).unwrap();
     assert!(!flow.boundaries.try_retain());
     assert!(!flow.nodes.try_retain());
     let borrowed = flow.clone();
@@ -209,7 +220,7 @@ fn zero_retention_and_pool_shrink_keep_each_array_until_its_final_borrower() {
 
 #[test]
 fn native_contract_preparation_funds_and_retains_its_original_graph() {
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku GraphOwner { view fn main() authorize(anyone) -> bool { true } }")
         .unwrap();
     let budget = AllocationBudget::new(64 * 1024 * 1024);

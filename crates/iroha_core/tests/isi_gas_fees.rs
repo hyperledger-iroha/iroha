@@ -22,7 +22,9 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
-use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{ProgramMetadata, syscalls as ivm_sys};
+use ivm_abi::baseline::encoding;
+use ivm_abi::baseline::instruction;
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 fn test_network_id(label: &[u8]) -> NetworkId {
@@ -1099,8 +1101,11 @@ fn ivm_syscall_charges_fees() {
     install_pipeline_gas_fixture(&mut state, pipeline);
     let native_chain = signed_gas_chain(state);
     let state = native_chain.state();
-    let scall = encoding::wide::encode_scall(ivm_sys::SYSCALL_DEBUG_PRINT);
-    let mut program = ProgramMetadata::default().encode();
+    let scall = crate::ivm_test_support::baseline_syscall(ivm_sys::SYSCALL_DEBUG_PRINT);
+    let mut program = crate::ivm_test_support::baseline_header(ProgramMetadata {
+        max_cycles: 1_000,
+        ..ProgramMetadata::default()
+    });
     program.extend_from_slice(&scall.to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let exec = Executable::Ivm(IvmBytecode::from_compiled(program));
@@ -1138,7 +1143,7 @@ fn ivm_syscall_charges_fees() {
         .execute_transaction(&mut state_tx, &alice_id, &tx, &mut ivm_cache)
         .expect("execution");
     assert_eq!(state_tx.current_dataspace_id, Some(contract_route));
-    let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
+    let scall_cost = ivm::gas::baseline::cost_of(scall).expect("SCALL must have gas cost");
     // DEBUG_PRINT charges deterministic host work gas on top of the SCALL opcode.
     let debug_print_host_gas = 16;
     let expected_debug_print_gas = scall_cost + debug_print_host_gas;
@@ -1286,10 +1291,10 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut program = meta.encode();
+    let mut program = crate::ivm_test_support::baseline_header(meta.clone());
     program.extend_from_slice(&code);
     let fee_payment = FeePaymentIntent::authority(
         vec![FeeChargeLimit::new(

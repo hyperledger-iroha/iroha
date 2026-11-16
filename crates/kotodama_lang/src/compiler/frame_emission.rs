@@ -31,6 +31,7 @@ fn retain_scalar() -> bool {
 }
 
 pub(super) fn emit_saved_registers(
+    isa: Isa,
     code: &mut Vec<u8>,
     fixups: &LiteralFixups,
     registers: &[u8],
@@ -53,10 +54,10 @@ pub(super) fn emit_saved_registers(
         offsets.push(offset);
     }
     let direct =
-        |offset: usize| i64::try_from(offset).is_ok_and(|offset| fit_imm14(offset).is_some());
+        |offset: usize| i64::try_from(offset).is_ok_and(|offset| isa.fit_imm(offset).is_some());
     let large = offsets.iter().filter(|offset| !direct(**offset)).count();
     // At most ten allocated callee-preserved registers fit in one 16 KiB
-    // window. Four large accesses save at least 24 executable bytes, covering
+    // window (256 bytes for the baseline 8-bit displacement). Four large accesses save at least 24 executable bytes, covering
     // a worst-case 16-byte new i64 directory/data entry as well.
     let windowed = !retain_scalar() && large >= 4 && registers.len() <= 10;
     // Preflight the complete window anchor before writing code or fixups.
@@ -70,10 +71,10 @@ pub(super) fn emit_saved_registers(
             .unwrap();
         i64::try_from(first_large)
             .ok()
-            .and_then(|offset| offset.checked_sub(i64::from(IMM14_MIN)))
+            .and_then(|offset| offset.checked_sub(i64::from(isa.imm_min())))
             .ok_or("saved register window anchor overflow")?;
     }
-    let mut window = StackTableWindow::new(27);
+    let mut window = StackTableWindow::new(isa, 27);
     for (register, offset) in registers.iter().copied().zip(offsets) {
         let (base, relative) = if windowed {
             window.address(code, fixups, offset)?
@@ -81,9 +82,10 @@ pub(super) fn emit_saved_registers(
             (sp, offset as i64)
         };
         if restore {
-            emit_load64(code, fixups, register, base, relative, Some(28))?;
+            emit_load64(isa, code, fixups, register, base, relative, Some(28))?;
         } else {
             emit_store64(
+                isa,
                 code,
                 fixups,
                 base,
@@ -127,6 +129,7 @@ pub(super) fn shared_epilogue_label(
 }
 
 pub(super) fn emit_epilogue(
+    isa: Isa,
     code: &mut Vec<u8>,
     fixups: &LiteralFixups,
     registers: &[u8],
@@ -135,11 +138,12 @@ pub(super) fn emit_epilogue(
     frame_bytes: usize,
 ) -> Result<(), String> {
     let sp = regalloc::SP_REG as u8;
-    emit_saved_registers(code, fixups, registers, save_base, true)?;
+    emit_saved_registers(isa, code, fixups, registers, save_base, true)?;
     if saves_return_address {
-        emit_load64(code, fixups, 1, sp, 0, Some(27))?;
+        emit_load64(isa, code, fixups, 1, sp, 0, Some(27))?;
     }
     emit_bounded_add(
+        isa,
         code,
         fixups,
         sp,
@@ -147,10 +151,7 @@ pub(super) fn emit_epilogue(
         i64::try_from(frame_bytes).map_err(|_| "frame size exceeds signed address space")?,
         LITERAL_SHIFT_REG,
     )?;
-    push_word(
-        code,
-        encoding::wide::encode_ri(instruction::wide::control::JALR, 0, 1, 0),
-    );
+    push_word(code, isa.encode_return());
     Ok(())
 }
 

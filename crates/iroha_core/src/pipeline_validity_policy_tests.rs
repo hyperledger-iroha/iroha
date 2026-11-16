@@ -748,10 +748,14 @@ fn authorized_change_governs_the_next_block_identically_on_every_node() {
 
 /// An IVM program of `syscalls` system calls and `loads` 64-bit loads, then `HALT`.
 fn amx_program(syscalls: usize, loads: usize) -> Vec<u8> {
-    use ivm::{encoding::wide as encode, instruction::wide};
-    let mut program = ivm::ProgramMetadata::default_for(1, 1, 1).encode();
+    use ivm_abi::baseline::encoding::wide as encode;
+    use ivm_abi::baseline::instruction::wide;
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default_for(1, 1, 1)
+    });
     for _ in 0..syscalls {
-        program.extend_from_slice(&encode::encode_scall(0).to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::baseline_syscall(0).to_le_bytes());
     }
     for _ in 0..loads {
         program
@@ -769,13 +773,18 @@ fn amx_program(syscalls: usize, loads: usize) -> Vec<u8> {
 fn amx_budgets_accept_exactly_the_committed_budget_and_reject_one_unit_above() {
     use std::num::NonZeroUsize;
 
-    use ivm::analysis::{AmxBudgetError, analyze_program, enforce_amx_budget};
+    use ivm::analysis::{AmxBudgetError, analyze_program_for_profile, enforce_amx_budget};
 
     use crate::smartcontracts::ivm::host::CoreHost;
 
     // A real program fixes the memory-access and syscall counts; the instruction
     // count is then chosen so the modelled cost is exactly one millisecond.
-    let mut analysis = analyze_program(&amx_program(3, 5)).expect("the program analyses");
+    let program = amx_program(3, 5);
+    let mut analysis = analyze_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("the program analyses");
     let loads = analysis.memory.load64;
     let syscalls: u64 = analysis.syscalls.iter().map(|usage| usage.count).sum();
     assert_eq!((loads, syscalls), (5, 3));

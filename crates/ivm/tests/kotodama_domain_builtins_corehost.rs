@@ -17,7 +17,7 @@ fn kotodama_unregister_domain() {
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     // Prepare WSV with the domain present and caller permitted to register domains
     let mut wsv = MockWorldStateView::new();
@@ -61,7 +61,7 @@ fn kotodama_transfer_domain() {
     "#
     );
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(&src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
     let wonderland: DomainId =

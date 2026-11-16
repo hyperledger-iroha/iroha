@@ -21,9 +21,12 @@
 //! # }
 //! ```
 use crate::{
-    VMError, encoding, instruction::wide, ivm_cache::DecodedOp, metadata::ProgramMetadata,
-    prepared::PreparedContract,
+    IvmEngine, IvmProfileId, VMError, encoding, instruction::wide, ivm_cache::DecodedOp,
+    metadata::ProgramMetadata, prepared::PreparedContract,
 };
+/// Registers an analysis tracks: the widest engine's register file (the baseline's 256; C10
+/// addresses the first 32).
+const ANALYSIS_REGISTER_COUNT: usize = 256;
 mod aggregate;
 mod verified_artifact;
 pub use verified_artifact::analyze_verified_artifact_with_memory_budget;
@@ -37,7 +40,9 @@ use static_state_keys::Descriptor as StaticKeyDescriptor;
 pub use static_state_keys::StaticStateKeys;
 use static_state_literals::LiteralSource;
 use std::{error::Error, fmt, num::NonZeroUsize};
-pub use syscall_scan::{prepared_syscall_numbers, program_syscall_numbers};
+pub use syscall_scan::{
+    prepared_syscall_numbers, program_syscall_numbers, program_syscall_numbers_for_profile,
+};
 pub use syscall_usage::SyscallUsages;
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///
@@ -70,33 +75,33 @@ enum StaticNoritoKey {
 }
 #[derive(Clone, PartialEq, Eq)]
 struct StaticStateFacts {
-    names: [Option<u16>; crate::parallel::REGISTER_COUNT],
-    paths: [Option<StaticStatePath>; crate::parallel::REGISTER_COUNT],
-    pointer_literals: [Option<u16>; crate::parallel::REGISTER_COUNT],
-    norito_keys: [Option<StaticNoritoKey>; crate::parallel::REGISTER_COUNT],
-    content_may_be_mutable: [bool; crate::parallel::REGISTER_COUNT],
-    stack_offsets: [Option<i64>; crate::parallel::REGISTER_COUNT],
+    names: [Option<u16>; ANALYSIS_REGISTER_COUNT],
+    paths: [Option<StaticStatePath>; ANALYSIS_REGISTER_COUNT],
+    pointer_literals: [Option<u16>; ANALYSIS_REGISTER_COUNT],
+    norito_keys: [Option<StaticNoritoKey>; ANALYSIS_REGISTER_COUNT],
+    content_may_be_mutable: [bool; ANALYSIS_REGISTER_COUNT],
+    stack_offsets: [Option<i64>; ANALYSIS_REGISTER_COUNT],
     direct: bool,
 }
 impl StaticStateFacts {
     fn entrypoint() -> Self {
         Self {
-            names: [None; crate::parallel::REGISTER_COUNT],
-            paths: [None; crate::parallel::REGISTER_COUNT],
-            pointer_literals: [None; crate::parallel::REGISTER_COUNT],
-            norito_keys: [None; crate::parallel::REGISTER_COUNT],
-            content_may_be_mutable: [false; crate::parallel::REGISTER_COUNT],
+            names: [None; ANALYSIS_REGISTER_COUNT],
+            paths: [None; ANALYSIS_REGISTER_COUNT],
+            pointer_literals: [None; ANALYSIS_REGISTER_COUNT],
+            norito_keys: [None; ANALYSIS_REGISTER_COUNT],
+            content_may_be_mutable: [false; ANALYSIS_REGISTER_COUNT],
             stack_offsets: std::array::from_fn(|register| (register == 31).then_some(0)),
             direct: true,
         }
     }
     fn clear(&mut self) {
-        self.names = [None; crate::parallel::REGISTER_COUNT];
-        self.paths = [None; crate::parallel::REGISTER_COUNT];
-        self.pointer_literals = [None; crate::parallel::REGISTER_COUNT];
-        self.norito_keys = [None; crate::parallel::REGISTER_COUNT];
-        self.content_may_be_mutable = [false; crate::parallel::REGISTER_COUNT];
-        self.stack_offsets = [None; crate::parallel::REGISTER_COUNT];
+        self.names = [None; ANALYSIS_REGISTER_COUNT];
+        self.paths = [None; ANALYSIS_REGISTER_COUNT];
+        self.pointer_literals = [None; ANALYSIS_REGISTER_COUNT];
+        self.norito_keys = [None; ANALYSIS_REGISTER_COUNT];
+        self.content_may_be_mutable = [false; ANALYSIS_REGISTER_COUNT];
+        self.stack_offsets = [None; ANALYSIS_REGISTER_COUNT];
     }
     fn clear_content(&mut self, register: usize) {
         self.names[register] = None;
@@ -188,15 +193,15 @@ impl StaticStateFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterUsage {
     /// Number of times each register was read.
-    pub reads: [u64; crate::parallel::REGISTER_COUNT],
+    pub reads: [u64; ANALYSIS_REGISTER_COUNT],
     /// Number of times each register was written.
-    pub writes: [u64; crate::parallel::REGISTER_COUNT],
+    pub writes: [u64; ANALYSIS_REGISTER_COUNT],
 }
 impl Default for RegisterUsage {
     fn default() -> Self {
         Self {
-            reads: [0; crate::parallel::REGISTER_COUNT],
-            writes: [0; crate::parallel::REGISTER_COUNT],
+            reads: [0; ANALYSIS_REGISTER_COUNT],
+            writes: [0; ANALYSIS_REGISTER_COUNT],
         }
     }
 }
@@ -205,6 +210,10 @@ impl Default for RegisterUsage {
 pub struct MemoryAccesses {
     pub load64: u64,
     pub store64: u64,
+    /// Baseline-engine 128-bit loads (always zero for C10).
+    pub load128: u64,
+    /// Baseline-engine 128-bit stores (always zero for C10).
+    pub store128: u64,
 }
 /// Syscall usage summary sorted by syscall number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,13 +267,37 @@ impl Error for ProgramAnalysisError {
         }
     }
 }
-/// Inspect a local diagnostic program and return aggregate usage information.
+/// Inspect a local diagnostic C10 program (the explicit [`IvmProfileId::C10_ABI_V1`] profile) and
+/// return aggregate usage information. A program submitted to a root is analyzed under the
+/// profile resolved for it ([`analyze_program_for_profile`]).
 /// State execution uses [`analyze_program_with_memory_budget`] for allocation custody.
 ///
 /// # Errors
 /// Returns canonical decode errors or local allocation refusal.
 pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-    analyze_program_in(bytes, None)
+    analyze_program_in(bytes, IvmProfileId::C10_ABI_V1, None)
+}
+/// Inspect a program under one resolved profile: its engine's header layout and operand
+/// decoding.
+///
+/// # Errors
+/// Returns canonical decode errors or local allocation refusal.
+pub fn analyze_program_for_profile(
+    bytes: &[u8],
+    profile: IvmProfileId,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_program_in(bytes, profile, None)
+}
+/// Analyze a program of one resolved profile with funded scratch and output allocations.
+///
+/// # Errors
+/// Preserves canonical metadata/instruction errors and original local allocation refusals.
+pub fn analyze_program_with_memory_budget_for_profile(
+    bytes: &[u8],
+    profile: IvmProfileId,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+    analyze_program_in(bytes, profile, Some(budget))
 }
 /// Analyze a program with exact syscall scratch and output allocations funded by its owner.
 /// The original pool remains attached to the shared result through every borrower.
@@ -275,14 +308,16 @@ pub fn analyze_program_with_memory_budget(
     bytes: &[u8],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-    analyze_program_in(bytes, Some(budget))
+    analyze_program_in(bytes, IvmProfileId::C10_ABI_V1, Some(budget))
 }
 fn analyze_program_in(
     bytes: &[u8],
+    profile: IvmProfileId,
     budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-    let (metadata, decoded) = syscall_scan::parsed_stream(bytes)?;
-    aggregate::analyze(metadata, || decoded.iter(), budget).map_err(ProgramAnalysisError::Decode)
+    let (metadata, decoded) = syscall_scan::parsed_stream(bytes, profile)?;
+    aggregate::analyze(profile.engine(), metadata, || decoded.iter(), budget)
+        .map_err(ProgramAnalysisError::Decode)
 }
 /// Inspect a prepared contract for local diagnostics using its validated instructions.
 /// State execution uses [`analyze_prepared_with_memory_budget`] for allocation custody.
@@ -309,6 +344,7 @@ fn analyze_prepared_in(
     budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
     aggregate::analyze(
+        contract.profile_id().engine(),
         contract.metadata().clone(),
         || contract.decoded().iter().copied(),
         budget,
@@ -337,11 +373,21 @@ pub fn analyze_prepared_static_state_accesses(
     static_state::analyze(contract, entrypoint, budget)
 }
 
-fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
-    let offset_words = match wide::opcode(op.inst) {
-        wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::jal_offset(op.inst)),
-        wide::control::JALS => i64::from(wide::imm24(op.inst)),
-        _ => return None,
+fn direct_call_edges(engine: IvmEngine, op: &DecodedOp) -> Option<(u64, u64)> {
+    let offset_words = match engine {
+        IvmEngine::C10 => match wide::opcode(op.inst) {
+            wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::jal_offset(op.inst)),
+            wide::control::JALS => i64::from(wide::imm24(op.inst)),
+            _ => return None,
+        },
+        IvmEngine::Baseline => {
+            use ivm_abi::baseline::instruction::wide as base;
+            match base::opcode(op.inst) {
+                base::control::JAL if base::rd(op.inst) != 0 => i64::from(base::imm16(op.inst)),
+                base::control::JALS => i64::from(base::imm24(op.inst)),
+                _ => return None,
+            }
+        }
     };
     let byte_offset = offset_words.checked_mul(4)?;
     let call_target = i128::from(op.pc)
@@ -350,11 +396,22 @@ fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let return_pc = op.pc.checked_add(4)?;
     Some((call_target, return_pc))
 }
-fn is_protected_contract_return(op: &DecodedOp) -> bool {
-    wide::opcode(op.inst) == wide::control::JALR
-        && wide::rd(op.inst) == 0
-        && wide::rs1(op.inst) == 1
-        && wide::imm14(op.inst) == 0
+fn is_protected_contract_return(engine: IvmEngine, op: &DecodedOp) -> bool {
+    match engine {
+        IvmEngine::C10 => {
+            wide::opcode(op.inst) == wide::control::JALR
+                && wide::rd(op.inst) == 0
+                && wide::rs1(op.inst) == 1
+                && wide::imm14(op.inst) == 0
+        }
+        IvmEngine::Baseline => {
+            use ivm_abi::baseline::instruction::wide as base;
+            base::opcode(op.inst) == base::control::JALR
+                && base::rd(op.inst) == 0
+                && base::rs1(op.inst) == 1
+                && base::imm8(op.inst) == 0
+        }
+    }
 }
 fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
     let start = contract
@@ -373,6 +430,111 @@ fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) ->
     Some(bytes)
 }
 fn transfer_static_state_facts(
+    engine: IvmEngine,
+    op: &DecodedOp,
+    literals: &impl LiteralSource,
+    facts: &mut StaticStateFacts,
+    result: &mut StaticStateAccessAnalysis,
+) -> Option<StaticKeyDescriptor> {
+    match engine {
+        IvmEngine::C10 => transfer_c10_static_state_facts(op, literals, facts, result),
+        IvmEngine::Baseline => transfer_baseline_static_state_facts(op, literals, facts, result),
+    }
+}
+/// The anchor's static-state transfer for the frozen baseline instruction set: 8-bit `SCALL`,
+/// 24-bit `SYSTEM`, `JR`, 128-bit memory operations and the baseline operand layout.
+fn transfer_baseline_static_state_facts(
+    op: &DecodedOp,
+    literals: &impl LiteralSource,
+    facts: &mut StaticStateFacts,
+    result: &mut StaticStateAccessAnalysis,
+) -> Option<StaticKeyDescriptor> {
+    use ivm_abi::baseline::{encoding::wide as base_encoding, instruction::wide as base};
+    match base::opcode(op.inst) {
+        base::memory::LDLIT => {
+            let destination = base::rd(op.inst);
+            let index = base::literal_index(op.inst);
+            facts.clear_register(destination);
+            facts.names[destination] = literals.name(index).and_then(|_| u16::try_from(index).ok());
+            facts.paths[destination] = literals
+                .path(index)
+                .and_then(|_| u16::try_from(index).ok())
+                .map(StaticStatePath::Literal);
+            facts.pointer_literals[destination] = literals
+                .envelope(index)
+                .and_then(|_| u16::try_from(index).ok());
+            facts.norito_keys[destination] = literals
+                .payload(index)
+                .and_then(|_| u16::try_from(index).ok())
+                .map(StaticNoritoKey::LiteralPayload);
+        }
+        base::memory::LDI64 => {
+            facts.clear_register(base::rd(op.inst));
+        }
+        base::memory::LOAD64 => {
+            let (_, destination, _, _) = base_encoding::decode_mem(op.inst);
+            facts.clear_register(usize::from(destination));
+        }
+        base::memory::STORE64 => {
+            let (_, base_register, _, immediate) = base_encoding::decode_mem(op.inst);
+            if !facts.store_is_within_minimum_stack(
+                usize::from(base_register),
+                i64::from(immediate),
+                8,
+            ) {
+                facts.invalidate_mutable_content();
+            }
+        }
+        base::memory::STORE128 => {
+            let (_, base_register, _, _) = base_encoding::decode_store128(op.inst);
+            if !facts.store_is_within_minimum_stack(usize::from(base_register), 0, 16) {
+                facts.invalidate_mutable_content();
+            }
+        }
+        base::memory::LOAD128 => {
+            let (_, destination_low, _, destination_high) = base_encoding::decode_load128(op.inst);
+            facts.clear_register(usize::from(destination_low));
+            facts.clear_register(usize::from(destination_high));
+        }
+        base::arithmetic::ADDI => {
+            let (_, destination, source, immediate) = base_encoding::decode_ri(op.inst);
+            let stack_offset = facts.stack_offsets[usize::from(source)]
+                .and_then(|offset| offset.checked_add(i64::from(immediate)));
+            if immediate == 0 {
+                facts.copy_register(usize::from(destination), usize::from(source));
+            } else {
+                facts.clear_register(usize::from(destination));
+            }
+            facts.stack_offsets[usize::from(destination)] = stack_offset;
+        }
+        base::control::BEQ
+        | base::control::BNE
+        | base::control::BLT
+        | base::control::BGE
+        | base::control::BLTU
+        | base::control::BGEU
+        | base::control::JMP
+        | base::control::JR
+        | base::control::HALT => {}
+        base::control::JAL | base::control::JALR => {
+            facts.clear_register(base::rd(op.inst));
+        }
+        base::control::JALS => {
+            facts.clear_register(1);
+        }
+        base::system::SCALL | base::system::SYSTEM => {
+            let number = IvmEngine::Baseline.syscall_number(op.inst)?;
+            return transfer_static_state_syscall(number, literals, facts, result);
+        }
+        _ => {
+            // A narrow whitelist is intentional. Any unmodelled register or
+            // memory transformation invalidates literal provenance.
+            facts.clear();
+        }
+    }
+    None
+}
+fn transfer_c10_static_state_facts(
     op: &DecodedOp,
     literals: &impl LiteralSource,
     facts: &mut StaticStateFacts,
@@ -585,10 +747,13 @@ pub fn enforce_amx_budget(
     let per_ds_limit = limits.per_dataspace_budget_ms.saturating_mul(1_000_000);
     let group_limit = limits.group_budget_ms.saturating_mul(1_000_000);
     let instruction_count = u64::try_from(analysis.instruction_count).unwrap_or(u64::MAX);
+    // The anchor's estimate: a C10 program has no 128-bit accesses, so its value is unchanged.
     let memory_accesses = analysis
         .memory
         .load64
-        .saturating_add(analysis.memory.store64);
+        .saturating_add(analysis.memory.store64)
+        .saturating_add(analysis.memory.load128)
+        .saturating_add(analysis.memory.store128);
     let syscall_calls = analysis
         .syscalls
         .iter()
@@ -667,7 +832,13 @@ mod tests {
         let decoded =
             crate::ivm_cache::IvmCache::decode_stream(&bytes[parsed.code_offset..]).unwrap();
         let analysis = analyze_program(&bytes).unwrap();
-        let owned = aggregate::analyze(parsed.metadata, || decoded.iter().copied(), None).unwrap();
+        let owned = aggregate::analyze(
+            IvmEngine::C10,
+            parsed.metadata,
+            || decoded.iter().copied(),
+            None,
+        )
+        .unwrap();
         assert_eq!(analysis.metadata.encode(), owned.metadata.encode());
         assert_eq!(analysis.instruction_count, owned.instruction_count);
         assert_eq!(analysis.registers, owned.registers);
@@ -678,7 +849,7 @@ mod tests {
 
     #[test]
     fn analysis_canonical_metadata_refusal_is_local_and_retryable() {
-        let bytes = kotodama_lang::compiler::Compiler::new()
+        let bytes = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku Analysis { view fn main() authorize(anyone) -> bool { true } }",
             )
@@ -719,7 +890,7 @@ seiyaku StaticMapAnalysis { permission CanWrite;
   kotoage fn write_one() authorize(CanWrite) { Counters[1] = 10; }
 }
 "#;
-        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source_with_manifest(source)
             .expect("compile literal StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
@@ -765,7 +936,7 @@ seiyaku HelperMapAnalysis { permission CanWrite;
   kotoage fn second_helper_write() authorize(CanWrite) { hidden_write(); }
 }
 "#;
-        let program = kotodama_lang::compiler::Compiler::new()
+        let program = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(source)
             .expect("compile helper-hidden StateMap access");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
@@ -777,7 +948,7 @@ seiyaku HelperMapAnalysis { permission CanWrite;
         let helper_calls = prepared
             .decoded()
             .iter()
-            .filter_map(direct_call_edges)
+            .filter_map(|op| direct_call_edges(IvmEngine::C10, op))
             .map(|(call_target, _)| call_target)
             .collect::<Vec<_>>();
         assert_eq!(helper_calls.len(), 2, "both helper call sites are retained");
@@ -805,7 +976,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
   kotoage fn run() authorize(CanRun) {}
 }
 "#;
-        let program = kotodama_lang::compiler::Compiler::new()
+        let program = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(source)
             .expect("compile direct control-flow fixture");
         let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
@@ -820,13 +991,18 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             .find(|op| op.pc == entry_pc)
             .expect("entrypoint instruction");
         entry.inst = wide_enc::encode_rr(wide::control::JALR, 0, 2, 0);
-        let control_flow = crate::prepared::PreparedControlFlow::from_decoded(&decoded, None)
-            .expect("build adversarial indirect control flow");
+        let control_flow = crate::prepared::PreparedControlFlow::from_decoded(
+            &decoded,
+            None,
+            prepared.profile_id().engine(),
+        )
+        .expect("build adversarial indirect control flow");
         let adversarial = crate::prepared::PreparedContract::from_parts(
             crate::prepared::PreparedContractParts {
                 artifact: prepared.shared_artifact(),
                 metadata: prepared.metadata().clone(),
-                syscall_policy: prepared.syscall_policy(),
+                profile: prepared.profile_id(),
+                vector_length: prepared.vector_length(),
                 manifest: prepared.manifest().clone(),
                 header_len: prepared.header_len(),
                 code_offset: prepared.code_offset(),
@@ -856,18 +1032,16 @@ seiyaku IndirectStateAnalysis { permission CanRun;
     #[test]
     fn protected_contract_return_requires_exact_jalr_encoding() {
         let op = |inst| DecodedOp { pc: 0, inst };
-        assert!(is_protected_contract_return(&op(wide_enc::encode_rr(
-            wide::control::JALR,
-            0,
-            1,
-            0,
-        ))));
+        assert!(is_protected_contract_return(
+            IvmEngine::C10,
+            &op(wide_enc::encode_rr(wide::control::JALR, 0, 1, 0,))
+        ));
         for inst in [
             wide_enc::encode_rr(wide::control::JALR, 1, 1, 0),
             wide_enc::encode_rr(wide::control::JALR, 0, 2, 0),
             wide_enc::encode_ri(wide::control::JALR, 0, 1, 1),
         ] {
-            assert!(!is_protected_contract_return(&op(inst)));
+            assert!(!is_protected_contract_return(IvmEngine::C10, &op(inst)));
         }
     }
     #[test]
@@ -895,6 +1069,7 @@ seiyaku IndirectStateAnalysis { permission CanRun;
             );
             assert!(facts.content_may_be_mutable[10]);
             let _ = transfer_static_state_facts(
+                IvmEngine::C10,
                 &DecodedOp { pc: 0, inst: store },
                 &literals,
                 &mut facts,

@@ -32,9 +32,20 @@ impl Selection {
         fees: &Fees,
     ) -> Result<Self> {
         let plan = owner.authority.provider_plan()?;
+        let material = plan.admission_material();
+        let provider_from = material
+            .issued_at
+            .checked_mul(1000)
+            .ok_or_else(|| invalid("provider interval overflow"))?;
+        let provider_until = material
+            .retention_epoch
+            .checked_mul(1000)
+            .ok_or_else(|| invalid("provider interval overflow"))?;
+        // The retained parser refuses a body outside this interval on every later open
+        // (`matches_unsigned`), so it is refused here, before any custody is published.
+        within_provider_interval(&unsigned.statement, provider_from, provider_until)?;
         unsigned.validate(owner, purpose, || Ok(&plan))?;
         fees.validate()?;
-        let material = plan.admission_material();
         let value = Self {
             network: owner.authority.config.network_id,
             genesis: *owner.authority.genesis.genesis.hash().as_ref(),
@@ -42,14 +53,8 @@ impl Selection {
             purpose: dispatch_purpose(purpose, owner.authority.provider_id()?)?,
             predecessor: unsigned.selection.clone(),
             fees: fees.clone(),
-            provider_from: material
-                .issued_at
-                .checked_mul(1000)
-                .ok_or_else(|| invalid("provider interval overflow"))?,
-            provider_until: material
-                .retention_epoch
-                .checked_mul(1000)
-                .ok_or_else(|| invalid("provider interval overflow"))?,
+            provider_from,
+            provider_until,
         };
         encode(&value, MAX_SELECTION_BYTES)?;
         Ok(value)
@@ -113,20 +118,30 @@ impl Selection {
         if encode(&self.predecessor, 64 * 1024)? != encode(&unsigned.selection, 64 * 1024)? {
             return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
         }
-        if unsigned.statement.issued_at_unix_ms < self.provider_from
-            || unsigned.statement.expires_at_unix_ms > self.provider_until
-        {
-            return Err(invalid(
-                "enrollment body exceeds original provider interval",
-            ));
-        }
-        Ok(())
+        within_provider_interval(&unsigned.statement, self.provider_from, self.provider_until)
     }
     pub(super) fn digest(&self) -> Result<[u8; 32]> {
         #[cfg(test)]
         let _timing = finish_timing::phase(finish_timing::Phase::SelectionDigest);
         attempts::semantic_digest(self, MAX_SELECTION_BYTES)
     }
+}
+
+/// An enrollment body lies inside its provider's original admission interval, in UTC
+/// milliseconds: issued no earlier than `provider_from`, expiring no later than `provider_until`.
+/// One rule for a new selection and for every retained parse of it.
+pub(super) fn within_provider_interval(
+    statement: &SignerCustodyStatementV1,
+    provider_from: u64,
+    provider_until: u64,
+) -> Result<()> {
+    if statement.issued_at_unix_ms < provider_from || statement.expires_at_unix_ms > provider_until
+    {
+        return Err(invalid(
+            "enrollment body exceeds original provider interval",
+        ));
+    }
+    Ok(())
 }
 
 /// The exact statement and native evidence are retained before the sole attester is opened.

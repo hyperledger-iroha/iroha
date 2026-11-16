@@ -30,12 +30,14 @@ fn retain_original() -> bool {
 }
 /// Knowledge about r12–r14 in the current physical emission prefix only.
 pub(super) struct Block {
+    isa: Isa,
     cursor: usize,
     zero: u8,
 }
 impl Block {
-    pub(super) fn new(start: usize) -> Self {
+    pub(super) fn new(isa: Isa, start: usize) -> Self {
         Self {
+            isa,
             cursor: start,
             zero: 0,
         }
@@ -46,7 +48,7 @@ impl Block {
         }
     }
     fn observe_word(&mut self, word: u32) {
-        use instruction::wide::{arithmetic as a, memory as m, system as s};
+        use instruction::wide::{arithmetic as a, memory as m};
         let opcode = instruction::wide::opcode(word);
         match opcode {
             a::ADDI => {
@@ -56,7 +58,7 @@ impl Block {
                     self.zero = 0;
                     return;
                 }
-                let destination = instruction::wide::rd(word);
+                let destination = self.isa.rd(word);
                 self.clear_written(destination);
                 // Even an exact ADDI from public r0 is only a scanned write:
                 // internal conditional branches may skip it. Establish facts
@@ -105,17 +107,15 @@ impl Block {
             | a::MEAN
             | m::LOAD64
             | m::LDLIT
-            | m::LDI64 => self.clear_written(instruction::wide::rd(word)),
+            | m::LDI64 => self.clear_written(self.isa.rd(word)),
             m::STORE64 => {} // Stores do not write a scalar register.
-            s::SCALL => {
+            _ => match self.isa.syscall_number(word) {
                 // These exact sole-kernel operations write only r10/r11 (the
                 // comparisons only r10), including recoverable arithmetic faults.
                 // No other host syscall is inferred to preserve r12–r14.
-                if !preserves_inputs(instruction::wide::syscall_number(word)) {
-                    self.zero = 0;
-                }
-            }
-            _ => self.zero = 0,
+                Some(number) if preserves_inputs(number) => {}
+                _ => self.zero = 0,
+            },
         }
     }
     fn observe(&mut self, code: &[u8], fixups: &LiteralFixups) {
@@ -157,7 +157,7 @@ impl Block {
         for register in 12..=14 {
             let mask = 1 << (register - 12);
             if retain_original() || self.zero & mask == 0 {
-                push_word(code, encode_addi(register, 0, 0)?);
+                push_word(code, self.isa.encode_addi(register, 0, 0)?);
             }
             self.zero |= mask;
         }

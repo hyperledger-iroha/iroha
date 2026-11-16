@@ -13,7 +13,7 @@ fn compile_large_positive_constant_executes() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile large positive constant");
     let mut vm = IVM::new(u64::MAX);
@@ -34,7 +34,7 @@ fn compile_large_negative_constant_executes() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile large negative constant");
     let mut vm = IVM::new(u64::MAX);
@@ -60,7 +60,7 @@ fn signed_512_bit_boundary_constants_are_canonical_and_deterministic() {
             }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let artifact = compiler
         .compile_source(source)
         .expect("compile signed boundaries");

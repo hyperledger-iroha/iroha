@@ -2030,7 +2030,12 @@ pub async fn handle_gov_contract_get(
             "active contract record disagrees with its world-state binding",
         ));
     }
-    let verified = ivm::verify_contract_artifact(&record.code_bytes).map_err(|error| {
+    // The stored artifact is verified under the profile this root resolves for its bytes.
+    let verified = ivm::verify_contract_artifact_for_policy(
+        &record.code_bytes,
+        iroha_core::smartcontracts::ivm::artifact_policy(view.world(), &record.code_bytes),
+    )
+    .map_err(|error| {
         governed_contract_invariant(format!(
             "active contract artifact failed independent verification: {error}"
         ))

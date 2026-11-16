@@ -377,7 +377,7 @@ seiyaku ControlledLock {
         let program = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .expect("compile typed native lock calls");
-        let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+        let metadata = crate::ivm_test_support::parse_declared(&program).unwrap();
         let entrypoint = metadata
             .contract_interface
             .as_ref()
@@ -416,7 +416,11 @@ seiyaku ControlledLock {
             let mut host = host();
             host.set_entrypoint_argument_record(Some(prepared.clone()));
             let mut vm = IVM::new(50_000_000);
-            vm.load_program(&program).unwrap();
+            vm.load_program_for_profile(
+                &program,
+                crate::ivm_test_support::declared_profile(&program),
+            )
+            .unwrap();
             vm.set_register(1, vm.memory.code_len());
             vm.set_program_counter(metadata.prefix_len() as u64 + entrypoint.entry_pc)
                 .unwrap();
@@ -702,7 +706,7 @@ seiyaku ControlledLock {
         program: &[u8],
         gas_limit: u64,
     ) -> (Result<(), ivm::VMError>, IVM, OpenGasProbe) {
-        let metadata = ivm::ProgramMetadata::parse(program).unwrap();
+        let metadata = crate::ivm_test_support::parse_declared(program).unwrap();
         let entry = metadata
             .contract_interface
             .as_ref()
@@ -733,7 +737,8 @@ seiyaku ControlledLock {
             actual: None,
         };
         let mut vm = IVM::new(gas_limit);
-        vm.load_program(program).unwrap();
+        vm.load_program_for_profile(program, crate::ivm_test_support::declared_profile(program))
+            .unwrap();
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(metadata.prefix_len() as u64 + entry.entry_pc)
             .unwrap();

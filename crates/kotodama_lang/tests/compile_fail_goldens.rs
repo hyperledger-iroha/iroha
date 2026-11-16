@@ -17,7 +17,7 @@ struct CompileFailCase {
 include!(concat!(env!("OUT_DIR"), "/kotodama_compile_fail_cases.rs"));
 #[test]
 fn public_session_compile_fail_diagnostics_are_stable() {
-    let session = CompilerSession::default();
+    let session = CompilerSession::c10();
     let mut failures = Vec::new();
     for case in CASES {
         let source_name = format!("{}.ko", case.name);
@@ -435,7 +435,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
 ];
 #[test]
 fn targeted_syntax_diagnostics_render_exactly() {
-    let session = CompilerSession::default();
+    let session = CompilerSession::c10();
     let mut failures = Vec::new();
     for (name, source, expected) in RENDERED_SYNTAX_SNAPSHOTS {
         let source_name = format!("{name}.ko");
@@ -458,7 +458,7 @@ fn targeted_syntax_diagnostics_render_exactly() {
 #[test]
 fn tail_type_mismatch_points_at_the_exact_tail_expression() {
     let source = "seiyaku TailMismatch {\nfn value() -> bool { 1 }\n}";
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source,
             source_name: Some("tail-type-mismatch-exact.ko"),
@@ -516,7 +516,7 @@ fn trigger_metadata_contract(value: &str) -> String {
 }
 #[test]
 fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
-    let session = CompilerSession::default();
+    let session = CompilerSession::c10();
     for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
         let source = trigger_metadata_contract(value);
         session
@@ -659,7 +659,7 @@ fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
         named_type_chain_source("DepthBoundary", MAX_NESTING_DEPTH - 1),
         "fn keep(S000 value) {}",
     );
-    CompilerSession::default()
+    CompilerSession::c10()
         .build(CompileRequest {
             source: &boundary,
             source_name: Some("depth-boundary.ko"),
@@ -668,7 +668,7 @@ fn acyclic_named_type_chain_preserves_the_exact_v1_resolution_boundary() {
     // Adding one product wrapper produces the required hostile 257-level
     // acyclic chain without relying on syntactic generic nesting.
     let source = named_type_chain_source("DeepAcyclic", MAX_NESTING_DEPTH);
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source: &source,
             source_name: Some("deep-acyclic.ko"),
@@ -696,7 +696,7 @@ fn use_site_wrapper_cannot_hide_an_over_depth_named_type() {
         named_type_chain_source("WrappedDepth", MAX_NESTING_DEPTH - 1),
         "fn keep(Option<S000> value) {}",
     );
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source: &source,
             source_name: Some("wrapped-depth.ko"),
@@ -732,14 +732,14 @@ fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
     // remain below 250,000; a sixth reference exceeds it. Both sources stay
     // tiny, so the test specifically exercises semantic expansion accounting.
     let legitimate = branching_named_type_use_source("SharedUseBoundary", 5);
-    CompilerSession::default()
+    CompilerSession::c10()
         .build(CompileRequest {
             source: &legitimate,
             source_name: Some("shared-use-boundary.ko"),
         })
         .expect("repeated shared named-type references below the node budget must compile");
     let hostile = branching_named_type_use_source("SharedUseOverflow", 6);
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source: &hostile,
             source_name: Some("shared-use-overflow.ko"),
@@ -771,14 +771,14 @@ fn repeated_shared_named_type_uses_obey_the_same_expanded_node_budget() {
 #[test]
 fn inferred_aggregate_types_cannot_bypass_the_shared_node_budget() {
     let legitimate = branching_named_type_expression_source("InferredSharedBoundary", 5);
-    CompilerSession::default()
+    CompilerSession::c10()
         .check(CompileRequest {
             source: &legitimate,
             source_name: Some("inferred-shared-boundary.ko"),
         })
         .expect("an inferred shared aggregate below the semantic node budget must check");
     let hostile = branching_named_type_expression_source("InferredSharedOverflow", 6);
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .check(CompileRequest {
             source: &hostile,
             source_name: Some("inferred-shared-overflow.ko"),
@@ -818,7 +818,7 @@ fn modest_shared_named_type_dag_compiles_below_the_node_budget() {
         ));
     }
     source.push_str("struct S008 { int value; }\nview fn run() authorize(anyone) {}\n}\n");
-    CompilerSession::default()
+    CompilerSession::c10()
         .build(CompileRequest {
             source: &source,
             source_name: Some("modest-dag.ko"),
@@ -836,7 +836,7 @@ fn branching_named_type_dag_is_measured_without_exponential_expansion() {
         ));
     }
     source.push_str("struct S017 { int value; }\n}\n");
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source: &source,
             source_name: Some("branching-dag.ko"),
@@ -881,7 +881,7 @@ fn over_budget_named_types_point_at_parameter_and_return_references() {
         source.push_str("struct S017 { int value; }\n");
         source.push_str(declaration);
         source.push_str("\n}\n");
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source: &source,
                 source_name: Some(source_name),
@@ -908,7 +908,7 @@ fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source,
             source_name: Some(source_name),

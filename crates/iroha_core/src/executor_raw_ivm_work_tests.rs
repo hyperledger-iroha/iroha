@@ -3,7 +3,9 @@ mod raw_ivm_work {
     use super::*;
     use crate::executor::Executor;
     use crate::smartcontracts::ivm::host::CoreHost;
-    use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
+    use ivm::pointer_abi::PointerType;
+    use ivm_abi::baseline::encoding::wide;
+    use ivm_abi::baseline::instruction::wide as opcode;
 
     const GAS: u64 = 50_000_000;
 
@@ -39,7 +41,10 @@ mod raw_ivm_work {
     // Literal descriptors bind each pointer to canonical, hashed TLV bytes; no
     // test register injection or unindexed literal access reaches the executor.
     fn program(literals: &[Vec<u8>], instructions: &[u32]) -> Vec<u8> {
-        let mut bytes = ivm::ProgramMetadata::default().encode();
+        let mut bytes = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         if !literals.is_empty() {
             let data_offset = 16 + literals.len() * 8;
             let data_len: usize = literals.iter().map(Vec::len).sum();
@@ -90,7 +95,8 @@ mod raw_ivm_work {
     // and gas consumption before inspecting the higher-level failure boundary.
     fn run_vm(program: &[u8], gas: u64) -> (Result<(), ivm::VMError>, u64, CoreHost) {
         let mut vm = ivm::IVM::new(gas);
-        vm.load_program(program).unwrap();
+        vm.load_program_for_profile(program, crate::ivm_test_support::declared_profile(program))
+            .unwrap();
         vm.set_gas_limit(gas);
         let mut host = CoreHost::with_accounts(ALICE_ID.clone(), Arc::new(vec![ALICE_ID.clone()]));
         host.set_generic_execution();
@@ -475,12 +481,12 @@ seiyaku UnverifiedBallot { permission CanInvokeContractEntrypoint;
             wide::encode_literal(opcode::memory::LDLIT, 10, 0),
             wide::encode_literal(opcode::memory::LDLIT, 11, 1),
             wide::encode_literal(opcode::memory::LDLIT, 12, 2),
-            wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
+            crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
         ];
         if failing_tail {
             code.extend([
                 wide::encode_literal(opcode::memory::LDLIT, 10, 3),
-                wide::encode_scall(ivm::syscalls::SYSCALL_DELETE_ROLE),
+                crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_DELETE_ROLE),
             ]);
         }
         code.push(wide::encode_halt());

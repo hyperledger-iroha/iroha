@@ -52,6 +52,6 @@ mod ssa;
 pub mod syntax;
 pub mod testing;
 pub use ivm_abi::{
-    Perm, SyscallPolicy, VMError, axt, dev_env, encoding, instruction, metadata, pointer_abi,
-    syscalls,
+    IvmEngine, IvmProfileId, Perm, SyscallPolicy, VMError, axt, dev_env, encoding, instruction,
+    metadata, pointer_abi, syscalls,
 };

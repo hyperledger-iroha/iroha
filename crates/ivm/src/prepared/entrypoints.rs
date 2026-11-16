@@ -6,7 +6,6 @@ use crate::{
     cache_memory::OwnedAllocation,
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
-    instruction::wide,
     ivm_cache::DecodedOp,
     metadata::EmbeddedEntrypointDescriptor,
 };
@@ -75,6 +74,7 @@ impl Entrypoints {
         graph: &PreparedControlFlow,
         instruction_entry_pc: u64,
         budget: Option<&AllocationBudget>,
+        engine: crate::IvmEngine,
     ) -> Result<Self, VMError> {
         let mut entries = Fixed::new(descriptors.len(), budget)?;
         let mut scratch = Reachability::new(
@@ -95,6 +95,7 @@ impl Entrypoints {
                     decoded,
                     graph,
                     descriptor.entry_pc,
+                    engine,
                 )?,
             };
         }
@@ -148,6 +149,7 @@ impl Reachability {
         decoded: &[DecodedOp],
         graph: &PreparedControlFlow,
         entry_pc: u64,
+        engine: crate::IvmEngine,
     ) -> Result<bool, VMError> {
         let slots = self.0.values_mut();
         slots.fill(Visit::default());
@@ -161,8 +163,7 @@ impl Reachability {
             let index = slots[head].queued_index;
             head += 1;
             let op = decoded.get(index).ok_or(VMError::DecodeError)?;
-            let syscall = (wide::opcode(op.inst) == wide::system::SCALL)
-                .then(|| wide::syscall_number(op.inst));
+            let syscall = engine.syscall_number(op.inst);
             if syscall == Some(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT) {
                 return Ok(true);
             }

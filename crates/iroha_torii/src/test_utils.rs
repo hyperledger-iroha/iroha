@@ -293,7 +293,12 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
 ///
 /// This matches Torii's domain-separated full-artifact deployment hashing.
 pub fn contract_code_hash_hex(code_bytes: &[u8]) -> String {
-    ivm::ProgramMetadata::parse(code_bytes).expect("parse contract artifact");
+    ivm::ProgramMetadata::parse_for_profile(
+        code_bytes,
+        ivm::IvmProfileId::declared(code_bytes)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse contract artifact");
     let h = ivm::contract_code_hash(code_bytes);
     hex::encode(<[u8; 32]>::from(h))
 }
@@ -409,7 +414,8 @@ pub fn enqueue_locally_signed_contract_deployment_with_permissions(
     subject_permissions: impl IntoIterator<Item = permission::Permission>,
     caller_permissions: impl IntoIterator<Item = Name>,
 ) -> (ContractAddress, String, String) {
-    let verified = ivm::verify_contract_artifact(artifact).expect("verify contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
+        .expect("verify contract artifact");
     let key_pair =
         KeyPair::from_private_key(private_key.0.clone()).expect("derive local deployment key pair");
     assert_eq!(

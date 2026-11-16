@@ -456,7 +456,7 @@ fn included_contract_fragment_cannot_export_declarations() {
 fn splitting_declarations_preserves_artifact_and_durable_interface() {
     let declarations = "error enum Failure { #[message(\"Balance too low\")] Low = 1001; } state int funds; hajimari() { funds = 0; }";
     let functions = "fn read_balance() -> int { funds } view fn balance() authorize(anyone) -> int { read_balance() } view fn failure() authorize(anyone) -> Failure { Failure::Low }";
-    let session = crate::session::CompilerSession::new(crate::compiler::CompilerOptions::default());
+    let session = crate::session::CompilerSession::new(crate::compiler::CompilerOptions::c10());
     let single = session
         .build_source_bundle(project(
             &format!("seiyaku Wallet {{ {declarations} {functions} }}"),
@@ -536,7 +536,7 @@ fn standalone_test_source_catalog_is_retained() {
     let tests = crate::session::TestSourceUnit { source_name: "tests.ko".into(), source: r#"module Tests { koto_test { target: "app.ko" } error enum Failure { #[message("A test failure")] Bad = 1; } #[test] fn ok() { require(value() == 1, Failure::Bad); } }"#.into() };
     let session = crate::session::CompilerSession::new(crate::compiler::CompilerOptions {
         mode: crate::compiler::CompilerMode::Test,
-        ..crate::compiler::CompilerOptions::default()
+        ..crate::compiler::CompilerOptions::c10()
     });
     let output = session.build_test_sources(&target, &[tests]).unwrap();
     assert!(
@@ -846,7 +846,7 @@ fn event_payloads_resolve_imported_nominal_types_and_included_declarations() {
 
 #[test]
 fn compiled_contract_imports_admit_exact_owner_artifacts() {
-    let artifact = crate::compiler::Compiler::new()
+    let artifact = crate::compiler::Compiler::new_c10()
         .compile_source("seiyaku Pool { view fn quote() authorize(anyone) -> int { 7 } }")
         .unwrap();
     let expected = ivm_artifact_admission::verify_contract_artifact(&artifact).unwrap();
@@ -915,7 +915,7 @@ fn compiled_contract_imports_reject_invalid_bytes_and_alias_collisions() {
             .iter()
             .any(|code| code == "E_CONTRACT_IMPORT_INVALID")
     );
-    let artifact = crate::compiler::Compiler::new()
+    let artifact = crate::compiler::Compiler::new_c10()
         .compile_source("seiyaku Pool { view fn quote() authorize(anyone) -> int { 7 } }")
         .unwrap();
     let mut request = project(
@@ -1036,7 +1036,7 @@ fn compiled_contract_import_accepts_exact_named_profile_without_selecting_its_ca
     let mut artifact =
         crate::compiler::Compiler::new_with_options(crate::compiler::CompilerOptions {
             host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..crate::compiler::CompilerOptions::c10()
         })
         .compile_source("seiyaku Pool { view fn quote() authorize(anyone) -> int { 7 } }")
         .unwrap();

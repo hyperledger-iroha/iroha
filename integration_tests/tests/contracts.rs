@@ -48,7 +48,8 @@ fn minimal_contract_artifact() -> Vec<u8> {
 #[test]
 fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     let artifact = minimal_contract_artifact();
-    let verified = ivm::verify_contract_artifact(&artifact).expect("admit minimal contract");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("admit minimal contract");
     assert_eq!(verified.metadata.abi_version, 1);
     assert_eq!(verified.metadata.max_cycles, 1_000);
     let literal_section = verified.literal_section();
@@ -97,14 +98,18 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     } else {
         missing_callable.extend_from_slice(&artifact[section_end..]);
     }
-    let parsed = ivm::ProgramMetadata::parse(&missing_callable)
-        .expect("negative fixture must retain valid metadata and literal alignment");
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &missing_callable,
+        ivm::IvmProfileId::declared(&missing_callable)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("negative fixture must retain valid metadata and literal alignment");
     assert_eq!(
         &missing_callable[parsed.code_offset..],
         &artifact[verified.code_offset..],
         "removing a callable descriptor must preserve the original executable"
     );
-    let error = ivm::verify_contract_artifact(&missing_callable)
+    let error = ivm::verify_contract_artifact_with_declared_profile(&missing_callable)
         .expect_err("public entrypoints require their canonical callable descriptors");
     assert!(
         error.to_string().contains(
@@ -246,7 +251,7 @@ pub(super) fn contract_probe_call_intent(
     contract_alias: &iroha_data_model::smart_contract::ContractAlias,
     entrypoint: &str,
 ) -> Result<iroha::client::ContractCallDraftIntent> {
-    let verified = ivm::verify_contract_artifact(artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
         .map_err(|error| eyre!("verify contract probe artifact: {error}"))?;
     let descriptor = verified
         .contract_interface
@@ -528,7 +533,7 @@ fn contract_probe_genesis_registration(
     };
     let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     let registrar = AccountId::new(registrar_key.public_key().clone());
-    let verified = ivm::verify_contract_artifact(artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
         .map_err(|error| eyre!("verify genesis contract probe artifact: {error}"))?;
     let manifest = verified
         .manifest
@@ -683,7 +688,8 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
     };
     let encoding = ManifestEncodingBudget::new().expect("admit fixture manifest budget");
     let artifact = contract_state_probe_artifact();
-    let verified = ivm::verify_contract_artifact(&artifact).expect("verify probe artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("verify probe artifact");
     let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     let registrar = AccountId::new(registrar_key.public_key().clone());
     let permission: Permission = CanManageSmartContractCode.into();
@@ -747,7 +753,12 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
 #[test]
 fn contract_v1_four_validator_probe_compiles_final_syntax() {
     let artifact = contract_state_probe_artifact();
-    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse V1 network probe");
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse V1 network probe");
     assert_eq!(
         parsed.metadata.max_cycles, 1_000_000,
         "the fixture gas allowance must retain the bounded artifact cycle cap"
@@ -831,7 +842,12 @@ seiyaku DynamicAccessCounter { import permission "CanEnactGovernance" as CanEnac
     let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile dynamic-access counter program");
-    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse dynamic-access metadata");
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse dynamic-access metadata");
     let interface = parsed
         .contract_interface
         .expect("dynamic-access contract interface");
@@ -962,7 +978,12 @@ fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
     use ivm_abi::pointer_abi::{PointerType, encode_tlv};
 
     let artifact = typed_core_query_pager_artifact();
-    let parsed = ivm::ProgramMetadata::parse(&artifact).unwrap();
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let interface = parsed.contract_interface.as_ref().unwrap();
     let run = |entrypoint_name: &str, offset: &str, limit: &str| {
         let entrypoint = interface
@@ -987,7 +1008,12 @@ fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
             encode_tlv(PointerType::NoritoBytes, &record).unwrap(),
         )]));
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&artifact).unwrap();
+        vm.load_program_for_profile(
+            &artifact,
+            ivm::IvmProfileId::declared(&artifact)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .unwrap();
         vm.select_entrypoint(entrypoint_name).unwrap();
         vm.set_host(host);
         let error = vm
@@ -1563,8 +1589,8 @@ fn dynamic_counter_call_intent(
 ) -> iroha::client::ContractCallDraftIntent {
     use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
 
-    let verified =
-        ivm::verify_contract_artifact(artifact).expect("verify dynamic counter artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
+        .expect("verify dynamic counter artifact");
     let schema = verified
         .contract_interface
         .entrypoints
@@ -1618,7 +1644,8 @@ fn dynamic_counter_call_intent(
 #[test]
 fn dynamic_counter_intent_binds_address_without_alias_metadata() {
     let artifact = dynamic_access_counter_artifact();
-    let verified = ivm::verify_contract_artifact(&artifact).expect("verify counter artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("verify counter artifact");
     let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
         b"dynamic-counter-intent-network",
     )));
@@ -2088,7 +2115,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         iroha_test_samples::BOB_KEYPAIR.private_key().clone(),
     );
     let artifact = minimal_contract_artifact();
-    let verified = ivm::verify_contract_artifact(&artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
         .map_err(|error| eyre!("verify lifecycle test artifact: {error}"))?;
     let code_hash = verified.code_hash;
     let code_hash_hex = hex::encode(code_hash.as_ref());
@@ -2392,7 +2419,7 @@ fn manifest_response_code_hash(manifest: &norito::json::Value) -> Result<Hash> {
 #[test]
 fn manifest_response_code_hash_preserves_canonical_hash_identity() {
     let artifact = minimal_contract_artifact();
-    let verified = ivm::verify_contract_artifact(&artifact).unwrap();
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact).unwrap();
     let mut manifest = norito::json::to_value(&verified.manifest).unwrap();
     assert_eq!(
         manifest_response_code_hash(&manifest).unwrap(),
@@ -3346,7 +3373,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
     network.ensure_blocks(1).await?;
     let code_bytes = pre_registered_artifact.unwrap_or_else(contract_state_probe_artifact);
     if registered_in_genesis {
-        let verified = ivm::verify_contract_artifact(&code_bytes)
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&code_bytes)
             .map_err(|error| eyre!("verify pre-registered probe: {error}"))?;
         let expected = verified.manifest.try_signed(
             encoding.context(),

@@ -17502,7 +17502,7 @@ function normalizeManifestPayload(manifest, context) {
         `${context}.features_bitmap`,
         { allowZero: true },
       );
-      if (bitmap > 1) {
+      if (bitmap > 3) {
         rejectType(`${context}.features_bitmap contains unsupported Kotodama V1 feature bits`);
       }
       normalized.features_bitmap = bitmap;

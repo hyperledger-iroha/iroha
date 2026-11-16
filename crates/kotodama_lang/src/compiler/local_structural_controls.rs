@@ -7,7 +7,7 @@ fn compile(source: &str, scalar: bool) -> CompileOutput {
 fn compile_with_original_zeros(source: &str, scalar: bool, original_zeros: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: None,
@@ -72,7 +72,7 @@ fn pair(source: &str) -> (CompileOutput, CompileOutput) {
 }
 fn implementation_ir(source: &str, declaration: &str) -> ir::Function {
     crate::session::run_with_compiler_stack(|| {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let parsed = session
             .parse_compilation_unit(CompileRequest {
                 source,
@@ -93,7 +93,7 @@ fn implementation_ir(source: &str, declaration: &str) -> ir::Function {
                 (function.name == declaration).then(|| entrypoint_ir_symbol_name(function))
             })
             .expect("original declaration");
-        let compiler = Compiler::new();
+        let compiler = Compiler::new_c10();
         let lowered = compiler.lower_typed_program(typed.clone(), None).unwrap();
         let ssa = compiler.construct_ssa_program(lowered).unwrap();
         let optimized = compiler.optimize_ssa_program(ssa).unwrap();

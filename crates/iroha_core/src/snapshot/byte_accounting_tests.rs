@@ -252,13 +252,14 @@ fn snapshot_accounting_keeps_release_wire_and_abi_pins() {
     // roots keep their bytes; a reader built before it refuses a keyed root whose marker bit
     // is clear.
     //
-    // The IVM ABI consolidation (roadmap C10; `specs/ivm_header.md`, golden
-    // `iroha_data_model/tests/fixtures/abi_v1_hash.rs`) then replaced ABI V1 7531b45d with
-    // bdd5188f. The wire identity binds that hash (`release_identity::wire_schema_hash`), so it
-    // moved with it from 072924c3 to b2d6d37f. A network that still runs 072924c3/7531b45d
-    // does not accept this release's frames or programs.
-    assert!(wire.starts_with("b2d6d37f"), "wire={wire}");
-    assert!(abi.starts_with("bdd5188f"), "abi={abi}");
+    // The IVM ABI consolidation (roadmap C10) replaced ABI V1 7531b45d with bdd5188f, and the
+    // wire identity, which binds that hash (`release_identity::wire_schema_hash`), moved to
+    // b2d6d37f. The atomic baseline cutover (`specs/runtime/ivm_baseline_and_c10_profiles.md`
+    // phase 4) binds ABI V1 to the frozen baseline engine again: the hash is 7531b45d (golden
+    // `iroha_data_model/tests/fixtures/abi_v1_hash.rs`) and the wire identity 9d96f872. It is
+    // not the anchor's 072924c3 because covered wire roots changed after that anchor.
+    assert!(wire.starts_with("9d96f872"), "wire={wire}");
+    assert!(abi.starts_with("7531b45d"), "abi={abi}");
     eprintln!("snapshot-byte-accounting: wire={wire} abi={abi}");
 }
 

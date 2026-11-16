@@ -126,7 +126,9 @@ mod tests {
             let artifact = kotodama_lang::compiler::Compiler::new()
                 .compile_source(&source)
                 .unwrap();
-            let verified = ivm_artifact_admission::verify_contract_artifact(&artifact).unwrap();
+            let verified =
+                ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)
+                    .unwrap();
             let hook = LifecycleHook::from_artifact(&artifact).unwrap();
             assert_eq!(Some(hook.clone()), LifecycleHook::from_verified(&verified));
             assert_eq!(hook.name, "hajimari");

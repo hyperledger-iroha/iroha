@@ -344,7 +344,7 @@ fn prepare_or_resume_deployment(
     prepare_only: bool,
     progress: &mut dyn FnMut(&str),
 ) -> eyre::Result<RetainedDeployment> {
-    let code_hash = ivm::verify_contract_artifact(&request.artifact)
+    let code_hash = ivm::verify_contract_artifact_with_declared_profile(&request.artifact)
         .map_err(|error| eyre::eyre!("invalid contract artifact: {error}"))?
         .code_hash;
     if let Some(retained) = session.recover_matching(
@@ -628,7 +628,7 @@ pub(super) fn read_reproduced_prebuilt_artifact(
         iroha_contract_deploy::MAX_DEPLOYMENT_ARTIFACT_BYTES as u64,
     )
     .map_err(|error| io_diagnostic("read prebuilt contract", prebuilt, &error))?;
-    let verified = ivm::verify_contract_artifact(&bytes)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&bytes)
         .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, error.to_string()))?;
     let manifest_bytes =
         read_bounded_single_link_regular_file_v1(prebuilt_manifest, 4 * 1024 * 1024).map_err(
@@ -766,7 +766,7 @@ pub(super) fn read_selected_artifact(artifact: &CompilerArtifactV1) -> Result<Ve
         iroha_contract_deploy::MAX_DEPLOYMENT_ARTIFACT_BYTES as u64,
     )
     .map_err(|error| io_diagnostic("read built contract", &artifact.artifact, &error))?;
-    let verified = ivm::verify_contract_artifact(&bytes)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&bytes)
         .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, error.to_string()))?;
     if verified.code_hash.to_string() != artifact.artifact_hash
         || verified.abi_hash.to_string() != artifact.abi_hash
@@ -1473,12 +1473,14 @@ mod tests {
             compiled("seiyaku Quote { view fn quote() authorize(anyone) -> int { return 30; } }");
         let other =
             compiled("seiyaku Quote { view fn quote() authorize(anyone) -> int { return 31; } }");
-        let verified = ivm::verify_contract_artifact(&original).expect("admitted original");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&original)
+            .expect("admitted original");
         let artifact_path = root.path().join("quote.to");
         let manifest_path = root.path().join("quote.manifest.json");
         fs::write(&artifact_path, &original).expect("prebuilt artifact");
         let manifest_for = |artifact: &[u8]| {
-            let verified = ivm::verify_contract_artifact(artifact).expect("admitted");
+            let verified =
+                ivm::verify_contract_artifact_with_declared_profile(artifact).expect("admitted");
             norito::json::to_string(&verified.manifest).expect("compiler manifest")
         };
         fs::write(&manifest_path, manifest_for(&original)).expect("prebuilt manifest");
@@ -1530,7 +1532,8 @@ mod tests {
                 "seiyaku Quote { view fn quote() authorize(anyone) -> int { return 31; } }",
             )
             .expect("replacement contract");
-        let verified = ivm::verify_contract_artifact(&original).expect("admitted original");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&original)
+            .expect("admitted original");
         let path = root.path().join("quote.to");
         fs::write(&path, &original).expect("build output");
         let mut artifact = CompilerArtifactV1 {

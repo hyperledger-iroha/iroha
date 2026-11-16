@@ -18,7 +18,7 @@ fn break_exits_bounded_for_loop() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile bounded for/break program");
     let mut vm = IVM::new(u64::MAX);
@@ -44,7 +44,7 @@ fn continue_skips_range_iteration() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile continue program");
     let mut vm = IVM::new(u64::MAX);

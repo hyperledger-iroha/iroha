@@ -17,7 +17,7 @@ include!(concat!(env!("OUT_DIR"), "/kotodama_secret_reject_cases.rs"));
 fn zk_session() -> CompilerSession {
     CompilerSession::new(CompilerOptions {
         force_zk: true,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
 }
 fn request(source: &str) -> CompileRequest<'_> {

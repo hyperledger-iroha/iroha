@@ -11072,7 +11072,8 @@ fn collect_contract_state_schemas(
         let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
         };
-        let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
+        let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code_bytes.as_slice());
+        let Ok(parsed) = ivm::ProgramMetadata::parse_for_policy(code_bytes.as_slice(), policy) else {
             return Ok(());
         };
         let Some(contract_interface) = parsed.contract_interface else {
@@ -18655,7 +18656,8 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     }
     let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&invocation.contract_address, *binding).ok()?;
     let code = world.contract_code().get(&artifact_id)?;
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
+    let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code.as_ref());
+    let prepared = ivm::prepare_contract_for_policy(Arc::<[u8]>::from(code.as_ref()), policy).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
@@ -18946,7 +18948,8 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
     let binding = world.contract_instances().get(&parsed.contract_address)?;
     let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&parsed.contract_address, *binding).ok()?;
     let code = world.contract_code().get(&artifact_id)?;
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(code.as_ref())).ok()?;
+    let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code.as_ref());
+    let prepared = ivm::prepare_contract_for_policy(Arc::<[u8]>::from(code.as_ref()), policy).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
@@ -20902,7 +20905,7 @@ seiyaku PublicCallPayloadNormalizeTest { permission CanEnactGovernance;
                 .to_string();
         let settlement_asset =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
-        let parsed = ivm::ProgramMetadata::parse(&code).expect("compiled contract metadata");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(&code, ivm::IvmProfileId::declared(&code).unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1))).expect("compiled contract metadata");
         let interface = parsed
             .contract_interface
             .expect("compiled contract interface");
@@ -21492,7 +21495,7 @@ dataspace_catalog,
         Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant CanManageSmartContractCode");
-        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&code).expect("verify contract artifact");
         let code_hash = register_code_bytes(
             authority,
             contract_address
@@ -43918,8 +43921,8 @@ pub mod validation_fee_torii_ingress_tests {
         let mut artifact = metadata.encode();
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
-        let verified =
-            ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid payout contract artifact");
         (artifact, verified.manifest)
     }
     fn pool_contract_artifact() -> (
@@ -43987,8 +43990,8 @@ pub mod validation_fee_torii_ingress_tests {
         let mut artifact = metadata.encode();
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
-        let verified =
-            ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid pool contract artifact");
         (artifact, verified.manifest)
     }
     /// Bind the fixture payout contracts and accounts to the original network.
@@ -58709,12 +58712,18 @@ instructions: Vec<InstructionBox>,
         tx_instructions,
     }))
 }
-/// One `SCALL` and `HALT` under the default non-ZK header, which declares no trace bound:
-/// gas, supplied when the trigger fires, is the program's only execution budget.
-fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
-    let mut blob = ivm::ProgramMetadata::default().encode();
-    blob.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-    blob.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+/// One `SCALL` and `HALT` for a trigger registered through the interface: the frozen baseline
+/// header and encoding, declaring the root's admission cycle limit (the anchor's program).
+fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
+    use ivm_abi::baseline::{encoding::wide, instruction::wide::system};
+    let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
+    let mut blob = ivm::ProgramMetadata {
+        max_cycles: max_cycles.get(),
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+    blob.extend_from_slice(&wide::encode_sys(system::SCALL, opcode).to_le_bytes());
+    blob.extend_from_slice(&wide::encode_halt().to_le_bytes());
     IvmBytecode::from_compiled(blob)
 }
 fn build_billing_trigger(
@@ -58722,6 +58731,7 @@ fn build_billing_trigger(
     authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
+    max_cycles: NonZeroU64,
 ) -> Trigger {
     use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
     let schedule = Schedule {
@@ -58738,6 +58748,7 @@ fn build_billing_trigger(
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            max_cycles,
         )),
         Repeats::Exactly(1),
         authority,
@@ -58747,11 +58758,16 @@ fn build_billing_trigger(
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
 }
-fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+fn build_usage_trigger(
+    trigger_id: TriggerId,
+    authority: AccountId,
+    max_cycles: NonZeroU64,
+) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            max_cycles,
         )),
         Repeats::Indefinitely,
         authority.clone(),
@@ -58897,11 +58913,16 @@ pub async fn handle_post_v1_subscription_create(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     if let Some(ref usage_trigger_id) = usage_trigger_id {
         instructions.push(InstructionBox::from(Register::trigger(
-            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
+            build_usage_trigger(
+                usage_trigger_id.clone(),
+                authority.clone(),
+                state.ivm_admission_cycle_limit(),
+            ),
         )));
     }
     let provider_usage_grant_included = usage_trigger_id.is_some()
@@ -59109,6 +59130,7 @@ pub async fn handle_post_v1_subscription_resume(
             authority.clone(),
             subscription_id.clone(),
             next_charge_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     subscription_action_draft_response(
@@ -59336,6 +59358,7 @@ pub async fn handle_post_v1_subscription_charge_now(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     subscription_action_draft_response(

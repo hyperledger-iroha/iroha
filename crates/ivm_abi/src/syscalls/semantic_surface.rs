@@ -561,7 +561,7 @@ pub(super) fn semantic_abi_surface_v1() -> Result<
                 },
                 AbiNumericFaultSurface {
                     name: "register_integer_overflow",
-                    tag: crate::numeric::NumericFaultV1::RegisterIntegerOverflow.tag(),
+                    tag: crate::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG,
                 },
             ],
             pointer_faults: vec![

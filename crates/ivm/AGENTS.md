@@ -19,7 +19,7 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 ## Development workflow
 - Keep changes deterministic across hardware. Every SIMD/Metal/CUDA path must have a byte-for-byte equivalent scalar fallback.
 - Features to know:
-  - `metal` enables Apple Metal acceleration for the host-side SHA-256/Merkle, Keccak, AES, Ed25519 batch and vector helpers. No opcode reaches them.
+  - `metal` enables Apple Metal acceleration for the host-side SHA-256/Merkle, Keccak, AES, Ed25519 batch and vector helpers; the baseline engine (ABI V1) reaches them through its vector and cryptographic opcodes, the C10 profile only through syscalls.
   - `cuda` uses the one optional source-approved authenticated bundle and loads the driver at runtime only after bundle admission. Linux/Windows daemon dependencies select this feature automatically. Current `REVIEWED_CUDA_BUNDLE_PINS = None` with no bundle preserves CPU-capable ordinary builds in every profile; supplied unreviewed or malformed material is an integrity error. Shipping qualification requires genuine approval and the complete signed bundle. The sole explicit offline producer uses pinned tools; Cargo and startup never invoke `nvcc`. Kernel execution failures retain the original quarantine and CPU fallback.
   - ML-DSA verification is unconditional; `ivm_vrf_tests` and `ivm_zk_tests` gate heavy test suites.
 - Run `cargo test -p ivm` for the default set, plus targeted commands when relevant:

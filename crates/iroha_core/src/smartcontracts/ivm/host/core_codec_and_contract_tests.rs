@@ -225,7 +225,9 @@ fn build_authenticated_test_contract_program_with_states(
         }],
         seiyaku_name: "CoreHostHarness".to_owned(),
         compiler_fingerprint: "iroha-core-host-tests".to_owned(),
-        abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        // The harness probes are C10 programs (`ProgramMetadata::encode`, C10 encoders), so the
+        // interface binds C10's ABI V1 surface hash.
+        abi_hash: ivm_sys::compute_c10_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: if zk_mode {
             ivm::CONTRACT_FEATURE_BIT_ZK
         } else {
@@ -285,11 +287,71 @@ fn build_authenticated_test_contract_program_with_states(
     }
     program
 }
+/// The harness probe as a baseline-engine contract, for fixtures that a live path admits or calls
+/// (ABI V1 roots resolve the baseline engine). `code` is baseline-encoded.
+fn build_authenticated_baseline_test_contract_program(code: &[u8], zk_mode: bool) -> Vec<u8> {
+    use ivm_abi::baseline::{
+        encoding::wide,
+        instruction::wide::{arithmetic, control, memory},
+    };
+
+    assert!(code.len().is_multiple_of(4));
+    assert!(
+        code.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|word| u32::from_le_bytes(*word) != wide::encode_halt())
+    );
+    let parsed = crate::ivm_test_support::parse_declared(
+        &build_authenticated_test_contract_program(&[], zk_mode),
+    )
+    .expect("C10 harness probe");
+    let mut contract_interface = parsed
+        .contract_interface
+        .expect("the harness probe declares its interface");
+    contract_interface.abi_hash = ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        mode: if zk_mode { ivm::ivm_mode::ZK } else { 0 },
+        max_cycles: 1_000_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&contract_interface.encode_section());
+    for instruction in [
+        wide::encode_ri(arithmetic::ADDI, 31, 31, -16),
+        wide::encode_store(memory::STORE64, 31, 12, 0),
+        wide::encode_store(memory::STORE64, 31, 1, 8),
+        wide::encode_ri(arithmetic::ADDI, 10, 14, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 15, 0),
+        wide::encode_ri(arithmetic::ADDI, 12, 16, 0),
+    ] {
+        program.extend_from_slice(&instruction.to_le_bytes());
+    }
+    program.extend_from_slice(code);
+    for instruction in [
+        wide::encode_ri(arithmetic::ADDI, 17, 10, 0),
+        wide::encode_load(memory::LOAD64, 25, 31, 0),
+        wide::encode_load(memory::LOAD64, 1, 31, 8),
+        wide::encode_store(memory::STORE64, 25, 0, 0),
+        wide::encode_ri(arithmetic::ADDI, 10, 25, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+        wide::encode_ri(arithmetic::ADDI, 31, 31, 16),
+        wide::encode_rr(control::JALR, 0, 1, 0),
+    ] {
+        program.extend_from_slice(&instruction.to_le_bytes());
+    }
+    program
+}
 #[test]
 fn authenticated_test_probe_completes_unit_and_preserves_syscall_observation() {
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_authenticated_test_contract_program(&[], false))
-        .expect("authenticated probe fixture");
+    vm.load_program_for_profile(
+        &build_authenticated_test_contract_program(&[], false),
+        crate::ivm_test_support::declared_profile(&build_authenticated_test_contract_program(
+            &[],
+            false,
+        )),
+    )
+    .expect("authenticated probe fixture");
     vm.set_register(14, 42);
     vm.run().expect("probe completes protected return");
     assert_eq!(authenticated_test_probe_result(&vm), 42);
@@ -312,10 +374,13 @@ fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
     }
     let instruction = ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_DEBUG_PRINT);
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_authenticated_test_contract_program(
-        &instruction.to_le_bytes(),
-        false,
-    ))
+    vm.load_program_for_profile(
+        &build_authenticated_test_contract_program(&instruction.to_le_bytes(), false),
+        crate::ivm_test_support::declared_profile(&build_authenticated_test_contract_program(
+            &instruction.to_le_bytes(),
+            false,
+        )),
+    )
     .expect("authenticated probe fixture");
     let mut host = ObserveGas(None);
     vm.run_with_host(&mut host)
@@ -946,7 +1011,7 @@ fn install_contract_artifact_with_interface_and_lifecycle(
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     sanitize_test_contract_artifact_wildcards(&mut code);
     rewrite_test_contract_interface(&mut code, customize_interface);
-    let mut manifest = ivm::verify_contract_artifact(&code)
+    let mut manifest = ivm::verify_contract_artifact_with_declared_profile(&code)
         .expect("test contract artifact must verify after wildcard sanitization")
         .manifest;
     let next_height = u64::try_from((state.view().height() + 1).max(2))
@@ -1194,7 +1259,11 @@ seiyaku GrantPolicy {
     ] {
         for declaration in ["Admin", "Shared", "Typo"] {
             let mut vm = ivm::IVM::new(1_000_000);
-            vm.load_program(&artifact).unwrap();
+            vm.load_program_for_profile(
+                &artifact,
+                crate::ivm_test_support::declared_profile(&artifact),
+            )
+            .unwrap();
             let mut host = CoreHost::new(ALICE_ID.clone());
             bind_test_contract_runtime(&mut host, 911);
             let address = host

@@ -135,7 +135,9 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         BTreeSet::from([PathBuf::from("defaults/executor.to")]),
         "the default executor must retain its exact owner"
     );
-    let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    // Contracts and the default executor run under the interface profile (the frozen baseline
+    // engine, the default Kotodama target); the predecoder fixtures exercise the C10 predecoder.
+    let interface = ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1);
     let compiler = kotodama_lang::compiler::Compiler::new();
     let zk_compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
@@ -148,23 +150,23 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
         let path = root.join(&relative);
         let bytes = fs::read(&path)
             .unwrap_or_else(|error| panic!("read owned artifact {}: {error}", path.display()));
-        let parsed = ivm::ProgramMetadata::parse(&bytes)
+        let profile = match artifact.owner {
+            "predecoder" => ivm::IvmProfileId::C10_ABI_V1,
+            _ => interface,
+        };
+        let layout = profile.engine().header_layout();
+        let parsed = ivm::ProgramMetadata::parse_for_profile(&bytes, profile)
             .unwrap_or_else(|error| panic!("{} has invalid metadata: {error}", path.display()));
-        assert_eq!(
-            parsed.header_len,
-            ivm::HEADER_SIZE,
-            "{} header",
-            path.display()
-        );
+        assert_eq!(parsed.header_len, layout.size, "{} header", path.display());
         assert_eq!(parsed.metadata.abi_version, 1, "{} ABI", path.display());
         assert_eq!(
-            bytes.get(ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE),
-            Some(expected_abi_hash.as_slice()),
+            bytes.get(layout.abi_hash_offset..layout.size),
+            Some(profile.abi_hash().as_slice()),
             "{} does not authenticate the canonical ABI descriptor",
             path.display()
         );
         ivm::IVM::new(parsed.metadata.max_cycles.max(1))
-            .load_program(&bytes)
+            .load_program_for_profile(&bytes, profile)
             .unwrap_or_else(|error| panic!("{} does not load: {error}", path.display()));
         match artifact.owner {
             "kotodama-standard" | "kotodama-zk" => {
@@ -179,12 +181,13 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
                     "{} must embed its CNTR interface",
                     path.display()
                 );
-                ivm::verify_contract_artifact(&bytes).unwrap_or_else(|error| {
-                    panic!(
-                        "{} does not pass contract admission: {error}",
-                        path.display()
-                    )
-                });
+                ivm::verify_contract_artifact_for_policy(&bytes, ivm::SyscallPolicy::AbiV1)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{} does not pass contract admission: {error}",
+                            path.display()
+                        )
+                    });
             }
             "predecoder" => {
                 assert_eq!(
@@ -223,7 +226,8 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
                     path.display()
                 );
                 assert!(
-                    ivm::verify_contract_artifact(&bytes).is_err(),
+                    ivm::verify_contract_artifact_for_policy(&bytes, ivm::SyscallPolicy::AbiV1)
+                        .is_err(),
                     "{} must not enter deployable contract admission",
                     path.display()
                 );

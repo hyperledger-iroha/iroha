@@ -3028,7 +3028,11 @@ where
                 summary.prepared_contract(),
                 identity.contract_alias.as_ref(),
             )?;
-            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
+            validate_prepared_ivm_execution_policy_for_profile(
+                state,
+                summary.profile(),
+                &summary.metadata,
+            )?;
             let manifest = state
                 .world()
                 .contract_manifests()
@@ -3070,7 +3074,11 @@ where
                             summary.code_hash,
                         ),
                     )?;
-                    validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
+                    validate_prepared_ivm_execution_policy_for_profile(
+                        state,
+                        summary.profile(),
+                        &summary.metadata,
+                    )?;
                     return Ok(());
                 }
                 ExecutableProgramSummary::Contract(summary) => summary,
@@ -3099,7 +3107,11 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
+            validate_prepared_ivm_execution_policy_for_profile(
+                state,
+                summary.profile(),
+                &summary.metadata,
+            )?;
             crate::pipeline::overlay::validate_contract_binding(
                 state,
                 transaction.payload(),
@@ -3130,7 +3142,11 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_governed_ivm_proved_execution_policy(state, &summary.metadata)?;
+            validate_governed_ivm_proved_execution_policy(
+                state,
+                summary.profile(),
+                &summary.metadata,
+            )?;
             crate::pipeline::overlay::validate_contract_binding(
                 state,
                 transaction.payload(),

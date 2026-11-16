@@ -74,10 +74,35 @@ impl WsvHost {
         lifecycle: ContractLifecycleControlV1,
         pending: Option<EntryPointKind>,
     ) -> Result<(), VMError> {
+        self.install_contract_fixture_for_profile(
+            address,
+            artifact,
+            lifecycle,
+            pending,
+            crate::IvmProfileId::C10_ABI_V1,
+        )
+    }
+    /// Install a fixture admitted and prepared under one explicitly resolved profile, such as the
+    /// frozen baseline profile.
+    ///
+    /// # Errors
+    /// Rejects invalid artifacts for that profile, inconsistent lifecycle hashes and undeclared
+    /// pending hooks.
+    pub fn install_contract_fixture_for_profile(
+        &mut self,
+        address: ContractAddress,
+        artifact: Vec<u8>,
+        lifecycle: ContractLifecycleControlV1,
+        pending: Option<EntryPointKind>,
+        profile: crate::IvmProfileId,
+    ) -> Result<(), VMError> {
         lifecycle.validate().map_err(|_| VMError::InvalidMetadata)?;
-        let prepared =
-            crate::prepare_contract_with_memory_budget(&artifact, &self.contract_execution_budget)
-                .map_err(|error| error.into_vm_error())?;
+        let prepared = crate::prepare_contract_with_memory_budget_for_profile(
+            &artifact,
+            &self.contract_execution_budget,
+            profile,
+        )
+        .map_err(|error| error.into_vm_error())?;
         if lifecycle.retained_code_hash != Some(prepared.code_hash())
             || lifecycle
                 .active_code_hash
@@ -186,9 +211,14 @@ impl WsvHost {
         let previous = self
             .contract_fixture(address)
             .ok_or(VMError::InvalidMetadata)?;
-        let replacement =
-            crate::prepare_contract_with_memory_budget(&artifact, &self.contract_execution_budget)
-                .map_err(|error| error.into_vm_error())?;
+        // A replacement is admitted under the profile its predecessor runs; the upgrade path does
+        // not move a contract between engines.
+        let replacement = crate::prepare_contract_with_memory_budget_for_profile(
+            &artifact,
+            &self.contract_execution_budget,
+            previous.profile_id(),
+        )
+        .map_err(|error| error.into_vm_error())?;
         if previous.code_hash() == replacement.code_hash() {
             return Err(VMError::PermissionDenied);
         }

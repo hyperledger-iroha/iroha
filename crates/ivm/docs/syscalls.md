@@ -19,12 +19,14 @@ ABI policy
   depth rules, and typed durable-state schema/record identities, enum tags, layouts, traversal rules,
   pointer mappings, caps, operation-specific state paths, and CNTR-bound read/write record validation.
   It also binds the generic-program discriminator, reserved transaction metadata,
-  and exact sorted list of syscalls unavailable without an authenticated contract identity,
-  the 48-byte program header layout, and the instruction-set section: the word layout, the
-  operand format of every admitted opcode, the 32-register file, the ZK privacy-tag join rule and
-  the instruction fault mapping (`Numeric(DivisionByZero)`, `Numeric(RegisterIntegerOverflow)`,
-  `CallDepthExceeded`, `ControlFlowViolation`).
-  Display names and gas prices are not part of this digest.
+  and exact sorted list of syscalls unavailable without an authenticated contract identity.
+  Display names and gas prices are not part of this digest. This is the frozen baseline digest
+  (`ivm::syscalls::compute_abi_hash`, `7531b45d…`). The C10 profile's digest
+  (`compute_c10_abi_hash`), which no root selects yet, also binds the 48-byte program header
+  layout and the instruction-set section: the word layout, the operand format of every admitted
+  opcode, the 32-register file, the ZK privacy-tag join rule and the instruction fault mapping
+  (`Numeric(DivisionByZero)`, `Numeric(RegisterIntegerOverflow)`, `CallDepthExceeded`,
+  `ControlFlowViolation`).
   `ivm::gas::schedule_hash()` commits to the canonical gas schedule and every staged-metering phase
   name/tag independently.
 - Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
@@ -83,7 +85,7 @@ Admission/host guardrails
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
 
-`SCALL` carries a 24-bit syscall number in bits 23..0 of its instruction word; there is no other syscall encoding. The host receives the number as `u32`, and admission checks it before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
+`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for ABI V1 calls outside the `SCALL` range. Under the C10 profile, `SCALL` carries a 24-bit syscall number in bits 23..0 of its instruction word and there is no other syscall encoding. The host receives all syscall numbers as `u32`, and admission checks every encoding before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
 
 Query syscall (Norito)
 - `0xA1` and extended `0x010000` expect `r10=&NoritoBytes(QueryRequest)` and return `r10=&NoritoBytes(QueryResponse)`. The authority is always the calling contract; embedded authorities are ignored.
@@ -459,7 +461,7 @@ Smart‑contract helpers (Norito)
   - Executes the callee in a child VM. The parent escrows the available syscall gas and is charged the fixed request/return overhead plus all gas consumed by child instructions and child syscalls; unused escrow is refunded.
   - Every public callee has an explicit authorization policy and an authenticated permission declaration table. For a `kotoage fn` or `view fn`, `authorize(anyone)` opens invocation and `authorize(Role)` resolves the declared role. An instance role requires an exact address-and-name grant on the calling contract subject. An explicitly imported chain role requires that exact chain token with canonical JSON `null` payload; a typed built-in permission payload cannot satisfy it. Lifecycle hooks require the separate runtime address-and-hook token. Missing permission rejects the syscall with `PermissionDenied`. Invocation authority never supplies the separate permissions needed for ledger effects.
 
-Extended query/sysvar surface (numbers above `0xFF`)
+Extended query/sysvar surface (numbers above `0xFF`: `SYSTEM` / SCALLX in the baseline)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
 - 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
 - 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<int>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.

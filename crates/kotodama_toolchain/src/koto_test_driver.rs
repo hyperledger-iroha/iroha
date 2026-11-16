@@ -24,8 +24,6 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity},
     numeric_abi::DecimalValueV1,
 };
-#[cfg(test)]
-use ivm::ProgramMetadata;
 use ivm::{
     AccountId, AssetDefinitionId, IVM, IVMHost, MockWorldStateView, PermissionToken, PointerType,
     TraceMode, WsvHost,
@@ -1913,6 +1911,16 @@ fn compile_suite_with_modules_for_chain(
         &modules.artifacts,
     )
 }
+/// Prepare a locally compiled contract under the profile its header declares: the default
+/// (baseline) target or an explicit C10 build. An undeclared header is refused by the interface
+/// profile's parser.
+fn prepare_declared_contract(
+    artifact: Arc<[u8]>,
+) -> Result<ivm::PreparedContract, ivm::ContractArtifactError> {
+    let profile = ivm::IvmProfileId::declared(&artifact)
+        .unwrap_or_else(|| ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+    ivm::prepare_contract_for_profile(artifact, profile)
+}
 fn prepare_compiled_suite(
     suite: &DiscoveredSuite,
     outputs: TestCompileOutput,
@@ -1924,7 +1932,7 @@ fn prepare_compiled_suite(
     let artifacts = artifacts
         .iter()
         .map(|artifact| {
-            ivm::prepare_contract(Arc::from(artifact.artifact.clone()))
+            prepare_declared_contract(Arc::from(artifact.artifact.clone()))
                 .map(|prepared| (artifact.source_name.clone(), prepared))
                 .map_err(|error| {
                     internal(format!(
@@ -1959,8 +1967,8 @@ fn prepare_compiled_suite(
     };
     let (runtime, runtime_entrypoints) = if let Some(runtime_output) = outputs.runtime {
         let runtime_report = runtime_output.report;
-        let runtime_program =
-            ivm::prepare_contract(Arc::from(runtime_output.artifact)).map_err(|err| {
+        let runtime_program = prepare_declared_contract(Arc::from(runtime_output.artifact))
+            .map_err(|err| {
                 internal(format!(
                     "failed to prepare compiled runtime contract: {err}"
                 ))
@@ -2917,11 +2925,12 @@ impl KotoTestHost {
             control.active_code_hash = Some(prepared.code_hash());
             control.retained_code_hash = Some(prepared.code_hash());
             inner
-                .install_contract_fixture(
+                .install_contract_fixture_for_profile(
                     contract_address.clone(),
                     prepared.artifact().to_vec(),
                     control,
                     (lifecycle == Lifecycle::PendingHajimari).then_some(EntryPointKind::Hajimari),
+                    prepared.profile_id(),
                 )
                 .expect("already admitted runtime artifact forms a valid local fixture");
             inner
@@ -4486,6 +4495,9 @@ fn classify_vm_error(
     if let ivm::VMError::NumericFault(fault) = error.as_unmetered() {
         return numeric_fault_failure(*fault);
     }
+    if let ivm::VMError::RegisterIntegerOverflow = error.as_unmetered() {
+        return register_integer_overflow_failure();
+    }
     let kind = match trap {
         Some(Trap::PermissionDenied) => FailureKind::PermissionDenied,
         Some(Trap::NumericFault) => FailureKind::NumericFault,
@@ -4507,6 +4519,18 @@ fn classify_vm_error(
         failure.message = detail;
     }
     failure
+}
+/// A C10 signed 64-bit register overflow. Source numerics never reach 64-bit register
+/// arithmetic; only compiler-owned bookkeeping does, so its overflow is a toolchain defect.
+fn register_integer_overflow_failure() -> TestFailure {
+    TestFailure::new(
+        FailureKind::NumericFault,
+        format!(
+            "a compiler-owned 64-bit register operation overflowed (ABI fault {})",
+            ivm_abi::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG
+        ),
+    )
+    .detail("help: this is a toolchain defect; report it with a minimal reproducer")
 }
 /// Classify a numeric fault: its `kotodama::NumericError` variant and what went wrong, plus a
 /// `help:` line where the source has a direct remedy.
@@ -4545,18 +4569,6 @@ fn numeric_fault_failure(fault: ivm_abi::numeric::NumericFaultV1) -> TestFailure
                 FailureKind::NumericFault,
                 format!(
                     "a numeric instruction violated its VM contract (ABI fault {})",
-                    fault.tag()
-                ),
-            )
-            .detail("help: this is a toolchain defect; report it with a minimal reproducer");
-        }
-        // Source numerics never reach 64-bit register arithmetic; only compiler-owned
-        // bookkeeping does, so its overflow is a toolchain defect.
-        Fault::RegisterIntegerOverflow => {
-            return TestFailure::new(
-                FailureKind::NumericFault,
-                format!(
-                    "a compiler-owned 64-bit register operation overflowed (ABI fault {})",
                     fault.tag()
                 ),
             )

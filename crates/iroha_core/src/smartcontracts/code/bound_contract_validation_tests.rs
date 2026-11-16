@@ -540,17 +540,20 @@ fn bound_contract_validation_and_elections_invocation_diagnostic() {
     }
     let mut block = state.block(default_header(2));
     let transaction = block.transaction();
-    let mut program = ivm::ProgramMetadata {
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
-    }
-    .encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = ivm::IVM::new(GAS_LIMIT);
-    vm.load_program(&program).expect("load no-op guest");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load no-op guest");
     // A reused VM models the existing runtime checkout; each invocation still
     // creates and hydrates a fresh host against the same pinned transaction.
     let mut invoke = |cached: bool| {

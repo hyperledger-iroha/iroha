@@ -1612,7 +1612,7 @@
     }
    ],
    "sites": [
-    ["crates/iroha_core/src/executor.rs", "node_policy_read", "pipeline.ivm_max_cycles_upper_bound", 1],
+    ["crates/iroha_core/src/executor.rs", "node_policy_read", "pipeline.ivm_max_cycles_upper_bound", 2],
     ["crates/iroha_core/src/executor.rs", "node_policy_read", "pipeline.quarantine_tx_max_gas", 1],
     ["crates/iroha_core/src/executor_execution_effects.rs", "node_policy_read", "pipeline.overlay_max_bytes", 1],
     ["crates/iroha_core/src/executor_execution_effects.rs", "node_policy_read", "pipeline.overlay_max_instructions", 1],

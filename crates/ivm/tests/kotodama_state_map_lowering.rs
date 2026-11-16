@@ -25,7 +25,7 @@ fn kotodama_state_map_set_writes_corehost_state() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile");
     let mut vm = IVM::new(u64::MAX);
@@ -56,7 +56,7 @@ fn kotodama_nested_struct_map_roundtrip() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile nested map state");
     let mut vm = IVM::new(u64::MAX);
@@ -119,7 +119,7 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile durable loop");
     let mut wsv = MockWorldStateView::new();

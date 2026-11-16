@@ -24,8 +24,13 @@ pub fn analyze_verified_artifact_with_memory_budget(
         .borrow_admitted_program(bytes)
         .map_err(ProgramAnalysisError::Metadata)?;
     let stream = ValidatedInstructions::new(source.code()).map_err(ProgramAnalysisError::Decode)?;
-    aggregate::analyze(source.metadata().clone(), || stream.iter(), Some(budget))
-        .map_err(ProgramAnalysisError::Decode)
+    aggregate::analyze(
+        verified.profile.engine(),
+        source.metadata().clone(),
+        || stream.iter(),
+        Some(budget),
+    )
+    .map_err(ProgramAnalysisError::Decode)
 }
 
 #[cfg(test)]
@@ -34,7 +39,7 @@ mod tests {
     use crate::{VMError, analysis::analyze_program_with_memory_budget};
 
     fn actual() -> (Vec<u8>, VerifiedContractArtifact) {
-        let bytes = kotodama_lang::compiler::Compiler::new()
+        let bytes = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku VerifiedAnalysis { state int count; hajimari() { count = 0; } view fn main() authorize(anyone) -> int { return count; } }",
             )

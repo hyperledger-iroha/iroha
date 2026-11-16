@@ -14,7 +14,7 @@ use ivm_abi::state_value::StateValueKindV1;
 use kotodama_lang::compiler::Compiler;
 
 fn compile(source: &str) -> Vec<u8> {
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("compile canonical typed state contract")
 }

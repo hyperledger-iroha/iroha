@@ -621,7 +621,7 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
             ty: ivm::EmbeddedStateType::Bool,
         }],
     );
-    let code_offset = ivm::ProgramMetadata::parse(&program)
+    let code_offset = crate::ivm_test_support::parse_declared(&program)
         .expect("parse program")
         .code_offset;
     let instruction_gas = program[code_offset..]
@@ -663,8 +663,11 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
             let base_before = host.durable_state_base.clone();
             let overlay_before = host.durable_state_overlay.clone();
             let mut vm = IVM::new(limit);
-            vm.load_program(&program)
-                .expect("load actual authenticated read program");
+            vm.load_program_for_profile(
+                &program,
+                crate::ivm_test_support::declared_profile(&program),
+            )
+            .expect("load actual authenticated read program");
             let path_ptr = store_state_path_tlv(&mut vm, &path);
             vm.set_register(14, path_ptr);
             vm.set_register(15, 0xfeed);

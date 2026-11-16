@@ -11,7 +11,10 @@ fn every_fixed_register_path_matches_canonical_tree_and_authenticates_its_origin
         registers.set(index, (index as u64).wrapping_mul(0x0102_0304_0506_0708));
         registers.set_tag(index, index % 3 == 0);
     }
-    let digests = super::super::register_leaf_digests(&registers.gpr, &registers.tags);
+    let digests = super::super::register_leaf_digests(
+        super::super::narrow(&registers.gpr),
+        super::super::narrow(&registers.tags),
+    );
     let canonical = MerkleTree::from_hashed_leaves_sha256(digests);
     for (index, digest) in digests.into_iter().enumerate() {
         let (root, path) = registers.merkle_root_and_path(index).unwrap();

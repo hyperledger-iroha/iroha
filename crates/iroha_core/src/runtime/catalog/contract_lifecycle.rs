@@ -30,7 +30,12 @@ impl ReleaseCatalog {
                 abi_hash: ivm::syscalls::compute_abi_hash(
                     ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
                 ),
-                metering: ivm::gas::schedule_hash().into(),
+                // The lifecycle policy runs on the C10 engine and is priced by its schedule.
+                metering: ivm::gas::schedule_hash_for(
+                    ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
+                        .engine(),
+                )
+                .into(),
             },
         ))?;
         for (services, lifecycle) in self.runtime_lifecycle_compositions.clone() {

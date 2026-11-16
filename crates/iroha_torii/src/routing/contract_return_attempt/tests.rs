@@ -19,7 +19,12 @@ fn completed_return() -> (IVM, AllocationBudget, EntrypointValueTypeV1) {
             "seiyaku ReturnAttempt { view fn main() authorize(anyone) -> bool { true } }",
         )
         .unwrap();
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.select_entrypoint("main").unwrap();
     let schema = vm
         .contract_interface()

@@ -5,7 +5,7 @@ use crate::session::{CompileOutput, CompileRequest, CompilerSession};
 pub(super) fn compile(source: &str, scalar: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: Some("frame_emission.ko"),
@@ -72,12 +72,27 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
         let mut scalar = Vec::new();
         let scalar_fixups = LiteralFixups::default();
         with_scalar_frame_emission(|| {
-            emit_saved_registers(&mut scalar, &scalar_fixups, &registers, base, restore)
+            emit_saved_registers(
+                Isa::C10,
+                &mut scalar,
+                &scalar_fixups,
+                &registers,
+                base,
+                restore,
+            )
         })
         .unwrap();
         let mut windows = Vec::new();
         let window_fixups = LiteralFixups::default();
-        emit_saved_registers(&mut windows, &window_fixups, &registers, base, restore).unwrap();
+        emit_saved_registers(
+            Isa::C10,
+            &mut windows,
+            &window_fixups,
+            &registers,
+            base,
+            restore,
+        )
+        .unwrap();
         let opcode = if restore {
             instruction::wide::memory::LOAD64
         } else {
@@ -145,12 +160,12 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
         let mut scalar = Vec::new();
         let a = LiteralFixups::default();
         with_scalar_frame_emission(|| {
-            emit_saved_registers(&mut scalar, &a, &registers[..3], base, false)
+            emit_saved_registers(Isa::C10, &mut scalar, &a, &registers[..3], base, false)
         })
         .unwrap();
         let mut ordinary = Vec::new();
         let b = LiteralFixups::default();
-        emit_saved_registers(&mut ordinary, &b, &registers[..3], base, false).unwrap();
+        emit_saved_registers(Isa::C10, &mut ordinary, &b, &registers[..3], base, false).unwrap();
         assert_eq!(scalar, ordinary);
         assert_eq!(*a.borrow(), *b.borrow());
     }
@@ -164,7 +179,9 @@ fn saved_slot_overflow_and_reserved_scratch_aliases_refuse_before_emission() {
     for (registers, base) in cases {
         let mut code = Vec::new();
         let fixups = LiteralFixups::default();
-        assert!(emit_saved_registers(&mut code, &fixups, registers, base, false).is_err());
+        assert!(
+            emit_saved_registers(Isa::C10, &mut code, &fixups, registers, base, false).is_err()
+        );
         assert!(code.is_empty());
         assert!(fixups.borrow().is_empty());
     }

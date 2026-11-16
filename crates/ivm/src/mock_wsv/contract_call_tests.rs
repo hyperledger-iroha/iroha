@@ -5,7 +5,7 @@ use iroha_data_model::smart_contract::{ContractLifecycleControlV1, manifest::Ent
 use ivm_abi::contract_call::ContractCallBindingV1;
 
 fn install(host: &mut WsvHost, nonce: u64, source: &str) -> ContractAddress {
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(source)
         .unwrap();
     let hash = crate::contract_code_hash(&artifact);
@@ -309,7 +309,7 @@ fn mock_replacement_checks_owner_revision_schema_and_real_migration_state() {
     );
     let revision = host.wsv.contract_instances[&address].lifecycle.revision;
     let previous_hash = host.contract_fixture(&address).unwrap().code_hash();
-    let replacement = kotodama_lang::compiler::Compiler::new()
+    let replacement = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             r#"seiyaku Upgrade {
         state StateMap<int,bool> Values;
@@ -350,7 +350,7 @@ fn mock_replacement_checks_owner_revision_schema_and_real_migration_state() {
         "seiyaku Upgrade { view fn main() authorize(anyone) -> bool { true } }",
         "seiyaku Upgrade { state StateMap<int,bool> Values; state bool initialized; hajimari() { initialized = true; } view fn main() authorize(anyone) -> bool { initialized } }",
     ] {
-        let artifact = kotodama_lang::compiler::Compiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(source)
             .unwrap();
         assert!(matches!(

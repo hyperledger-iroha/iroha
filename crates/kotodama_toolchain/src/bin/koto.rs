@@ -1093,9 +1093,18 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         })
         .transpose()?;
     let mut compiler_options = CompilerOptions::default();
-    compiler_options.host_policy = match host_profile.as_str() {
-        "iroha.ivm.runtime_lifecycle.v1" => ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-        "abi-v1" => ivm::SyscallPolicy::AbiV1,
+    // `abi-v1` builds for the engine the interface policy runs (the frozen baseline); the
+    // runtime-lifecycle profile exists only on the C10 engine.
+    // TODO: phase 5 names C10's own ABI V1 surface as a separate host profile here.
+    (compiler_options.host_policy, compiler_options.engine) = match host_profile.as_str() {
+        "iroha.ivm.runtime_lifecycle.v1" => (
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+            ivm::IvmEngine::C10,
+        ),
+        "abi-v1" => (
+            ivm::SyscallPolicy::AbiV1,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1).engine(),
+        ),
         _ => unreachable!("clap validates the exact named host profile"),
     };
     if let Some(zk_trace_cycles) = zk_trace_cycles {
@@ -1404,9 +1413,10 @@ fn document(args: DocArgs) -> Result<(), KotoError> {
     let output = driver
         .compile_project(graph, &source_name)
         .map_err(|error| build_error(DiagnosticFormat::Human, error))?;
-    let verified = ivm::verify_contract_artifact(&output.artifact).map_err(|error| {
-        KotoError::Internal(format!("documentation artifact failed admission: {error}"))
-    })?;
+    let verified =
+        ivm::verify_contract_artifact_with_declared_profile(&output.artifact).map_err(|error| {
+            KotoError::Internal(format!("documentation artifact failed admission: {error}"))
+        })?;
     let private_input_entrypoints = verified.private_input_entrypoints();
     let rendered = match format {
         DocFormat::Json => {
@@ -3289,7 +3299,8 @@ mod tests {
         std::fs::write(&source_path, "seiyaku Counter { state int total; state int added; hajimari() { total = 0; added = 0; } kaizen() { added = 1; } view fn read() authorize(anyone) -> int { total + added } }").unwrap();
         build(args()).expect("compatible upgrade with explicit migration obligation");
         let published = std::fs::read(&output).unwrap();
-        ivm::verify_contract_artifact(&published).expect("complete replacement artifact");
+        ivm::verify_contract_artifact_with_declared_profile(&published)
+            .expect("complete replacement artifact");
         std::fs::write(&previous_path, b"not an artifact").unwrap();
         let error = build(args()).expect_err("base artifact must pass admission");
         assert!(

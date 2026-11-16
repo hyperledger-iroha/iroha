@@ -2,6 +2,7 @@
 
 use super::super::static_state_literals::TestLiterals;
 use super::*;
+use crate::instruction::wide;
 
 fn decoded(numbers: &[u32]) -> Vec<DecodedOp> {
     numbers
@@ -30,8 +31,12 @@ fn sorted_unique_output_preserves_text_hex_wildcards_and_shared_final_owner() {
     };
     let literals = literals();
     let budget = AllocationBudget::new(1024 * 1024);
-    let mut scratch =
-        KeyScratch::new(&decoded(&[READ, READ, WRITE, WRITE, SCAN, READ]), &budget).unwrap();
+    let mut scratch = KeyScratch::new(
+        crate::IvmEngine::C10,
+        &decoded(&[READ, READ, WRITE, WRITE, SCAN, READ]),
+        &budget,
+    )
+    .unwrap();
     let records = [
         (StaticStatePath::Literal(0), READ),
         (
@@ -106,7 +111,7 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
     )
     .unwrap();
     let make = || {
-        let mut scratch = KeyScratch::new(&code, &budget).unwrap();
+        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
         scratch.record(0, key, &literals).unwrap();
         scratch
     };
@@ -128,10 +133,10 @@ fn exact_output_admission_refuses_before_any_destination_and_retries() {
     assert_eq!(budget.reserved_bytes(), 0);
     let zero = AllocationBudget::new(0);
     assert!(matches!(
-        KeyScratch::new(&code, &zero),
+        KeyScratch::new(crate::IvmEngine::C10, &code, &zero),
         Err(VMError::AllocationDeferred(_))
     ));
-    let empty = KeyScratch::new(&[], &zero)
+    let empty = KeyScratch::new(crate::IvmEngine::C10, &[], &zero)
         .unwrap()
         .finish(&literals, &zero)
         .unwrap();
@@ -144,7 +149,7 @@ fn first_site_key_remains_after_ambiguity_and_different_exact_key_is_rejected() 
     let literals = literals();
     let budget = AllocationBudget::new(1024 * 1024);
     let read = crate::syscalls::SYSCALL_STATE_GET;
-    let mut scratch = KeyScratch::new(&decoded(&[read]), &budget).unwrap();
+    let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &decoded(&[read]), &budget).unwrap();
     let original = Descriptor::new(StaticStatePath::Literal(0), read, &literals).unwrap();
     scratch.record(0, original, &literals).unwrap();
     // Distinct provenance with the same logical text is the same output key.
@@ -191,7 +196,7 @@ fn zero_retention_and_each_partial_output_failure_reclaim_only_original_pool() {
     let code = decoded(&[read]);
     let key = Descriptor::new(StaticStatePath::Literal(0), read, &literals).unwrap();
     for fault in 1..=4 {
-        let mut scratch = KeyScratch::new(&code, &budget).unwrap();
+        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
         scratch.record(0, key, &literals).unwrap();
         OUTPUT_FAULT.set(fault);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -210,7 +215,7 @@ fn zero_retention_and_each_partial_output_failure_reclaim_only_original_pool() {
         assert_eq!(OUTPUT_FAULT.get(), 0);
         assert_eq!(budget.reserved_bytes(), 19);
     }
-    let mut scratch = KeyScratch::new(&code, &budget).unwrap();
+    let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
     scratch.record(0, key, &literals).unwrap();
     let (reads, writes) = scratch.finish(&literals, &budget).unwrap();
     let retained = budget.reserved_bytes();
@@ -307,9 +312,13 @@ fn diamond_and_loop_match_old_collecting_reference_with_first_key_per_site() {
             old_visits += 1;
             assert!(old_visits < 100);
             let mut facts = incoming[&index].clone();
-            if let Some(key) =
-                transfer_static_state_facts(&code[index], &literals, &mut facts, &mut expected)
-            {
+            if let Some(key) = transfer_static_state_facts(
+                crate::IvmEngine::C10,
+                &code[index],
+                &literals,
+                &mut facts,
+                &mut expected,
+            ) {
                 let text = reference_key(key, &literals);
                 reference[usize::from(key.write)].insert(text.clone());
                 let keys = by_site.entry(code[index].pc).or_default();
@@ -336,7 +345,7 @@ fn diamond_and_loop_match_old_collecting_reference_with_first_key_per_site() {
         }
         let budget = AllocationBudget::new(4 * 1024 * 1024);
         let mut workspace = Workspace::new(code.len(), &budget).unwrap();
-        let mut scratch = KeyScratch::new(&code, &budget).unwrap();
+        let mut scratch = KeyScratch::new(crate::IvmEngine::C10, &code, &budget).unwrap();
         let mut actual = StaticStateAccessAnalysis {
             complete: true,
             ..Default::default()
@@ -346,9 +355,13 @@ fn diamond_and_loop_match_old_collecting_reference_with_first_key_per_site() {
         while let Some((index, mut facts)) = workspace.pop() {
             visits += 1;
             assert!(visits < 100);
-            if let Some(key) =
-                transfer_static_state_facts(&code[index], &literals, &mut facts, &mut actual)
-            {
+            if let Some(key) = transfer_static_state_facts(
+                crate::IvmEngine::C10,
+                &code[index],
+                &literals,
+                &mut facts,
+                &mut actual,
+            ) {
                 scratch.record(code[index].pc, key, &literals).unwrap();
             }
             for next in EDGES[index] {

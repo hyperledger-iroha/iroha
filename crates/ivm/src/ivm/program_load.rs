@@ -2,24 +2,64 @@
 
 use super::*;
 
-/// Prepare the canonical image, installing it only when a VM was supplied.
-/// Validation-only callers retire the same admitted image without mutable VM storage.
+/// Prepare a C10 image under the explicit [`IvmProfileId::C10_ABI_V1`] profile, installing it
+/// only when a VM was supplied. Validation-only callers retire the same admitted image without
+/// mutable VM storage. Root-owned callers prepare under their resolved profile instead.
 pub(super) fn prepare(program: &[u8], destination: Option<&mut IVM>) -> Result<(), VMError> {
-    prepare_for_policy(program, destination, SyscallPolicy::AbiV1)
+    prepare_for_profile(program, destination, IvmProfileId::C10_ABI_V1)
 }
 
 /// Named-profile admission selected by the caller, retained through installation.
+/// The engine of the caller's policy prepares the image; no other engine is consulted.
 pub(super) fn prepare_for_policy(
     program: &[u8],
     destination: Option<&mut IVM>,
     policy: SyscallPolicy,
 ) -> Result<(), VMError> {
+    prepare_for_profile(program, destination, IvmProfileId::of_policy(policy))
+}
+
+/// Admission under one explicitly resolved profile; its engine prepares the image.
+pub(super) fn prepare_for_profile(
+    program: &[u8],
+    destination: Option<&mut IVM>,
+    profile: IvmProfileId,
+) -> Result<(), VMError> {
+    engine::prepare(program, destination, profile)
+}
+
+/// Preparation of the consolidated (C10) engine for one of its named profiles.
+pub(super) fn prepare_c10(
+    program: &[u8],
+    destination: Option<&mut IVM>,
+    profile: IvmProfileId,
+) -> Result<(), VMError> {
+    prepare_with_engine_rules(program, destination, profile)
+}
+
+/// Preparation of the frozen baseline engine: the anchor loader, read in the 49-byte header
+/// layout, with baseline opcode validation, syscall decoding and gas pricing.
+pub(super) fn prepare_baseline(
+    program: &[u8],
+    destination: Option<&mut IVM>,
+    profile: IvmProfileId,
+) -> Result<(), VMError> {
+    prepare_with_engine_rules(program, destination, profile)
+}
+
+/// The loader sequence both engines share: fixed header, then the contract or generic image,
+/// every engine-specific rule taken from `profile`'s engine.
+fn prepare_with_engine_rules(
+    program: &[u8],
+    destination: Option<&mut IVM>,
+    profile: IvmProfileId,
+) -> Result<(), VMError> {
     let budget = destination
         .as_deref()
         .and_then(|vm| vm.memory.allocation_budget());
-    let header = ProgramMetadata::parse_header_for_policy(program, policy)?;
+    let header = ProgramMetadata::parse_header_for_profile(program, profile)?;
     if header.declares_contract_interface() {
-        let contract = prepare_contract_image(program, budget, policy)?;
+        let contract = prepare_contract_image(program, budget, profile)?;
         return destination.map_or(Ok(()), |vm| vm.load_prepared(&contract));
     }
     let image = prepare_generic_image(program, header, budget)?;
@@ -32,15 +72,15 @@ pub(super) fn prepare_for_policy(
 fn prepare_contract_image(
     program: &[u8],
     budget: Option<&AllocationBudget>,
-    policy: SyscallPolicy,
+    profile: IvmProfileId,
 ) -> Result<crate::PreparedContract, VMError> {
     match budget {
-        Some(budget) => crate::contract_artifact::prepare_contract_with_memory_budget_for_policy(
-            program, budget, policy,
+        Some(budget) => crate::contract_artifact::prepare_contract_with_memory_budget_for_profile(
+            program, budget, profile,
         ),
-        None => crate::contract_artifact::prepare_contract_for_policy(
+        None => crate::contract_artifact::prepare_contract_for_profile(
             Arc::<[u8]>::from(program),
-            policy,
+            profile,
         ),
     }
     .map_err(crate::ContractArtifactError::into_vm_error)
@@ -56,6 +96,7 @@ fn prepare_generic_image<'a>(
     budget: Option<&AllocationBudget>,
 ) -> Result<ProgramLoadImage<'a>, VMError> {
     let parsed = header.parse_sections()?;
+    let engine = parsed.profile.engine();
     let strict_return_integrity = false;
     let header_len = parsed.header_len;
     let literal_prefix = parsed.prefix_len();
@@ -87,20 +128,22 @@ fn prepare_generic_image<'a>(
             )?,
             None => crate::ivm_cache::global_get(instruction_region)?,
         };
-        validate_generic_program_syscalls(decoded.as_ref())?;
+        validate_generic_program_syscalls(decoded.as_ref(), engine)?;
         let prepared = prepare_instruction_stream(
             instruction_region,
             decoded.as_ref(),
             entry_pc,
             literal_table.entries(),
             budget,
+            engine,
         )?;
         (Some(decoded), Some(prepared))
     };
     let image = ProgramLoadImage {
         code_region,
         metadata: meta,
-        syscall_policy: parsed.syscall_policy,
+        profile: parsed.profile,
+        vector_length: parsed.vector_length,
         contract_interface: parsed.contract_interface.map(|interface| {
             let exclusively_owned = interface
                 .entrypoints
@@ -204,7 +247,7 @@ mod tests {
         let mut truncated = generic(b"LTLB");
         truncated.extend_from_slice(&1_u32.to_le_bytes());
         same_static_verdict(&truncated, false);
-        let mut contract = kotodama_lang::compiler::Compiler::new()
+        let mut contract = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku Admission { view fn main() authorize(anyone) -> bool { true } }",
             )
@@ -217,7 +260,7 @@ mod tests {
 
     #[test]
     fn static_admission_preserves_local_preparation_refusal_and_retry() {
-        let contract = kotodama_lang::compiler::Compiler::new()
+        let contract = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku Admission { view fn main() authorize(anyone) -> bool { true } }",
             )

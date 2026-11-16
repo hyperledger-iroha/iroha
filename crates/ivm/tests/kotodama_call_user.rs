@@ -11,7 +11,7 @@ fn user_defined_call_returns_42() {
             view fn main() authorize(anyone) -> int { let z = add(a: 20, b: 22); return z; }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let program = compiler.compile_source(src).expect("compile kotodama");
     let mut vm = IVM::new(10_000);
     vm.load_program(&program).expect("load program");

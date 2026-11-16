@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 pub(super) fn compile(source: &str, retain_calls: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::new(CompilerOptions::default())
+            CompilerSession::new(CompilerOptions::c10())
                 .build(CompileRequest {
                     source,
                     source_name: Some("single_use_private.ko"),

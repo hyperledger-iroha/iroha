@@ -3903,6 +3903,17 @@ def main():
         if unknown:
             parser.error(f"unknown mutation id(s): {', '.join(unknown)}")
         selected = [by_id[x] for x in wanted]
+    # A campaign never reuses an earlier campaign's evidence paths. A refused capture would
+    # otherwise truncate that run's raw build log, compiler probe and receipt before naming
+    # the conflict.
+    logs = args.target_dir / "logs"
+    prefixes = ([] if args.skip_baseline else ["baseline."]) + [f"{mu.id}." for mu in selected]
+    held = (sorted(entry.name for entry in logs.iterdir()
+                   if any(entry.name.startswith(prefix) for prefix in prefixes))
+            if logs.is_dir() else [])
+    if held:
+        parser.error(f"{logs} already holds evidence for the selected work ({len(held)} "
+                     f"entries, first {held[0]}); choose a fresh --target-dir")
     args.target_dir.mkdir(parents=True, exist_ok=True)
 
     source = {"before": None, "after": None, "errors": [],

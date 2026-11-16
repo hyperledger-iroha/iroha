@@ -390,9 +390,12 @@ pub(crate) fn register_contract(
     }
     let artifact =
         ContractArtifactId::for_address(&context.contract_address, code_hash).map_err(refused)?;
-    let expected = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(
-        ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-    ));
+    let expected = iroha_crypto::Hash::prehashed(
+        crate::smartcontracts::ivm::profile::ResolvedIvmProfile::of_policy(
+            ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
+        )
+        .abi(),
+    );
     let manifest = tx
         .world
         .contract_manifests()

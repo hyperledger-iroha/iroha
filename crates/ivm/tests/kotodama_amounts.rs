@@ -20,7 +20,7 @@ fn execute_rounded(mode: &str) -> Quantity {
         }}
         "#,
     );
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(&source)
         .expect("compile rounded quantity program");
     let metadata = ProgramMetadata::parse(&program).expect("parse rounded quantity metadata");

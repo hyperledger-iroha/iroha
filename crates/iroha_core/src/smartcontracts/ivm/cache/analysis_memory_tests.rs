@@ -33,9 +33,9 @@ fn with_syscalls(mut program: Vec<u8>) -> Vec<u8> {
         ivm::syscalls::SYSCALL_DEBUG_PRINT,
         ivm::syscalls::SYSCALL_ALLOC,
     ] {
-        program.extend_from_slice(&ivm::encoding::wide::encode_scall(number).to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::baseline_syscall(number).to_le_bytes());
     }
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     program
 }
 

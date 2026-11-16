@@ -11,10 +11,10 @@ fn private_literal_helpers_emit_the_exact_direct_literal_artifact() {
         let direct = format!(
             "seiyaku LiteralFold {{ view fn read() authorize(anyone) -> {kind} {{ let {kind} value = {value}; return value; }} }}"
         );
-        let (artifact, manifest, report) = Compiler::new()
+        let (artifact, manifest, report) = Compiler::new_c10()
             .compile_source_with_manifest_and_report(&helper)
             .expect("compile private typed helper");
-        let (direct_artifact, direct_manifest, _) = Compiler::new()
+        let (direct_artifact, direct_manifest, _) = Compiler::new_c10()
             .compile_source_with_manifest_and_report(&direct)
             .expect("compile direct typed literal");
         assert_eq!(
@@ -143,7 +143,7 @@ fn literal_candidates_exclude_attributes_parameters_and_secret_types() {
     }
     // Source validation is still authoritative; the conservative metadata guard
     // is not a new way to admit private authorization or public direct calls.
-    let error = Compiler::new().compile_source("seiyaku Invalid { permission CanInspect;  fn value() -> int authorize(CanInspect) { return 0; } view fn read() authorize(anyone) -> int { return value(); } }").expect_err("private authorization rejected before optimization");
+    let error = Compiler::new_c10().compile_source("seiyaku Invalid { permission CanInspect;  fn value() -> int authorize(CanInspect) { return 0; } view fn read() authorize(anyone) -> int { return value(); } }").expect_err("private authorization rejected before optimization");
     assert!(error.contains("only valid on"), "{error}");
 }
 
@@ -154,7 +154,7 @@ fn literal_folding_preserves_forced_zk_and_cycle_metadata() {
     let compiler = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         zk_trace_cycles: std::num::NonZeroU64::new(100_000).unwrap(),
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     let helper = compiler
         .compile_source(helper)
@@ -184,7 +184,7 @@ fn unused_folded_numeric_literal_preserves_the_codegen_rejection() {
             let TypedItem::Function(function) = item;
             function.name == "literal"
         }));
-        let compiler = Compiler::new();
+        let compiler = Compiler::new_c10();
         let mut lowered = compiler
             .lower_typed_program(typed, None)
             .expect("validated typed source");
@@ -258,7 +258,7 @@ fn canonical_dlmm_literal_folding_measures_same_compiler_artifacts_and_public_me
         include_str!("../../../../iroha_core/src/validation_fee/fixtures/dlmm_pool.ko");
     let compile = |fold| {
         crate::session::run_with_compiler_stack(|| {
-            let options = CompilerOptions::default();
+            let options = CompilerOptions::c10();
             let session = CompilerSession::new(options.clone());
             let parsed = session
                 .parse_compilation_unit(CompileRequest {

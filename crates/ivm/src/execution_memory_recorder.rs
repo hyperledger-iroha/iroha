@@ -1016,7 +1016,7 @@ mod tests {
             }],
             seiyaku_name: "DiagnosticAlignment".to_owned(),
             compiler_fingerprint: "memory-diagnostics-test".to_owned(),
-            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            abi_hash: crate::IvmProfileId::C10_ABI_V1.abi_hash(),
             features_bitmap: crate::CONTRACT_FEATURE_BIT_ZK,
             access_set_hints: None,
             kotoba: Vec::new(),

@@ -34,7 +34,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     let caller = literal_account();
     let mut wsv = MockWorldStateView::new();
@@ -70,7 +70,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     let caller = public_key_account();
     let mut wsv = MockWorldStateView::new();
@@ -105,7 +105,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     let caller = public_key_account();
     let mut wsv = MockWorldStateView::new();
@@ -134,7 +134,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     let caller = public_key_account();
     let mut wsv = MockWorldStateView::new();
@@ -159,7 +159,7 @@ fn kotodama_authority_matches_domainless_account_literal() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     let caller = literal_account();
     let wsv = MockWorldStateView::new();

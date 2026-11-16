@@ -461,12 +461,13 @@ fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
         .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))
 }
 
-/// Exact source-reproduction policy from immutable deployed code or its bound manifest.
-/// This is inspection authority only; it neither selects a runtime profile nor authorizes a call.
+/// Exact source-reproduction profile (engine and host policy) from immutable deployed code or its
+/// bound manifest. This is inspection authority only; it neither selects a runtime profile nor
+/// authorizes a call.
 pub(crate) fn verified_source_host_policy(
     world: &impl WorldReadOnly,
     artifact_id: ContractArtifactId,
-) -> Result<ivm::SyscallPolicy, Error> {
+) -> Result<ivm::IvmProfileId, Error> {
     let manifest = world.contract_manifests().get(&artifact_id);
     if let Some(bytes) = world.contract_code().get(&artifact_id) {
         let verified =
@@ -483,7 +484,7 @@ pub(crate) fn verified_source_host_policy(
                 "retained source artifact or manifest identity disagrees",
             ));
         }
-        return Ok(verified.syscall_policy);
+        return Ok(verified.profile);
     }
     if let Some(manifest) = manifest {
         if manifest.code_hash != Some(artifact_id.code_hash) {
@@ -494,19 +495,20 @@ pub(crate) fn verified_source_host_policy(
         return manifest
             .abi_hash
             .as_ref()
-            .and_then(|hash| ivm::syscalls::policy_for_abi_hash(hash.as_ref()))
+            .and_then(|hash| ivm::IvmProfileId::of_abi_hash(hash.as_ref()))
             .ok_or_else(|| {
                 conversion_error("retained source manifest names no implemented host profile")
             });
     }
-    // Existing submissions before upload explicitly compile the baseline. A named profile needs
-    // its immutable artifact or exact bound manifest first; the requested code hash selects none.
-    Ok(ivm::SyscallPolicy::AbiV1)
+    // Existing submissions before upload explicitly compile the interface profile (the frozen
+    // baseline). A named profile needs its immutable artifact or exact bound manifest first; the
+    // requested code hash selects none.
+    Ok(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1))
 }
 
 fn recorded_source_host_policy(
     record: &StoredVerifiedSourceRecord,
-) -> Result<ivm::SyscallPolicy, Error> {
+) -> Result<ivm::IvmProfileId, Error> {
     let mut hash = [0; 32];
     let encoded = record
         .abi_hash
@@ -514,7 +516,9 @@ fn recorded_source_host_policy(
         .ok_or_else(|| storage_error("stored source ABI identity is absent"))?;
     hex::decode_to_slice(encoded, &mut hash)
         .map_err(|_| storage_error("stored source ABI identity is malformed"))?;
-    ivm::syscalls::policy_for_abi_hash(&hash)
+    // The recorded ABI identity names the engine as well as the policy: the source recompiles
+    // under exactly that engine.
+    ivm::IvmProfileId::of_abi_hash(&hash)
         .ok_or_else(|| storage_error("stored source ABI identity is not implemented"))
 }
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
@@ -1638,7 +1642,7 @@ fn validate_verified_source_record(
 ) -> Result<(), Error> {
     let expected_code_hash = hash_hex(&artifact_id.code_hash);
     validate_verified_source_record_schema(record, network_id, artifact_id)?;
-    let compiled = compile_verified_source_for_policy(
+    let compiled = compile_verified_source_for_profile(
         recorded_source_host_policy(record)?,
         record.source_name.as_deref(),
         &record.source_text,
@@ -2197,7 +2201,7 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
     let byte_len = input.code_bytes.as_ref().map(|bytes| bytes.len() as u64);
     if let Some(code_bytes) = input.code_bytes.as_ref() {
         let canonical_hash = canonical_code_hash(code_bytes)?;
-        match ivm::verify_contract_artifact(code_bytes) {
+        match ivm::verify_contract_artifact_with_declared_profile(code_bytes) {
             Ok(verified) => {
                 let verified_hash = hash_hex(&canonical_hash);
                 if declared_code_hash.is_none() {
@@ -2227,7 +2231,7 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
                 }
                 abi_hash = Some(hash_hex(&verified.abi_hash));
                 compiler_fingerprint = Some(verified.contract_interface.compiler_fingerprint);
-                match ivm::analysis::analyze_program(code_bytes) {
+                match ivm::analysis::analyze_program_for_profile(code_bytes, verified.profile) {
                     Ok(value) => analysis = Some(value),
                     Err(err) => input
                         .warnings
@@ -2618,8 +2622,8 @@ fn compile_verified_source(
     packages: &[ContractSourcePackageDto],
     artifacts: &[ContractSourceArtifactDto],
 ) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
-    compile_verified_source_for_policy(
-        ivm::SyscallPolicy::AbiV1,
+    compile_verified_source_for_profile(
+        ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
         source_name,
         source_text,
         sources,
@@ -2628,8 +2632,8 @@ fn compile_verified_source(
         artifacts,
     )
 }
-fn compile_verified_source_for_policy(
-    host_policy: ivm::SyscallPolicy,
+fn compile_verified_source_for_profile(
+    profile: ivm::IvmProfileId,
     source_name: Option<&str>,
     source_text: &str,
     sources: &[ContractSourceFileDto],
@@ -2639,7 +2643,8 @@ fn compile_verified_source_for_policy(
 ) -> Result<kotodama_lang::session::CompileOutput, kotodama_lang::diagnostic::DiagnosticBundle> {
     let session =
         kotodama_lang::session::CompilerSession::new(kotodama_lang::compiler::CompilerOptions {
-            host_policy,
+            host_policy: profile.policy(),
+            engine: profile.engine(),
             ..Default::default()
         });
     if sources.is_empty() && artifacts.is_empty() && imports.is_empty() && packages.is_empty() {
@@ -2845,7 +2850,7 @@ pub fn handle_post_verified_source_job(
     artifact_id: ContractArtifactId,
     request: SubmitVerifiedContractSourceDto,
     _sorafs_node: sorafs_node::NodeHandle,
-    host_policy: ivm::SyscallPolicy,
+    host_policy: ivm::IvmProfileId,
 ) -> Result<(StatusCode, JsonBody<ContractVerifiedSourceJobResponseDto>), Error> {
     let requested_hash = artifact_id.code_hash;
     let code_hash_hex = hash_hex(&requested_hash);
@@ -2968,7 +2973,7 @@ pub fn handle_post_verified_source_job(
     };
     let compile_result = canonical_error.map_or_else(
         || {
-            compile_verified_source_for_policy(
+            compile_verified_source_for_profile(
                 host_policy,
                 source_name.as_deref(),
                 &source_text,
@@ -3309,8 +3314,8 @@ mod tests {
                 .expect("source map")
                 .contains("parts/view.ko")
         );
-        let verified =
-            ivm::verify_contract_artifact(&original.artifact).expect("verified artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&original.artifact)
+            .expect("verified artifact");
         let code_hash = hash_hex(&canonical_code_hash(&original.artifact).expect("code hash"));
         let mut record = StoredVerifiedSourceRecord {
             artifacts: Vec::new(),
@@ -4007,7 +4012,8 @@ seiyaku Display {
         dm::Grant::account_permission(enact_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant CanEnactGovernance");
-        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&code)
+            .expect("verify contract artifact");
         let code_hash = register_code_bytes(
             authority,
             contract_address.dataspace_id().expect("fixture scope"),
@@ -4221,7 +4227,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
             source_artifact(&code_hash_hex),
             request,
             node,
-            ivm::SyscallPolicy::AbiV1,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
         )
         .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -4255,7 +4261,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: "seiyaku Demo {}".to_owned(),
             },
             node,
-            ivm::SyscallPolicy::AbiV1,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
         )
         .expect("reject language alias");
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -4297,7 +4303,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: source.to_owned(),
             },
             node,
-            ivm::SyscallPolicy::AbiV1,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
         )
         .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -4333,7 +4339,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
                 source_text: source.to_owned(),
             },
             node,
-            ivm::SyscallPolicy::AbiV1,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
         )
         .expect("submit mismatch");
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -4358,8 +4364,8 @@ mod named_source_profile_tests {
     #[test]
     fn source_reproduction_uses_exact_retained_artifact_or_manifest_profile() {
         let source = "seiyaku NamedSource { view fn read() authorize(anyone) -> int { 1 } }";
-        let policy = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
-        let compiled = compile_verified_source_for_policy(
+        let policy = ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+        let compiled = compile_verified_source_for_profile(
             policy,
             Some("named.ko"),
             source,
@@ -4379,7 +4385,7 @@ mod named_source_profile_tests {
         let mut block = world.block();
         assert_eq!(
             verified_source_host_policy(&block, id).unwrap(),
-            ivm::SyscallPolicy::AbiV1
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)
         );
         block
             .contract_manifests_mut_for_testing()
@@ -4389,7 +4395,7 @@ mod named_source_profile_tests {
             .contract_code_mut_for_testing()
             .insert(id, compiled.artifact.clone());
         assert_eq!(verified_source_host_policy(&block, id).unwrap(), policy);
-        let replay = compile_verified_source_for_policy(
+        let replay = compile_verified_source_for_profile(
             policy,
             Some("named.ko"),
             source,
@@ -4420,8 +4426,8 @@ mod named_source_profile_tests {
     fn named_source_job_records_and_restores_its_original_profile_without_a_wire_change() {
         let guard = crate::test_utils::TestDataDirGuard::new();
         let source = "seiyaku NamedSource { view fn read() authorize(anyone) -> int { 1 } }";
-        let policy = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
-        let compiled = compile_verified_source_for_policy(
+        let policy = ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
+        let compiled = compile_verified_source_for_profile(
             policy,
             Some("named.ko"),
             source,

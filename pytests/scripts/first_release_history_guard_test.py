@@ -188,8 +188,8 @@ ABI_FIXTURE_JSON = "sdk/test/fixtures/artifact.json"
 
 
 def ivm_program(abi_hash: bytes, body: bytes = b"\x00" * 8) -> bytes:
-    """An IVM program image: the fixed 48-byte header ending in the ABI hash, then `body`."""
-    header = b"IVM\0" + bytes([1, 1, 0]) + (0).to_bytes(8, "little") + b"\x01"
+    """An IVM program image: the fixed 49-byte header ending in the ABI hash, then `body`."""
+    header = b"IVM\0" + bytes([1, 1, 0, 0]) + (1_000_000).to_bytes(8, "little") + b"\x01"
     return header + abi_hash + body
 
 
@@ -610,7 +610,8 @@ def test_current_inventory_declares_the_abi_cutover_and_every_carrier() -> None:
         f"demo/{name}.manifest.json"
         for name in ("authority_probe", "irohaswap", "ivm_smoke", "prediction_market")
     } | {"crates/iroha/tests/fixtures/contract_code_readback/code_readback.manifest.json"}
-    # A compiler capture is read row by row, both programs of every row.
+    # The compiler emission captures are C10 fixtures (their tests select the C10 target), so
+    # they stay regeneration targets without carrying the ABI V1 hash.
     captures = {
         f"fixtures/kotodama/{name}/native_v1.tsv"
         for name in (
@@ -621,15 +622,9 @@ def test_current_inventory_declares_the_abi_cutover_and_every_carrier() -> None:
             "private_single_use",
         )
     }
-    assert {path for path, form in forms.items() if form == "ivm_hex_rows"} == captures
-    assert {path for path in forms if path.startswith("fixtures/kotodama/")} == captures
-    rows = 0
-    for capture in sorted(captures):
-        for line in (ROOT / capture).read_text(encoding="utf-8").splitlines():
-            programs = [field for field in line.split("\t") if field.startswith("49564d00")]
-            assert len(programs) == 2, (capture, line[:40])
-            rows += 1
-    assert rows == 42
+    assert {path for path, form in forms.items() if form == "ivm_hex_rows"} == set()
+    assert captures <= {target["artifact"] for target in surface["regenerate"]}
+    assert not captures & set(forms)
     # The JS fixture states the hash as a base64 program, in its manifest and in its semantics.
     assert forms["javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json"] == [
         "hex",
@@ -640,15 +635,22 @@ def test_current_inventory_declares_the_abi_cutover_and_every_carrier() -> None:
     retired_readback = "crates/iroha/tests/fixtures/contract_code_readback/provenance.json"
     assert retired_readback not in forms
     assert not (ROOT / retired_readback).exists()
-    # Every program of the artifact map carries the declared hash in its header.
+    # Every program of the artifact map's carrier owners carries the declared hash in its
+    # header; the predecoder rows are C10 fixtures of the explicitly selected C10 profile.
+    artifact_map = next(
+        target for target in surface["regenerate"] if target["artifact"] == "scripts/ivm_artifacts.tsv"
+    )
+    assert artifact_map["carrier_owners"] == ["default", "kotodama-standard", "kotodama-zk"]
     raw = bytes.fromhex(declaration["abi_hash"])
     rows = [
         line.split("\t")
         for line in (ROOT / "scripts/ivm_artifacts.tsv").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     ]
-    assert len(rows) >= 60
-    assert all(GUARD.ivm_program_abi_hash((ROOT / row[2]).read_bytes()) == raw for row in rows)
+    carriers = [row for row in rows if row[0] in artifact_map["carrier_owners"]]
+    assert len(carriers) == 59
+    assert {row[0] for row in rows} - set(artifact_map["carrier_owners"]) == {"predecoder"}
+    assert all(GUARD.ivm_program_abi_hash((ROOT / row[2]).read_bytes()) == raw for row in carriers)
 
 
 def test_current_inventory_retired_the_headerless_block_decoder() -> None:
@@ -1747,6 +1749,56 @@ def test_every_base64_program_of_a_fixture_is_read(tree: Path) -> None:
     assert GUARD.check(tree) == ()
     write(tree, ABI_FIXTURE_JSON, with_second(stale))
     assert_single(GUARD.check(tree), ABI_FIXTURE_JSON, "base64 IVM program header does not carry")
+
+
+def test_artifact_map_carrier_owners_exclude_other_engine_rows(tree: Path) -> None:
+    other_engine = "demo/other_engine.to"
+    write(tree, other_engine, ivm_program(OTHER_ABI_RAW))
+    write(tree, ABI_MAP_TSV, ABI_MAP + f"predecoder\t0\t{other_engine}\n")
+    # Without `carrier_owners` every row of the map carries the declared hash.
+    assert_single(GUARD.check(tree), other_engine, "IVM program header does not carry")
+    owners = lambda names: lambda data: data["incompatible_change_surfaces"][2]["regenerate"][
+        5
+    ].update(carrier_owners=names)
+    edit_inventory(tree, owners(["contract", "default"]))
+    assert GUARD.check(tree) == ()
+    # A carrier owner's stale row still fails, and every listed owner must own a row.
+    write(tree, ABI_SAMPLE_TO, ivm_program(OTHER_ABI_RAW))
+    assert_single(GUARD.check(tree), ABI_SAMPLE_TO, "IVM program header does not carry")
+    write(tree, ABI_SAMPLE_TO, ivm_program(ABI_RAW))
+    edit_inventory(tree, owners(["contract", "default", "kotodama-zk"]))
+    assert_single(GUARD.check(tree), ABI_MAP_TSV, "carrier owner `kotodama-zk` owns no row")
+
+
+@pytest.mark.parametrize("carrier_owners", [[], "default", ["default", "default"], ["default", ""], [3]])
+def test_malformed_carrier_owners_fail(tree: Path, carrier_owners) -> None:
+    edit_inventory(
+        tree,
+        lambda data: data["incompatible_change_surfaces"][2]["regenerate"][5].update(
+            carrier_owners=carrier_owners
+        ),
+    )
+    assert_single(GUARD.check(tree), ABI_MAP_TSV, "`carrier_owners` is a non-empty list")
+
+
+def test_carrier_owners_belong_to_an_artifact_map(tree: Path) -> None:
+    edit_inventory(
+        tree,
+        lambda data: data["incompatible_change_surfaces"][2]["regenerate"][6].update(
+            carrier_owners=["default"]
+        ),
+    )
+    assert_single(GUARD.check(tree), ABI_CAPTURE_TSV, "`carrier_owners` is a non-empty list")
+
+
+def test_carrier_owners_of_reads_a_list_of_distinct_owner_names() -> None:
+    assert GUARD.carrier_owners_of({}) == ()
+    assert GUARD.carrier_owners_of({"carrier_owners": ["default", "kotodama-zk"]}) == (
+        "default",
+        "kotodama-zk",
+    )
+    for malformed in ([], "default", ["a", "a"], ["a", ""], [3], {"a": 1}):
+        assert GUARD.carrier_owners_of({"carrier_owners": malformed}) is None, malformed
 
 
 def test_carrier_forms_accept_one_form_or_a_list_of_distinct_forms() -> None:

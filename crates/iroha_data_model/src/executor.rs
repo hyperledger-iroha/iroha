@@ -9,8 +9,9 @@ pub use self::model::*;
 pub use self::model::{
     ArtifactAbiHashMismatchInfo, ContractRejection, DecodedCodeSizeLimitInfo,
     DecodedInstructionLimitInfo, Executor, ExecutorDataModel, IvmAdmissionError,
-    ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
-    UnsupportedVersionInfo, ValidationFail,
+    ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
+    MaxCyclesExceedsUpperBoundInfo, UnsupportedVersionInfo, ValidationFail,
+    VectorLengthTooLargeInfo,
 };
 use crate::transaction::executable::IvmBytecode;
 use iroha_data_model_derive::model;
@@ -220,7 +221,7 @@ mod model {
     #[norito(tag = "kind", content = "content")]
     #[repr(u32)]
     pub enum IvmAdmissionError {
-        /// ZK-mode IVM bytecode omits its non-zero `max_cycles` trace bound
+        /// IVM bytecode omits a non-zero `max_cycles` header field
         #[codec(index = 0)]
         MissingMaxCycles,
         /// Unsupported IVM version
@@ -235,41 +236,44 @@ mod model {
         /// Program targets an ABI version that is not active under runtime governance
         #[codec(index = 4)]
         AbiVersionNotActive(u8),
-        /// ZK trace bound `max_cycles` exceeds the node upper bound
+        /// Vector length too large
         #[codec(index = 5)]
-        MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo),
-        /// Non-ZK IVM bytecode declares a `max_cycles` trace bound: {0}
+        VectorLengthTooLarge(VectorLengthTooLargeInfo),
+        /// `max_cycles` exceeds upper bound
         #[codec(index = 6)]
-        MaxCyclesWithoutZk(u64),
-        /// Decoded instruction count exceeds admission limit
+        MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo),
+        /// `max_cycles` exceeds configured fuel limit
         #[codec(index = 7)]
+        MaxCyclesExceedsFuel(MaxCyclesExceedsFuelInfo),
+        /// Decoded instruction count exceeds admission limit
+        #[codec(index = 8)]
         DecodedInstructionCountExceeded(DecodedInstructionLimitInfo),
         /// Decoded byte length exceeds admission limit
-        #[codec(index = 8)]
+        #[codec(index = 9)]
         DecodedCodeSizeExceeded(DecodedCodeSizeLimitInfo),
         /// Kotodama bytecode decode failed: {0}
-        #[codec(index = 9)]
+        #[codec(index = 10)]
         BytecodeDecodingFailed(String),
         /// Manifest `code_hash` mismatch
-        #[codec(index = 10)]
+        #[codec(index = 11)]
         ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo),
         /// Manifest `abi_hash` mismatch with node policy
-        #[codec(index = 11)]
+        #[codec(index = 12)]
         ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo),
         /// Contract manifest omits the required `code_hash`
-        #[codec(index = 12)]
+        #[codec(index = 13)]
         ManifestCodeHashMissing,
         /// Contract manifest omits the required `abi_hash`
-        #[codec(index = 13)]
+        #[codec(index = 14)]
         ManifestAbiHashMissing,
         /// Transaction `contract_manifest` metadata is malformed
-        #[codec(index = 14)]
+        #[codec(index = 15)]
         ManifestMalformed,
         /// Artifact-carried ABI hash does not match the runtime descriptor
-        #[codec(index = 15)]
+        #[codec(index = 16)]
         ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo),
         /// Generic IVM program invokes a contract-bound syscall
-        #[codec(index = 16)]
+        #[codec(index = 17)]
         GenericSyscallNotAllowed(u32),
     }
     /// Unsupported IVM version details
@@ -292,6 +296,26 @@ mod model {
         /// Minor version
         pub minor: u8,
     }
+    /// Vector length limit violation details
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+    )]
+    pub struct VectorLengthTooLargeInfo {
+        /// Provided vector length
+        pub vector_length: u8,
+        /// Maximum allowed
+        pub max_allowed: u8,
+    }
     /// Max cycles limit violation details
     #[derive(
         Debug,
@@ -307,10 +331,30 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     pub struct MaxCyclesExceedsUpperBoundInfo {
-        /// Header `max_cycles` ZK trace bound
+        /// Header `max_cycles` value
         pub max_cycles: u64,
         /// Upper bound
         pub upper_bound: u64,
+    }
+    /// Fuel limit violation details
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+    )]
+    pub struct MaxCyclesExceedsFuelInfo {
+        /// Header `max_cycles` value
+        pub max_cycles: u64,
+        /// Configured fuel limit
+        pub fuel_limit: u64,
     }
     /// Decoded instruction count violation details
     #[derive(
@@ -596,53 +640,66 @@ mod tests {
             (IvmAdmissionError::UnsupportedAbiVersion(2), 3),
             (IvmAdmissionError::AbiVersionNotActive(2), 4),
             (
+                IvmAdmissionError::VectorLengthTooLarge(VectorLengthTooLargeInfo {
+                    vector_length: 65,
+                    max_allowed: 64,
+                }),
+                5,
+            ),
+            (
                 IvmAdmissionError::MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo {
                     max_cycles: 2,
                     upper_bound: 1,
                 }),
-                5,
+                6,
             ),
-            (IvmAdmissionError::MaxCyclesWithoutZk(7), 6),
+            (
+                IvmAdmissionError::MaxCyclesExceedsFuel(MaxCyclesExceedsFuelInfo {
+                    max_cycles: 2,
+                    fuel_limit: 1,
+                }),
+                7,
+            ),
             (
                 IvmAdmissionError::DecodedInstructionCountExceeded(DecodedInstructionLimitInfo {
                     decoded_instructions: 2,
                     limit: 1,
                 }),
-                7,
+                8,
             ),
             (
                 IvmAdmissionError::DecodedCodeSizeExceeded(DecodedCodeSizeLimitInfo {
                     decoded_bytes: 2,
                     limit: 1,
                 }),
-                8,
+                9,
             ),
-            (IvmAdmissionError::BytecodeDecodingFailed("bad".into()), 9),
+            (IvmAdmissionError::BytecodeDecodingFailed("bad".into()), 10),
             (
                 IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
                     expected: hash,
                     actual: hash,
                 }),
-                10,
+                11,
             ),
             (
                 IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
                     expected: hash,
                     actual: hash,
                 }),
-                11,
+                12,
             ),
-            (IvmAdmissionError::ManifestCodeHashMissing, 12),
-            (IvmAdmissionError::ManifestAbiHashMissing, 13),
-            (IvmAdmissionError::ManifestMalformed, 14),
+            (IvmAdmissionError::ManifestCodeHashMissing, 13),
+            (IvmAdmissionError::ManifestAbiHashMissing, 14),
+            (IvmAdmissionError::ManifestMalformed, 15),
             (
                 IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                     expected: hash,
                     actual: hash,
                 }),
-                15,
+                16,
             ),
-            (IvmAdmissionError::GenericSyscallNotAllowed(0x47), 16),
+            (IvmAdmissionError::GenericSyscallNotAllowed(0x47), 17),
         ];
         for (error, expected_tag) in cases {
             let encoded = error.encode();
@@ -657,7 +714,7 @@ mod tests {
                 error
             );
         }
-        let unknown = 17_u32.encode();
+        let unknown = 18_u32.encode();
         assert!(
             IvmAdmissionError::decode_all(&mut unknown.as_slice()).is_err(),
             "unknown admission error tags must fail closed"

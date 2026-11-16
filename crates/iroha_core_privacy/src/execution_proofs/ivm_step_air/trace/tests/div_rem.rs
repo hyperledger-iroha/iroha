@@ -57,10 +57,10 @@ pub(super) fn attempted(
         DiagnosticStepOutcome::Trapped(VmTrapKind::NumericFault) => {
             assert!(matches!(
                 actual,
-                Err(ivm::VMError::NumericFault(
-                    ivm::numeric::NumericFaultV1::DivisionByZero
-                        | ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
-                ))
+                Err(
+                    ivm::VMError::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero)
+                        | ivm::VMError::RegisterIntegerOverflow
+                )
             ));
             SegmentOutcome::NumericFault
         }

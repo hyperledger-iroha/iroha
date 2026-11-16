@@ -296,9 +296,14 @@ pub(super) fn parallel_state_decode(syscall: u32, argument_count: usize) -> bool
     syscall == syscalls::SYSCALL_STATE_VALUE_DECODE && argument_count == 2 && !retain_scalar()
 }
 /// A self-copy changes no architectural value or public tag.
-pub(super) fn emit_move(code: &mut Vec<u8>, destination: u8, source: u8) -> Result<(), String> {
+pub(super) fn emit_move(
+    isa: Isa,
+    code: &mut Vec<u8>,
+    destination: u8,
+    source: u8,
+) -> Result<(), String> {
     if destination != source || retain_scalar() {
-        push_word(code, encode_addi(destination, source, 0)?);
+        push_word(code, isa.encode_addi(destination, source, 0)?);
     }
     Ok(())
 }

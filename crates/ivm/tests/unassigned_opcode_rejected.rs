@@ -37,11 +37,11 @@ fn unassigned_crypto_slots_report_their_opcode_byte_on_both_paths() {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
         let (admission, runtime) = admission_and_runtime_rejections(word);
         assert!(
-            matches!(admission, VMError::InvalidOpcode(actual) if actual == opcode),
+            matches!(admission, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
             "admission reported {admission:?} for unassigned opcode 0x{opcode:02x}"
         );
         assert!(
-            matches!(runtime, VMError::InvalidOpcode(actual) if actual == opcode),
+            matches!(runtime, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
             "execution reported {runtime:?} for unassigned opcode 0x{opcode:02x}"
         );
     }
@@ -62,11 +62,11 @@ fn removed_opcode_bytes_are_rejected_on_both_paths() {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
         let (admission, runtime) = admission_and_runtime_rejections(word);
         assert!(
-            matches!(admission, VMError::InvalidOpcode(actual) if actual == opcode),
+            matches!(admission, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
             "admission reported {admission:?} for removed opcode 0x{opcode:02x}"
         );
         assert!(
-            matches!(runtime, VMError::InvalidOpcode(actual) if actual == opcode),
+            matches!(runtime, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
             "execution reported {runtime:?} for removed opcode 0x{opcode:02x}"
         );
     }

@@ -31,12 +31,19 @@ fn exact_funded_histogram_preserves_register_memory_and_extended_syscall_analysi
     ]);
     let budget = AllocationBudget::new(4096);
     let funded = analyze(
+        crate::IvmEngine::C10,
         ProgramMetadata::default(),
         || ops.iter().copied(),
         Some(&budget),
     )
     .unwrap();
-    let local = analyze(ProgramMetadata::default(), || ops.iter().copied(), None).unwrap();
+    let local = analyze(
+        crate::IvmEngine::C10,
+        ProgramMetadata::default(),
+        || ops.iter().copied(),
+        None,
+    )
+    .unwrap();
     assert_eq!(funded.registers, local.registers);
     assert_eq!(funded.memory, local.memory);
     assert_eq!(funded.syscalls, local.syscalls);
@@ -76,6 +83,7 @@ fn original_pool_refuses_before_second_pass_and_reclaims_on_visit_unwind() {
     let budget = AllocationBudget::new(0);
     let passes = Cell::new(0);
     let result = analyze(
+        crate::IvmEngine::C10,
         ProgramMetadata::default(),
         || {
             passes.set(passes.get() + 1);
@@ -95,6 +103,7 @@ fn original_pool_refuses_before_second_pass_and_reclaims_on_visit_unwind() {
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
             let _ = analyze(
+                crate::IvmEngine::C10,
                 ProgramMetadata::default(),
                 || {
                     passes.set(passes.get() + 1);

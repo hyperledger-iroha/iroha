@@ -52,7 +52,7 @@ fn documentation_examples() -> Vec<(&'static str, PathBuf)> {
     ]
 }
 fn kotodama_compiler() -> KotodamaCompiler {
-    KotodamaCompiler::new_with_options(CompilerOptions::default())
+    KotodamaCompiler::new_with_options(CompilerOptions::c10())
 }
 #[test]
 fn kotodama_documentation_examples_compile() {

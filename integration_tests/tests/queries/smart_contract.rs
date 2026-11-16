@@ -12,7 +12,12 @@ use std::num::NonZeroU64;
 /// Gas the caller signs for one sample invocation; the artifact derives no budget.
 const SAMPLE_GAS_LIMIT: u64 = 20_000_000;
 fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent> {
-    ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;
+    ivm::ProgramMetadata::parse_for_profile(
+        bytecode.as_ref(),
+        ivm::IvmProfileId::declared(bytecode.as_ref())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .wrap_err("parse IVM program metadata")?;
     Ok(FeePaymentIntent::authority(
         Vec::new(),
         NonZeroU64::new(SAMPLE_GAS_LIMIT),

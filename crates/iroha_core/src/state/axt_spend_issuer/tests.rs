@@ -52,8 +52,8 @@ fn fixture() -> Fixture {
             "seiyaku IssuerFixture { permission issuer_fixture_run;  kotoage fn main() authorize(issuer_fixture_run) {} }",
         )
         .expect("compile current ABI V1 artifact");
-    let invocation =
-        ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("admit current ABI V1 artifact");
+    let invocation = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program))
+        .expect("admit current ABI V1 artifact");
     let asset =
         AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1])
             .expect("canonical asset id");
@@ -648,7 +648,8 @@ fn current_issuer_rejects_changed_policy_envelope_code_and_key() {
     let other_program = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku OtherIssuerFixture { permission other_issuer_fixture_run;  kotoage fn other() authorize(other_issuer_fixture_run) {} }",
     ).unwrap();
-    let other = ivm::prepare_contract(Arc::<[u8]>::from(other_program)).unwrap();
+    let other =
+        crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(other_program)).unwrap();
     assert_eq!(
         transaction.verify_current_axt_spend_issuer_claims_v1(
             &fixture.spend,

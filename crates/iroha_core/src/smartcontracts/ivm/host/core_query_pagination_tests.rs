@@ -434,8 +434,11 @@ fn dispatched_failed_query_consumes_its_fail_closed_reserve() {
     ]
     .concat();
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_program(&code))
-        .expect("load query program");
+    vm.load_program_for_profile(
+        &build_program(&code),
+        crate::ivm_test_support::declared_profile(&build_program(&code)),
+    )
+    .expect("load query program");
     let request = QueryRequest::Continue(ForwardCursor {
         query: "ivm-cursor".to_owned(),
         cursor: nonzero!(1_u64),

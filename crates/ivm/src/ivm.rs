@@ -8,7 +8,7 @@
 //! The machine has 32 tagged registers. Hardware feature detection selects only
 //! throughput implementations of host-side helpers, behind byte-identical fallbacks.
 use crate::{
-    SyscallPolicy,
+    IvmEngine, IvmProfileId, SyscallPolicy,
     contract_return_stack::ContractReturnStack,
     decoder,
     error::{Perm, VMError, VmTrapKind},
@@ -51,7 +51,11 @@ mod native_packets;
 pub(crate) mod register_logging;
 mod trace_logging;
 pub(crate) use literal_table::{DecodedLiteral, DecodedLiteralTable, decode_literal_table};
+mod baseline;
+pub use baseline::{BaselineConstraint, VmCycleBudget};
 mod diagnostic;
+mod engine;
+pub(crate) use engine::metering_schedule_hash;
 #[cfg(test)]
 mod snapshot;
 use crate::branch_hint::unlikely;
@@ -152,8 +156,7 @@ fn isqrt_u64(mut n: u64) -> u64 {
 const DIVISION_BY_ZERO: VMError =
     VMError::NumericFault(crate::numeric::NumericFaultV1::DivisionByZero);
 /// A signed 64-bit register result outside `i64` (`i64::MIN / -1`, `ABS(i64::MIN)`).
-const REGISTER_INTEGER_OVERFLOW: VMError =
-    VMError::NumericFault(crate::numeric::NumericFaultV1::RegisterIntegerOverflow);
+const REGISTER_INTEGER_OVERFLOW: VMError = VMError::RegisterIntegerOverflow;
 fn checked_div_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     if denom == 0 {
         return Err(DIVISION_BY_ZERO);
@@ -679,7 +682,9 @@ impl From<IvmConfigBuilder> for IvmBuilder {
 pub(crate) fn validate_instruction_word(word: u32) -> Result<(), VMError> {
     match instruction::wide::validate_word(word) {
         Ok(_) => Ok(()),
-        Err(instruction::wide::WordError::InvalidOpcode(op)) => Err(VMError::InvalidOpcode(op)),
+        Err(instruction::wide::WordError::InvalidOpcode(op)) => {
+            Err(VMError::InvalidOpcode(u16::from(op)))
+        }
         Err(instruction::wide::WordError::ReservedBits) => Err(VMError::DecodeError),
     }
 }
@@ -690,16 +695,34 @@ struct PreparedOp {
     base_gas: Option<u64>,
 }
 impl PreparedOp {
-    fn from_decoded(op: &crate::ivm_cache::DecodedOp) -> Result<Self, VMError> {
+    /// Validate and price one decoded word with the rules of `engine`.
+    fn from_decoded(op: &crate::ivm_cache::DecodedOp, engine: IvmEngine) -> Result<Self, VMError> {
         if !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
             return Err(VMError::DecodeError);
         }
-        validate_instruction_word(op.inst)?;
-        Ok(Self {
-            inst: op.inst,
-            wide_op: instruction::wide::opcode(op.inst),
-            base_gas: gas::cost_of(op.inst),
-        })
+        match engine {
+            IvmEngine::C10 => {
+                validate_instruction_word(op.inst)?;
+                Ok(Self {
+                    inst: op.inst,
+                    wide_op: instruction::wide::opcode(op.inst),
+                    base_gas: gas::cost_of(op.inst),
+                })
+            }
+            // The baseline admits every assigned opcode byte and reports a rejected word by its
+            // low 16 bits; it has no reserved-bit rule.
+            IvmEngine::Baseline => {
+                let wide_op = ivm_abi::baseline::instruction::wide::opcode(op.inst);
+                if !ivm_abi::baseline::instruction::wide::is_valid_opcode(wide_op) {
+                    return Err(VMError::InvalidOpcode((op.inst & 0xFFFF) as u16));
+                }
+                Ok(Self {
+                    inst: op.inst,
+                    wide_op,
+                    base_gas: gas::baseline::cost_of(op.inst),
+                })
+            }
+        }
     }
     fn fetched(&self) -> FetchedOp {
         FetchedOp {
@@ -720,6 +743,7 @@ impl PreparedProgram {
         decoded: &[crate::ivm_cache::DecodedOp],
         instruction_len: usize,
         budget: Option<&AllocationBudget>,
+        engine: IvmEngine,
     ) -> Result<crate::cache_memory::SharedAllocation<PreparedOp>, VMError> {
         let expected_len = decoded.len().saturating_mul(WIDE_INSTRUCTION_LEN as usize);
         if instruction_len != expected_len {
@@ -729,7 +753,7 @@ impl PreparedProgram {
             if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
                 return Err(VMError::DecodeError);
             }
-            PreparedOp::from_decoded(op)
+            PreparedOp::from_decoded(op, engine)
         });
         match budget {
             Some(budget) => {
@@ -780,7 +804,9 @@ impl PreparedProgram {
         self.ops.belongs_to(budget)
     }
 }
-type PreparedProgramCacheKey = [u8; 32];
+/// Engine whose rules validated and priced the stream, and the SHA-256 of its code bytes.
+/// The same bytes prepared by two engines are distinct entries.
+type PreparedProgramCacheKey = (IvmEngine, [u8; 32]);
 struct PreparedProgramCache {
     map: HashMap<PreparedProgramCacheKey, crate::cache_memory::SharedAllocation<PreparedOp>>,
     order: VecDeque<PreparedProgramCacheKey>,
@@ -796,31 +822,32 @@ impl PreparedProgramCache {
             bytes: 0,
         }
     }
-    fn key_for(code: &[u8]) -> PreparedProgramCacheKey {
+    fn key_for(code: &[u8], engine: IvmEngine) -> PreparedProgramCacheKey {
         let mut hasher = Sha256::new();
         hasher.update(code);
         let hash = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&hash);
-        out
+        (engine, out)
     }
     fn get_or_prepare(
         &mut self,
         code: &[u8],
         decoded: &[crate::ivm_cache::DecodedOp],
+        engine: IvmEngine,
     ) -> Result<crate::cache_memory::SharedAllocation<PreparedOp>, VMError> {
         if crate::ivm_cache::cache_limits().capacity == 0
             || crate::cache_memory::memory_stats().limit_bytes == 0
         {
             self.clear_storage();
-            return PreparedProgram::prepare_ops(decoded, code.len(), None);
+            return PreparedProgram::prepare_ops(decoded, code.len(), None, engine);
         }
-        let key = Self::key_for(code);
+        let key = Self::key_for(code, engine);
         if let Some(hit) = self.map.get(&key).cloned() {
             self.touch(key);
             return Ok(hit);
         }
-        let prepared = PreparedProgram::prepare_ops(decoded, code.len(), None)?;
+        let prepared = PreparedProgram::prepare_ops(decoded, code.len(), None, engine)?;
         // Both instruction caches share one allocation-owned byte budget.
         // Evicted borrowers can keep it full; never wait for their execution.
         while !prepared.try_retain() {
@@ -926,12 +953,13 @@ pub(crate) fn validate_indexed_literal_instructions(
 }
 fn validate_generic_program_syscalls(
     decoded: &[crate::ivm_cache::DecodedOp],
+    engine: IvmEngine,
 ) -> Result<(), VMError> {
     for op in decoded {
-        if instruction::wide::opcode(op.inst) != instruction::wide::system::SCALL {
+        // The baseline also reaches syscalls through its 8-bit `SCALL` and 24-bit `SYSTEM`.
+        let Some(number) = engine.syscall_number(op.inst) else {
             continue;
-        }
-        let number = instruction::wide::syscall_number(op.inst);
+        };
         if !crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number) {
             return Err(VMError::UnknownSyscall(number));
         }
@@ -968,6 +996,7 @@ pub(crate) fn prepare_instruction_stream(
     first_pc: u64,
     literals: &[DecodedLiteral],
     budget: Option<&AllocationBudget>,
+    engine: IvmEngine,
 ) -> Result<PreparedProgram, VMError> {
     // A prepared-cache hit is keyed by code bytes, so validate the caller's
     // decoded stream against those bytes before looking up or sharing any ops.
@@ -975,19 +1004,21 @@ pub(crate) fn prepare_instruction_stream(
     validate_indexed_literal_instructions(decoded, literals)?;
     let prepared_ops = if let Some(budget) = budget {
         // Original State custody never enters the code-only global cache.
-        PreparedProgram::prepare_ops(decoded, code.len(), Some(budget))?
+        PreparedProgram::prepare_ops(decoded, code.len(), Some(budget), engine)?
     } else {
         let mut guard = prepared_program_cache()
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        guard.get_or_prepare(code, decoded)?
+        guard.get_or_prepare(code, decoded, engine)?
     };
     PreparedProgram::from_prepared_ops(prepared_ops, first_pc, code.len())
 }
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
-    syscall_policy: SyscallPolicy,
+    profile: IvmProfileId,
+    /// Logical vector length a baseline header declared; zero for C10 images.
+    vector_length: u8,
     contract_interface:
         Option<crate::cache_memory::SharedValue<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
@@ -1212,7 +1243,10 @@ pub struct IVM {
     max_vector_lanes: usize,
     max_cycles: u64,
     metadata: ProgramMetadata,
-    syscall_policy: SyscallPolicy,
+    /// Profile (engine and named policy) of the installed image.
+    profile: IvmProfileId,
+    /// Machine state only the baseline engine reads.
+    baseline: baseline::BaselineMachine,
     /// A partially installed image must never run with mismatched code and policy.
     /// Only a complete successful load can clear this quarantine; reset cannot.
     program_image_valid: bool,
@@ -1488,7 +1522,8 @@ impl IVM {
             max_vector_lanes,
             max_cycles: 0,
             metadata: ProgramMetadata::default(),
-            syscall_policy: SyscallPolicy::AbiV1,
+            profile: IvmProfileId::C10_ABI_V1,
+            baseline: baseline::BaselineMachine::default(),
             program_image_valid: true,
             code_hash: [0u8; 32],
             contract_interface: None,
@@ -1607,7 +1642,8 @@ impl IVM {
         self.program_image_valid = false;
         self.scrub_private_state()?;
         self.metadata = ProgramMetadata::default();
-        self.syscall_policy = SyscallPolicy::AbiV1;
+        self.profile = IvmProfileId::C10_ABI_V1;
+        self.baseline.install(self.profile, 0, 0);
         self.max_cycles = 0;
         self.zk_mode = false;
         // Preserve INPUT/STACK contents but reset HEAP/OUTPUT for a clean run.
@@ -1675,6 +1711,29 @@ impl IVM {
         }
         program_load::prepare(program, Some(self))
     }
+    /// Validate under one explicitly resolved profile, including the frozen baseline profile.
+    ///
+    /// # Errors
+    /// Preserves the profile engine's exact protocol rejection or local resource refusal.
+    pub fn validate_program_for_profile(
+        program: &[u8],
+        profile: IvmProfileId,
+    ) -> Result<(), VMError> {
+        program_load::prepare_for_profile(program, None, profile)
+    }
+    /// Load a program under one explicitly resolved profile, including the frozen baseline
+    /// profile ([`IvmProfileId::BASELINE_ABI_V1`]).
+    ///
+    /// # Errors
+    /// Preserves the profile engine's exact protocol rejection or local resource refusal.
+    pub fn load_program_for_profile(
+        &mut self,
+        program: &[u8],
+        profile: IvmProfileId,
+    ) -> Result<(), VMError> {
+        self.last_diagnostic = None;
+        program_load::prepare_for_profile(program, Some(self), profile)
+    }
     /// Load a program under one explicitly selected named ABI V1 host profile.
     /// Root-owned callers must derive the policy from their committed selection.
     pub fn load_program_for_policy(
@@ -1740,6 +1799,7 @@ impl IVM {
                 contract.instruction_entry_pc(),
                 literal_table.entries(),
                 Some(budget),
+                contract.profile_id().engine(),
             )?;
             (decoded, prepared)
         } else {
@@ -1751,7 +1811,8 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
-            syscall_policy: contract.syscall_policy(),
+            profile: contract.profile_id(),
+            vector_length: contract.vector_length(),
             contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table,
@@ -1788,13 +1849,19 @@ impl IVM {
         self.captured_root_tables = None;
         self.call_layouts = call_layouts;
         self.metadata = image.metadata.clone();
-        self.syscall_policy = image.syscall_policy;
+        self.profile = image.profile;
+        self.baseline
+            .install(image.profile, image.metadata.mode, image.vector_length);
         self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
         self.literal_table = image.literal_table;
-        // The header parser requires a nonzero trace bound exactly for ZK programs.
+        // The C10 header parser requires a nonzero trace bound exactly for ZK programs; a baseline
+        // ZK image without one pads to the default trace length.
         self.max_cycles = image.metadata.max_cycles;
         self.zk_mode = image.metadata.mode & crate::metadata::mode::ZK != 0;
+        if image.profile.engine() == IvmEngine::Baseline && self.zk_mode && self.max_cycles == 0 {
+            self.max_cycles = zk::MAX_CYCLES;
+        }
         // Overlay code while preserving INPUT/STACK contents that may have
         // been preloaded by the host/tests. HEAP/OUTPUT are cleared per load.
         self.predecoded = image.predecoded;
@@ -2501,7 +2568,7 @@ impl IVM {
     /// warm prepared loads and snapshots; no current-root or cache heuristic selects it.
     pub fn syscall_policy(&self) -> SyscallPolicy {
         debug_assert_eq!(self.metadata.abi_version, 1);
-        self.syscall_policy
+        self.profile.policy()
     }
     /// Reset registers, PC and cycles while preserving loaded program and host.
     ///
@@ -2553,6 +2620,7 @@ impl IVM {
         self.last_staged_syscall = None;
         self.argument_decode_prepaid_gas = None;
         self.captured_root_tables = None;
+        self.baseline.reset();
         Ok(())
     }
     /// Capture the current post-load state as a reusable execution baseline.
@@ -2701,10 +2769,12 @@ impl IVM {
             || !matches!(self.step_log.allocated_bytes(), Ok(0))
             || !matches!(self.delta_trace.allocated_bytes(), Ok(0))
             || !matches!(self.pc_trace.allocated_bytes(), Ok(0))
+            || self.baseline.constraints.capacity() != 0
         {
             return false;
         }
         self.host = None;
+        self.baseline.active_cycle_budget = None;
         self.contract_return_stack.compact_for_cache();
         let Some(log) = self.reg_log.as_ref() else {
             return false;
@@ -3164,8 +3234,13 @@ impl IVM {
         })
     }
     /// Get the Merkle root of the register file.
+    ///
+    /// A baseline image commits all 256 registers; a C10 image commits its 32.
     pub fn register_root(&self) -> [u8; 32] {
-        *self.registers.merkle_root().as_ref()
+        match self.engine() {
+            IvmEngine::C10 => *self.registers.merkle_root().as_ref(),
+            IvmEngine::Baseline => *self.registers.baseline_merkle_root().as_ref(),
+        }
     }
     pub fn trace_mode(&self) -> TraceMode {
         self.trace_mode
@@ -3560,9 +3635,8 @@ impl IVM {
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
         };
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            self.run_with_host_ref(host.as_mut(), None)
-        }));
+        let outcome =
+            std::panic::catch_unwind(AssertUnwindSafe(|| engine::run(self, host.as_mut(), None)));
         self.host = Some(host);
         match outcome {
             Ok(result) => result,
@@ -3571,7 +3645,7 @@ impl IVM {
     }
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
-        self.run_with_host_ref(host, None)
+        engine::run(self, host, None)
     }
     /// Run with a prepaid, local-only diagnostic step recorder.
     ///
@@ -3585,7 +3659,7 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.last_diagnostic = None;
         recorder.begin_run()?;
-        let result = self.run_with_host_ref(host, Some(recorder));
+        let result = engine::run(self, host, Some(recorder));
         if recorder.end().is_none() {
             recorder.finish_run(DiagnosticRunEnd {
                 state: self.diagnostic_step_state(),
@@ -3742,7 +3816,7 @@ impl IVM {
                 // The gas schedule prices exactly the admitted opcodes, so a missing
                 // price is the invalid-opcode rejection.
                 let Some(cost) = fetched.base_gas else {
-                    return Err(VMError::InvalidOpcode(wide_op));
+                    return Err(VMError::InvalidOpcode(u16::from(wide_op)));
                 };
                 if let Some(step) = pending_step.as_mut() {
                     step.priced(cost);
@@ -4637,7 +4711,7 @@ impl IVM {
                                 ins = instr,
                             );
                         }
-                        return Err(VMError::InvalidOpcode(wide_op));
+                        return Err(VMError::InvalidOpcode(u16::from(wide_op)));
                     }
                 }
             }
@@ -5794,7 +5868,7 @@ mod tests {
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "ivm-runtime-tests".to_owned(),
-            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            abi_hash: crate::IvmProfileId::C10_ABI_V1.abi_hash(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -5856,18 +5930,18 @@ mod tests {
         // Reject inconsistency both before preparation and after a valid call
         // may have warmed the code-keyed prepared cache.
         assert!(matches!(
-            prepare_instruction_stream(&code, &wrong_word, 0, &[], None),
+            prepare_instruction_stream(&code, &wrong_word, 0, &[], None, IvmEngine::C10),
             Err(VMError::DecodeError)
         ));
-        assert!(prepare_instruction_stream(&code, &valid, 0, &[], None).is_ok());
+        assert!(prepare_instruction_stream(&code, &valid, 0, &[], None, IvmEngine::C10).is_ok());
         for decoded in [&wrong_word[..], &wrong_pc[..], &[][..]] {
             assert!(matches!(
-                prepare_instruction_stream(&code, decoded, 0, &[], None),
+                prepare_instruction_stream(&code, decoded, 0, &[], None, IvmEngine::C10),
                 Err(VMError::DecodeError)
             ));
         }
         assert!(matches!(
-            prepare_instruction_stream(&code[..3], &[], 0, &[], None),
+            prepare_instruction_stream(&code[..3], &[], 0, &[], None, IvmEngine::C10),
             Err(VMError::DecodeError)
         ));
     }
@@ -6418,7 +6492,7 @@ seiyaku Demo {
   }
 }
 "#;
-        let output = kotodama_lang::session::CompilerSession::default()
+        let output = kotodama_lang::session::CompilerSession::c10()
             .build(kotodama_lang::session::CompileRequest {
                 source,
                 source_name: Some("contracts/runtime_trap.ko"),
@@ -6807,11 +6881,13 @@ mod failed_program_install_tests {
     fn compiled(policy: SyscallPolicy) -> PreparedContract {
         let bytes = Compiler::new_with_options(CompilerOptions {
             host_policy: policy,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .compile_source("seiyaku CompleteImage { view fn main() authorize(anyone) { () } }")
         .unwrap();
-        crate::prepare_contract_for_policy(Arc::<[u8]>::from(bytes), policy).unwrap()
+        let profile = IvmProfileId::of_engine_policy(crate::IvmEngine::C10, policy)
+            .expect("C10 implements every named policy");
+        crate::prepare_contract_for_profile(Arc::<[u8]>::from(bytes), profile).unwrap()
     }
 
     fn refuse_loader_memory(vm: &mut IVM) {

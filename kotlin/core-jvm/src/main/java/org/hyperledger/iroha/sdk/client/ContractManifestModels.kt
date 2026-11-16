@@ -599,8 +599,7 @@ object ContractManifestJsonParser {
         } else {
             unsignedInteger(root["features_bitmap"], maxU64, "manifest.features_bitmap")
         }
-        // ZK (bit 0) is the only Kotodama V1 capability bit.
-        check(featuresBitmap == null || featuresBitmap <= BigInteger.ONE) {
+        check(featuresBitmap == null || featuresBitmap <= BigInteger.valueOf(3)) {
             "manifest.features_bitmap contains unsupported Kotodama V1 bits"
         }
         val accessSetHints = optionalObject(root, "access_set_hints", "manifest.access_set_hints")

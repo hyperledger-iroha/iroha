@@ -5,7 +5,7 @@ use kotodama_lang::{
 };
 
 fn compile(source: &str) -> Vec<u8> {
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("compile simple contract")
 }
@@ -56,7 +56,7 @@ fn typed_constants_reject_runtime_initializers_and_invalid_literals() {
             view fn value() authorize(anyone) -> AccountId { ACTOR }
         }"#,
     ] {
-        Compiler::new()
+        Compiler::new_c10()
             .compile_source(source)
             .expect_err("constants must have valid literal inputs");
     }
@@ -193,7 +193,7 @@ fn product_updates_preserve_mutability_type_and_root_checks() {
 #[test]
 fn temporary_product_fields_cannot_be_assignment_targets() {
     let source = "seiyaku Invalid { struct Record { int count } fn make() -> Record { Record { count: 1 } } fn check() { make().count = 2; } }";
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect_err("temporary products have no mutable binding");
 }

@@ -134,7 +134,7 @@ fn malformed_literal_frames_and_opcode_kinds_remain_deterministic() {
 
 #[test]
 fn actual_artifact_admission_keeps_literal_refusal_after_metadata_succeeds() {
-    let mut artifact = kotodama_lang::compiler::Compiler::new()
+    let mut artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             "seiyaku LiteralAdmission { view fn main() authorize(anyone) -> bool { true } }",
         )

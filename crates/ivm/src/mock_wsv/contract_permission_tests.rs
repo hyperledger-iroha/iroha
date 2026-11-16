@@ -26,7 +26,7 @@ fn fixture() -> (WsvHost, IVM, ContractAddress, AccountId) {
         DataSpaceId::UNIVERSAL,
     )
     .unwrap();
-    let program = kotodama_lang::compiler::Compiler::new()
+    let program = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             "seiyaku Grants {
                 permission Member;

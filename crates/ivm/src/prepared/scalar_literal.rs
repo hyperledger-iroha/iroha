@@ -30,7 +30,7 @@ mod tests {
     const VALUES: [u64; 5] = [0, 1, i64::MAX as u64, i64::MIN as u64, u64::MAX];
 
     fn artifact() -> Vec<u8> {
-        let source = kotodama_lang::compiler::Compiler::new()
+        let source = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source("seiyaku ScalarLiterals { view fn main() authorize(anyone) {} }")
             .unwrap();
         let original = crate::prepare_contract(source.into()).unwrap();

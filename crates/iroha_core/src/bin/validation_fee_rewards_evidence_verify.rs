@@ -61,9 +61,11 @@ struct VerifiedWithContracts {
     verified_contract_artifacts: BTreeMap<String, VerifiedContractArtifact>,
 }
 fn verify_contract_bytes(bytes: &[u8], expected_code_hash: &[u8; 32]) -> Result<(), String> {
-    let authenticated_evidence = ivm::verify_contract_artifact(bytes).map_err(|error| {
-        format!("contract artifact is not deployable by this native runtime: {error}")
-    })?;
+    // Deployable means the interface profile every root runs (the frozen baseline).
+    let authenticated_evidence =
+        ivm::verify_contract_artifact_for_policy(bytes, ivm::SyscallPolicy::AbiV1).map_err(
+            |error| format!("contract artifact is not deployable by this native runtime: {error}"),
+        )?;
     if authenticated_evidence.code_hash.as_ref() != expected_code_hash {
         return Err(
             "signed contract artifact differs from the finalized governed code hash".into(),
@@ -354,7 +356,8 @@ mod tests {
         assert!(super::verify_contract_bytes(&bytes, &[0x42; 32]).is_err());
         assert!(super::verify_contract_bytes(&bytes[..4], &expected).is_err());
 
-        let parsed = ivm::ProgramMetadata::parse(&bytes).unwrap();
+        let parsed =
+            ivm::ProgramMetadata::parse_for_policy(&bytes, ivm::SyscallPolicy::AbiV1).unwrap();
         let mut interface = parsed.contract_interface.unwrap();
         let original_section = interface.encode_section();
         let section_end = parsed.header_len + original_section.len();
@@ -367,7 +370,7 @@ mod tests {
         let mut wrong_abi = bytes.clone();
         wrong_abi[parsed.header_len..section_end].copy_from_slice(&changed_section);
         assert!(
-            ivm::ProgramMetadata::parse(&wrong_abi).is_ok(),
+            ivm::ProgramMetadata::parse_for_policy(&wrong_abi, ivm::SyscallPolicy::AbiV1).is_ok(),
             "metadata parsing alone cannot authenticate the runtime ABI"
         );
         let dir = tempfile::tempdir().unwrap();

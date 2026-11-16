@@ -67,7 +67,7 @@ fn state_program(write: bool) -> Vec<u8> {
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "HostRoundtripFixture".to_owned(),
         compiler_fingerprint: "ivm-integration-tests".to_owned(),
-        abi_hash: syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),

@@ -12,7 +12,7 @@ fn nested_function_calls_work() {
             view fn main() authorize(anyone) -> int { return add_two(x: 5); }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile nested calls");
     let mut vm = IVM::new(u64::MAX);
@@ -31,7 +31,7 @@ fn multi_return_call_and_tuple_use() {
             view fn main() authorize(anyone) -> int { return sum_pair(x: 5); }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile multi-return");
     let mut vm = IVM::new(u64::MAX);

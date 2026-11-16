@@ -3,16 +3,21 @@ const BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const END: &str = "<!-- END GENERATED HEADER POLICY -->";
 fn expected_header_policy() -> String {
     let zk = ivm::ivm_mode::ZK;
+    let vector = ivm_abi::baseline::mode::VECTOR;
+    let baseline_bits = zk | vector;
     let mut table = String::new();
-    table.push_str("| Field | Policy |\n");
-    table.push_str("|---|---|\n");
-    table.push_str("| version_major | 1 |\n");
-    table.push_str("| version_minor | 1 (sole current header for every profile) |\n");
+    table.push_str("| Field | ABI V1 (baseline) | C10 profiles |\n");
+    table.push_str("|---|---|---|\n");
+    table.push_str("| version_major | 1 | 1 |\n");
+    table.push_str("| version_minor | 1 | 1 |\n");
     table.push_str(&format!(
-        "| mode (known bits) | 0x{zk:02x} (ZK=0x{zk:02x}) |\n"
+        "| mode (known bits) | 0x{baseline_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vector:02x}) | 0x{zk:02x} (ZK=0x{zk:02x}) |\n"
     ));
-    table.push_str("| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
-    table.push_str("| abi_version | 1 |\n");
+    table.push_str(
+        "| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) | absent |\n",
+    );
+    table.push_str("| max_cycles | nonzero cycle limit, bounded by fuel and the node ceiling | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
+    table.push_str("| abi_version | 1 | 1 |\n");
     format!("{BEGIN}\n{table}{END}")
 }
 fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {

@@ -131,7 +131,7 @@ fn server(
 }
 
 fn binding(address: &ContractAddress, artifact: &[u8]) -> Value {
-    let verified = ivm::verify_contract_artifact(artifact).unwrap();
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact).unwrap();
     let hash = hex::encode(verified.code_hash.as_ref());
     object([
         ("found", true.into()),

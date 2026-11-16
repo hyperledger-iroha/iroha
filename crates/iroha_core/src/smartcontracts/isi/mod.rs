@@ -1781,7 +1781,7 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -1823,17 +1823,38 @@ mod tests {
         };
         let mut code = Vec::new();
         for instruction in [
-            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ivm_abi::baseline::encoding::wide::encode_store(
+                ivm_abi::baseline::instruction::wide::memory::STORE64,
+                12,
+                0,
+                0,
+            ),
+            ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                10,
+                12,
+                0,
+            ),
+            ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                11,
+                0,
+                1,
+            ),
+            ivm_abi::baseline::encoding::wide::encode_rr(
+                ivm_abi::baseline::instruction::wide::control::JALR,
+                0,
+                1,
+                0,
+            ),
         ] {
             code.extend_from_slice(&instruction.to_le_bytes());
         }
-        let mut artifact = meta.encode();
+        let mut artifact = crate::ivm_test_support::baseline_header(meta.clone());
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&code);
-        let verified = ivm::verify_contract_artifact(&artifact).expect("valid test contract");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid test contract");
         (artifact, verified.manifest)
     }
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {

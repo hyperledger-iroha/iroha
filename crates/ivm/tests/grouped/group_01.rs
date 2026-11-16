@@ -24,6 +24,8 @@ mod arithmetic_checked_boundaries;
 mod axt_descriptor_builder;
 #[path = "../axt_host_flow.rs"]
 mod axt_host_flow;
+#[path = "../baseline_v1_differential.rs"]
+mod baseline_v1_differential;
 #[path = "../baseline_v1_fixtures.rs"]
 mod baseline_v1_fixtures;
 #[path = "../beep_test.rs"]

@@ -4,7 +4,7 @@ use ivm::{CoreHost, IVM, TraceMode};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 #[test]
 fn runtime_trace_mode_collects_pcs_and_register_deltas() {
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(
             r#"
             seiyaku TraceMode {

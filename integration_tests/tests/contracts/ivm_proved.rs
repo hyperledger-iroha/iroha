@@ -402,7 +402,11 @@ async fn run() -> Result<()> {
     let http = integration_tests::http::client();
     let artifact = counter_artifact();
     // The caller signs the gas budget; the artifact's trace bound derives none.
-    ivm::ProgramMetadata::parse(&artifact)?;
+    ivm::ProgramMetadata::parse_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )?;
     let gas_limit = 20_000_000_u64;
     let fee_payment = FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(gas_limit));
     let (address, _, height) = deploy_contract_artifact(
@@ -470,12 +474,17 @@ async fn run() -> Result<()> {
 #[test]
 fn counter_fixture_uses_real_v1_interface_and_zk_mode() -> Result<()> {
     let artifact = counter_artifact();
-    let parsed = ivm::ProgramMetadata::parse(&artifact)?;
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )?;
     ensure!(
         parsed.metadata.mode & ivm::ivm_mode::ZK != 0,
         "ZK mode missing"
     );
-    let verified = ivm::verify_contract_artifact(&artifact).map_err(|error| eyre!("{error}"))?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .map_err(|error| eyre!("{error}"))?;
     ensure!(
         verified
             .contract_interface

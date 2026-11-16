@@ -3,7 +3,7 @@ use crate::common;
 use ivm::{CoreHost, IVM};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn run_program(source: &str) -> IVM {
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile Kotodama aggregate-state fixture");
     let mut vm = IVM::new(u64::MAX);

@@ -155,8 +155,9 @@ pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
     ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
-    prepare_contract_for_policy, prepare_contract_with_memory_budget,
-    prepare_contract_with_memory_budget_for_policy, prepare_koto_test_contract,
+    prepare_contract_for_policy, prepare_contract_for_profile, prepare_contract_with_memory_budget,
+    prepare_contract_with_memory_budget_for_policy,
+    prepare_contract_with_memory_budget_for_profile, prepare_koto_test_contract,
     verify_contract_artifact, verify_contract_artifact_for_policy,
     verify_contract_artifact_with_declared_profile, verify_contract_artifact_with_memory_budget,
     verify_contract_artifact_with_memory_budget_for_policy,
@@ -195,11 +196,14 @@ pub use crate::{
         ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
         VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
     },
-    execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
+    execution_summary::{BaselineExecutionSummary, EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
-    ivm::{IVM, RuntimeTemplate, RuntimeTemplateResetError, TraceMode, set_banner_enabled},
+    ivm::{
+        BaselineConstraint, IVM, RuntimeTemplate, RuntimeTemplateResetError, TraceMode,
+        VmCycleBudget, set_banner_enabled,
+    },
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },
@@ -218,7 +222,7 @@ pub use crate::{
 };
 pub use crate::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
-    registers::{REGISTER_MERKLE_PATH_DEPTH, Registers},
+    registers::{BASELINE_REGISTER_COUNT, REGISTER_MERKLE_PATH_DEPTH, Registers},
     signature::{SignatureScheme, verify_signature},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     vector::{
@@ -252,6 +256,8 @@ pub use ivm_abi::error_types;
 pub use ivm_abi::state_cursor;
 /// Canonical schemas and records used for durable Kotodama V1 state values.
 pub use ivm_abi::state_value;
+/// Engine and compiled profile identities behind the one [`IVM`] facade.
+pub use ivm_abi::{HeaderLayout, IvmEngine, IvmProfileId};
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.

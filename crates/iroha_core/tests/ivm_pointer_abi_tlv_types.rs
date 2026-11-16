@@ -71,7 +71,12 @@ fn wrong_type_for_asset_def_rejected() {
     vm.set_register(11, Memory::INPUT_START + off_to);
     vm.set_register(12, Memory::INPUT_START + off_wrong);
     vm.set_register(13, Memory::INPUT_START + off_amount);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
@@ -109,7 +114,12 @@ fn wrong_type_for_set_account_detail_value_rejected() {
     vm.set_register(10, Memory::INPUT_START + off_acc);
     vm.set_register(11, Memory::INPUT_START + off_key);
     vm.set_register(12, Memory::INPUT_START + off_wrong);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }

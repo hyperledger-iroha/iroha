@@ -32,7 +32,12 @@ fn canonical_executor_runs_without_hidden_host_semantics() {
     const LENGTH_PREFIX_BYTES: usize = 8;
     let bytes = include_bytes!("../../../defaults/executor.to");
     let mut vm = IVM::new(0);
-    vm.load_program(bytes).unwrap();
+    vm.load_program_for_profile(
+        bytes,
+        ivm::IvmProfileId::declared(bytes)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.set_host(LoggingHost);
     let context = ExecutorContext {
         authority: ALICE_ID.clone(),

@@ -15,7 +15,7 @@ fn kotodama_set_account_detail_with_constructors() {
         }
     "#;
     // Use default compiler options (no forced VECTOR bit)
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     // Allow ample cycles so the program can mirror TLVs and perform the syscall.
     let mut vm = IVM::new(u64::MAX);

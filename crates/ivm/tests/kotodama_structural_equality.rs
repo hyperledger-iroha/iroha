@@ -5,7 +5,7 @@ use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
 
 fn run(source: &str, core_host: bool) -> (bool, u64) {
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile equality");
     let metadata = ProgramMetadata::parse(&program).expect("equality metadata");
@@ -121,7 +121,7 @@ fn compare_raw_handles(ty: &str, initialize: impl FnOnce(&mut IVM) -> (u64, u64)
     );
     let compiler = KotodamaCompiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     let (mut program, _, report) = compiler
         .compile_source_with_manifest_and_report(&source)

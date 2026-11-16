@@ -189,7 +189,7 @@ fn assert_contract_rejection(
 #[test]
 fn tides_fixture_has_bounded_real_ivm_entrypoints() -> Result<()> {
     let code = artifact()?;
-    let verified = ivm::verify_contract_artifact(&code)?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&code)?;
     ensure!(
         verified.metadata.max_cycles == 0,
         "a non-ZK fixture declares no trace bound; gas is its only budget"

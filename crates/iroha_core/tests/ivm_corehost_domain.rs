@@ -21,8 +21,12 @@ fn build_tlv<T: norito::NoritoSerialize>(type_id: u16, val: &T) -> Vec<u8> {
 fn register_and_unregister_domain_queue_instructions() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
-    vm.load_program(&ProgramMetadata::default().encode())
-        .unwrap();
+    vm.load_program_for_profile(
+        &ProgramMetadata::default().encode(),
+        ivm::IvmProfileId::declared(&ProgramMetadata::default().encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv).expect("preload input");
@@ -49,8 +53,12 @@ fn register_and_unregister_domain_queue_instructions() {
 fn transfer_domain_queues_instruction() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
-    vm.load_program(&ProgramMetadata::default().encode())
-        .unwrap();
+    vm.load_program_for_profile(
+        &ProgramMetadata::default().encode(),
+        ivm::IvmProfileId::declared(&ProgramMetadata::default().encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv_dom = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv_dom).expect("preload input");
@@ -73,8 +81,12 @@ fn transfer_domain_queues_instruction() {
 fn register_domain_rejects_wrong_type() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
-    vm.load_program(&ProgramMetadata::default().encode())
-        .unwrap();
+    vm.load_program_for_profile(
+        &ProgramMetadata::default().encode(),
+        ivm::IvmProfileId::declared(&ProgramMetadata::default().encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Use AccountId TLV where DomainId expected (type mismatch)
     let bad = build_tlv(0x0001, &ALICE_ID.clone());
     vm.memory.preload_input(0, &bad).expect("preload input");
@@ -87,8 +99,12 @@ fn register_domain_rejects_corrupted_hash() {
     use iroha_crypto::Hash;
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
-    vm.load_program(&ProgramMetadata::default().encode())
-        .unwrap();
+    vm.load_program_for_profile(
+        &ProgramMetadata::default().encode(),
+        ivm::IvmProfileId::declared(&ProgramMetadata::default().encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let did: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let payload = norito::to_bytes(&did).expect("encode domain id");
     let mut blob = Vec::new();

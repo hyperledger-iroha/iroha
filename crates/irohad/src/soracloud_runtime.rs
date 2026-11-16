@@ -111,7 +111,7 @@ use iroha_torii::sorafs::{
 };
 use ivm::{
     CoreHost, IVM, IVMHost, Memory, PointerType, PreparedArgumentRecord, PreparedContract,
-    RuntimeTemplate, VMError, prepare_contract,
+    RuntimeTemplate, VMError,
     syscalls::{
         self as ivm_syscalls, SYSCALL_SORACLOUD_APPEND_JOURNAL,
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE, SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
@@ -2102,16 +2102,21 @@ impl SoracloudPreparedRuntimeCache {
             ));
         }
         let artifact_bytes = fingerprint.bytes;
-        let prepared =
-            prepare_contract(Arc::<[u8]>::from(artifact.into_boxed_slice())).map_err(|error| {
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Internal,
-                    format!(
-                        "verify and prepare Soracloud contract artifact {}: {error}",
-                        cache_path.display()
-                    ),
-                )
-            })?;
+        // Soracloud artifacts are ABI V1 contracts: they are prepared under the interface
+        // profile (the frozen baseline engine), as the anchor's unkeyed preparation did.
+        let prepared = ivm::prepare_contract_for_policy(
+            Arc::<[u8]>::from(artifact.into_boxed_slice()),
+            ivm::SyscallPolicy::AbiV1,
+        )
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "verify and prepare Soracloud contract artifact {}: {error}",
+                    cache_path.display()
+                ),
+            )
+        })?;
         SoracloudPreparedRuntimeCounters::increment(&self.counters.contract_preparations);
         let mut vm = IVM::try_new(u64::MAX).map_err(|error| {
             SoracloudRuntimeExecutionError::new(
@@ -11364,6 +11369,7 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::GasCostOverflow => "gas_cost_overflow",
         VMError::SyscallOutOfGas { .. } => "syscall_out_of_gas",
         VMError::NumericFault(_) => "numeric_fault",
+        VMError::RegisterIntegerOverflow => "register_integer_overflow",
         VMError::PointerAbiFault(_) => "pointer_abi_fault",
         VMError::AssertionFailed => "assertion_failed",
         VMError::ContractAbort { .. } => "contract_abort",
@@ -11374,9 +11380,13 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::UnsupportedProgramAbiVersion { .. } => "unsupported_program_abi_version",
         VMError::MissingMaxCycles => "missing_max_cycles",
         VMError::MaxCyclesWithoutZk { .. } => "max_cycles_without_zk",
+        VMError::ProgramVectorLengthTooLarge { .. } => "program_vector_length_too_large",
         VMError::ArtifactAbiHashMismatch { .. } => "artifact_abi_hash_mismatch",
         VMError::GenericSyscallNotAllowed { .. } => "generic_syscall_not_allowed",
+        VMError::InvalidVectorLength { .. } => "invalid_vector_length",
         VMError::MissingHalt => "missing_halt",
+        VMError::VectorExtensionDisabled => "vector_disabled",
+        VMError::ZkExtensionDisabled => "zk_disabled",
         VMError::NullifierAlreadyUsed => "nullifier_used",
         VMError::PermissionDenied => "permission_denied",
         VMError::PrivacyViolation => "privacy_violation",

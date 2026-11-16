@@ -84,8 +84,8 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
-    let verified =
-        ivm::verify_contract_artifact(&artifact).expect("canonical manifest test contract");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("canonical manifest test contract");
     (artifact, verified.manifest)
 }
 fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {

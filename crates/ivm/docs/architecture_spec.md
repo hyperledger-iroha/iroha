@@ -12,15 +12,19 @@ This document describes the first-release implementation. ABI version 1 is the o
 - Program loading validates metadata, instruction boundaries, opcodes, indexed literals, syscall
   policy, and the terminating HALT before execution.
 - Compact 16-bit and mixed-width instruction streams are rejected.
-- The only mode bit is ZK. Unknown bits are invalid metadata. The header's `max_cycles` field is the
-  ZK trace bound: nonzero exactly when the ZK bit is set. Gas, supplied by the caller, is the only
-  execution budget.
-- 32 registers; five-bit register fields; signed 14-bit immediates, displacements and branch offsets;
-  signed 19-bit `JAL` and 24-bit `JMP`/`JALS` word offsets; one 24-bit `SCALL`; reserved operand bits
-  must be zero.
-- ABI v1 admits 58 opcodes (scalar arithmetic, 64-bit memory, typed literals, control flow and
-  host calls). Hashing and signature verification are syscalls; no opcode performs a
-  cryptographic or field primitive.
+- Two engines share this format, each selected by an authenticated profile
+  ([profiles record](../../../specs/runtime/ivm_baseline_and_c10_profiles.md)). ABI V1 as every root
+  selects it runs the frozen baseline engine: a 49-byte header whose mode bits are ZK and VECTOR
+  (unknown bits are invalid metadata) and whose positive `max_cycles` is the invocation's cycle
+  budget; 256 registers; 8-bit `SCALL` plus the 24-bit `SYSTEM`/`SCALLX` form; 90 opcodes including
+  vector, cryptographic and zero-knowledge ones ([opcodes](opcodes.md)).
+- The C10 profile (the runtime lifecycle profile now, its own ABI V1 addition in phase 5) has a
+  48-byte header whose only mode bit is ZK and whose `max_cycles` field is the ZK trace bound,
+  nonzero exactly when the ZK bit is set; gas, supplied by the caller, is its only execution budget.
+  It has 32 registers; five-bit register fields; signed 14-bit immediates, displacements and branch
+  offsets; signed 19-bit `JAL` and 24-bit `JMP`/`JALS` word offsets; one 24-bit `SCALL`; reserved
+  operand bits must be zero. It admits 58 opcodes (scalar arithmetic, 64-bit memory, typed
+  literals, control flow and host calls); hashing and signature verification are syscalls.
 - Prepared programs cache validated decode results. The execution loop consumes the canonical
   prepared representation directly; there is no compatibility decoder or alternate interpreter.
 
@@ -106,15 +110,19 @@ funding, configuration-reload pool custody and notification-safe cache release.
 The contract interpreter is a single sequential fetch-decode-execute loop. This keeps trap
 precedence, gas exhaustion, privacy checks, and proof traces in exact program order.
 
-Each opcode has one fixed ABI-v1 gas price, and only the terminating HALT is free. Cryptographic
-and staged syscall work is charged before bounded parsing or expensive host work. Hardware
-selection and block scheduling are never consensus-metered. Gas is the only execution budget: the
-caller supplies it (transaction limit within the remaining block budget) and a nested invocation
-draws from its parent's remaining gas. No header field converts into gas.
+Each opcode has one gas rule in its engine's schedule ([gas model](../../../specs/gas_model.md)).
+Cryptographic and staged syscall work is charged before bounded parsing or expensive host work.
+Hardware selection and block scheduling are never consensus-metered.
 
-The header `max_cycles` field is the ZK trace bound only: a ZK run traps `ExceededMaxCycles` when
-its cycles reach it and pads a successful trace to exactly that length (one gas per padded cycle).
-Ordinary execution has no cycle bound. Branches always charge their fixed instruction cost;
+Under the baseline engine (ABI V1) the header `max_cycles` is required, bounded by the available
+fuel and the committed ceiling, and converted into the invocation's gas limit; vector costs scale
+with the declared logical vector length, and nested calls share the parent's cycle allowance.
+Under the C10 profile gas is the only execution budget: the caller supplies it (transaction limit
+within the remaining block budget) and a nested invocation draws from its parent's remaining gas;
+no header field converts into gas, only the terminating HALT is free, and the header `max_cycles`
+field is the ZK trace bound only: a ZK run traps `ExceededMaxCycles` when its cycles reach it and
+pads a successful trace to exactly that length (one gas per padded cycle). Ordinary C10 execution
+has no cycle bound. Branches always charge their fixed instruction cost;
 execution history and predictor state cannot affect the result.
 
 ## Zero-knowledge mode
@@ -129,9 +137,10 @@ release gates remain open in the [completion record](../../../specs/kotodama_ivm
 
 ## Hardware acceleration
 
-The instruction set has no vector or cryptographic opcodes. Scalar, SIMD, Metal and CUDA
-implementations exist only behind host-side helpers (Merkle hashing, syscall primitives, proof
-tooling) and must return byte-for-byte identical outputs. Runtime feature detection selects only a
+The baseline engine's VECTOR mode enables logical vector opcodes, whose lane count is part of
+program metadata and capped by ABI policy; the C10 instruction set has no vector or cryptographic
+opcodes. Scalar, SIMD, Metal and CUDA implementations, whether behind opcodes or host-side helpers
+(Merkle hashing, syscall primitives, proof tooling), must return byte-for-byte identical outputs. Runtime feature detection selects only a
 throughput implementation; a deterministic scalar fallback remains authoritative.
 
 Optional acceleration can fail closed or fall back without changing opcodes, gas, traps, register

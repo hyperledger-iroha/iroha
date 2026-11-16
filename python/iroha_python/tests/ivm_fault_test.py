@@ -18,20 +18,21 @@ def fault():
     }
 
 
-# `IvmFaultKindV1` in codec-index order (0..=27).
+# `IvmFaultKindV1` in codec-index order (0..=29).
 FAULT_KINDS = (
     "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
     "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow", "Numeric",
-    "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt",
-    "NullifierAlreadyUsed", "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid",
-    "AbiTypeNotAllowed", "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded",
-    "ReentrantCall", "CallDepthExceeded", "ControlFlowViolation",
+    "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength",
+    "MissingHalt", "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed",
+    "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+    "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
+    "CallDepthExceeded",
 )
-# `NumericFaultV1` in ABI tag order (1..=14).
+# `NumericFaultV1` in ABI tag order (1..=13).
 NUMERIC_FAULTS = (
     "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
     "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
-    "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+    "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot",
 )
 # `PointerAbiFaultV1` in ABI tag order (1..=11).
 POINTER_ABI_FAULTS = (
@@ -41,8 +42,8 @@ POINTER_ABI_FAULTS = (
 
 
 def test_closed_fault_catalog_has_the_current_codec_cardinality():
-    assert len(FAULT_KINDS) == 28
-    assert len(NUMERIC_FAULTS) == 14
+    assert len(FAULT_KINDS) == 30
+    assert len(NUMERIC_FAULTS) == 13
     assert len(POINTER_ABI_FAULTS) == 11
 
 
@@ -62,14 +63,13 @@ def test_every_current_fault_category_and_subtype_is_accepted(kind):
 @pytest.mark.parametrize(
     "kind",
     [
-        {"kind": "InvalidVectorLength", "value": None},
-        {"kind": "VectorExtensionDisabled", "value": None},
-        {"kind": "ZkExtensionDisabled", "value": None},
-        {"kind": "Numeric", "value": {"kind": "ControlFlowViolation", "value": None}},
-        {"kind": "PointerAbi", "value": {"kind": "RegisterIntegerOverflow", "value": None}},
-        {"kind": "ControlFlowViolation", "value": {"kind": "DivisionByZero", "value": None}},
+        {"kind": "ControlFlowViolation", "value": None},
+        {"kind": "Numeric", "value": {"kind": "RegisterIntegerOverflow", "value": None}},
+        {"kind": "Numeric", "value": {"kind": "MissingHalt", "value": None}},
+        {"kind": "PointerAbi", "value": {"kind": "DivisionByZero", "value": None}},
+        {"kind": "InvalidVectorLength", "value": {"kind": "DivisionByZero", "value": None}},
     ],
-    ids=["InvalidVectorLength", "VectorExtensionDisabled", "ZkExtensionDisabled", "numeric-cross", "pointer-cross", "unit-payload"],
+    ids=["ControlFlowViolation", "RegisterIntegerOverflow", "numeric-cross", "pointer-cross", "unit-payload"],
 )
 def test_retired_or_cross_category_fault_tags_are_rejected(kind):
     value = fault()

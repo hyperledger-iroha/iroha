@@ -8,7 +8,7 @@ fn fixture() -> (tempfile::TempDir, Inputs, Vec<u8>) {
         code_file: directory.path().join("contract.to"),
         out: directory.path().join("manifest.json"),
     };
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             "seiyaku Admission { view fn inspect() authorize(anyone) -> int { return 7; } }",
         )
@@ -172,7 +172,7 @@ fn named_profile_publication_uses_its_exact_manifest_and_refuses_unknown_identit
     let mut artifact = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             host_policy: ivm_abi::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..kotodama_lang::compiler::CompilerOptions::c10()
         },
     )
     .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")

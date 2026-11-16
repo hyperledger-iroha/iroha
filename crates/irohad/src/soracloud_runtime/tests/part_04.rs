@@ -2832,7 +2832,12 @@ fn durable_inrou_egress_gc_retains_current_and_ahead_reporters() -> Result<()> {
 fn soracloud_canonical_argument_tables_preserve_full_width_context_and_reject_unknown_fields()
 -> Result<()> {
     let artifact = soracloud_update_artifact(&["update"]);
-    let contract = prepare_contract(Arc::from(artifact))?;
+    let contract = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(artifact);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }?;
     let body = ivm::pointer_abi::encode_tlv(PointerType::Blob, b"exact request body")?;
     let mut vm = IVM::new(u64::MAX);
     vm.load_prepared(&contract)?;
@@ -2880,7 +2885,12 @@ fn soracloud_canonical_argument_tables_preserve_full_width_context_and_reject_un
         ),
         soracloud_unit_return_words(),
     )]);
-    let unknown = prepare_contract(Arc::from(unknown))?;
+    let unknown = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(unknown);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }?;
     let mut denied = IVM::new(u64::MAX);
     denied.load_prepared(&unknown)?;
     assert!(matches!(
@@ -2911,7 +2921,12 @@ fn soracloud_completed_result_tables_reject_raw_registers_and_corrupt_unit_words
         .expect_err("raw r10 without protected completion is not a response");
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Internal);
     let artifact = simple_soracloud_contract_artifact(&["unit"]);
-    let contract = prepare_contract(Arc::from(artifact))?;
+    let contract = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(artifact);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }?;
     let mut vm = IVM::new(u64::MAX);
     vm.load_prepared(&contract)?;
     vm.select_entrypoint("unit")?;

@@ -15,7 +15,9 @@ const LITERAL_BENCH_SIZE: usize = 512;
 fn kotodama_program() -> Vec<u8> {
     let src =
         "seiyaku Add { view fn add(int a, int b) authorize(anyone) -> int { return a + b; } }";
-    Compiler::new().compile_source(src).expect("compile failed")
+    Compiler::new_c10()
+        .compile_source(src)
+        .expect("compile failed")
 }
 fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
     let parsed = ProgramMetadata::parse(program).expect("parse Kotodama metadata");
@@ -457,7 +459,7 @@ fn bounded_list_runtime_source(manual: bool) -> String {
     )
 }
 fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile bounded List runtime benchmark");
     let pc = entrypoint_pc(&code, "main");
@@ -704,7 +706,7 @@ fn bench_quantity_arithmetic(c: &mut Criterion) {
 }
 fn bench_literal_heavy_compile(c: &mut Criterion) {
     let src = literal_heavy_source(LITERAL_BENCH_SIZE);
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     c.bench_function("kotodama_phase_codegen_end_to_end", |b| {
         b.iter(|| {
             let bytes = compiler

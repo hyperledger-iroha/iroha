@@ -17321,7 +17321,7 @@ mod tests {
     #[test]
     fn public_parameters_reject_keyword_fields_before_abi_lowering() {
         let source = "seiyaku Boundary { view fn read(Name permission) authorize(anyone) -> Name { permission } }";
-        let diagnostics = crate::session::CompilerSession::default()
+        let diagnostics = crate::session::CompilerSession::c10()
             .check(crate::session::CompileRequest {
                 source,
                 source_name: Some("boundary.ko"),
@@ -17533,7 +17533,7 @@ mod tests {
     /// Check `source` and return the first semantic diagnostic's message, help
     /// and primary-span text.
     fn first_checked_diagnostic(source: &str) -> (String, Option<String>, Option<String>) {
-        let diagnostics = crate::session::CompilerSession::default()
+        let diagnostics = crate::session::CompilerSession::c10()
             .check(crate::session::CompileRequest {
                 source,
                 source_name: Some("probe.ko"),

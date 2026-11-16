@@ -11,8 +11,23 @@ use ivm_abi::{
     },
     pointer_abi::{PointerType, validate_tlv_bytes},
 };
-use ivm_artifact_admission::verify_contract_artifact;
+use ivm_artifact_admission::{
+    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact_for_policy,
+};
 use std::ops::Range;
+/// Shared admission of the interface profile (ABI V1, the frozen baseline engine), under which
+/// every current artifact here is compiled.
+fn verify_contract_artifact(
+    artifact: &[u8],
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_for_policy(artifact, SyscallPolicy::AbiV1)
+}
+/// Parse a fixture header and sections under the interface profile.
+fn parse_interface(
+    artifact: &[u8],
+) -> Result<ivm_abi::metadata::ParsedProgramMetadata, ivm_abi::VMError> {
+    ProgramMetadata::parse_for_policy(artifact, SyscallPolicy::AbiV1)
+}
 const CURRENT_FIXTURE: &str =
     include_str!("../../../javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json");
 const INTEGER_FIXTURE: &[u8] =
@@ -77,7 +92,7 @@ fn rewrite_interface(
     artifact: &[u8],
     mutate: impl FnOnce(&mut EmbeddedContractInterfaceV1),
 ) -> Vec<u8> {
-    let parsed = ProgramMetadata::parse(artifact).expect("parse contract fixture metadata");
+    let parsed = parse_interface(artifact).expect("parse contract fixture metadata");
     let section_start = parsed.header_len;
     assert_eq!(
         artifact.get(section_start..section_start + 4),
@@ -129,7 +144,7 @@ fn numeric_fixtures() -> [(&'static str, &'static [u8], PointerType); 3] {
     ]
 }
 fn pointer_literal_range(artifact: &[u8], expected_type: PointerType) -> Range<usize> {
-    let parsed = ProgramMetadata::parse(artifact).expect("parse numeric contract fixture");
+    let parsed = parse_interface(artifact).expect("parse numeric contract fixture");
     let section = parsed
         .literal_section
         .expect("numeric contract fixture carries LTLB");
@@ -257,14 +272,14 @@ fn foreign_vm_modules_cannot_enter_native_ivm_admission() {
 }
 
 #[test]
-fn host_private_syscall_is_rejected() {
+fn host_private_system_syscall_is_rejected() {
     let fixture = current_fixture();
     let mut mutated = fixture.artifact;
-    // Canonical SCALL encoding for host-private syscall 0x00fe0000.
+    // Canonical wide SYSTEM encoding for host-private syscall 0x00fe0000.
     mutated[fixture.code_offset..fixture.code_offset + 4]
-        .copy_from_slice(&ivm_abi::encoding::wide::encode_scall(0x00fe_0000).to_le_bytes());
+        .copy_from_slice(&[0x00, 0x00, 0xfe, 0x62]);
     let error = verify_contract_artifact(&mutated)
-        .expect_err("host-private syscall must fail shared admission");
+        .expect_err("host-private SYSTEM syscall must fail shared admission");
     assert!(error.to_string().contains("disallowed syscall 0xfe0000"));
 }
 
@@ -361,8 +376,9 @@ fn unassigned_exact_json_getter_syscalls_are_rejected() {
             "reserved exact-number gap {number:#08x} must stay outside ABI V1"
         );
         let mut mutated = fixture.artifact.clone();
-        mutated[fixture.code_offset..fixture.code_offset + 4]
-            .copy_from_slice(&ivm_abi::encoding::wide::encode_scall(number).to_le_bytes());
+        mutated[fixture.code_offset..fixture.code_offset + 4].copy_from_slice(
+            &ivm_abi::baseline::encoding::wide::encode_syscallx(number).to_le_bytes(),
+        );
         let error = verify_contract_artifact(&mutated)
             .expect_err("reserved exact-number syscall must fail shared admission");
         assert!(

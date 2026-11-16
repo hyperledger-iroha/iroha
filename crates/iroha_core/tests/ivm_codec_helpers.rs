@@ -43,8 +43,12 @@ fn bytes_key_record(payload: &[u8]) -> Vec<u8> {
     norito::encode_canonical(&record).expect("encode canonical key record")
 }
 fn load_metadata(vm: &mut IVM) {
-    vm.load_program(&ProgramMetadata::default().encode())
-        .expect("load metadata");
+    vm.load_program_for_profile(
+        &ProgramMetadata::default().encode(),
+        ivm::IvmProfileId::declared(&ProgramMetadata::default().encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load metadata");
     assert_eq!(vm.abi_version(), 1, "default metadata should set ABI v1");
     assert!(
         ivm::syscalls::is_syscall_allowed(vm.syscall_policy(), syscalls::SYSCALL_JSON_ENCODE),
@@ -105,8 +109,12 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
-    vm.load_program(&artifact)
-        .expect("load schema-bound StateMap metadata");
+    vm.load_program_for_profile(
+        &artifact,
+        ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load schema-bound StateMap metadata");
 }
 #[test]
 fn json_encode_decode_roundtrip() {

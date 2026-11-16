@@ -417,6 +417,14 @@ impl CompilerSession {
     pub const fn host_policy(&self) -> crate::SyscallPolicy {
         self.options.host_policy
     }
+    /// Execution profile of this session's deployable output: the selected engine's profile of
+    /// the selected host policy.
+    ///
+    /// # Errors
+    /// The baseline engine implements only the ABI V1 host profile.
+    pub fn target_profile(&self) -> Result<crate::IvmProfileId, String> {
+        self.options.target_profile()
+    }
     /// Enter the exact account-literal network selected by this session.
     ///
     /// Build drivers call this inside worker threads because thread-local
@@ -438,12 +446,23 @@ impl CompilerSession {
             &self.options.chain_discriminant.to_le_bytes(),
             &[mode],
         ]);
-        match self.options.host_policy {
+        let policy = match self.options.host_policy {
             crate::SyscallPolicy::AbiV1 => baseline,
             crate::SyscallPolicy::AbiV1RuntimeLifecycle => iroha_crypto::Hash::new_from_chunks(&[
                 b"kotodama-compiler-named-host-policy-v1\0",
                 baseline.as_ref(),
                 &crate::syscalls::compute_abi_hash(self.options.host_policy),
+            ]),
+        };
+        // The baseline engine emits different bytes for the same source, and its header carries
+        // the cycle ceiling; neither may share a cache entry with a C10 build.
+        match self.options.engine {
+            crate::IvmEngine::C10 => policy,
+            crate::IvmEngine::Baseline => iroha_crypto::Hash::new_from_chunks(&[
+                b"kotodama-compiler-baseline-engine-v1\0",
+                policy.as_ref(),
+                &self.options.baseline_max_cycles.get().to_le_bytes(),
+                &crate::IvmProfileId::BASELINE_ABI_V1.abi_hash(),
             ]),
         }
     }
@@ -1512,6 +1531,14 @@ impl Default for CompilerSession {
         Self::new(CompilerOptions::default())
     }
 }
+impl CompilerSession {
+    /// A session with the default options and the explicit C10 target
+    /// ([`CompilerOptions::c10`]).
+    #[must_use]
+    pub fn c10() -> Self {
+        Self::new(CompilerOptions::c10())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1523,7 +1550,7 @@ mod tests {
             source,
             source_name: Some("cfg.ko"),
         };
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let warnings = session
             .check_with_lint_config(request, &LintConfig::new())
             .expect("warnings do not fail by default");
@@ -1654,7 +1681,7 @@ mod tests {
     }
     #[test]
     fn session_returns_structured_success_and_failure() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let output = session
             .build(CompileRequest {
                 source: "seiyaku Demo { view fn ping() authorize(anyone) -> int { return 1; } }",
@@ -1705,7 +1732,7 @@ mod tests {
         );
         let taira = CompilerSession::new(CompilerOptions {
             chain_discriminant: 369,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         taira
             .build(CompileRequest {
@@ -1715,7 +1742,7 @@ mod tests {
             .expect("the exact Taira I105 literal must compile under discriminant 369");
         let sora = CompilerSession::new(CompilerOptions {
             chain_discriminant: 753,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         let diagnostics = sora
             .build(CompileRequest {
@@ -1747,7 +1774,7 @@ mod tests {
     #[test]
     fn contextual_retired_type_words_remain_valid_value_and_entrypoint_names() {
         let source = "seiyaku ValueNames { view fn amount(quantity money) authorize(anyone) -> quantity { let quantity number = money; return number; } }";
-        let output = CompilerSession::default()
+        let output = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("value-names.ko"),
@@ -1760,7 +1787,7 @@ mod tests {
             .expect("deployable seiyaku manifest entrypoints");
         assert_eq!(entrypoints.len(), 1);
         assert_eq!(entrypoints[0].name, "amount");
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .check(CompileRequest {
                 source: "module RetiredType { struct Amount { int value; } }",
                 source_name: Some("retired-type.ko"),
@@ -1773,7 +1800,7 @@ mod tests {
     }
     #[test]
     fn retired_type_words_are_rejected_as_source_unit_identities() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let contract_diagnostics = session
             .build(CompileRequest {
                 source: "seiyaku Amount { view fn run() authorize(anyone) {} }",
@@ -1806,7 +1833,7 @@ mod tests {
             source: &source,
             source_name: Some("deep.ko"),
         };
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         session
             .check(request)
             .expect("the inclusive frontend nesting boundary must be stack-safe");
@@ -1830,7 +1857,7 @@ mod tests {
             .name("kotodama-direct-compiler-stack-margin".to_owned())
             .stack_size(COMPILER_STACK_BYTES / 2)
             .spawn(|| {
-                let session = CompilerSession::default();
+                let session = CompilerSession::c10();
                 let valid = boundary_contract("0");
                 session
                     .check_inner(CompileRequest {
@@ -1930,7 +1957,7 @@ mod tests {
             .name("kotodama-small-compiler-caller".to_owned())
             .stack_size(128 * 1024)
             .spawn(move || {
-                let session = CompilerSession::default();
+                let session = CompilerSession::c10();
                 session
                     .check(CompileRequest {
                         source: &source,
@@ -1976,7 +2003,7 @@ mod tests {
     #[test]
     fn session_rejects_oversized_input_before_constructing_a_source_database() {
         let source = " ".repeat(MAX_SOURCE_BYTES + 1);
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source: &source,
                 source_name: Some("oversized.ko"),
@@ -1996,7 +2023,7 @@ mod tests {
     }
     #[test]
     fn session_accepts_aggregate_arguments_beyond_the_retired_register_limit() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for source in [
             source_fixture(include_str!("session/fixtures/wide_call.ko")),
             source_fixture(include_str!("session/fixtures/nested_wide_call.ko")),
@@ -2017,7 +2044,7 @@ mod tests {
     }
     #[test]
     fn modules_can_be_checked_but_never_emitted_directly() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let request = CompileRequest {
             source: "module Math { fn add(int left, int right) -> int { return left + right; } }",
             source_name: Some("math.ko"),
@@ -2032,7 +2059,7 @@ mod tests {
     }
     #[test]
     fn check_and_build_return_identical_resolution_records_for_contracts_and_modules() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for source in [
             source_fixture(include_str!("session/fixtures/broken_contract.ko")),
             source_fixture(include_str!("session/fixtures/broken_module.ko")),
@@ -2087,7 +2114,7 @@ mod tests {
     #[test]
     fn resolution_failures_are_collected_with_stable_source_spans() {
         let source = "seiyaku Broken {\nfn first() -> int { return missing_first; }\nfn second() -> int { return missing_second; }\n}";
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("multi-error.ko"),
@@ -2111,7 +2138,7 @@ mod tests {
                 expected_name
             );
         }
-        let repeated = CompilerSession::default()
+        let repeated = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("multi-error.ko"),
@@ -2122,7 +2149,7 @@ mod tests {
     #[test]
     fn compiler_session_preserves_explicit_semantic_code_and_plain_message() {
         let source = "seiyaku Broken { fn missing_context() { let values = []; } }";
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .check(CompileRequest {
                 source,
                 source_name: Some("explicit-semantic-code.ko"),
@@ -2150,7 +2177,7 @@ mod tests {
     fn secret_signature_and_state_rejections_have_exact_type_spans() {
         let session = CompilerSession::new(CompilerOptions {
             force_zk: true,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         for (source, code) in [
             (
@@ -2193,7 +2220,7 @@ mod tests {
     #[test]
     fn v1_retired_and_unsafe_diagnostics_have_exact_ranges_and_safe_fixes() {
         fn reject(source: &str) -> DiagnosticBundle {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .check(CompileRequest {
                     source,
                     source_name: Some("v1-diagnostic.ko"),
@@ -2384,7 +2411,7 @@ mod tests {
     #[test]
     fn parser_recovers_independent_items_into_one_spanned_bundle() {
         let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("parse-errors.ko"),
@@ -2416,7 +2443,7 @@ mod tests {
     #[test]
     fn parser_spans_cover_the_complete_unexpected_token() {
         let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("token-spans.ko"),
@@ -2444,7 +2471,7 @@ mod tests {
             ("init", "seiyaku Demo { init() {} }"),
             ("upgrade", "seiyaku Demo { upgrade() {} }"),
         ] {
-            let diagnostics = CompilerSession::default()
+            let diagnostics = CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: Some("alias.ko"),
@@ -2461,7 +2488,7 @@ mod tests {
             assert_eq!(span.end.column, start + retired.len(), "{retired}");
         }
         let unicode_source = "seiyaku Demo { fn 利用者() {} }";
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source: unicode_source,
                 source_name: Some("unicode.ko"),
@@ -2500,7 +2527,7 @@ mod tests {
     #[test]
     fn invalid_escape_reports_the_full_literal_span() {
         let source = r#"module Escape { fn invalid() { let string value = "\q"; } }"#;
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("escape.ko"),
@@ -2517,7 +2544,7 @@ mod tests {
     }
     #[test]
     fn state_initialization_diagnostics_retain_actionable_spans() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for (source, code, expected_primary) in [
             (
                 "seiyaku Missing { state int value; view fn read() authorize(anyone) -> int { return value; } }",
@@ -2570,7 +2597,7 @@ mod tests {
             .expect("write source fixture");
         }
         source.push_str("}\n");
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build(CompileRequest {
                 source: &source,
                 source_name: Some("fanout.ko"),
@@ -2600,10 +2627,10 @@ mod tests {
     }
     #[test]
     fn production_rejects_every_local_test_declaration_with_exact_spans() {
-        let production = CompilerSession::default();
+        let production = CompilerSession::c10();
         let test_mode = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         for (source, expected_span) in [
             (
@@ -2649,7 +2676,7 @@ mod tests {
             source,
             source_name: Some("test-helper.ko"),
         };
-        let production = CompilerSession::default();
+        let production = CompilerSession::c10();
         for diagnostics in [
             production
                 .check(request)
@@ -2668,7 +2695,7 @@ mod tests {
         }
         let test_options = CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         };
         CompilerSession::new(test_options.clone())
             .build(request)
@@ -2690,13 +2717,13 @@ mod tests {
             source_name: "suite.ko".to_owned(),
             source: source.to_owned(),
         };
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .build_test_sources(&target, &[])
             .expect_err("production sessions must not expose the local test build path");
         assert_eq!(diagnostics.diagnostics[0].code, "E_TEST_ONLY_PRODUCTION");
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[])
         .expect("explicit test-mode suite build");
@@ -2758,7 +2785,7 @@ mod tests {
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[])
         .expect("valid compiler intrinsics must survive the production projection");
@@ -2808,7 +2835,7 @@ mod tests {
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[])
         .expect("compile pure unit-test suite");
@@ -2830,7 +2857,7 @@ mod tests {
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[])
         .expect("lowered list intrinsics must survive runtime projection");
@@ -2847,7 +2874,7 @@ mod tests {
         };
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[])
         .expect("lowered sum-type intrinsics must survive runtime projection");
@@ -2872,7 +2899,7 @@ mod tests {
         };
         let session = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         let forward = session
             .build_test_sources(&target, &[first.clone(), second.clone()])
@@ -2970,7 +2997,7 @@ mod tests {
         };
         let diagnostics = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .build_test_sources(&target, &[first, alias])
         .expect_err("normalized aliases must not receive distinct SourceIds");
@@ -2978,7 +3005,7 @@ mod tests {
     }
     #[test]
     fn session_enforces_presence_aware_state_map_reads() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for (source, expected_code) in [
             (
                 "seiyaku InvalidIndex { state StateMap<int, int> values; view fn read() authorize(anyone) -> int { return values[1]; } }",
@@ -3025,7 +3052,7 @@ mod tests {
     }
     #[test]
     fn session_rejects_singleton_tuple_types_and_uninitialized_vars() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for (source, expected_span) in [
             ("seiyaku Invalid { fn run((int) value) {} }", "(int)"),
             ("seiyaku Invalid { fn run() { var int value; } }", ";"),
@@ -3050,7 +3077,7 @@ mod tests {
     #[test]
     fn session_builds_grouping_real_tuples_and_else_if_chains() {
         let source = concat!(include_str!("session/fixtures/branching.ko"), "        ");
-        let output = CompilerSession::default()
+        let output = CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("branches.ko"),
@@ -3060,7 +3087,7 @@ mod tests {
     }
     #[test]
     fn concurrent_builds_do_not_share_semantic_declarations() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let sources = [
             (
                 concat!(
@@ -3117,10 +3144,11 @@ mod named_host_session_tests {
     #[test]
     fn compiler_session_keeps_named_profile_output_and_fingerprint_distinct() {
         let source = "seiyaku Session { view fn read() authorize(anyone) -> int { 1 } }";
+        // The default session targets the interface profile (the frozen baseline engine).
         let baseline = CompilerSession::default();
         let named = CompilerSession::new(CompilerOptions {
             host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..CompilerOptions::c10()
         });
         assert_eq!(baseline.host_policy(), crate::SyscallPolicy::AbiV1);
         assert_eq!(
@@ -3142,6 +3170,67 @@ mod named_host_session_tests {
             .unwrap();
             assert_eq!(admitted.manifest.abi_hash, output.manifest.abi_hash);
             assert_eq!(admitted.syscall_policy, session.host_policy());
+        }
+    }
+
+    #[test]
+    fn baseline_engine_sessions_have_their_own_fingerprint_and_admitted_output() {
+        let source = "seiyaku Session { view fn read() authorize(anyone) -> int { 1 } }";
+        let c10 = CompilerSession::c10();
+        let baseline = CompilerSession::new(CompilerOptions {
+            engine: crate::IvmEngine::Baseline,
+            ..CompilerOptions::c10()
+        });
+        let shorter = CompilerSession::new(CompilerOptions {
+            engine: crate::IvmEngine::Baseline,
+            baseline_max_cycles: std::num::NonZeroU64::new(5_000).unwrap(),
+            ..CompilerOptions::c10()
+        });
+        let c10_with_ceiling = CompilerSession::new(CompilerOptions {
+            baseline_max_cycles: std::num::NonZeroU64::new(5_000).unwrap(),
+            ..CompilerOptions::c10()
+        });
+        assert_ne!(c10.policy_fingerprint(), baseline.policy_fingerprint());
+        assert_ne!(baseline.policy_fingerprint(), shorter.policy_fingerprint());
+        assert_eq!(
+            c10.policy_fingerprint(),
+            c10_with_ceiling.policy_fingerprint(),
+            "a C10 build ignores the baseline ceiling"
+        );
+        assert_eq!(
+            baseline.target_profile(),
+            Ok(crate::IvmProfileId::BASELINE_ABI_V1)
+        );
+        for session in [baseline, shorter] {
+            let output = session
+                .build(CompileRequest {
+                    source,
+                    source_name: Some("baseline.ko"),
+                })
+                .unwrap();
+            let profile = session.target_profile().unwrap();
+            let admitted = ivm_artifact_admission::verify_contract_artifact_for_profile(
+                &output.artifact,
+                profile,
+            )
+            .unwrap();
+            assert_eq!(admitted.profile, profile);
+            assert_eq!(
+                admitted.manifest.abi_hash,
+                Some(iroha_crypto::Hash::prehashed(profile.abi_hash()))
+            );
+            assert_eq!(admitted.manifest.abi_hash, output.manifest.abi_hash);
+            let parsed =
+                crate::metadata::ProgramMetadata::parse_for_profile(&output.artifact, profile)
+                    .unwrap();
+            assert_eq!(
+                parsed.metadata.max_cycles,
+                session.options.baseline_max_cycles.get()
+            );
+            assert!(
+                ivm_artifact_admission::verify_contract_artifact(&output.artifact).is_err(),
+                "the C10 interface profile refuses a baseline artifact"
+            );
         }
     }
 }

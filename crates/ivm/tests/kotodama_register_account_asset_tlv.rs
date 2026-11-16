@@ -16,7 +16,7 @@ fn kotodama_register_account_and_unregister_asset() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile");
     // Prepare WSV host with permissions for the caller
     let _domain: iroha_model_base::domain::DomainId =

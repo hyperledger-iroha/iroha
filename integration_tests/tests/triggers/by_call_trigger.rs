@@ -60,7 +60,7 @@ fn mint_rose_fixture_builder(alias: &str) -> NetworkBuilder {
 }
 
 fn mint_rose_trigger_metadata(bytecode: &IvmBytecode, alias: &ContractAlias) -> Result<Metadata> {
-    let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(bytecode.as_ref())?;
     let mut metadata = contract_entrypoint_metadata("run");
     metadata.insert(
         "contract_alias".parse::<Name>()?,
@@ -127,7 +127,7 @@ async fn deploy_mint_rose_callback(
 ) -> Result<()> {
     let client = client.clone();
     run_on_dedicated_thread(move || -> Result<()> {
-        let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+        let verified = ivm::verify_contract_artifact_with_declared_profile(bytecode.as_ref())?;
         let (address, code_hash, _, _) = contract_deployment::deploy_contract_locally_signed(
             &client,
             bytecode.as_ref(),
@@ -173,7 +173,7 @@ async fn deploy_mint_rose_callback(
 fn mint_rose_metadata_keeps_event_arguments_and_exact_artifact_alias() -> Result<()> {
     let bytecode = load_sample_ivm("mint_rose_trigger");
     let alias = ContractAlias::from_components("argument_mint_rose", None, "universal")?;
-    let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(bytecode.as_ref())?;
     let metadata = mint_rose_trigger_metadata(&bytecode, &alias)?;
     let mut expected = Metadata::default();
     expected.insert(
@@ -202,7 +202,7 @@ fn mint_rose_execute_arguments_encode_the_admitted_callback_quantity() -> Result
     };
 
     let artifact = load_sample_ivm("mint_rose_trigger");
-    let verified = ivm::verify_contract_artifact(artifact.as_ref())?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact.as_ref())?;
     let schema = verified
         .contract_interface
         .entrypoints

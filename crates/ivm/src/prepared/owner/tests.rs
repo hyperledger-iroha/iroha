@@ -9,7 +9,7 @@ use std::{
 };
 
 fn fixture() -> PreparedContract {
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             r#"seiyaku PreparedOwners { permission Run;
             kotoage fn zebra() authorize(Run) {}
@@ -26,7 +26,8 @@ fn parts(prepared: &PreparedContract) -> PreparedContractParts {
     PreparedContractParts {
         artifact: prepared.shared_artifact(),
         metadata: prepared.metadata().clone(),
-        syscall_policy: prepared.syscall_policy(),
+        profile: prepared.profile_id(),
+        vector_length: prepared.vector_length(),
         manifest: prepared.manifest().clone(),
         header_len: prepared.header_len(),
         code_offset: prepared.code_offset(),

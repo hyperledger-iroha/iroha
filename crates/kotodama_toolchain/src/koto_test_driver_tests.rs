@@ -290,7 +290,12 @@ fn compiler_owned_test_callables_preserve_artifact_verification() {
     );
     let interface = compiled.suite.program.prepared().contract_interface();
     for test in &compiled.tests {
-        let parsed = ProgramMetadata::parse(suite_program).unwrap();
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            suite_program,
+            ivm::IvmProfileId::declared(suite_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .unwrap();
         let relative = test.pc - parsed.prefix_len() as u64;
         let callable = interface
             .callables
@@ -303,8 +308,13 @@ fn compiler_owned_test_callables_preserve_artifact_verification() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_harness(&compiled.suite.program)
         .expect("authenticated test artifact loads");
-    let error =
-        ivm::prepare_contract(Arc::from(suite_program)).expect_err("test image cannot deploy");
+    let error = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(suite_program);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }
+    .expect_err("test image cannot deploy");
     assert!(error.to_string().contains("missing required CNTR section"));
     let mut invalid_interface = interface.clone();
     invalid_interface.callables[0].frame_bytes |= 1;
@@ -396,7 +406,12 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
             .program
             .artifact(),
     ] {
-        let metadata = ProgramMetadata::parse(artifact).expect("parse compiled metadata");
+        let metadata = ivm::ProgramMetadata::parse_for_profile(
+            artifact,
+            ivm::IvmProfileId::declared(artifact)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("parse compiled metadata");
         assert_ne!(metadata.metadata.mode & ivm::ivm_mode::ZK, 0);
     }
 }
@@ -1671,8 +1686,12 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
         "test-suite and runtime projections must retain distinct artifact identities"
     );
-    let suite_metadata = ProgramMetadata::parse(compiled.suite.program.prepared().artifact())
-        .expect("parse generic test-suite metadata");
+    let suite_metadata = ivm::ProgramMetadata::parse_for_profile(
+        compiled.suite.program.prepared().artifact(),
+        ivm::IvmProfileId::declared(compiled.suite.program.prepared().artifact())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse generic test-suite metadata");
     assert_eq!(
         (
             suite_metadata.metadata.version_major,
@@ -1681,8 +1700,12 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         (1, 1),
         "the compiler-owned test suite must remain a generic IVM 1.1 image"
     );
-    let runtime_metadata = ProgramMetadata::parse(runtime.program.artifact())
-        .expect("parse deployable runtime metadata");
+    let runtime_metadata = ivm::ProgramMetadata::parse_for_profile(
+        runtime.program.artifact(),
+        ivm::IvmProfileId::declared(runtime.program.artifact())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse deployable runtime metadata");
     assert_eq!(
         (
             runtime_metadata.metadata.version_major,
@@ -1691,11 +1714,20 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         (1, 1),
         "nested contract calls must use a separately compiled deployable artifact"
     );
-    ivm::prepare_contract(std::sync::Arc::from(runtime.program.artifact()))
-        .expect("the nested runtime artifact must satisfy production admission");
-    let production_error = ivm::prepare_contract(std::sync::Arc::from(
-        compiled.suite.program.prepared().artifact(),
-    ))
+    {
+        let artifact: std::sync::Arc<[u8]> = std::sync::Arc::from(runtime.program.artifact());
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }
+    .expect("the nested runtime artifact must satisfy production admission");
+    let production_error = {
+        let artifact: std::sync::Arc<[u8]> =
+            std::sync::Arc::from(compiled.suite.program.prepared().artifact());
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }
     .expect_err("production admission must reject the generic IVM 1.1 test harness");
     assert!(
         production_error
@@ -2150,7 +2182,13 @@ fn fixture_permission_grant_is_address_and_declaration_scoped() {
     let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku Grants { permission Apply; permission Other; kotoage fn apply() authorize(Apply) {} }")
         .expect("compile permission declarations");
-    let program = ivm::prepare_contract(Arc::from(artifact)).expect("prepare contract");
+    let program = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(artifact);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }
+    .expect("prepare contract");
     let mut host = KotoTestHost::new(
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
         Some(program),
@@ -3973,7 +4011,7 @@ fn numeric_faults_name_their_numeric_error_variant() {
         "{}",
         internal.render()
     );
-    for tag in 1..=14 {
+    for tag in 1..=13 {
         let fault = NumericFaultV1::from_tag(tag).expect("defined tag");
         let rendered = numeric_fault_failure(fault).render();
         assert!(
@@ -3981,8 +4019,8 @@ fn numeric_faults_name_their_numeric_error_variant() {
             "no Rust debug formatting: {rendered}"
         );
     }
-    assert_eq!(NumericFaultV1::from_tag(15), None);
-    let overflow = numeric_fault_failure(NumericFaultV1::RegisterIntegerOverflow);
+    assert_eq!(NumericFaultV1::from_tag(14), None);
+    let overflow = register_integer_overflow_failure();
     assert!(
         overflow.message.contains("ABI fault 14") && overflow.render().contains("toolchain defect"),
         "{}",
@@ -4648,8 +4686,10 @@ module CallerTests {{
     let mut control = iroha_data_model::smart_contract::ContractLifecycleControlV1::direct(actor);
     control.active_code_hash = Some(child.report.artifact_hash);
     control.retained_code_hash = control.active_code_hash;
+    let child_profile = ivm::IvmProfileId::declared(&child.artifact)
+        .expect("the imported child declares an implemented profile");
     host.inner
-        .install_contract_fixture(address, child.artifact, control, None)
+        .install_contract_fixture_for_profile(address, child.artifact, control, None, child_profile)
         .expect("install Pool fixture");
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_harness(&compiled.suite.program).unwrap();

@@ -2068,9 +2068,10 @@ mod tests {
         let account = AccountId::new(key.public_key().clone());
         let mut ctx = TestContext::new(account);
         let program = minimal_view_contract_program();
-        let expected = ivm::verify_contract_artifact(&program)
-            .expect("verify source contract")
-            .manifest;
+        let expected =
+            ivm::verify_contract_artifact_for_policy(&program, ivm::SyscallPolicy::AbiV1)
+                .expect("verify source contract")
+                .manifest;
         let output = tempfile::tempdir().expect("manifest output directory");
         let path = output.path().join("manifest.json");
         BuildManifestArgs {
@@ -2122,7 +2123,7 @@ mod tests {
         let artifact = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-                ..Default::default()
+                ..kotodama_lang::compiler::CompilerOptions::c10()
             },
         )
         .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")
@@ -2160,16 +2161,19 @@ mod tests {
             vm.syscall_policy(),
             ivm::SyscallPolicy::AbiV1RuntimeLifecycle
         );
-        assert!(ivm::verify_contract_artifact(&artifact).is_err());
+        assert!(
+            ivm::verify_contract_artifact_for_policy(&artifact, ivm::SyscallPolicy::AbiV1).is_err()
+        );
     }
 
     #[test]
     fn build_unsigned_manifest_keeps_original_artifact_payload() {
         let mut ctx = TestContext::new(fixture_account(0xCB));
         let program = minimal_view_contract_program();
-        let expected = ivm::verify_contract_artifact(&program)
-            .expect("verify source contract")
-            .manifest;
+        let expected =
+            ivm::verify_contract_artifact_for_policy(&program, ivm::SyscallPolicy::AbiV1)
+                .expect("verify source contract")
+                .manifest;
         let output = tempfile::tempdir().expect("manifest output directory");
         let path = output.path().join("manifest.json");
         BuildManifestArgs {
@@ -2218,8 +2222,15 @@ mod tests {
         .expect("encode state int record")
     }
     fn minimal_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        // A generic program under the interface profile: the baseline header (whose cycle limit
+        // is required) and the baseline `HALT`, as at the anchor.
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 1,
+            ..ivm::ProgramMetadata::default()
+        };
+        let mut program =
+            meta.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     fn minimal_view_contract_program() -> Vec<u8> {
@@ -2241,7 +2252,11 @@ mod tests {
         program
     }
     fn embedded_entrypoint(program: &[u8], name: &str) -> ivm::EmbeddedEntrypointDescriptor {
-        let parsed = ivm::ProgramMetadata::parse(program).expect("parse contract metadata");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            program,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("parse contract metadata");
         parsed
             .contract_interface
             .expect("compiled contract interface")
@@ -2768,7 +2783,11 @@ mod tests {
             norito::json::to_json_pretty(&source_map).expect("render tampered sidecar"),
         )
         .expect("write tampered sidecar");
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            &program,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("parse contract metadata");
         let executable_len = u64::try_from(program.len() - parsed.code_offset)
             .expect("fixture executable length fits u64");
         let err = load_local_contract_source_map(
@@ -3351,7 +3370,9 @@ seiyaku DebugResult { permission Admin;
             Some(true),
             "unexpected debug-call response: {output:?}"
         );
-        let verified = ivm::verify_contract_artifact(&program).expect("verify contract artifact");
+        let verified =
+            ivm::verify_contract_artifact_for_policy(&program, ivm::SyscallPolicy::AbiV1)
+                .expect("verify contract artifact");
         let code_hash = verified.code_hash;
         let argument_schema = verified
             .contract_interface

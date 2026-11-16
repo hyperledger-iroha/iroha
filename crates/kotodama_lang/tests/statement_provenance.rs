@@ -23,7 +23,7 @@ const HELPER: &str = r#"module Math {
 }"#;
 
 fn compile(helper: &str) -> CompileOutput {
-    BuildDriver::new(CompilerSession::default(), "statement-provenance-test")
+    BuildDriver::new(CompilerSession::c10(), "statement-provenance-test")
         .compile_project(
             SourceLinkRequest {
                 root: SourceModuleUnit {

@@ -69,7 +69,8 @@ fn fixture_with_source(source: &str) -> Result<(Config, PlanRecord)> {
     let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .map_err(|error| eyre!(error))?;
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
     let fee = FeePaymentIntent::authority(Vec::new(), Some(NonZeroU64::new(1_000_000).unwrap()));
     let address = ContractAddress::derive(
         &config.network_id,
@@ -555,7 +556,8 @@ fn native_sequence_signing_matches_the_retained_plan_layout() -> Result<()> {
     let context = &record.preflight;
     let service = DeploymentService::new(config.clone())?;
     let artifact = hex::decode(&record.artifact_hex)?;
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
     let request = DeploymentRequest {
         artifact,
         alias: context.contract_alias.clone(),
@@ -1315,7 +1317,7 @@ fn named_profile_artifact_verification_and_lifecycle_guidance_preserve_exact_ide
 {
     let artifact = kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         host_policy: ivm_abi::SyscallPolicy::AbiV1RuntimeLifecycle,
-        ..Default::default()
+        ..kotodama_lang::compiler::CompilerOptions::c10()
     }).compile_source("seiyaku Named { hajimari(int initial) { let value = initial; } view fn read() authorize(anyone) -> int { 1 } }").map_err(|error| eyre!(error))?;
     let mut request = DeploymentRequest {
         artifact,

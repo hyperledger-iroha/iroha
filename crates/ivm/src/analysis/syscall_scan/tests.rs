@@ -38,7 +38,7 @@ fn borrowed_scan_preserves_repeated_full_width_ids_and_sorted_first_selection() 
 
 #[test]
 fn prepared_scan_matches_original_artifact_and_keeps_canonical_metadata_refusal() {
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku SyscallScan { view fn main() authorize(anyone) -> bool { true } }")
         .unwrap();
     let prepared = crate::prepare_contract(std::sync::Arc::from(bytes.as_slice())).unwrap();

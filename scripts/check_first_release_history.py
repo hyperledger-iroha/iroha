@@ -154,7 +154,9 @@ PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_]\w*\Z")
 # Program forms: the header of one IVM program, of every IVM program an artifact map lists in
 # its third column, of every hexadecimal IVM program in the tab-separated rows of a compiler
 # capture, or of every base64 IVM program embedded in a text fixture. An entry may state
-# several forms; each must hold.
+# several forms; each must hold. An artifact map entry may name its `carrier_owners`: only rows
+# of those owners carry the ABI V1 hash, and every other row belongs to another engine profile
+# (the explicitly selected C10 predecoder fixtures), whose own tests keep it fresh.
 ABI_TEXT_FORMS = ("hex", "HEX", "hex_wrapped")
 ABI_HASH_FORMS = (
     *ABI_TEXT_FORMS,
@@ -163,10 +165,11 @@ ABI_HASH_FORMS = (
     "ivm_hex_rows",
     "ivm_base64",
 )
-# An IVM program starts with magic, version, mode, ZK trace bound and ABI version; the ABI
-# hash is the last field of that fixed 48-byte header.
+# ABI V1 is the interface profile, the frozen baseline engine: its program starts with magic,
+# version, mode, vector length, cycle bound and ABI version, and the ABI hash is the last field
+# of that fixed 49-byte header.
 IVM_MAGIC = b"IVM\0"
-IVM_ABI_HASH_SPAN = (16, 48)
+IVM_ABI_HASH_SPAN = (17, 49)
 HEX_WRAPPING = re.compile(rb'[\s"]+')
 IVM_MAGIC_HEX = IVM_MAGIC.hex()
 HEX_TEXT = re.compile(r"(?:[0-9a-f]{2})+\Z")
@@ -1129,6 +1132,25 @@ def carrier_forms(target: dict) -> tuple[str, ...] | None:
     return tuple(forms)
 
 
+def carrier_owners_of(target: dict) -> tuple[str, ...] | None:
+    """The artifact map owners whose rows carry the ABI hash.
+
+    `()` when the target names none (every row carries it); `None` when `carrier_owners` is not a
+    non-empty list of distinct non-empty owner names.
+    """
+    stated = target.get("carrier_owners")
+    if stated is None:
+        return ()
+    if (
+        not isinstance(stated, list)
+        or not stated
+        or any(not isinstance(owner, str) or not owner for owner in stated)
+        or len(set(stated)) != len(stated)
+    ):
+        return None
+    return tuple(stated)
+
+
 def regeneration_errors(root: Path, surface: str, target: dict) -> list[str]:
     """One regeneration target names a concrete artifact and what produces or checks it.
 
@@ -1151,6 +1173,13 @@ def regeneration_errors(root: Path, surface: str, target: dict) -> list[str]:
             f"{artifact}: regeneration target of `{surface}` carries the ABI hash in the unknown "
             f"form `{target.get('carries')}`; use one of {', '.join(ABI_HASH_FORMS)}, or a list "
             "of distinct ones"
+        ]
+    if target.get("carrier_owners") is not None and (
+        "artifact_map" not in forms or carrier_owners_of(target) is None
+    ):
+        return [
+            f"{artifact}: `carrier_owners` is a non-empty list of distinct owners of an "
+            "`artifact_map` carrier"
         ]
     occurrences = target.get("occurrences")
     if occurrences is not None and (
@@ -1273,6 +1302,8 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
     for form in carrier_forms(target) or ():
         if form == "artifact_map":
             programs = 0
+            carrier_owners = carrier_owners_of(target) or ()
+            owners_seen: set[str] = set()
             for line in data.decode("utf-8", errors="replace").splitlines():
                 if not line or line.startswith("#"):
                     continue
@@ -1281,6 +1312,9 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
                     errors.append(
                         f"{artifact}: artifact map row `{line}` is not owner, source, artifact"
                     )
+                    continue
+                owners_seen.add(fields[0])
+                if carrier_owners and fields[0] not in carrier_owners:
                     continue
                 programs += 1
                 try:
@@ -1292,6 +1326,9 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
                     errors.append(f"{fields[2]}: IVM program header {stale}")
             if not programs:
                 errors.append(f"{artifact}: artifact map lists no IVM program")
+            for owner in carrier_owners:
+                if owner not in owners_seen:
+                    errors.append(f"{artifact}: carrier owner `{owner}` owns no row of the map")
         elif form == "ivm_hex_rows":
             rows = 0
             for number, line in enumerate(
@@ -1413,7 +1450,9 @@ def check_abi_cutover(root: Path, inventory: dict) -> list[str]:
     carriers = [
         target
         for target in surface["regenerate"]
-        if carrier_forms(target) and not target.get("document")
+        if carrier_forms(target)
+        and carrier_owners_of(target) is not None
+        and not target.get("document")
     ]
     if golden["path"] not in {target["artifact"] for target in carriers}:
         errors.append(

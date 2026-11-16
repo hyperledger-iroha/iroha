@@ -21,7 +21,7 @@ fn runtime_capture() -> Value {
     // Both real private calls execute in the complete native run. The repeated
     // helper retains its authenticated callable and exercises a child frame;
     // runtime view roots cannot be invoked through the private call boundary.
-    let code = Compiler::new().compile_source(
+    let code = Compiler::new_c10().compile_source(
         "seiyaku NativeFrameCapture { fn leaf(bool value) -> bool { value } view fn main() authorize(anyone) -> bool { leaf(value: leaf(value: true)) } }"
     ).unwrap();
     let metadata = ProgramMetadata::parse(&code).unwrap();

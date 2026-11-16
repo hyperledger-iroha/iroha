@@ -2584,6 +2584,42 @@ def test_main_report_preserves_strict_and_error_semantics_of_grouped_scenarios(
     assert report['summary']['error'] == ([mu.id] if verdict == 'error' else [])
 
 
+@pytest.mark.parametrize('held_name,skip_baseline,refused', [
+    ('baseline.build.runtime.json', False, True),
+    ('baseline.build.log', True, False),
+    ('SYNTHETIC_A.build.runtime.json', True, True),
+    ('SYNTHETIC_A.named.log', False, True),
+    ('SYNTHETIC_AB.build.log', True, False),
+])
+def test_main_refuses_a_target_holding_earlier_evidence_before_writing(
+    monkeypatch, tmp_path, held_name, skip_baseline, refused
+):
+    """A rerun into an earlier campaign's target directory must not truncate its evidence."""
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::named'])
+    monkeypatch.setattr(gate, 'MUTATIONS', [mu, gate.m('SYNTHETIC_AB', 'fixture', ['tests::other'])])
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    built = []
+    monkeypatch.setattr(gate, 'build', lambda *args: built.append(args) or gate.Step(status='pass'))
+    monkeypatch.setattr(gate, 'run_step', lambda *args, **kwargs: gate.Step(
+        status='fail', selected=['tests::named'], ran=['tests::named'], failed=['tests::named']))
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    (logs / held_name).write_bytes(b'run 1 evidence\n')
+    monkeypatch.setattr(sys, 'argv', ['sumeragi_mutation_gate.py', '--jobs', '1', '--fast',
+                                    '--only', 'SYNTHETIC_A', '--target-dir', str(tmp_path),
+                                    *(['--skip-baseline'] if skip_baseline else [])])
+    if refused:
+        with pytest.raises(SystemExit) as exit_info:
+            gate.main()
+        assert exit_info.value.code == 2
+        assert built == []
+        assert not (tmp_path / 'report.json').exists()
+    else:
+        gate.main()
+        assert built
+    assert (logs / held_name).read_bytes() == b'run 1 evidence\n'
+
+
 def test_grouped_substring_discovery_preserves_extra_and_overlapping_actual_names(monkeypatch, tmp_path):
     monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
     monkeypatch.setattr(gate.time, 'monotonic', lambda: 100.0)

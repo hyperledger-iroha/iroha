@@ -240,7 +240,10 @@ fn add_embedded_entrypoint_authorization_read(
     let Some(selector) = requested_contract_entrypoint(metadata) else {
         return true;
     };
-    let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode) else {
+    let Ok(parsed) = ivm::ProgramMetadata::parse_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    ) else {
         return false;
     };
     let Some(interface) = parsed.contract_interface.as_ref() else {
@@ -297,7 +300,11 @@ fn resolve_callable_contract_entrypoint(
     ),
     ExecutionAttemptError<String>,
 > {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|error| {
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    )
+    .map_err(|error| {
         dynamic_execution::vm_error(
             "invalid contract artifact for contract call dispatch",
             error,
@@ -326,9 +333,12 @@ fn resolve_callable_contract_entrypoint(
     ))
 }
 fn is_self_describing_contract(bytecode: &[u8]) -> Result<bool, ExecutionAttemptError<String>> {
-    ivm::ProgramMetadata::parse(bytecode)
-        .map(|parsed| parsed.contract_interface.is_some())
-        .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))
+    ivm::ProgramMetadata::parse_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    )
+    .map(|parsed| parsed.contract_interface.is_some())
+    .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))
 }
 fn parse_contract_call_execution_context(
     metadata: &Metadata,
@@ -535,7 +545,7 @@ fn apply_contract_call_execution_context(
     {
         // Match runtime contract-call semantics during access derivation so
         // non-`main` entrypoints can return cleanly to the VM end-of-stream.
-        vm.set_register(1, vm.memory.code_len());
+        vm.set_register(1, vm.code_len());
         vm.set_program_counter(entrypoint_pc).map_err(|err| {
             format!(
                 "contract entrypoint `{}` resolved to invalid pc: {err}",
@@ -1016,7 +1026,11 @@ fn is_conservative_global(set: &AccessSet) -> bool {
     set.read_keys.is_empty() && set.write_keys.len() == 1 && set.write_keys.contains("*")
 }
 fn apply_unverified_ivm_access_fence(bytecode: &[u8], set: &mut AccessSet) -> bool {
-    let fence = ivm::analysis::program_syscall_numbers(bytecode).map_or(
+    let fence = ivm::analysis::program_syscall_numbers_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    )
+    .map_or(
         crate::pipeline::overlay::VmAccessFence::Global,
         crate::pipeline::overlay::VmAccessFence::from_syscall_numbers,
     );
@@ -1211,7 +1225,7 @@ fn hint_access_set_if_safe(
     read_keys: &[String],
     write_keys: &[String],
 ) -> Option<AccessSet> {
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(bytecode)).ok()?;
     hint_access_set_with_dynamic_if_safe(
         &prepared,
         read_keys,
@@ -1227,7 +1241,7 @@ fn entrypoint_access_set_from_bytecode_if_safe(
     bytecode: &[u8],
     entrypoint: &EntrypointDescriptor,
 ) -> Option<AccessSet> {
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(bytecode)).ok()?;
     entrypoint_access_set_if_safe(&prepared, entrypoint, &static_state_test_budget())
 }
 #[cfg(test)]
@@ -1235,7 +1249,7 @@ fn manifest_hint_access_set_from_bytecode_if_safe(
     bytecode: &[u8],
     hints: &iroha_data_model::smart_contract::manifest::AccessSetHints,
 ) -> Option<AccessSet> {
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(bytecode)).ok()?;
     manifest_hint_access_set_if_safe(&prepared, hints, &static_state_test_budget())
 }
 #[cfg(test)]
@@ -1246,7 +1260,7 @@ fn manifest_access_set_from_bytecode(
     cache_enabled: bool,
     requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode)).ok()?;
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(bytecode)).ok()?;
     manifest_access_set(
         manifest,
         ContractArtifactId::new(
@@ -2416,8 +2430,11 @@ where
 {
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
     if let DynamicIvmProgram::Raw(bytecode) = program {
-        ivm::ProgramMetadata::parse(bytecode)
-            .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))?;
+        ivm::ProgramMetadata::parse_for_profile(
+            bytecode,
+            crate::smartcontracts::ivm::profile::resolve_artifact(state_ro.world(), bytecode).id(),
+        )
+        .map_err(|error| dynamic_execution::vm_error("ivm.metadata", error))?;
     }
     if let Some(context) = contract_call_context {
         match (&context.entrypoint, &context.authorization) {
@@ -2460,8 +2477,7 @@ where
         .smart_contract()
         .memory()
         .get();
-    vm.memory
-        .set_heap_max_limit(heap_limit)
+    vm.set_heap_max_limit(heap_limit)
         .map_err(|error| dynamic_execution::vm_error("ivm.heap_limit", error))?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
@@ -2517,7 +2533,11 @@ where
         .map_err(|error| dynamic_execution::vm_error("ivm.begin_tx", error))?;
     match program {
         DynamicIvmProgram::Raw(bytecode) => vm
-            .load_program(bytecode)
+            .load_program_for_profile(
+                bytecode,
+                crate::smartcontracts::ivm::profile::resolve_artifact(state_ro.world(), bytecode)
+                    .id(),
+            )
             .map_err(|error| dynamic_execution::vm_error("ivm.load_program", error))?,
         DynamicIvmProgram::Prepared(contract) => vm
             .load_prepared(contract)
@@ -2686,7 +2706,7 @@ mod tests {
         }
     }
     fn fixture_callable(code: &[u8], pc: u64) -> ivm::call::EmbeddedCallableV1 {
-        use ivm::instruction::wide;
+        use ivm_abi::baseline::instruction::wide;
         let mut callable = crate::ivm_test_support::unit_callable(pc);
         let start = usize::try_from(pc).expect("fixture value fits usize");
         if let Some(bytes) = code.get(start..start + 4) {
@@ -2694,15 +2714,16 @@ mod tests {
             if wide::opcode(word) == wide::arithmetic::ADDI
                 && wide::rd(word) == 31
                 && wide::rs1(word) == 31
-                && wide::imm14(word) < 0
+                && wide::imm8(word) < 0
             {
-                callable.frame_bytes = u32::from(wide::imm14(word).unsigned_abs());
+                callable.frame_bytes = u32::from(wide::imm8(word).unsigned_abs());
             }
         }
         callable
     }
     fn literal_clobber_call_program(long_call: bool, fresh_literal: bool) -> Vec<u8> {
-        use ivm::{encoding::wide as enc, instruction::wide};
+        use ivm_abi::baseline::encoding::wide as enc;
+        use ivm_abi::baseline::instruction::wide;
         // r16 is caller-clobbered. Descriptor staging does not erase its literal,
         // so provenance must be invalidated specifically at the direct call.
         let mut words = vec![
@@ -2720,14 +2741,14 @@ mod tests {
             } else {
                 enc::encode_ri(wide::arithmetic::ADDI, 10, 16, 0)
             },
-            enc::encode_scall(ivm::syscalls::SYSCALL_STATE_SET),
+            crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_STATE_SET),
             enc::encode_load(wide::memory::LOAD64, 12, 31, 8),
             enc::encode_store(wide::memory::STORE64, 12, 0, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
             enc::encode_load(wide::memory::LOAD64, 1, 31, 0),
             enc::encode_ri(wide::arithmetic::ADDI, 31, 31, 32),
-            enc::encode_ri(wide::control::JALR, 0, 1, 0),
+            enc::encode_rr(wide::control::JALR, 0, 1, 0),
             enc::encode_literal(wide::memory::LDLIT, 16, 1),
         ];
         words[8] = if long_call {
@@ -2739,7 +2760,7 @@ mod tests {
             .into_iter()
             .flat_map(u32::to_le_bytes)
             .collect::<Vec<_>>();
-        code.extend_from_slice(&crate::ivm_test_support::unit_return());
+        code.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
         code
     }
     fn test_contract_artifact(
@@ -2759,7 +2780,7 @@ mod tests {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let embedded_entrypoints = entrypoints
@@ -2783,11 +2804,11 @@ mod tests {
         let mut callables = std::collections::BTreeMap::new();
         callables.insert(0, fixture_callable(code, 0));
         for (index, bytes) in code.as_chunks::<4>().0.iter().enumerate() {
-            use ivm::instruction::wide;
+            use ivm_abi::baseline::instruction::wide;
             let word = u32::from_le_bytes(*bytes);
             let offset = match wide::opcode(word) {
                 wide::control::JALS => i64::from(wide::imm24(word)),
-                wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::jal_offset(word)),
+                wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
                 _ => continue,
             };
             let target = (index as u64 * 4)
@@ -2819,7 +2840,7 @@ mod tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = meta.encode();
+        let mut artifact = crate::ivm_test_support::baseline_header(meta.clone());
         let interface = interface.encode_section();
         artifact.extend_from_slice(&interface);
         if !literals.is_empty() {
@@ -2874,7 +2895,8 @@ mod tests {
             artifact.extend(std::iter::repeat_n(0, post_padding));
         }
         artifact.extend_from_slice(code);
-        let verified = ivm::verify_contract_artifact(&artifact).expect("valid test artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid test artifact");
         (artifact, verified.code_hash, verified.manifest)
     }
     fn default_test_entrypoint() -> EntrypointDescriptor {
@@ -3064,19 +3086,24 @@ mod tests {
         assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
     fn generic_state_get_test_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_STATE_GET)
+                .to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     fn state_get_test_program() -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_STATE_GET)
+                .to_le_bytes(),
         );
-        code.extend_from_slice(&crate::ivm_test_support::unit_return());
+        code.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = vec!["state:*".to_owned()];
         test_contract_artifact(&code, None, &[entrypoint]).0
@@ -3134,8 +3161,11 @@ mod tests {
     fn dynamic_generic_prepass_rejects_reserved_metadata_before_vm_execution() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let state = generic_prepass_test_state(&alice);
-        let mut halt = ivm::ProgramMetadata::default().encode();
-        halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut halt = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        halt.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         for reserved_key in ["contract_payload", "contract_address", "contract_alias"] {
             let mut metadata = Metadata::default();
             metadata.insert(
@@ -3163,8 +3193,11 @@ mod tests {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let state = generic_prepass_test_state(&alice);
         let block = state.block(prepass_test_header());
-        let mut halt = ivm::ProgramMetadata::default().encode();
-        halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut halt = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        halt.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let set = derive_from_ivm_dynamic(
             &halt,
             &alice,
@@ -3200,7 +3233,7 @@ mod tests {
     #[test]
     fn verified_empty_entrypoint_access_is_distinct_from_missing_or_incomplete_metadata() {
         let program = test_contract_artifact(
-            &crate::ivm_test_support::unit_return(),
+            &crate::ivm_test_support::baseline_unit_return(),
             None,
             &[default_test_entrypoint()],
         )
@@ -3251,7 +3284,7 @@ mod tests {
     #[test]
     fn protected_entrypoint_reads_the_authorization_scheduler_epoch() {
         let program = test_contract_artifact(
-            &crate::ivm_test_support::unit_return(),
+            &crate::ivm_test_support::baseline_unit_return(),
             None,
             &[default_test_entrypoint()],
         )
@@ -3283,7 +3316,7 @@ mod tests {
             crate::query::store::LiveQueryStore::start_test(),
         );
         let entrypoint = default_test_entrypoint();
-        let code = crate::ivm_test_support::unit_return().to_vec();
+        let code = crate::ivm_test_support::baseline_unit_return().to_vec();
         let (artifact, _, _) = test_contract_artifact(&code, None, &[entrypoint]);
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -3468,8 +3501,10 @@ seiyaku StaticAccessCounter { permission CanWrite;
             assert_ne!(descriptor.write_keys[0], "state:*");
             manifest_access_set_from_bytecode(&manifest, code_hash, &program, false, Some(name))
                 .unwrap_or_else(|| {
-                    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
-                        .expect("prepare static-access contract for failure diagnostics");
+                    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(
+                        program.clone(),
+                    ))
+                    .expect("prepare static-access contract for failure diagnostics");
                     let analysis = ivm::analysis::analyze_prepared_static_state_accesses(
                         &prepared,
                         Some(name),
@@ -4046,61 +4081,86 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         let value_tlv = make_tlv(ivm::PointerType::Json as u16, &value_payload);
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_AUTHORITY).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_GET_AUTHORITY)
+                .to_le_bytes(),
         );
         code.extend_from_slice(
-            &kotodama_lang::compiler::encode_addi(13, 10, 0)
-                .expect("encode addi")
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                13,
+                10,
+                0,
+            )
+            .to_le_bytes(),
         ); // save account ptr
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0)
+            &ivm_abi::baseline::encoding::wide::encode_literal(
+                ivm_abi::baseline::instruction::wide::memory::LDLIT,
+                10,
+                0,
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
                 .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                .to_le_bytes(),
-        );
-        code.extend_from_slice(
-            &kotodama_lang::compiler::encode_addi(11, 10, 0)
-                .expect("encode addi")
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                11,
+                10,
+                0,
+            )
+            .to_le_bytes(),
         ); // r11 = key ptr
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1)
+            &ivm_abi::baseline::encoding::wide::encode_literal(
+                ivm_abi::baseline::instruction::wide::memory::LDLIT,
+                10,
+                1,
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
                 .to_le_bytes(),
         );
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                .to_le_bytes(),
-        );
-        code.extend_from_slice(
-            &kotodama_lang::compiler::encode_addi(12, 10, 0)
-                .expect("encode addi")
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                12,
+                10,
+                0,
+            )
+            .to_le_bytes(),
         ); // r12 = value ptr
         code.extend_from_slice(
-            &kotodama_lang::compiler::encode_addi(10, 13, 0)
-                .expect("encode addi")
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                10,
+                13,
+                0,
+            )
+            .to_le_bytes(),
         ); // r10 = account ptr
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
                 .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        code.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let literals = [&key_tlv, &value_tlv];
         let descriptor_bytes = literals.len() * core::mem::size_of::<u64>();
         let literal_data_len = literals.iter().map(|literal| literal.len()).sum::<usize>();
         let post_pad = (4 - ((16 + descriptor_bytes + literal_data_len) % 4)) % 4;
-        let mut prog = meta.encode();
+        let mut prog = crate::ivm_test_support::baseline_header(meta.clone());
         prog.extend_from_slice(&LITERAL_SECTION_MAGIC);
         prog.extend_from_slice(
             &u32::try_from(literals.len())
@@ -4234,23 +4294,26 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             parameters.commit();
         }
         let view = state.block(prepass_test_header());
-        let mut program = ivm::ProgramMetadata {
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
-        }
-        .encode();
+        });
         program.extend_from_slice(
-            &kotodama_lang::compiler::encode_addi(10, 0, 72)
-                .expect("encode allocation size")
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                10,
+                0,
+                72,
+            )
+            .to_le_bytes(),
         );
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_ALLOC).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_ALLOC).to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let error =
             derive_from_ivm_dynamic_with_context(&program, &alice, None, &view, TEST_GAS_LIMIT)
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -4278,23 +4341,28 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         let mut code = Vec::new();
         for rd in [10_u8, 11, 12] {
             code.extend_from_slice(
-                &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, 0, 0)
-                    .to_le_bytes(),
+                &ivm_abi::baseline::encoding::wide::encode_ri(
+                    ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                    rd,
+                    0,
+                    0,
+                )
+                .to_le_bytes(),
             );
         }
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
                 .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        code.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
-        let mut prog = meta.encode();
+        let mut prog = crate::ivm_test_support::baseline_header(meta.clone());
         prog.extend_from_slice(&LITERAL_SECTION_MAGIC);
         prog.extend_from_slice(&0u32.to_le_bytes()); // literal entries
         prog.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
@@ -4337,9 +4405,15 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     fn bytecode_access_fence_serializes_state_and_nested_targets_conservatively() {
         use iroha_data_model::transaction::IvmProved;
         fn program_with_syscall(number: u32) -> Vec<u8> {
-            let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_scall(number).to_le_bytes());
-            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+                max_cycles: 1_000,
+                ..ivm::ProgramMetadata::default()
+            });
+            program.extend_from_slice(
+                &crate::ivm_test_support::baseline_syscall(number).to_le_bytes(),
+            );
+            program
+                .extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
             program
         }
         let mut state_set = AccessSet::new();
@@ -4405,9 +4479,15 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             (ivm::syscalls::SYSCALL_STATE_SCAN, "state:*"),
             (0x01_0030, "*"),
         ] {
-            let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+                max_cycles: 1_000,
+                ..ivm::ProgramMetadata::default()
+            });
+            program.extend_from_slice(
+                &crate::ivm_test_support::baseline_syscall(syscall).to_le_bytes(),
+            );
+            program
+                .extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
             let mut set = AccessSet::new();
             assert!(apply_unverified_ivm_access_fence(&program, &mut set));
             assert_eq!(set.write_keys, BTreeSet::from([expected.to_owned()]));
@@ -4443,18 +4523,21 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     }
     #[test]
     fn helper_hidden_privileged_and_dynamic_syscalls_force_global_serialization() {
-        use ivm::instruction::wide;
+        use ivm_abi::baseline::instruction::wide;
         for (label, syscall) in [
             ("ledger write", ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
             ("dynamic nested call", ivm::syscalls::SYSCALL_CALL_CONTRACT),
         ] {
             let code = [
-                ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
-                ivm::encoding::wide::encode_halt(),
-                ivm::encoding::wide::encode_scall(syscall),
-                ivm::encoding::wide::encode_ri(wide::control::JALR, 0, 1, 0),
+                ivm_abi::baseline::encoding::wide::encode_offset24(wide::control::JALS, 2),
+                ivm_abi::baseline::encoding::wide::encode_halt(),
+                crate::ivm_test_support::baseline_syscall(syscall),
+                ivm_abi::baseline::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
             ];
-            let mut program = ivm::ProgramMetadata::default().encode();
+            let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+                max_cycles: 1_000,
+                ..ivm::ProgramMetadata::default()
+            });
             program.extend(code.into_iter().flat_map(u32::to_le_bytes));
             assert!(
                 hint_access_set_if_safe(
@@ -4784,7 +4867,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             dynamic_reads: Vec::new(),
             dynamic_writes: Vec::new(),
         };
-        let code = crate::ivm_test_support::unit_return().to_vec();
+        let code = crate::ivm_test_support::baseline_unit_return().to_vec();
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
@@ -4862,7 +4945,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             dynamic_reads: Vec::new(),
             dynamic_writes: Vec::new(),
         };
-        let code = crate::ivm_test_support::unit_return().to_vec();
+        let code = crate::ivm_test_support::baseline_unit_return().to_vec();
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
@@ -4898,7 +4981,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn artifact_custody_is_checked_before_shared_preparation_cache() {
         let (program, hash, _) = test_contract_artifact(
-            &crate::ivm_test_support::unit_return(),
+            &crate::ivm_test_support::baseline_unit_return(),
             None,
             &[default_test_entrypoint()],
         );
@@ -4974,7 +5057,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             query,
         );
         let (prog, code_hash, _) = test_contract_artifact(
-            &crate::ivm_test_support::unit_return(),
+            &crate::ivm_test_support::baseline_unit_return(),
             None,
             &[default_test_entrypoint()],
         );
@@ -5086,9 +5169,12 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             kura,
             query,
         );
-        let mut prog = ivm::ProgramMetadata::default().encode();
+        let mut prog = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         prog.extend_from_slice(&[0x01, 0x00]); // dummy body
-        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        crate::ivm_test_support::parse_declared(&prog).expect("header parse");
         let code_hash = ivm::contract_code_hash(&prog);
         let hints = AccessSetHints {
             read_keys: vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()],
@@ -5162,12 +5248,16 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_STATE_GET).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_STATE_GET)
+                .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut prog = ivm::ProgramMetadata::default().encode();
+        code.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
+        let mut prog = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         prog.extend_from_slice(&code);
-        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        crate::ivm_test_support::parse_declared(&prog).expect("header parse");
         let code_hash = ivm::contract_code_hash(&prog);
         let entrypoints = vec![
             EntrypointDescriptor {
@@ -5280,13 +5370,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
-                .to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(
+                ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED,
+            )
+            .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut prog = ivm::ProgramMetadata::default().encode();
+        code.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
+        let mut prog = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         prog.extend_from_slice(&code);
-        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        crate::ivm_test_support::parse_declared(&prog).expect("header parse");
         let code_hash = ivm::contract_code_hash(&prog);
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
@@ -5372,13 +5467,18 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         );
         let mut code = Vec::new();
         code.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
-                .to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(
+                ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED,
+            )
+            .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut prog = ivm::ProgramMetadata::default().encode();
+        code.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
+        let mut prog = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         prog.extend_from_slice(&code);
-        ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        crate::ivm_test_support::parse_declared(&prog).expect("header parse");
         let code_hash = ivm::contract_code_hash(&prog);
         let asset_def: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -5698,7 +5798,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };
-            let code = crate::ivm_test_support::unit_return().to_vec();
+            let code = crate::ivm_test_support::baseline_unit_return().to_vec();
             let mut entrypoint = default_test_entrypoint();
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();
@@ -5837,7 +5937,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };
-            let code = crate::ivm_test_support::unit_return().to_vec();
+            let code = crate::ivm_test_support::baseline_unit_return().to_vec();
             let mut entrypoint = default_test_entrypoint();
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();

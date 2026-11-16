@@ -141,6 +141,7 @@ fn vm_error_samples() -> Vec<VMError> {
             phase: 0,
         },
         VMError::NumericFault(NumericFaultV1::DivisionByZero),
+        VMError::RegisterIntegerOverflow,
         VMError::PointerAbiFault(PointerAbiFaultV1::WrongType),
         VMError::AssertionFailed,
         VMError::ContractAbort {
@@ -158,12 +159,19 @@ fn vm_error_samples() -> Vec<VMError> {
         VMError::UnsupportedProgramAbiVersion { version: 9 },
         VMError::MissingMaxCycles,
         VMError::MaxCyclesWithoutZk { max_cycles: 1 },
+        VMError::ProgramVectorLengthTooLarge {
+            vector_length: 65,
+            max_allowed: 64,
+        },
         VMError::ArtifactAbiHashMismatch {
             expected: [0; 32],
             actual: [1; 32],
         },
         VMError::GenericSyscallNotAllowed { syscall: 0 },
+        VMError::InvalidVectorLength { vector_length: 0 },
         VMError::MissingHalt,
+        VMError::VectorExtensionDisabled,
+        VMError::ZkExtensionDisabled,
         VMError::NullifierAlreadyUsed,
         VMError::PermissionDenied,
         VMError::ReentrantCall,
@@ -1243,13 +1251,26 @@ fn every_vm_error_projects_only_completed_deterministic_faults() {
         "UnsupportedProgramAbiVersion",
         "MissingMaxCycles",
         "MaxCyclesWithoutZk",
+        "ProgramVectorLengthTooLarge",
         "ArtifactAbiHashMismatch",
         "GenericSyscallNotAllowed",
     ];
+    // Faults only the C10 engine raises: the unkeyed accessor applies the projection of the
+    // interface profile, the baseline, whose wire enum has no tag for them; C10 has no wire
+    // family of its own yet (phase 5), so its projection has none either.
+    let c10_only = ["ControlFlowViolation", "RegisterIntegerOverflow"];
     let samples = vm_error_samples();
     assert_eq!(samples.len(), VM_ERROR_COUNT);
     for error in samples {
         let name = vm_error_variant_name(&error);
+        if c10_only.contains(&name) {
+            assert!(error.fault_kind().is_none(), "{name}");
+            assert!(
+                ivm_abi::IvmEngine::C10.fault_kind(&error).is_none(),
+                "{name}"
+            );
+            continue;
+        }
         assert_eq!(
             error.fault_kind().is_some(),
             !excluded.contains(&name),
@@ -1515,6 +1536,7 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
         VmTrapKind::UnsupportedProgramAbiVersion,
         VmTrapKind::MissingMaxCycles,
         VmTrapKind::MaxCyclesWithoutZk,
+        VmTrapKind::ProgramVectorLengthTooLarge,
         VmTrapKind::ArtifactAbiHashMismatch,
     ] {
         assert_eq!(kind(prepare_only).origins(), [PrepareRejection]);
@@ -1595,11 +1617,12 @@ fn trap_origins_distinguish_rejections_traps_invariants_and_deferrals() {
             );
         }
     }
-    // Only a ZK run reaches its trace bound, inside the loop; the executor
+    // A C10 run reaches its trace bound only in ZK mode, inside the loop; a baseline run also
+    // refuses at entry when an earlier run exhausted its shared cycle allowance. The executor
     // relabels a failed migration run outside any invocation.
     assert_eq!(
         kind(VmTrapKind::ExceededMaxCycles).origins(),
-        [InterpreterTrap, OutsideInvocation]
+        [InitializationTrap, InterpreterTrap, OutsideInvocation]
     );
     assert_eq!(
         kind(VmTrapKind::AssertionFailed).origins(),
@@ -1720,7 +1743,7 @@ fn numeric_and_pointer_faults_match_their_tag_decoders_and_enum_sources() {
     assert!(NumericFaultEntry::OBLIGATIONS.contains(&Obligation::Faults));
     assert!(PointerAbiFaultEntry::OBLIGATIONS.contains(&Obligation::Pointers));
     let counts = summary();
-    assert_eq!(counts.numeric_faults, 14);
+    assert_eq!(counts.numeric_faults, 13);
     assert_eq!(counts.pointer_abi_faults, 11);
 }
 

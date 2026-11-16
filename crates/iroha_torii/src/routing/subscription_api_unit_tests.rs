@@ -175,15 +175,19 @@ fn network_time_ms_is_nonzero() {
 }
 #[test]
 fn ivm_syscall_program_emits_bytecode() {
-    let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
+    let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
+    let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
     assert!(!program.as_ref().is_empty());
     assert_eq!(
-        ivm::ProgramMetadata::parse(program.as_ref())
-            .expect("generated subscription program metadata")
-            .metadata
-            .max_cycles,
-        0,
-        "a non-ZK program declares no trace bound; gas is its only budget"
+        ivm::ProgramMetadata::parse_for_profile(
+            program.as_ref(),
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("generated subscription program metadata")
+        .metadata
+        .max_cycles,
+        configured_limit.get(),
+        "Torii must embed the live admission ceiling, not a compiled default"
     );
     let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
         .summarize_executable(program.as_ref())
@@ -204,6 +208,7 @@ fn build_billing_trigger_attaches_metadata_and_schedule() {
         authority.clone(),
         subscription_id.clone(),
         55,
+        defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
     );
     assert_eq!(trigger.id(), &trigger_id);
     let meta = trigger.metadata();
@@ -229,7 +234,11 @@ fn build_usage_trigger_uses_execute_filter() {
     use iroha_data_model::events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter};
     let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
     let authority = ALICE_ID.clone();
-    let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
+    let trigger = build_usage_trigger(
+        trigger_id.clone(),
+        authority.clone(),
+        defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+    );
     match trigger.action().filter() {
         EventFilterBox::ExecuteTrigger(filter) => {
             let expected = ExecuteTriggerEventFilter::new()

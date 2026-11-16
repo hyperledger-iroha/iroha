@@ -5,6 +5,7 @@
 pub mod access_hints;
 pub mod arguments;
 pub mod axt;
+pub mod baseline;
 pub mod call;
 pub mod codec;
 pub mod contract_call;
@@ -23,15 +24,18 @@ pub mod numeric;
 pub mod numeric_tlv;
 pub mod pointer_abi;
 pub mod private_input;
+pub mod profile;
 pub mod state_cursor;
 pub mod state_value;
 pub mod sum;
 pub mod syscalls;
 pub mod upgrade;
 pub use error::{HostOutputResource, Perm, VMError};
+pub use profile::{HeaderLayout, IvmEngine, IvmProfileId};
 /// Named host policy authenticated by the fixed program header's exact ABI hash.
-/// Both policies use first-release ABI version 1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Both policies use first-release ABI version 1. [`IvmProfileId::of_policy`] binds each policy
+/// to the engine that executes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SyscallPolicy {
     /// ABI surface for version 1 programs.
     AbiV1,

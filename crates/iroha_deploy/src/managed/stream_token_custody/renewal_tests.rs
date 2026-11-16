@@ -39,7 +39,9 @@ const PREDECESSOR_MIDPOINT_LEAD_MS: u64 = 2_000;
 enum InitialInterval {
     /// Setup only: tests read its retained material or renew it. It takes the policy's whole
     /// validity and is issued in the past, so its signing window is not a sleep constant and
-    /// generated renewal is legal [`PREDECESSOR_MIDPOINT_LEAD_MS`] after its selection.
+    /// generated renewal is legal [`PREDECESSOR_MIDPOINT_LEAD_MS`] after its selection. Its
+    /// issue time still lies inside the provider's admission interval: the fixture selects it
+    /// only once that interval has been open long enough.
     Predecessor,
     /// The interval itself is under test: this validity, issued at its selection.
     Exact(u64),
@@ -115,6 +117,36 @@ impl Fixture {
             ))],
         );
         assert_eq!(native.chain.commit(vec![log]), vec![true]);
+        // Every enrollment body lies inside its provider's admission interval, which opens at
+        // the generated network's creation, in whole seconds (`Selection::matches_unsigned`).
+        let provider_from = owner
+            .authority
+            .provider_plan()
+            .unwrap()
+            .admission_material()
+            .issued_at
+            .checked_mul(1000)
+            .unwrap();
+        if matches!(role, InitialInterval::Predecessor) {
+            // A predecessor is issued at most half its validity before it is selected.
+            assert!(renewal_validity_ms >= 2 * PREDECESSOR_MIDPOINT_LEAD_MS);
+            // It can therefore be selected only once its provider's interval has been open that
+            // long. Fixture setup can take less time, so wait for it here, before the policy's
+            // lifetime starts: the predecessor keeps its timing relative to its selection
+            // whatever the setup took.
+            let selectable_from =
+                provider_from + renewal_validity_ms.div_ceil(2) - PREDECESSOR_MIDPOINT_LEAD_MS;
+            let setup_done = now_ms().unwrap();
+            wait_until(
+                selectable_from,
+                Duration::from_millis(selectable_from.saturating_sub(setup_done) + 2_000),
+            );
+            eprintln!(
+                "fixture predecessor timing: provider_open_ms={} waited_ms={}",
+                setup_done.saturating_sub(provider_from),
+                selectable_from.saturating_sub(setup_done),
+            );
+        }
         // The policy's finite lifetime starts once the executed chain exists: generating and
         // executing genesis is fixture setup, not custody time.
         let mut policy = super::transport_tests::policy(&owner);
@@ -125,8 +157,6 @@ impl Fixture {
         policy.max_validity_ms = renewal_validity_ms;
         policy.max_anchor_age_ms = 120_000;
         if matches!(role, InitialInterval::Predecessor) {
-            // A predecessor is issued at most half its validity before it is selected.
-            assert!(renewal_validity_ms >= 2 * PREDECESSOR_MIDPOINT_LEAD_MS);
             policy.active_from_unix_ms = policy
                 .active_from_unix_ms
                 .min(policy_selected - renewal_validity_ms.div_ceil(2));
@@ -166,6 +196,10 @@ impl Fixture {
                         renewal_validity_ms,
                     ),
                 };
+                assert!(
+                    issued >= provider_from,
+                    "fixture enrollment issued before its provider admission interval"
+                );
                 let expires = issued.checked_add(validity_ms).unwrap();
                 ManagedCustodyEnrollmentInterval {
                     issued_at_unix_ms: issued,

@@ -89,7 +89,12 @@ fn kotodama_set_account_detail_with_authority() {
     vm.memory
         .preload_input(off_json, &json_tlv)
         .expect("preload json");
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load program");
     vm.set_register(10, ivm::Memory::INPUT_START + off_acc);
     vm.set_register(11, ivm::Memory::INPUT_START + off_name);
     vm.set_register(12, ivm::Memory::INPUT_START + off_json);

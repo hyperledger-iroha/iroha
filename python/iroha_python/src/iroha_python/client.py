@@ -7850,8 +7850,7 @@ class ContractManifest:
             raise TypeError("manifest `features_bitmap` must be an unsigned integer")
         elif not 0 <= features_raw <= 0xFFFFFFFFFFFFFFFF:
             raise TypeError("manifest `features_bitmap` must be a u64")
-        elif features_raw > 1:
-            # ZK (bit 0) is the only Kotodama V1 capability bit.
+        elif features_raw > 3:
             raise TypeError(
                 "manifest `features_bitmap` contains unsupported Kotodama V1 feature bits"
             )
@@ -8515,16 +8514,17 @@ class PipelineRecoverySidecar:
 _IVM_UNIT_FAULT_KINDS = frozenset((
     "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
     "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow",
-    "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt", "NullifierAlreadyUsed",
-    "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+    "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength", "MissingHalt",
+    "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed", "PermissionDenied",
+    "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
     "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
-    "CallDepthExceeded", "ControlFlowViolation",
+    "CallDepthExceeded",
 ))
-# `NumericFaultV1` codes in ABI tag order (1..=14).
+# `NumericFaultV1` codes in ABI tag order (1..=13).
 _IVM_NUMERIC_FAULT_CODES = frozenset((
     "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
     "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
-    "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+    "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot",
 ))
 # `PointerAbiFaultV1` codes in ABI tag order (1..=11).
 _IVM_POINTER_ABI_FAULT_CODES = frozenset((

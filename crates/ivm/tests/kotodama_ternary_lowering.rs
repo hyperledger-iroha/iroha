@@ -15,7 +15,7 @@ fn kotodama_ternary_executes() {
         }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile ternary program");
     let mut vm = IVM::new(u64::MAX);

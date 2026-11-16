@@ -4,7 +4,7 @@ use crate::session::{CompileOutput, CompileRequest, CompilerSession};
 pub(super) fn compile(source: &str, original: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: Some("numeric_zero.ko"),
@@ -59,7 +59,7 @@ pub(super) fn assert_metadata(before: &CompileOutput, after: &CompileOutput) {
     );
 }
 fn seed() -> (Block, Vec<u8>, LiteralFixups) {
-    let mut block = Block::new(0);
+    let mut block = Block::new(Isa::C10, 0);
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
@@ -69,10 +69,10 @@ fn seed() -> (Block, Vec<u8>, LiteralFixups) {
 #[test]
 fn same_block_reuses_only_exact_zero_inputs_across_original_numeric_kernel_and_stores() {
     let (mut block, mut code, fixups) = seed();
-    push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_ADD);
+    push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_ADD);
     push_word(&mut code, encode_addi(10, 11, 0).unwrap());
     push_word(&mut code, encode_store64_rv(2, 10, 0).unwrap());
-    push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_LT);
+    push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_LT);
     let end = code.len();
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
     assert_eq!(code.len(), end);
@@ -133,7 +133,7 @@ fn pending_calls_control_unknown_syscalls_and_new_blocks_keep_all_original_zero_
     }
     let (_, mut code, fixups) = seed();
     let end = code.len();
-    let mut next = Block::new(end);
+    let mut next = Block::new(Isa::C10, end);
     next.emit_trap_inputs(&mut code, &fixups).unwrap();
     assert_eq!(code.len() - end, 12);
 }
@@ -215,7 +215,7 @@ fn indexed_pending_relocations_keep_all_new_writes_after_many_prior_literal_fixu
             DataKey(DataKind::Int, value.to_string()),
         );
     }
-    let mut block = Block::new(code.len());
+    let mut block = Block::new(Isa::C10, code.len());
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
     for register in [10, 12, 27, 14] {
         emit_literal_load(
@@ -246,7 +246,7 @@ fn indexed_pending_relocations_keep_all_new_writes_after_many_prior_literal_fixu
         13,
         DataKey(DataKind::Int, "0".to_owned()),
     );
-    push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_LT);
+    push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_LT);
     let second = code.len();
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
     assert_eq!(code.len() - second, 4);
@@ -254,7 +254,7 @@ fn indexed_pending_relocations_keep_all_new_writes_after_many_prior_literal_fixu
         u32::from_le_bytes(code[second..].try_into().unwrap()),
         encode_addi(13, 0, 0).unwrap()
     );
-    push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_ADD);
+    push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_ADD);
     let third = code.len();
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
     assert_eq!(code.len(), third);
@@ -291,13 +291,13 @@ fn skipped_path_zero_writes_cannot_reestablish_facts_after_control_or_pending_ca
         for register in 12..=14 {
             push_word(&mut code, encode_addi(register, 0, 0).unwrap());
         }
-        push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_LT);
+        push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_LT);
         let end = code.len();
         block.emit_trap_inputs(&mut code, &fixups).unwrap();
         assert_eq!(code.len() - end, 12);
         assert_eq!(code[end..], code[..12]);
         assert_eq!(block.zero, 7);
-        push_syscall(&mut code, syscalls::SYSCALL_QUANTITY_ADD);
+        push_syscall(Isa::C10, &mut code, syscalls::SYSCALL_QUANTITY_ADD);
         let next = code.len();
         block.emit_trap_inputs(&mut code, &fixups).unwrap();
         assert_eq!(code.len(), next);

@@ -1548,7 +1548,11 @@ mod tests {
             "seiyaku ConversionKeys { state StateMap<int, quantity> ValidationFeeConversion; view fn amount(int index) authorize(anyone) -> quantity { ValidationFeeConversion.get(key: index).unwrap_or(default: 0) } }",
         ).expect("compile conversion map schema");
         let mut vm = ivm::IVM::new(1_000_000);
-        vm.load_program(&artifact).expect("load conversion schema");
+        vm.load_program_for_profile(
+            &artifact,
+            crate::ivm_test_support::declared_profile(&artifact),
+        )
+        .expect("load conversion schema");
         let base = "ValidationFeeConversion".parse().unwrap();
         let mut paths = BTreeSet::new();
         for index in [0, 1] {

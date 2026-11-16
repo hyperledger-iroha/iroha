@@ -98,7 +98,8 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
-use ivm::{IVM, encoding, pointer_abi::PointerType};
+use ivm::{IVM, pointer_abi::PointerType};
+use ivm_abi::baseline::encoding;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -1422,6 +1423,20 @@ state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(remaining_trigger_batch_gas(125, 25), 100);
     assert_eq!(remaining_trigger_batch_gas(125, 125), 0);
     assert_eq!(remaining_trigger_batch_gas(125, 200), 0);
+}
+state_test! { sync trigger_gas_limit_bounds_baseline_programs_by_their_cycle_budget
+    // C10: the block's remaining gas, or the default limit when unbounded.
+    assert_eq!(trigger_gas_limit(None, 125), 125);
+    assert_eq!(trigger_gas_limit(None, u64::MAX), DEFAULT_TRIGGER_GAS_LIMIT);
+    // Baseline: the anchor's `gas_limit_for_cycles(cycles).min(remaining)`.
+    let cycles = NonZeroU64::new(2).unwrap();
+    let per_cycle = ivm::gas::baseline::max_instruction_cost();
+    assert_eq!(trigger_gas_limit(Some(cycles), u64::MAX), 2 * per_cycle);
+    assert_eq!(trigger_gas_limit(Some(cycles), 125), 125);
+    assert_eq!(
+        trigger_gas_limit(Some(NonZeroU64::MAX), u64::MAX),
+        DEFAULT_TRIGGER_GAS_LIMIT
+    );
 }
 state_test! { sync trigger_batch_contract_calls_advance_nft_sequence
     let manifest_signing =
@@ -27145,8 +27160,10 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     };
     let state = authenticate_trigger_fixture(blank_state());
     let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
-    let_row! { mut program = ivm::ProgramMetadata::default() .encode() };
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let program = crate::ivm_test_support::baseline_program(
+        100,
+        &[ivm_abi::baseline::encoding::wide::encode_halt()],
+    );
     let generic_code_hash = ivm::contract_code_hash(&program);
     let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("completed original State read").expect("original trigger parent").as_ref().clone()) };
     {

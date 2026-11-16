@@ -20,7 +20,7 @@ fn struct_fields_lower_to_corehost_syscall_args() {
             }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler
         .compile_source(src)
         .expect("compile Kotodama with struct fields");

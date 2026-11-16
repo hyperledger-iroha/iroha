@@ -17,15 +17,17 @@ use super::{
     DOMAIN_WILDCARD_KEY, DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY,
     HINT_SKIP_CONTRACT_CALL_TARGET, HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE,
     HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
-    IMM14_MAX, IMM14_MIN, IrAccessClass, JAL_OFFSET_MAX, JAL_OFFSET_MIN, LiteralFixups,
-    NFT_COARSE_KEY, OFFSET24_MAX, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind,
-    classify_ir_access, collect_dynamic_access_hints, decoded_control_target, emit_addi,
+    IMM14_MAX, IMM14_MIN, IrAccessClass, Isa, LiteralFixups, NFT_COARSE_KEY, OFFSET24_MAX,
+    STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, classify_ir_access,
+    collect_dynamic_access_hints, decoded_control_target, emit_addi,
     emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
     emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
     patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
     record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
     stack_slot_offset_bytes,
 };
+use crate::instruction::wide::{JAL_OFFSET_MAX, JAL_OFFSET_MIN};
+use crate::{IvmEngine, IvmProfileId, SyscallPolicy};
 use crate::{
     ast::BinaryOp,
     ir,
@@ -47,7 +49,7 @@ use std::collections::{HashMap, HashSet};
 fn test_mode_compiler() -> Compiler {
     Compiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
 }
 fn canonical_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
@@ -63,7 +65,7 @@ fn alternate_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 fn compile_with_injected_ir(instructions: Vec<ir::Instr>) -> Result<Vec<u8>, String> {
-    let options = CompilerOptions::default();
+    let options = CompilerOptions::c10();
     let session = crate::session::CompilerSession::new(options.clone());
     let source_name = "axt_literal_validation.ko";
     let parsed = session
@@ -693,14 +695,14 @@ fn shared_host_requests_drive_canonical_roots_and_tally_access_hints() {
 }
 #[test]
 fn default_zk_trace_bound_matches_pipeline_bound() {
-    let opts = CompilerOptions::default();
+    let opts = CompilerOptions::c10();
     assert_eq!(opts.zk_trace_cycles, DEFAULT_ZK_TRACE_CYCLES);
     assert_eq!(DEFAULT_ZK_TRACE_CYCLES.get(), 1_000_000);
 }
 #[test]
 fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
     fn executable_code(source: &str) -> Vec<u8> {
-        let artifact = Compiler::new()
+        let artifact = Compiler::new_c10()
             .compile_source(source)
             .expect("compile V1 source");
         let metadata = ProgramMetadata::parse(&artifact).expect("parse V1 artifact");
@@ -759,7 +761,7 @@ fn source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes() {
         sourced_ir, stripped_ir,
         "source metadata must not enter lowered semantic IR"
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let sourced_output = compiler
         .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
         .expect("compile source-backed HIR");
@@ -790,7 +792,7 @@ fn source_metadata_changes_sidecars_but_not_lowered_ir_or_artifact_bytes() {
 }
 #[test]
 fn compiler_api_rejects_bare_fragments_and_implicit_main() {
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source("fn main() {}")
         .expect_err("deployable source requires a named source unit");
     assert!(error.contains("exactly one"), "unexpected error: {error}");
@@ -803,7 +805,7 @@ fn selected_zk_trace_bound_is_embedded_only_in_zk_artifacts() {
         let compiler = Compiler::new_with_options(CompilerOptions {
             force_zk,
             zk_trace_cycles,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         let code = compiler.compile_source(src).expect("compile");
         let parsed = ProgramMetadata::parse(&code).expect("parse meta");
@@ -821,7 +823,7 @@ fn selected_zk_trace_bound_is_embedded_only_in_zk_artifacts() {
 }
 #[test]
 fn loop_phi_lowering_is_deterministic() {
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let src = include_str!("fixtures/v1/c003.ko");
     let first = compiler.compile_source(src).expect("first compile");
     for _ in 0..8 {
@@ -832,7 +834,7 @@ fn loop_phi_lowering_is_deterministic() {
 #[test]
 fn emit_addi_zero_uses_addi_copy() {
     let mut code = Vec::new();
-    emit_addi(&mut code, 5, 7, 0);
+    emit_addi(Isa::C10, &mut code, 5, 7, 0);
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code[..4].try_into().unwrap());
     assert_eq!(
@@ -843,7 +845,7 @@ fn emit_addi_zero_uses_addi_copy() {
 #[test]
 fn emit_addi_combines_a_small_immediate_with_the_initial_copy() {
     let mut code = Vec::new();
-    emit_addi(&mut code, 5, 7, 42);
+    emit_addi(Isa::C10, &mut code, 5, 7, 42);
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code.try_into().expect("one addi word"));
     assert_eq!(
@@ -856,13 +858,14 @@ fn emit_load64_uses_bounded_indexed_offset() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
     let offset = i64::from(IMM14_MAX) + 1;
-    emit_load64(&mut code, &fixups, 5, 6, offset, None).expect("emit load64");
+    emit_load64(Isa::C10, &mut code, &fixups, 5, 6, offset, None).expect("emit load64");
     let recorded = fixups.into_inner();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, 0);
     assert_eq!(recorded[0].1, super::LITERAL_SHIFT_REG);
     assert_eq!((recorded[0].2).0, DataKind::I64);
     patch_indexed_literal_load(
+        Isa::C10,
         &mut code,
         recorded[0].0,
         recorded[0].1,
@@ -894,10 +897,11 @@ fn emit_store64_uses_bounded_indexed_offset() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
     let offset = i64::from(IMM14_MAX) + 1;
-    emit_store64(&mut code, &fixups, 6, 5, offset, 7).expect("emit store64");
+    emit_store64(Isa::C10, &mut code, &fixups, 6, 5, offset, 7).expect("emit store64");
     let recorded = fixups.into_inner();
     assert_eq!(recorded.len(), 1);
     patch_indexed_literal_load(
+        Isa::C10,
         &mut code,
         recorded[0].0,
         recorded[0].1,
@@ -962,11 +966,12 @@ fn first_word_beyond_jal() -> usize {
 fn far_jump_fixup_uses_one_word_signed24_transfer() {
     let mut code = Vec::new();
     let start = super::reserve_word(&mut code);
-    super::patch_jump_transfer(&mut code, start, first_word_beyond_jal() - 4)
+    super::patch_jump_transfer(Isa::C10, &mut code, start, first_word_beyond_jal() - 4)
         .expect("patch farthest direct jump");
     let word = u32::from_le_bytes(code.as_slice().try_into().unwrap());
     assert_eq!(word, encode_jal(0, JAL_OFFSET_MAX * 4).unwrap());
-    super::patch_jump_transfer(&mut code, start, first_word_beyond_jal()).expect("patch far jump");
+    super::patch_jump_transfer(Isa::C10, &mut code, start, first_word_beyond_jal())
+        .expect("patch far jump");
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code.try_into().unwrap());
     assert_eq!(
@@ -978,7 +983,7 @@ fn far_jump_fixup_uses_one_word_signed24_transfer() {
 #[test]
 fn trampoline_jump_is_always_non_linking_and_range_checked() {
     let mut code = vec![0_u8; 4];
-    super::patch_trampoline_jump(&mut code, 0, 4).expect("patch near trampoline hop");
+    super::patch_trampoline_jump(Isa::C10, &mut code, 0, 4).expect("patch near trampoline hop");
     let word = u32::from_le_bytes(code.try_into().unwrap());
     assert_eq!(
         instruction::wide::opcode(word),
@@ -988,7 +993,7 @@ fn trampoline_jump_is_always_non_linking_and_range_checked() {
     assert_eq!(instruction::wide::imm24(word), 1);
     let mut code = vec![0_u8; 4];
     let first_out_of_range = usize::try_from(OFFSET24_MAX + 1).unwrap() * 4;
-    let error = super::patch_trampoline_jump(&mut code, 0, first_out_of_range)
+    let error = super::patch_trampoline_jump(Isa::C10, &mut code, 0, first_out_of_range)
         .expect_err("trampoline hops beyond signed24 must fail closed");
     assert!(error.contains("signed 24-bit word range"), "{error}");
 }
@@ -996,7 +1001,7 @@ fn trampoline_jump_is_always_non_linking_and_range_checked() {
 fn near_call_fixup_is_one_word_jal() {
     let mut code = Vec::new();
     let start = super::reserve_word(&mut code);
-    super::patch_call_transfer(&mut code, start, start + 16).expect("patch near call");
+    super::patch_call_transfer(Isa::C10, &mut code, start, start + 16).expect("patch near call");
     assert_eq!(code.len(), 4);
     let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
     assert_eq!(
@@ -1008,11 +1013,12 @@ fn near_call_fixup_is_one_word_jal() {
 fn far_call_fixup_uses_one_word_signed24_transfer() {
     let mut code = Vec::new();
     let start = super::reserve_word(&mut code);
-    super::patch_call_transfer(&mut code, start, first_word_beyond_jal() - 4)
+    super::patch_call_transfer(Isa::C10, &mut code, start, first_word_beyond_jal() - 4)
         .expect("patch farthest direct call");
     let word = u32::from_le_bytes(code.as_slice().try_into().unwrap());
     assert_eq!(word, encode_jal(1, JAL_OFFSET_MAX * 4).unwrap());
-    super::patch_call_transfer(&mut code, start, first_word_beyond_jal()).expect("patch far call");
+    super::patch_call_transfer(Isa::C10, &mut code, start, first_word_beyond_jal())
+        .expect("patch far call");
     assert_eq!(code.len(), 4);
     let word = u32::from_le_bytes(code.try_into().unwrap());
     assert_eq!(
@@ -1027,8 +1033,15 @@ fn transfer_beyond_signed24_is_deferred_instead_of_rejected() {
     let at = reserve_word(&mut code);
     let target = usize::try_from(OFFSET24_MAX + 2).unwrap() * 4;
     let mut deferred = Vec::new();
-    super::patch_or_defer_transfer(&mut code, at, target, TransferKind::Call, &mut deferred)
-        .expect("far call must be deferred");
+    super::patch_or_defer_transfer(
+        Isa::C10,
+        &mut code,
+        at,
+        target,
+        TransferKind::Call,
+        &mut deferred,
+    )
+    .expect("far call must be deferred");
     assert_eq!(deferred.len(), 1);
     assert_eq!(deferred[0].at, at);
     assert_eq!(deferred[0].target, target);
@@ -1046,7 +1059,7 @@ fn ordinary_control_relaxation_is_byte_identical() {
     push_word(&mut code, encoding::wide::encode_halt());
     let expected = code.clone();
     let (relaxed, offsets) =
-        relax_control_transfers_with_trampolines(code, &[], 32).expect("relax near code");
+        relax_control_transfers_with_trampolines(Isa::C10, code, &[], 32).expect("relax near code");
     assert_eq!(relaxed, expected);
     assert!(offsets.islands.is_empty());
     assert_eq!(offsets.entry(8), 8);
@@ -1061,12 +1074,18 @@ fn trampoline_relaxation_rejects_duplicate_or_out_of_image_fixups() {
         kind: TransferKind::Jump,
     };
     assert!(
-        relax_control_transfers_with_trampolines(code.clone(), &[duplicate, duplicate], 32,)
-            .expect_err("duplicate fixup sources must fail")
-            .contains("duplicate")
+        relax_control_transfers_with_trampolines(
+            Isa::C10,
+            code.clone(),
+            &[duplicate, duplicate],
+            32,
+        )
+        .expect_err("duplicate fixup sources must fail")
+        .contains("duplicate")
     );
     assert!(
         relax_control_transfers_with_trampolines(
+            Isa::C10,
             code,
             &[DeferredTransfer {
                 at: 0,
@@ -1094,7 +1113,8 @@ fn deferred_far_jump_uses_sparse_direct_trampoline_chain() {
         kind: TransferKind::Jump,
     }];
     let (relaxed, offsets) =
-        relax_control_transfers_with_trampolines(code, &deferred, 32).expect("relax deferred jump");
+        relax_control_transfers_with_trampolines(Isa::C10, code, &deferred, 32)
+            .expect("relax deferred jump");
     assert!(offsets.islands.len() >= 3);
     assert_eq!(
         relaxed.len(),
@@ -1140,7 +1160,8 @@ fn deferred_far_call_links_once_and_trampolines_without_relinking() {
         kind: TransferKind::Call,
     }];
     let (relaxed, offsets) =
-        relax_control_transfers_with_trampolines(code, &deferred, 24).expect("relax deferred call");
+        relax_control_transfers_with_trampolines(Isa::C10, code, &deferred, 24)
+            .expect("relax deferred call");
     let source = offsets.instruction(source);
     let source_word =
         u32::from_le_bytes(relaxed[source..source + 4].try_into().expect("source word"));
@@ -1304,7 +1325,7 @@ fn computation_samples_publish_only_public_views() {
         ),
     ];
     for (name, source) in sources {
-        let (_, manifest) = Compiler::new()
+        let (_, manifest) = Compiler::new_c10()
             .compile_source_with_manifest(source)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert!(manifest.permissions.is_empty(), "{name}: no mutation roles");
@@ -1396,7 +1417,7 @@ fn direct_call(callee: &str) -> ir::Instr {
 }
 #[test]
 fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
-    let artifact = Compiler::new()
+    let artifact = Compiler::new_c10()
         .compile_source(
             r#"seiyaku Test { permission Entry;
   state StateMap<bool, int> Foo;
@@ -1581,7 +1602,7 @@ seiyaku CompilerFixture { permission FixtureAccess;
   }
 }
 "#;
-    let (_artifact, manifest) = Compiler::new()
+    let (_artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("compile mixed dynamic/literal ledger helper calls");
     let hints = manifest
@@ -1619,7 +1640,7 @@ seiyaku CompilerFixture { permission FixtureAccess;
   }
 }
 "#;
-    let (_artifact, manifest) = Compiler::new()
+    let (_artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("compile mixed dynamic/authority account helper calls");
     let hints = manifest
@@ -1659,10 +1680,11 @@ fn encode_addi_rejects_out_of_range_immediate() {
 fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
     let moves = vec![(10, 11), (11, 12), (12, 10), (13, 14)];
     let mut code = Vec::new();
-    emit_parallel_register_moves(&mut code, moves.clone(), 27)
+    emit_parallel_register_moves(Isa::C10, &mut code, moves.clone(), 27)
         .expect("emit parallel ABI move cycle");
     let mut second = Vec::new();
-    emit_parallel_register_moves(&mut second, moves, 27).expect("repeat parallel ABI move cycle");
+    emit_parallel_register_moves(Isa::C10, &mut second, moves, 27)
+        .expect("repeat parallel ABI move cycle");
     assert_eq!(code, second);
     let mut registers = [0u64; 32];
     registers[10] = 10;
@@ -1685,7 +1707,7 @@ fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
 #[test]
 fn private_numeric_valcom_staging_preserves_cross_aliased_operands() {
     let mut code = Vec::new();
-    emit_private_numeric_valcom_arguments(&mut code, 11, 10, 29)
+    emit_private_numeric_valcom_arguments(Isa::C10, &mut code, 11, 10, 29)
         .expect("stage cross-aliased private commitment operands");
     let mut registers = [0u64; 32];
     registers[10] = 101;
@@ -1708,7 +1730,7 @@ fn get_private_input_staging_preserves_index_aliased_with_kind_register() {
         ivm_abi::private_input::PrivateInputKindV1::Quantity,
     ] {
         let mut code = Vec::new();
-        emit_get_private_input_arguments(&mut code, 11, kind, 29)
+        emit_get_private_input_arguments(Isa::C10, &mut code, 11, kind, 29)
             .expect("stage private-input index and kind");
         let mut registers = [0u64; 32];
         registers[11] = 37;
@@ -1726,12 +1748,14 @@ fn get_private_input_staging_preserves_index_aliased_with_kind_register() {
 #[test]
 fn private_numeric_staging_rejects_reserved_scratch_aliases_without_emitting_code() {
     let mut commitment_code = Vec::new();
-    let commitment_error = emit_private_numeric_valcom_arguments(&mut commitment_code, 29, 10, 29)
-        .expect_err("commitment source must not alias staging scratch");
+    let commitment_error =
+        emit_private_numeric_valcom_arguments(Isa::C10, &mut commitment_code, 29, 10, 29)
+            .expect_err("commitment source must not alias staging scratch");
     assert!(commitment_error.contains("reserved scratch register"));
     assert!(commitment_code.is_empty());
     let mut private_input_code = Vec::new();
     let private_input_error = emit_get_private_input_arguments(
+        Isa::C10,
         &mut private_input_code,
         29,
         ivm_abi::private_input::PrivateInputKindV1::Int,
@@ -1801,14 +1825,23 @@ fn encode_jal_rejects_unaligned_offsets() {
 fn emit_load64_requires_scratch_when_rd_equals_base() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
-    let err = emit_load64(&mut code, &fixups, 5, 5, 0, None).unwrap_err();
+    let err = emit_load64(Isa::C10, &mut code, &fixups, 5, 5, 0, None).unwrap_err();
     assert!(err.contains("emit_load64 requires scratch"));
 }
 #[test]
 fn emit_store64_requires_distinct_scratch() {
     let mut code = Vec::new();
     let fixups = LiteralFixups::default();
-    let err = emit_store64(&mut code, &fixups, 5, 6, i64::from(IMM14_MAX) + 1, 5).unwrap_err();
+    let err = emit_store64(
+        Isa::C10,
+        &mut code,
+        &fixups,
+        5,
+        6,
+        i64::from(IMM14_MAX) + 1,
+        5,
+    )
+    .unwrap_err();
     assert!(err.contains("emit_store64 scratch"));
 }
 #[test]
@@ -2060,7 +2093,7 @@ kotoage fn main() authorize(EscrowAdmin) {{
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile native escrow access hints");
@@ -3070,7 +3103,7 @@ seiyaku WideInfo { permission FixtureAccess;
   }
 }
 "#;
-    let artifact = Compiler::new()
+    let artifact = Compiler::new_c10()
         .compile_source(source)
         .expect("compile full-width Int logging");
     let metadata = ProgramMetadata::parse(&artifact).expect("V1 metadata");
@@ -3103,7 +3136,7 @@ fn debug_surface_rejects_raw_variants_and_invalid_info_arguments() {
         let source = format!(
             "seiyaku CompilerFixture {{ permission DebugContract;  kotoage fn run() authorize(DebugContract) {{ {call}; }} }}"
         );
-        let err = Compiler::new()
+        let err = Compiler::new_c10()
             .compile_source(&source)
             .expect_err("non-canonical debug call must fail");
         assert!(
@@ -3181,7 +3214,7 @@ fn privacy_output_builtins_emit_runtime_syscalls() {
     let compiler = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         mode: CompilerMode::Test,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     let bytes = compiler
         .compile_source(src)
@@ -3275,7 +3308,7 @@ fn raw_transfer_batch_boundaries_are_not_source_apis() {
         include_str!("fixtures/v1/c068.ko"),
         include_str!("fixtures/v1/c069.ko"),
     ] {
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(source)
             .expect_err("only typed transfer_batch is a source API");
         assert!(
@@ -3313,7 +3346,7 @@ fn transfer_batch_builtin_lowers_entries_between_boundaries() {
         "seiyaku EmptyBatch { permission Writer;  kotoage fn main() authorize(Writer) { ledger::asset::transfer_batch(transfers: []); } }",
         "seiyaku SavedBatch { permission Writer;  kotoage fn main() authorize(Writer) { let List<(AccountId, AccountId, AssetDefinitionId, quantity), 8> transfers = []; ledger::asset::transfer_batch(transfers: transfers); } }",
     ] {
-        Compiler::new()
+        Compiler::new_c10()
             .compile_source(source)
             .expect("empty and saved typed lists compile");
     }
@@ -3772,7 +3805,7 @@ kotoage fn main() authorize(FixtureAccess) {{
 "#
         )
     };
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(&source(&"a".repeat(128)))
         .expect("a 128-byte canonical governance selector must compile");
     let overlong = "a".repeat(129);
@@ -3786,7 +3819,7 @@ kotoage fn main() authorize(FixtureAccess) {{
         ("Unicode", "投票"),
         ("overlong", overlong.as_str()),
     ] {
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&source(selector))
             .expect_err("a noncanonical governance selector must fail compilation");
         assert!(
@@ -3874,7 +3907,7 @@ seiyaku BallotAccess { permission Invoke;
     }
 }
 "#;
-    let (program, manifest) = Compiler::new()
+    let (program, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("compile a literal instruction behind an internal call");
     let entrypoints = manifest.entrypoints.expect("manifest entrypoints");
@@ -4847,7 +4880,7 @@ fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
 #[test]
 fn source_meta_cannot_override_build_configuration() {
     let src = include_str!("fixtures/v1/c129.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let err = compiler
         .compile_source(src)
         .expect_err("source policy must be rejected");
@@ -4862,7 +4895,7 @@ fn production_rejects_test_only_assertions() {
         let source = format!(
             "seiyaku Test {{ permission Entry;  kotoage fn main() authorize(Entry) {{ {assertion} }} }}"
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&source)
             .expect_err("production assertion must be rejected");
         assert!(
@@ -4878,7 +4911,7 @@ fn production_rejects_test_only_assertions() {
 #[test]
 fn manifest_access_set_hints_from_state_only_contract() {
     let src = include_str!("fixtures/v1/c130.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -4891,7 +4924,7 @@ fn manifest_access_set_hints_from_state_only_contract() {
 #[test]
 fn zero_arg_public_entrypoint_retains_scalar_state_hints() {
     let src = include_str!("fixtures/v1/c131.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -4917,7 +4950,7 @@ fn zero_arg_public_entrypoint_retains_scalar_state_hints() {
 #[test]
 fn whole_program_dce_excludes_dead_private_dynamic_access_hints() {
     let src = include_str!("fixtures/v1/c132.ko");
-    let (_bytes, manifest, report) = Compiler::new()
+    let (_bytes, manifest, report) = Compiler::new_c10()
         .compile_source_with_manifest_and_report(src)
         .expect("compile reachable access hints");
     assert!(
@@ -4953,7 +4986,7 @@ seiyaku ReachableHintControlFlow {{
 }}
 "#
         );
-        let (_bytes, manifest) = Compiler::new()
+        let (_bytes, manifest) = Compiler::new_c10()
             .compile_source_with_manifest(&source)
             .expect("compile retained function with unreachable scan");
         assert!(
@@ -4978,7 +5011,7 @@ fn expression_nested_scans_retain_post_optimization_provenance() {
         ),
     ];
     for (source, expected) in cases {
-        let (_artifact, manifest) = Compiler::new()
+        let (_artifact, manifest) = Compiler::new_c10()
             .compile_source_with_manifest(source)
             .expect("compile expression-nested StateMap scan");
         let hints = manifest
@@ -5088,7 +5121,7 @@ fn optimized_ir_dynamic_provenance_must_match_the_emitted_state_schema() {
 #[test]
 fn bounded_state_map_scans_emit_exact_dynamic_read_hints() {
     let src = include_str!("fixtures/v1/c139.ko");
-    let (_bytes, manifest) = Compiler::new()
+    let (_bytes, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile bounded StateMap scans");
     let hints = manifest
@@ -5140,7 +5173,7 @@ seiyaku ZeroScanNoOp {{
 }}
 "#
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source_with_manifest(&source)
             .expect_err("scan limits are always positive");
         assert!(error.contains("E_ITERATION_LIMIT"), "{iterator}: {error}");
@@ -5164,7 +5197,7 @@ seiyaku ExactScanProvenance {{
 }}
 "#
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source_with_manifest(&source)
             .expect_err("unresolved free calls cannot provide scan provenance");
         assert!(
@@ -5176,7 +5209,7 @@ seiyaku ExactScanProvenance {{
 #[test]
 fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
     let src = include_str!("fixtures/v1/c141.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -5229,7 +5262,7 @@ fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
 #[test]
 fn manifest_build_rejects_dynamic_state_iteration_bounds() {
     let src = include_str!("fixtures/v1/c142.ko");
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect_err("V1 build must reject nonliteral iteration bounds");
     assert!(error.contains("E_UNBOUNDED_ITERATION"), "{error}");
@@ -5280,7 +5313,7 @@ fn manifest_compilation_rejects_raw_call_contract() {
 #[test]
 fn compile_native_json_object_with_exact_int_and_pointer_values() {
     let src = include_str!("fixtures/v1/c145.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     compiler
         .compile_source_with_manifest(src)
         .expect("compile json object builders");
@@ -5294,7 +5327,7 @@ fn native_json_accepts_returned_state_cursors() {
             json { after: batch.next }
         }
     }"#;
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("opaque cursors are native JSON values");
 }
@@ -5334,7 +5367,7 @@ fn native_json_construction_emits_one_build_syscall() {
 #[test]
 fn manifest_access_set_hints_include_register_trigger_from_json() {
     let src = include_str!("fixtures/v1/c147.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -5351,7 +5384,7 @@ fn manifest_access_set_hints_include_register_trigger_from_json() {
 #[test]
 fn manifest_access_set_hints_include_nft_set_metadata_literal() {
     let src = include_str!("fixtures/v1/c148.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -5379,7 +5412,7 @@ fn manifest_access_set_hints_include_nft_set_metadata_literal() {
 #[test]
 fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata() {
     let src = include_str!("fixtures/v1/c149.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -5401,7 +5434,7 @@ fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata() {
 #[test]
 fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_mint() {
     let src = include_str!("fixtures/v1/c150.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -5450,7 +5483,7 @@ kotoage fn main() authorize(AssetAdmin) {{
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -5505,7 +5538,7 @@ kotoage fn main() authorize(AssetAdmin) {{
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -5566,7 +5599,7 @@ kotoage fn main() authorize(AssetAdmin) {{
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&source)
         .expect("compile manifest");
@@ -5600,7 +5633,7 @@ kotoage fn main() authorize(AssetAdmin) {{
 }
 #[test]
 fn manifest_access_set_hints_include_inline_ballot_vendor_payload() {
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(include_str!("../samples/zk_vote_ballot.ko"))
         .expect("compile sample manifest");
@@ -5644,7 +5677,7 @@ fn manifest_access_set_hints_include_transfer_domain_literal() {
     let src = format!(
         "seiyaku CompilerFixture {{ permission Admin;  kotoage fn main() authorize(Admin) {{ ledger::domain::transfer(source: AccountId::parse(\"{from_literal}\"), domain: DomainId::parse(\"{domain}\"), destination: AccountId::parse(\"{to_literal}\")); }} }}"
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -5957,7 +5990,7 @@ fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
     let src = include_str!("fixtures/v1/c153.ko");
     let compiler = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     let error = compiler
         .compile_source_with_manifest(src)
@@ -5990,7 +6023,7 @@ seiyaku Test {{ permission Admin;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("static peer helpers should have complete access hints");
@@ -6010,7 +6043,7 @@ seiyaku Test {{ permission Admin;
 #[test]
 fn manifest_access_set_hints_include_subscription_helpers() {
     let src = include_str!("fixtures/v1/c154.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("subscription helpers should have complete access hints");
@@ -6049,7 +6082,7 @@ fn manifest_access_set_hints_make_adversarial_static_host_payloads_conservative(
         entry.access_hints_skipped,
         [HINT_SKIP_OPAQUE_ISI.to_owned()]
     );
-    let (_bytes, production_manifest) = Compiler::new()
+    let (_bytes, production_manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("production must preserve conservative incomplete metadata");
     let production_entry = production_manifest
@@ -6084,7 +6117,7 @@ seiyaku Test {{ permission Entry;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -6104,7 +6137,7 @@ seiyaku Test {{ permission Entry;
 #[test]
 fn manifest_trigger_decl_rejects_unchecked_namespaced_callback() {
     let src = include_str!("fixtures/v1/c156.ko");
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect_err("remote callbacks cannot bypass authenticated source signatures");
     assert!(error.contains("E_TRIGGER_TARGET_NAMESPACE"), "{error}");
@@ -6115,7 +6148,7 @@ fn execute_trigger_callback_uses_exact_public_argument_schema() {
         kotoage fn run(int amount, Name recipient) authorize(anyone) {}
         trigger wake -> run { on execute trigger wake; }
     }"#;
-    let (_, manifest) = Compiler::new()
+    let (_, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("typed execute callback");
     let entrypoints = manifest.entrypoints.unwrap();
@@ -6147,7 +6180,7 @@ fn execute_trigger_callback_uses_exact_public_argument_schema() {
 #[test]
 fn trigger_callback_dispatches_only_through_cntr_entry_pc() {
     let src = include_str!("fixtures/v1/c157.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -6181,7 +6214,7 @@ fn trigger_callback_dispatches_only_through_cntr_entry_pc() {
 #[test]
 fn source_order_and_main_name_do_not_select_raw_dispatch() {
     let src = include_str!("fixtures/v1/c158.ko");
-    let (bytes, manifest) = Compiler::new()
+    let (bytes, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile manifest");
     let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -6258,7 +6291,7 @@ seiyaku Test {{ permission Entry;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -6510,7 +6543,7 @@ seiyaku Test {{ permission Entry;
             )),
         ),
     ];
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     for (src, expected_filter) in cases {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -6531,7 +6564,7 @@ fn manifest_trigger_decl_lowers_pipeline_filter() {
         pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
     };
     let src = include_str!("fixtures/v1/c161.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -6583,7 +6616,7 @@ fn access_hint_diagnostics_report_literal_trigger_spec_decode_failures() {
 #[test]
 fn production_accepts_dynamic_state_path_access_fallback() {
     let src = include_str!("fixtures/v1/c164.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("dynamic state fallback should be deployable in production");
@@ -6605,7 +6638,7 @@ fn production_accepts_dynamic_state_path_access_fallback() {
 #[test]
 fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
     let src = include_str!("fixtures/v1/c165.ko");
-    let session = crate::session::CompilerSession::default();
+    let session = crate::session::CompilerSession::c10();
     let request = crate::session::CompileRequest {
         source: src,
         source_name: Some("invalid_trigger.ko"),
@@ -6646,7 +6679,7 @@ fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
 #[test]
 fn production_rejects_raw_call_contract_surface() {
     let src = include_str!("fixtures/v1/c166.ko");
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect_err("raw contract-call bridge must not reach production admission");
     assert!(
@@ -6661,7 +6694,7 @@ fn compile_contract_import(
     callee: &str,
 ) -> Result<crate::session::CompileOutput, crate::driver::BuildError> {
     use crate::linker::{SourceContractArtifact, SourceLinkRequest, SourceModuleUnit};
-    let artifact = Compiler::new()
+    let artifact = Compiler::new_c10()
         .compile_source(callee)
         .expect("compile imported interface");
     let request = SourceLinkRequest {
@@ -6678,7 +6711,7 @@ fn compile_contract_import(
         packages: Vec::new(),
     };
     crate::driver::BuildDriver::new(
-        crate::session::CompilerSession::default(),
+        crate::session::CompilerSession::c10(),
         "contract-import-test",
     )
     .compile_project(request, "app.ko")
@@ -6819,7 +6852,7 @@ fn contract_references_stay_private_and_imported_type_aliases_cannot_shadow_decl
 #[test]
 fn retired_contract_invoke_is_not_a_source_api() {
     let source = include_str!("fixtures/v1/c167.ko");
-    let error = Compiler::new().compile_source(source).unwrap_err();
+    let error = Compiler::new_c10().compile_source(source).unwrap_err();
     assert!(
         error.contains("error[K2002] resolve: unknown function or builtin `contract::invoke`"),
         "{error}"
@@ -6828,7 +6861,7 @@ fn retired_contract_invoke_is_not_a_source_api() {
 #[test]
 fn production_accepts_opaque_isi_access_fallback() {
     let src = include_str!("fixtures/v1/c168.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("opaque ISI fallback should be deployable in production");
@@ -6858,7 +6891,7 @@ fn production_accepts_opaque_isi_access_fallback() {
 #[test]
 fn production_preserves_dynamic_asset_definition_transfer_coarse_hints() {
     let src = include_str!("fixtures/v1/c169.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("dynamic asset transfers should use coarse asset access hints");
@@ -6901,7 +6934,7 @@ seiyaku Test {{ permission Admin;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("fixed asset dynamic accounts should have bounded access hints");
@@ -6960,7 +6993,7 @@ seiyaku Test {{ permission Admin;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("literal asset helper return should feed access hints");
@@ -6985,7 +7018,7 @@ seiyaku Test {{ permission Admin;
 #[test]
 fn explicit_global_wildcards_are_rejected() {
     let src = include_str!("fixtures/v1/c170.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let err = compiler
         .compile_source_with_manifest(src)
         .expect_err("manual access hints should be rejected");
@@ -7011,7 +7044,7 @@ seiyaku Test {{ permission Admin;
 }}
 "#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let err = compiler
         .compile_source_with_manifest(&src)
         .expect_err("manual access hints should be rejected");
@@ -7020,7 +7053,7 @@ seiyaku Test {{ permission Admin;
 #[test]
 fn manifest_access_set_hints_include_literal_map_keys() {
     let src = include_str!("fixtures/v1/c171.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -7034,7 +7067,7 @@ fn manifest_access_set_hints_include_literal_map_keys() {
 #[test]
 fn manifest_access_set_hints_use_canonical_records_for_bool_map_keys() {
     let src = include_str!("fixtures/v1/c172.ko");
-    let (_bytes, manifest) = Compiler::new()
+    let (_bytes, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile bool map access hints");
     let hints = manifest.access_set_hints.expect("access hints");
@@ -7049,7 +7082,7 @@ fn manifest_access_set_hints_use_canonical_records_for_bool_map_keys() {
 #[test]
 fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
     let src = include_str!("fixtures/v1/c173.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("quantity is a canonical-Norito durable map key");
@@ -7070,7 +7103,7 @@ fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
 #[test]
 fn manifest_access_set_hints_include_literal_pointer_map_keys() {
     let src = include_str!("fixtures/v1/c174.ko");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
@@ -7121,7 +7154,7 @@ fn manifest_access_set_hints_include_create_trigger() {
     let src = format!(
         r#"seiyaku Test {{ permission Admin;  kotoage fn main() authorize(Admin) {{ ledger::trigger::register(trigger_spec: Json::parse("{escaped}")); }} }}"#
     );
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_bytes, manifest) = compiler
         .compile_source_with_manifest(&src)
         .expect("compile manifest");
@@ -7203,9 +7236,11 @@ fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
     let parsed = ProgramMetadata::parse(bytes).expect("parse metadata");
     code_syscalls(&bytes[parsed.code_offset..])
 }
-/// Every syscall word emitted in an artifact compiled under `host_policy`, in program order.
+/// Every syscall word emitted in a C10 artifact compiled under `host_policy`, in program order.
 fn emitted_syscalls_for(bytes: &[u8], host_policy: crate::SyscallPolicy) -> Vec<u32> {
-    let parsed = ProgramMetadata::parse_for_policy(bytes, host_policy).expect("parse metadata");
+    let profile = crate::IvmProfileId::of_engine_policy(crate::IvmEngine::C10, host_policy)
+        .expect("C10 implements every named policy");
+    let parsed = ProgramMetadata::parse_for_profile(bytes, profile).expect("parse metadata");
     code_syscalls(&bytes[parsed.code_offset..])
 }
 /// Every syscall word in a code section, in program order.
@@ -7233,7 +7268,7 @@ seiyaku JsonFields {
     }
 }
 "#;
-    let bytes = Compiler::new()
+    let bytes = Compiler::new_c10()
         .compile_source(source)
         .expect("compile string and bool getters");
     let emitted = emitted_syscalls(&bytes);
@@ -7462,7 +7497,7 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         let source = format!(
             "seiyaku Probe {{ permission ProbeAccess; kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ {body} }} }}"
         );
-        let bytes = Compiler::new()
+        let bytes = Compiler::new_c10()
             .compile_source(&source)
             .unwrap_or_else(|error| panic!("`{body}` must compile: {error}"));
         emitted_syscalls(&bytes)
@@ -7581,7 +7616,7 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         );
         Compiler::new_with_options(CompilerOptions {
             host_policy,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         })
         .compile_source(&source)
         .map(|bytes| emitted_syscalls_for(&bytes, host_policy))
@@ -7594,7 +7629,7 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
         ) {
             crate::SyscallPolicy::AbiV1RuntimeLifecycle
         } else {
-            CompilerOptions::default().host_policy
+            CompilerOptions::c10().host_policy
         }
     };
     let baseline_for = |host_policy: crate::SyscallPolicy| {
@@ -7603,7 +7638,7 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
             .into_iter()
             .collect::<HashSet<_>>()
     };
-    let baseline = baseline_for(CompilerOptions::default().host_policy);
+    let baseline = baseline_for(CompilerOptions::c10().host_policy);
     let lifecycle_baseline = baseline_for(crate::SyscallPolicy::AbiV1RuntimeLifecycle);
     // Pointer publication, normalization and encoding, heap allocation,
     // checked `int` narrowing and its trap are compiler-owned plumbing unless
@@ -7719,7 +7754,7 @@ fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
             "seiyaku Probe {{ permission ProbeAccess; state StateMap<int, int> Balances; fn run({PARAMS}) {{ {body} }} \
              kotoage fn probe({PARAMS}) authorize(ProbeAccess) {{ run({ARGS}); }} }}"
         );
-        Compiler::new()
+        Compiler::new_c10()
             .compile_source(&source)
             .map(|bytes| emitted_syscalls(&bytes))
     };
@@ -7829,7 +7864,7 @@ fn declared_authorization_inventory_is_authenticated_in_artifact_and_manifest() 
         view fn inspect() authorize(ChainAdmin) -> int { 1 }
         kotoage fn open() authorize(anyone) {}
     }"#;
-    let (artifact, manifest) = Compiler::new()
+    let (artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("declared permissions");
     let interface = ProgramMetadata::parse(&artifact)
@@ -7891,7 +7926,7 @@ fn scoped_permission_grants_emit_canonical_name_pointer_operations() {
             ledger::誓約::revoke_permission(account: account, permission: Pay);
         }
     }"#;
-    let artifact = Compiler::new()
+    let artifact = Compiler::new_c10()
         .compile_source(source)
         .expect("instance permission grant and revoke");
     let syscalls = emitted_syscalls(&artifact);
@@ -7914,7 +7949,7 @@ fn ordinary_enums_keep_distinct_public_call_json_and_durable_state_schemas() {
         view fn json_value(Status value) authorize(anyone) -> Json { json { status: value } }
         kotoage fn store(int key, Status value) authorize(anyone) { Values[key] = value; }
     }"#;
-    let (artifact, manifest) = Compiler::new()
+    let (artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("enum ABI and state");
     let interface = ProgramMetadata::parse(&artifact)
@@ -7980,7 +8015,7 @@ fn native_events_embed_exact_sorted_payload_schemas_and_enum_inventory() {
             emit Empty {};
         }
     }"#;
-    let (artifact, manifest) = Compiler::new()
+    let (artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("native event compilation");
     let interface = ProgramMetadata::parse(&artifact)
@@ -8030,7 +8065,7 @@ fn vrf_epoch_seed_accepts_typed_exact_epochs_and_returns_an_option() {
             .flat_map(|block| &block.instrs)
             .any(|instruction| matches!(instruction, ir::Instr::VrfEpochSeed { .. }))
     );
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("typed VRF source compiles");
     for expression in [
@@ -8042,7 +8077,7 @@ fn vrf_epoch_seed_accepts_typed_exact_epochs_and_returns_an_option() {
             "seiyaku Seeds {{ view fn read() authorize(anyone) -> Option<bytes> {{ {expression} }} }}"
         );
         assert!(
-            Compiler::new().compile_source(&source).is_err(),
+            Compiler::new_c10().compile_source(&source).is_err(),
             "{expression}"
         );
     }
@@ -8050,7 +8085,7 @@ fn vrf_epoch_seed_accepts_typed_exact_epochs_and_returns_an_option() {
 
 #[test]
 fn public_value_utilities_compile_exact_schemas_and_reject_private_or_cursor_values() {
-    Compiler::new().compile_source(r#"seiyaku Utilities {
+    Compiler::new_c10().compile_source(r#"seiyaku Utilities {
         enum Status { Ready = 1 }
         struct Payload { Status status; List<Option<int>, 2> values; Json metadata }
         view fn encode(Payload value) authorize(anyone) -> bytes { codec::encode(value) }
@@ -8065,7 +8100,7 @@ fn public_value_utilities_compile_exact_schemas_and_reject_private_or_cursor_val
         "module Reject { fn text(bytes value) -> string { string::from(value) } }",
         "module Reject { fn text(int value) -> string { string::as_bytes(value) } }",
     ] {
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(source)
             .expect_err("utility must reject unsupported source type");
         assert!(error.contains("K2003"), "{error}");
@@ -8074,7 +8109,7 @@ fn public_value_utilities_compile_exact_schemas_and_reject_private_or_cursor_val
 
 #[test]
 fn numeric_selection_retains_exact_domains_and_rejects_implicit_mixing() {
-    Compiler::new().compile_source("seiyaku NumericSelection { view fn select(decimal a, decimal b, quantity q, quantity r) authorize(anyone) -> (decimal, decimal, decimal, quantity, quantity, quantity) { (math::min(a, b), math::max(a, b), math::abs(a), math::min(q, r), math::max(q, r), math::abs(q)) } }").expect("all exact numeric domains");
+    Compiler::new_c10().compile_source("seiyaku NumericSelection { view fn select(decimal a, decimal b, quantity q, quantity r) authorize(anyone) -> (decimal, decimal, decimal, quantity, quantity, quantity) { (math::min(a, b), math::max(a, b), math::abs(a), math::min(q, r), math::max(q, r), math::abs(q)) } }").expect("all exact numeric domains");
     for expression in [
         "math::min(1, 2.0)",
         "math::max(1.0, 2)",
@@ -8082,7 +8117,7 @@ fn numeric_selection_retains_exact_domains_and_rejects_implicit_mixing() {
         "math::mean(1.0, 2.0)",
     ] {
         let source = format!("module Rejected {{ fn bad() {{ let _value = {expression}; }} }}");
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&source)
             .expect_err("mixed or unsupported numeric operands");
         assert!(error.contains("K2003"), "{error}");
@@ -8109,7 +8144,7 @@ fn account_filtered_asset_pages_keep_the_exact_owner_and_typed_projection() {
                 }
             ))
     );
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("typed owner filter");
     for args in [
@@ -8120,7 +8155,10 @@ fn account_filtered_asset_pages_keep_the_exact_owner_and_typed_projection() {
         let source = format!(
             "seiyaku Inventory {{ view fn assets(AccountId account) authorize(anyone) -> QueryPage<AssetView> {{ ledger::query::assets_of({args}) }} }}"
         );
-        assert!(Compiler::new().compile_source(&source).is_err(), "{args}");
+        assert!(
+            Compiler::new_c10().compile_source(&source).is_err(),
+            "{args}"
+        );
     }
 }
 
@@ -8133,7 +8171,7 @@ fn tuple_state_keys_emit_exact_cursor_and_dynamic_access_schemas() {
             balances.page(after: after, limit: 2)
         }
     }"#;
-    let (artifact, manifest) = Compiler::new()
+    let (artifact, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(source)
         .unwrap();
     let parsed = ProgramMetadata::parse(&artifact).unwrap();
@@ -8161,11 +8199,11 @@ fn tuple_state_keys_reject_unsupported_leaves_and_mismatched_cursor_layouts() {
         let source = format!(
             "seiyaku InvalidKey {{ state StateMap<{key}, int> values; view fn read() authorize(anyone) {{ () }} }}"
         );
-        let error = Compiler::new().compile_source(&source).unwrap_err();
+        let error = Compiler::new_c10().compile_source(&source).unwrap_err();
         assert!(error.contains("StateMap key type"), "{key}: {error}");
     }
     let source = "seiyaku WrongCursor { state StateMap<(int, Name), int> values; view fn page(Option<StateCursor<(Name, int)>> after) authorize(anyone) { let _ = values.page(after: after, limit: 1); } }";
-    let error = Compiler::new().compile_source(source).unwrap_err();
+    let error = Compiler::new_c10().compile_source(source).unwrap_err();
     assert!(error.contains("StateCursor"), "{error}");
 }
 
@@ -8175,7 +8213,7 @@ fn literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints() {
         StateValueAtomV1 as Atom, StateValueKindV1 as Kind, StateValueNodeV1 as Node,
         StateValueRecordV1, StateValueSchemaV1, state_value_schema_hash_v1,
     };
-    let output = Compiler::new().compile_source_output(r#"seiyaku ConstantKeys {
+    let output = Compiler::new_c10().compile_source_output(r#"seiyaku ConstantKeys {
         state StateMap<int, int> Singles;
         state StateMap<(int, bool), int> Pairs;
         view fn known() authorize(anyone) -> bool { Singles.contains(1) && Pairs.contains((1, true)) }
@@ -8275,7 +8313,7 @@ mod fi_waterfall;
 #[test]
 fn runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_manifest() {
     let source = "seiyaku RuntimeObligations { kotoage fn enter(bytes request) authorize(anyone) { ledger::runtime::register_obligation(request); ledger::runtime::complete_obligation(request); } }";
-    let baseline = Compiler::new();
+    let baseline = Compiler::new_c10();
     assert!(
         baseline
             .compile_source(source)
@@ -8284,7 +8322,7 @@ fn runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_man
     );
     let compiler = Compiler::new_with_options(CompilerOptions {
         host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     let (artifact, manifest) = compiler.compile_source_with_manifest(source).unwrap();
     assert!(crate::metadata::ProgramMetadata::parse(&artifact).is_err());
@@ -8303,16 +8341,100 @@ fn runtime_obligation_named_host_requires_explicit_policy_and_binds_artifact_man
     let test_compiler = Compiler::new_with_options(CompilerOptions {
         host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
         mode: CompilerMode::Test,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     assert!(test_compiler.compile_source(source).is_err());
-    let baseline_session = crate::session::CompilerSession::new(CompilerOptions::default());
+    let baseline_session = crate::session::CompilerSession::new(CompilerOptions::c10());
     let named_session = crate::session::CompilerSession::new(CompilerOptions {
         host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     });
     assert_ne!(
         baseline_session.policy_fingerprint(),
         named_session.policy_fingerprint()
     );
+}
+
+#[test]
+fn target_profile_is_the_engine_profile_of_the_host_policy() {
+    let options = |engine, host_policy| CompilerOptions {
+        engine,
+        host_policy,
+        ..CompilerOptions::c10()
+    };
+    assert_eq!(CompilerOptions::c10().engine, IvmEngine::C10);
+    assert_eq!(
+        CompilerOptions::default().engine,
+        IvmEngine::Baseline,
+        "the default target is the engine of the interface policy"
+    );
+    assert_eq!(
+        CompilerOptions::default().target_profile(),
+        Ok(IvmProfileId::of_policy(SyscallPolicy::AbiV1))
+    );
+    assert_eq!(
+        options(IvmEngine::C10, SyscallPolicy::AbiV1).target_profile(),
+        Ok(IvmProfileId::C10_ABI_V1)
+    );
+    assert_eq!(
+        options(IvmEngine::C10, SyscallPolicy::AbiV1RuntimeLifecycle).target_profile(),
+        Ok(IvmProfileId::of_policy(
+            SyscallPolicy::AbiV1RuntimeLifecycle
+        ))
+    );
+    assert_eq!(
+        options(IvmEngine::Baseline, SyscallPolicy::AbiV1).target_profile(),
+        Ok(IvmProfileId::BASELINE_ABI_V1)
+    );
+    assert!(
+        options(IvmEngine::Baseline, SyscallPolicy::AbiV1RuntimeLifecycle)
+            .target_profile()
+            .is_err()
+    );
+}
+
+#[test]
+fn baseline_target_header_and_contract_interface_follow_the_anchor() {
+    let source = "seiyaku Target { view fn read() authorize(anyone) -> int { 1 } }";
+    let build = |engine, force_zk| {
+        Compiler::new_with_options(CompilerOptions {
+            engine,
+            force_zk,
+            ..CompilerOptions::c10()
+        })
+        .compile_source(source)
+        .expect("compile")
+    };
+    for force_zk in [false, true] {
+        let artifact = build(IvmEngine::Baseline, force_zk);
+        let parsed = ProgramMetadata::parse_for_profile(&artifact, IvmProfileId::BASELINE_ABI_V1)
+            .expect("baseline header and sections");
+        assert_eq!(parsed.profile, IvmProfileId::BASELINE_ABI_V1);
+        assert_eq!(parsed.vector_length, 0, "the runtime default lane count");
+        // Every baseline header carries the cycle ceiling, ZK or not.
+        assert_eq!(
+            parsed.metadata.max_cycles,
+            super::DEFAULT_BASELINE_MAX_CYCLES.get()
+        );
+        assert_eq!(
+            parsed.metadata.mode,
+            if force_zk {
+                ivm_abi::baseline::mode::ZK
+            } else {
+                0
+            }
+        );
+        let interface = parsed.contract_interface.expect("CNTR");
+        assert_eq!(interface.abi_hash, IvmProfileId::BASELINE_ABI_V1.abi_hash());
+        // The C10 header of the same build keeps its own rules.
+        let c10 = ProgramMetadata::parse(&build(IvmEngine::C10, force_zk)).expect("C10 header");
+        assert_eq!(
+            c10.metadata.max_cycles,
+            if force_zk {
+                DEFAULT_ZK_TRACE_CYCLES.get()
+            } else {
+                0
+            }
+        );
+    }
 }

@@ -4,7 +4,7 @@ use ivm::{IVM, ProgramMetadata};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
 fn run_table_function(source: &str) -> IVM {
-    let artifact = KotodamaCompiler::new()
+    let artifact = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile table program");
     let metadata = ProgramMetadata::parse(&artifact).expect("metadata");
@@ -185,7 +185,7 @@ fn run_maximum_table_function(source: &str, argument_words: usize, result_words:
 
     assert_eq!(MAX_CALL_WORDS_V1, 8192);
     assert!(source.len() <= kotodama_lang::source::MAX_SOURCE_BYTES);
-    let artifact = KotodamaCompiler::new()
+    let artifact = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile maximum-width table program within existing limits");
     assert!(
@@ -370,7 +370,7 @@ fn one_word_beyond_maximum_call_tables_is_rejected_before_lowering() {
         ),
     ] {
         assert!(source.len() <= kotodama_lang::source::MAX_SOURCE_BYTES);
-        let error = kotodama_lang::session::CompilerSession::default()
+        let error = kotodama_lang::session::CompilerSession::c10()
             .check(kotodama_lang::session::CompileRequest {
                 source: &source,
                 source_name: Some(name),

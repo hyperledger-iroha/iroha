@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '8666d0219ca30df4d20757c247366494aa54a6dc9c27c206dcc665434d3d8a66',
+        'c1bb5609fc0c2a7f7b46881f7a96e9b2ff630398565f03016b6069547e841950',
         (
             AssetSpec('001.ko', '3b0dc428d838d7448dc26b228709fea882f41a1dbcb15fe05431df58c6d53544', 246, True),
             AssetSpec('002.ko', '24a24ebec2af2c9f2dd940362b242fe84b8d351ea1efedc618069b31df90abb1', 329, True),
@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        '30bc6c0d285f44061bfdd4e9ce61b207f093302e42656b79c7d7bfcc665ef2c3',
+        '53455ef5d2ca5f67dd5a33dfb1e0be9e2bdcad8a82321815afa950aef4c03c85',
         (
             AssetSpec('001.ko', '453a3d980cd5a2d3fa5d764bdfaa8861a41a81aaf34885215dcb71b34a30a907', 290, True),
             AssetSpec('002.ko', 'ad7f419edf3f569a8fef0e1c774838dd136edd213c2c2cd772c1c1e4671f497d', 417, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        '6274bd0586f0c496c378e734f7009e07f2c12347159ff0c5515e5b89c5a7eec6',
+        'afa0114a394a2d449ef0831e8e21d8d18334972888d10335b224e4a45d92bd2d',
         (
             AssetSpec('001.ko', 'eee436d9ed6b4b79486bb5e30248989f101c1dab2f96489830bac8022af46c3f', 334, False),
             AssetSpec('002.ko', 'c642ad27e57fbe485e00b1eb0e061c8dbfe3a32f572ec95dacfad4c35ce04936', 624, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        'd1d4b64874fd731e21a6a2e9859d4c2cc387755ad73ed525ef431a439d762380',
+        '49215245bd99e2be7b9eeb029365aed57fb364134e043d81c5682d5bdf308670',
         (
             AssetSpec('001.ko', '8bbf76933b2161f3dbc4459140bc68aa0c9d761bc55a59c6ae371120dafb9997', 593, True),
             AssetSpec('002.ko', '5abfe3588acf4209052222acd44b7e82c767dab79827355e2533b1310dce3b58', 430, True),
@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        '0aa536ae236a873e36c1bbcae157c78db751ad7a5d919d759e79e6403b0882aa',
+        '492a38531cbbe853c8cdb043b34e3293e52be32f75d31e2e71c13899696a608e',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -207,7 +207,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/tests/sugar_zero_cost.rs',
-        'f32e5cd71e6ebb813853b18501695c7af5a0371373037b100011e6b7a1a89206',
+        'c9b32262263e7a1677c76aefad8edd7468f525a6f6d8e62ba5d4cd1d4bd8f23a',
         (
             AssetSpec('001.ko', 'fd4f70f9b50b326c9a1756a69ad4593828f2f3e42d5414462a628dcf95a7cc2c', 248, True),
             AssetSpec('002.ko', 'd3127d2bffa912b09940d208c52760be5e98c47aec837a1796cbe9601a2a1c2e', 403, True),
@@ -231,7 +231,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs',
-        '334e7d864824c4e4c71c23eb1555b347f16fb668c2e65109353930c0e248db2c',
+        '32678e2e99e6cb6276cce14b3152472f996b698809ae30823aff5677c2c57158',
         (
             AssetSpec('001.ko', '82e551d02e72a8b125a55bef9d68b4fff436fa4c46f2504d07e3be52c89cd0a4', 3003, True),
             AssetSpec('002.ko', '7df136db4866d8ecd84dcba6e90dfae6d1c225c71fa3d0acb7b71ce38ea872e1', 1475, True),
@@ -246,7 +246,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_scalar.rs',
-        '7de7385b40ab6397d2b24db3771c1103d8aa3c2db70ad8eec45325dcb32744a3',
+        '0476b0f49fc75d4a34f5efb4120a6d47e485414c6a16a4139941ad76ebebfcb6',
         (
             AssetSpec('001.ko', 'a3bb0c865a5a828c574e5c8860f455fec2612db32e2bdc9c2cef51be78ac8abe', 216, True),
             AssetSpec('002.ko', '4e9c0d53aa2f5f6d04822c1438c8ffcd4592154efb7e2fb55c13741314f6c011', 776, True),
@@ -272,7 +272,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/secret.rs',
-        'd2c86a4c4ad093f42596c39d39430a7ebd411493f462eacd79d52b67e50f53d4',
+        '23c1352b71a92209cc941b6ba58125977af19dddbc987ace6a611ffc8ac38113',
         (
             AssetSpec('001.ko', '2cabbe93cb0612dc119067e16807af6d72934d1fef6cbf0b193f9fcaea6cc746', 328, True),
             AssetSpec('002.ko', '3bf686a7b1c809bc2fc16c988cba69c53b041e5e74b0fa8933aa1595fb70ca87', 246, True),

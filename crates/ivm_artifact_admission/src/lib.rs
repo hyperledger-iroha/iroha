@@ -44,6 +44,11 @@ pub struct VerifiedContractArtifact {
     pub metadata: ProgramMetadata,
     /// Named policy authenticated by the fixed header and matching CNTR.
     pub syscall_policy: SyscallPolicy,
+    /// Profile (engine and named policy) the artifact was admitted under; its policy is
+    /// [`Self::syscall_policy`].
+    pub profile: ivm_abi::IvmProfileId,
+    /// Logical vector length a baseline header declared; zero for C10 artifacts.
+    pub vector_length: u8,
     /// Fixed metadata header length in artifact bytes.
     pub header_len: usize,
     /// Absolute executable-stream offset in the artifact.
@@ -78,7 +83,11 @@ impl VerifiedContractArtifact {
 }
 mod error;
 pub use error::ContractArtifactError;
-/// Verify a self-describing IVM 1.1 artifact and derive its canonical manifest.
+/// Verify a self-describing C10 artifact (the explicit [`ivm_abi::IvmProfileId::C10_ABI_V1`]
+/// profile) and derive its canonical manifest.
+///
+/// An artifact submitted to a root is verified under the profile resolved for it, and an offline
+/// artifact under its declared profile ([`verify_contract_artifact_with_declared_profile`]).
 ///
 /// # Errors
 ///
@@ -87,7 +96,9 @@ pub use error::ContractArtifactError;
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, None, SyscallPolicy::AbiV1)
+    // The C10 convenience: an artifact submitted to a root is verified under the profile
+    // resolved for it, and an offline artifact under its declared profile.
+    verify_contract_artifact_owned(artifact, None, ivm_abi::IvmProfileId::C10_ABI_V1)
 }
 /// Verify an offline contract against its exact implemented declared host profile.
 ///
@@ -101,14 +112,14 @@ pub fn verify_contract_artifact(
 pub fn verify_contract_artifact_with_declared_profile(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let policy = artifact
-        .get(ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE)
-        .and_then(|hash| <&[u8; 32]>::try_from(hash).ok())
-        .and_then(ivm_abi::syscalls::policy_for_abi_hash);
-    match policy {
-        Some(policy) => verify_contract_artifact_for_policy(artifact, policy),
-        None => verify_contract_artifact(artifact),
-    }
+    // An offline artifact names no execution root. Each implemented profile's hash is compared
+    // at its own engine's fixed-header position; without a match the interface profile's parser
+    // authenticates the header and reports the canonical rejection.
+    verify_contract_artifact_for_profile(
+        artifact,
+        ivm_abi::IvmProfileId::declared(artifact)
+            .unwrap_or_else(|| ivm_abi::IvmProfileId::of_policy(SyscallPolicy::AbiV1)),
+    )
 }
 /// Verify with temporary instruction-array custody in the original State pool.
 ///
@@ -122,7 +133,7 @@ pub fn verify_contract_artifact_with_memory_budget(
     artifact: &[u8],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, Some(budget), SyscallPolicy::AbiV1)
+    verify_contract_artifact_owned(artifact, Some(budget), ivm_abi::IvmProfileId::C10_ABI_V1)
 }
 /// Verify an artifact under one explicitly selected named ABI V1 host profile.
 /// The ordinary verifier continues to require the frozen baseline profile.
@@ -130,7 +141,29 @@ pub fn verify_contract_artifact_for_policy(
     artifact: &[u8],
     policy: SyscallPolicy,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, None, policy)
+    verify_contract_artifact_owned(artifact, None, ivm_abi::IvmProfileId::of_policy(policy))
+}
+/// Verify an artifact under one explicitly resolved profile, including the frozen baseline
+/// profile ([`ivm_abi::IvmProfileId::BASELINE_ABI_V1`]).
+///
+/// # Errors
+/// Returns the profile engine's canonical artifact rejection or a local resource refusal.
+pub fn verify_contract_artifact_for_profile(
+    artifact: &[u8],
+    profile: ivm_abi::IvmProfileId,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, None, profile)
+}
+/// Verify for an explicit profile with the original State allocation budget.
+///
+/// # Errors
+/// Returns the profile engine's canonical artifact rejection or a local resource refusal.
+pub fn verify_contract_artifact_with_memory_budget_for_profile(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+    profile: ivm_abi::IvmProfileId,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, Some(budget), profile)
 }
 /// Verify for an explicit named profile with the original State allocation budget.
 pub fn verify_contract_artifact_with_memory_budget_for_policy(
@@ -138,14 +171,34 @@ pub fn verify_contract_artifact_with_memory_budget_for_policy(
     budget: &iroha_allocation::AllocationBudget,
     policy: SyscallPolicy,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(artifact, Some(budget), policy)
+    verify_contract_artifact_owned(
+        artifact,
+        Some(budget),
+        ivm_abi::IvmProfileId::of_policy(policy),
+    )
 }
+/// Admit under the verifier of the engine that executes `policy`.
+///
+/// The caller resolved the policy before any artifact byte was read. Exactly one verifier runs:
+/// a refusal is final and never retried under another engine.
 fn verify_contract_artifact_owned(
     artifact: &[u8],
     budget: Option<&iroha_allocation::AllocationBudget>,
-    policy: SyscallPolicy,
+    profile: ivm_abi::IvmProfileId,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let mut parsed = parse_contract_metadata_for_policy(artifact, policy)?;
+    match profile.engine() {
+        ivm_abi::IvmEngine::C10 => verify_engine_contract_artifact(artifact, budget, profile),
+        // The baseline verifier is the same admission sequence read in the baseline header
+        // layout, with the baseline mode bits, ABI descriptor and instruction rules.
+        ivm_abi::IvmEngine::Baseline => verify_engine_contract_artifact(artifact, budget, profile),
+    }
+}
+fn verify_engine_contract_artifact(
+    artifact: &[u8],
+    budget: Option<&iroha_allocation::AllocationBudget>,
+    profile: ivm_abi::IvmProfileId,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    let mut parsed = parse_contract_metadata_for_profile(artifact, profile)?;
     let contract_interface = validate_contract_envelope(artifact, &parsed)?;
     let code = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
@@ -156,6 +209,7 @@ fn verify_contract_artifact_owned(
         contract_interface,
         &decoded,
         policy::ValidationProfile::Production,
+        profile.engine(),
     )?;
     literal::validate_literal_table(artifact, &parsed, &decoded)?;
     let contract_interface = parsed
@@ -179,7 +233,7 @@ pub fn verify_koto_test_artifact(
     artifact: &[u8],
     contract_interface: EmbeddedContractInterfaceV1,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    let parsed = parse_contract_metadata(artifact)?;
+    let parsed = parse_koto_test_metadata(artifact)?;
     validate_koto_test_envelope(artifact, &parsed, &contract_interface)?;
     let code = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
@@ -190,6 +244,7 @@ pub fn verify_koto_test_artifact(
         &contract_interface,
         &decoded,
         policy::ValidationProfile::KotoTest,
+        parsed.profile.engine(),
     )?;
     literal::validate_literal_table(artifact, &parsed, &decoded)?;
     Ok(verified_from_parts(
@@ -236,13 +291,16 @@ fn verified_from_parts(
         private_input_entrypoints,
         admitted_program: admitted_program::AdmittedProgramSeal::new(
             &parsed.metadata,
-            parsed.syscall_policy,
+            parsed.profile,
+            parsed.vector_length,
             parsed.header_len,
             parsed.code_offset,
             code_hash,
         ),
         metadata: parsed.metadata,
         syscall_policy: parsed.syscall_policy,
+        profile: parsed.profile,
+        vector_length: parsed.vector_length,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,
         literal_section: parsed.literal_section,
@@ -252,16 +310,22 @@ fn verified_from_parts(
         manifest,
     }
 }
-fn parse_contract_metadata(
+/// Parse a local Kotodama test harness under the profile its header declares; without a declared
+/// implemented profile, the interface profile's parser reports the canonical rejection.
+fn parse_koto_test_metadata(
     artifact: &[u8],
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
-    parse_contract_metadata_for_policy(artifact, SyscallPolicy::AbiV1)
+    parse_contract_metadata_for_profile(
+        artifact,
+        ivm_abi::IvmProfileId::declared(artifact)
+            .unwrap_or_else(|| ivm_abi::IvmProfileId::of_policy(SyscallPolicy::AbiV1)),
+    )
 }
-fn parse_contract_metadata_for_policy(
+fn parse_contract_metadata_for_profile(
     artifact: &[u8],
-    policy: SyscallPolicy,
+    profile: ivm_abi::IvmProfileId,
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
-    ProgramMetadata::parse_for_policy(artifact, policy).map_err(|error| match error {
+    ProgramMetadata::parse_for_profile(artifact, profile).map_err(|error| match error {
         VMError::ArtifactAbiHashMismatch { expected, actual } => {
             ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
@@ -282,13 +346,17 @@ fn validate_contract_envelope<'a>(
             metadata.version_major, metadata.version_minor
         )));
     }
-    if metadata.mode & !mode::ZK != 0 {
+    let known_mode_bits = match parsed.profile.engine() {
+        ivm_abi::IvmEngine::C10 => mode::ZK,
+        ivm_abi::IvmEngine::Baseline => ivm_abi::baseline::mode::KNOWN,
+    };
+    if metadata.mode & !known_mode_bits != 0 {
         return Err(ContractArtifactError::invalid(format!(
             "unsupported contract execution mode bits 0x{:02x}",
             metadata.mode
         )));
     }
-    if artifact.len() < HEADER_SIZE {
+    if artifact.len() < parsed.profile.engine().header_layout().size {
         return Err(ContractArtifactError::invalid(
             "artifact shorter than fixed IVM header",
         ));
@@ -312,8 +380,7 @@ fn validate_contract_envelope<'a>(
         .contract_interface
         .as_ref()
         .ok_or_else(|| ContractArtifactError::invalid("missing required CNTR section"))?;
-    let policy = parsed.syscall_policy;
-    let expected_abi_hash = ivm_abi::syscalls::compute_abi_hash(policy);
+    let expected_abi_hash = parsed.profile.abi_hash();
     if contract_interface.abi_hash != expected_abi_hash {
         return Err(ContractArtifactError::abi_hash_mismatch(
             expected_abi_hash,
@@ -365,7 +432,7 @@ fn validate_koto_test_envelope(
             "generic IVM 1.1 Kotodama test harness must not embed DBG1 metadata",
         ));
     }
-    let expected_abi_hash = ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1);
+    let expected_abi_hash = parsed.profile.abi_hash();
     if contract_interface.abi_hash != expected_abi_hash {
         return Err(ContractArtifactError::abi_hash_mismatch(
             expected_abi_hash,
@@ -574,7 +641,7 @@ mod tests {
         let compiler = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
-                ..Default::default()
+                ..kotodama_lang::compiler::CompilerOptions::c10()
             },
         );
         for (source, expected) in [
@@ -636,7 +703,7 @@ mod tests {
             }],
             seiyaku_name: "DeepManifest".to_owned(),
             compiler_fingerprint: "ivm-artifact-admission-tests".to_owned(),
-            abi_hash: ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1),
+            abi_hash: ivm_abi::IvmProfileId::C10_ABI_V1.abi_hash(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -769,12 +836,14 @@ mod tests {
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&debug.encode_section());
         artifact.extend_from_slice(&ivm_abi::encoding::wide::encode_halt().to_le_bytes());
-        let parsed = parse_contract_metadata(&artifact).unwrap();
+        let parsed =
+            parse_contract_metadata_for_profile(&artifact, ivm_abi::IvmProfileId::C10_ABI_V1)
+                .unwrap();
         assert!(parsed.contract_interface.is_none());
         assert_eq!(parsed.contract_debug, Some(debug));
         let error = norito::core::with_decode_limits_scope(
             norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
-            || parse_contract_metadata(&artifact),
+            || parse_contract_metadata_for_profile(&artifact, ivm_abi::IvmProfileId::C10_ABI_V1),
         )
         .unwrap_err();
         let retained = error.try_into_local_vm_error().unwrap();
@@ -784,7 +853,9 @@ mod tests {
         );
         assert!(matches!(retained, VMError::DecodeDeferred(_)));
         assert_eq!(
-            parse_contract_metadata(&artifact).unwrap().contract_debug,
+            parse_contract_metadata_for_profile(&artifact, ivm_abi::IvmProfileId::C10_ABI_V1)
+                .unwrap()
+                .contract_debug,
             parsed.contract_debug
         );
         assert!(
@@ -1013,17 +1084,17 @@ mod declared_profile_tests {
         for policy in [SyscallPolicy::AbiV1, SyscallPolicy::AbiV1RuntimeLifecycle] {
             let artifact = Compiler::new_with_options(CompilerOptions {
                 host_policy: policy,
-                ..Default::default()
+                ..CompilerOptions::c10()
             })
             .compile_source(source)
             .unwrap();
+            let c10 = ivm_abi::IvmProfileId::of_engine_policy(ivm_abi::IvmEngine::C10, policy)
+                .expect("C10 implements every named policy");
             let verified = verify_contract_artifact_with_declared_profile(&artifact).unwrap();
+            assert_eq!(verified.profile, c10);
             assert_eq!(verified.syscall_policy, policy);
             assert_eq!(verified.metadata.abi_version, 1);
-            assert_eq!(
-                verified.abi_hash,
-                Hash::prehashed(ivm_abi::syscalls::compute_abi_hash(policy))
-            );
+            assert_eq!(verified.abi_hash, Hash::prehashed(c10.abi_hash()));
             assert_eq!(verified.manifest.abi_hash, Some(verified.abi_hash));
             assert_eq!(
                 verify_contract_artifact(&artifact).is_ok(),
@@ -1038,20 +1109,106 @@ mod declared_profile_tests {
             } else {
                 SyscallPolicy::AbiV1
             };
+            let other = ivm_abi::IvmProfileId::of_engine_policy(ivm_abi::IvmEngine::C10, other)
+                .expect("C10 implements every named policy");
             mismatched[ivm_abi::metadata::HEADER_ABI_HASH_OFFSET..ivm_abi::metadata::HEADER_SIZE]
-                .copy_from_slice(&ivm_abi::syscalls::compute_abi_hash(other));
+                .copy_from_slice(&other.abi_hash());
             assert!(verify_contract_artifact_with_declared_profile(&mismatched).is_err());
         }
         let mut generic =
             ProgramMetadata::default().encode_for_policy(SyscallPolicy::AbiV1RuntimeLifecycle);
         generic.extend_from_slice(&ivm_abi::encoding::wide::encode_halt().to_le_bytes());
         assert!(verify_contract_artifact_with_declared_profile(&generic).is_err());
+        // Without a declared implemented profile the interface profile reports the rejection.
         for malformed in [b"".as_slice(), b"IVM\0".as_slice()] {
             assert_eq!(
                 verify_contract_artifact_with_declared_profile(malformed)
                     .unwrap_err()
                     .to_string(),
-                verify_contract_artifact(malformed).unwrap_err().to_string()
+                verify_contract_artifact_for_policy(malformed, SyscallPolicy::AbiV1)
+                    .unwrap_err()
+                    .to_string()
+            );
+        }
+        // The default Kotodama target is the interface profile: the frozen baseline.
+        let baseline = Compiler::new().compile_source(source).unwrap();
+        let verified = verify_contract_artifact_with_declared_profile(&baseline).unwrap();
+        assert_eq!(verified.profile, ivm_abi::IvmProfileId::BASELINE_ABI_V1);
+        assert_eq!(
+            verified.abi_hash,
+            Hash::prehashed(ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1))
+        );
+        assert!(verify_contract_artifact_for_policy(&baseline, SyscallPolicy::AbiV1).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod baseline_profile_tests {
+    use super::*;
+
+    /// A contract the anchor compiler produced for the installed baseline selection.
+    const BASELINE_CONTRACT: &[u8] = include_bytes!(
+        "../../ivm/tests/fixtures/baseline_v1/artifacts/kotodama/samples/asset_ops.to.bin"
+    );
+
+    #[test]
+    fn baseline_contracts_are_admitted_only_under_the_explicit_baseline_profile() {
+        let profile = ivm_abi::IvmProfileId::BASELINE_ABI_V1;
+        let verified = verify_contract_artifact_for_profile(BASELINE_CONTRACT, profile)
+            .expect("the anchor artifact is a baseline contract");
+        assert_eq!(verified.profile, profile);
+        assert_eq!(verified.syscall_policy, SyscallPolicy::AbiV1);
+        assert_eq!(verified.header_len, ivm_abi::baseline::HEADER_SIZE);
+        assert_eq!(
+            verified.abi_hash,
+            Hash::prehashed(ivm_abi::baseline::abi_hash())
+        );
+        verified
+            .borrow_admitted_program(BASELINE_CONTRACT)
+            .expect("the seal binds the baseline profile");
+        let mut forged = verify_contract_artifact_for_profile(BASELINE_CONTRACT, profile)
+            .expect("baseline admission");
+        forged.profile = ivm_abi::IvmProfileId::C10_ABI_V1;
+        assert!(forged.borrow_admitted_program(BASELINE_CONTRACT).is_err());
+        // The interface policy admits the baseline artifact; the C10 convenience reads the C10
+        // layout and refuses the baseline header.
+        assert_eq!(
+            verify_contract_artifact_for_policy(BASELINE_CONTRACT, SyscallPolicy::AbiV1)
+                .expect("the interface profile is the baseline")
+                .profile,
+            profile
+        );
+        assert!(verify_contract_artifact(BASELINE_CONTRACT).is_err());
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budgeted = verify_contract_artifact_with_memory_budget_for_profile(
+            BASELINE_CONTRACT,
+            &budget,
+            profile,
+        )
+        .expect("budgeted baseline admission");
+        assert_eq!(budgeted.code_hash, verified.code_hash);
+    }
+
+    #[test]
+    fn baseline_instruction_rules_refuse_what_the_anchor_refused() {
+        let profile = ivm_abi::IvmProfileId::BASELINE_ABI_V1;
+        let code_offset = verify_contract_artifact_for_profile(BASELINE_CONTRACT, profile)
+            .expect("baseline admission")
+            .code_offset;
+        use ivm_abi::baseline::{encoding::wide as base, instruction::wide as isa};
+        for word in [
+            // JR is unverifiable indirect control flow.
+            base::encode_rr(isa::control::JR, 1, 0, 0),
+            // An unassigned opcode byte.
+            base::encode_rr(0xFE, 0, 0, 0),
+            // POSEIDON6 must keep its reserved operand zero.
+            base::encode_rr(isa::crypto::POSEIDON6, 1, 2, 3),
+        ] {
+            let mut artifact = BASELINE_CONTRACT.to_vec();
+            artifact[code_offset..code_offset + 4].copy_from_slice(&word.to_le_bytes());
+            assert!(
+                verify_contract_artifact_for_profile(&artifact, profile).is_err(),
+                "word {word:#010x} must be refused"
             );
         }
     }

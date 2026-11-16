@@ -126,12 +126,8 @@ const MAX_JSON_NODES = 65_536;
 const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
 // IVM ABI v1 authenticates the syscall descriptor directly in the fixed
-// header: 16 execution bytes (magic[0..4], version 1.1 at [4] and [5], mode
-// [6], little-endian u64 ZK trace bound [7..15], ABI version [15]) followed by
-// the canonical 32-byte ABI hash.
-const IVM_EXECUTION_HEADER_BYTES = 16;
-const IVM_HEADER_BUDGET_OFFSET = 7;
-const IVM_HEADER_ABI_VERSION_OFFSET = 15;
+// header: 17 execution bytes followed by the canonical 32-byte ABI hash.
+const IVM_EXECUTION_HEADER_BYTES = 17;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const NORITO_FRAME_HEADER_BYTES = 40;
@@ -579,7 +575,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
       (TEXT_KOTODAMA_MANIFEST + ("identity/capabilities " + TEXT_DO_NOT_MATCH_THE_EMBEDDED + "contract " + TEXT_INTERFACE)),
     );
   }
-  if (Number(embeddedFeatures) !== (headerMode & 0x01)) {
+  if (Number(embeddedFeatures) !== (headerMode & 0x03)) {
     rejectType(
       (TEXT_KOTODAMA_EMBEDDED_CONTRACT + "capabilities do not match the IVM execution header"),
     );
@@ -757,20 +753,10 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   if (!hasMagic(bytes, 0, "IVM\0")) {
     rejectAt(label, " has invalid IVM header magic");
   }
-  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x01) !== 0) {
+  if (bytes[4] !== 1 || bytes[5] !== 1 || (bytes[6] & ~0x03) !== 0 || bytes[7] > 64) {
     rejectAt(label, " has unsupported IVM execution metadata");
   }
-  // The budget field is the ZK trace bound: nonzero exactly when the ZK bit is set.
-  let traceBoundIsZero = true;
-  for (let offset = IVM_HEADER_BUDGET_OFFSET; offset < IVM_HEADER_ABI_VERSION_OFFSET; offset += 1) {
-    if (bytes[offset] !== 0) {
-      traceBoundIsZero = false;
-    }
-  }
-  if (traceBoundIsZero === ((bytes[6] & 0x01) !== 0)) {
-    rejectAt(label, " must declare an IVM trace bound exactly when ZK mode is set");
-  }
-  if (bytes[IVM_HEADER_ABI_VERSION_OFFSET] !== 1) {
+  if (bytes[16] !== 1) {
     rejectAt(label, " must use IVM ABI version 1");
   }
   if (toHex(bytes.subarray(IVM_EXECUTION_HEADER_BYTES, IVM_HEADER_BYTES)) !== abiHashHex) {
@@ -1335,7 +1321,7 @@ function validateCompilerManifest(manifest) {
   requireString(manifest.compiler_fingerprint, (TEXT_KOTODAMA_MANIFEST + (TEXT_COMPILER_FINGERPRINT)));
   requireUnsignedInteger(
     manifest.features_bitmap,
-    1,
+    3,
     (TEXT_KOTODAMA_MANIFEST + (TEXT_FEATURES_BITMAP)),
   );
   validateAccessSetHints(manifest.access_set_hints, (TEXT_KOTODAMA_MANIFEST + TEXT_ACCESS_SET_HINTS));

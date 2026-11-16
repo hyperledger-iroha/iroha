@@ -2,18 +2,24 @@
 //!
 //! Prepared code and cache residency identify a profile; only the execution root authorizes
 //! using it. A captured obligation lends its original profile only inside its native scope.
+//! Which definitions activate a profile is decided by the resolver (`profile::activates`); this
+//! module applies the effective restrictions of those definitions on every invocation.
 
+#[cfg(test)]
+use iroha_data_model::runtime::definition::DefinitionDescriptorV1;
 use iroha_data_model::{
     ValidationFail,
     isi::error::InstructionExecutionError,
     runtime::{
-        definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},
+        definition::{DefinitionId, RestrictionV1, RootSelectionV1},
         lifecycle::RuntimeRejectionV1,
         obligation::CompletionCaptureV1,
     },
 };
+#[cfg(test)]
 use mv::storage::StorageReadOnly as _;
 
+use super::profile::{self, ResolvedIvmProfile};
 use crate::{
     runtime::obligations::Step,
     state::{StateTransaction, WorldReadOnly},
@@ -55,12 +61,15 @@ pub(crate) fn ensure_new_capture(
     capture: &CompletionCaptureV1,
     height: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
     for id in &capture.host_profiles {
-        if matches!(world.runtime_definitions().get(id),
-            Some(DefinitionDescriptorV1::HostProfile(profile))
-                if profile.abi_version == 1 && profile.abi_hash == hash)
-        {
+        // The implicit baseline keeps its original rule: only explicitly selected profiles
+        // are admitted as new work here.
+        let named = ivm::IvmProfileId::IMPLEMENTED
+            .into_iter()
+            .map(ResolvedIvmProfile::of_id)
+            .filter(|candidate| !candidate.is_implicit())
+            .any(|candidate| profile::activates(world, id, candidate));
+        if named {
             check_restriction(world.runtime_selection(), *id, height, None)?;
         }
     }
@@ -98,17 +107,14 @@ fn ensure(
     height: u64,
     step: impl Fn(DefinitionId) -> Option<Step>,
 ) -> Result<(), ValidationFail> {
-    if policy == ivm::SyscallPolicy::AbiV1 {
+    let resolved = ResolvedIvmProfile::of_policy(policy);
+    if resolved.is_implicit() {
         return Ok(());
     }
-    let hash = ivm::syscalls::compute_abi_hash(policy);
     let selection = world.runtime_selection();
     let mut selected = false;
     for id in &selection.active {
-        if !matches!(world.runtime_definitions().get(id),
-            Some(DefinitionDescriptorV1::HostProfile(profile))
-                if profile.abi_version == 1 && profile.abi_hash == hash)
-        {
+        if !profile::activates(world, id, resolved) {
             continue;
         }
         selected = true;

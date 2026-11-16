@@ -47,7 +47,7 @@ fn parameter(name: &'static str, ty: &'static str) -> Value {
 }
 /// Render the deterministic shared fixture document.
 pub fn render_fixture() -> String {
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(SOURCE)
         .expect("compile argument-record fixture contract");
     let metadata = ProgramMetadata::parse(&artifact).expect("parse fixture contract metadata");

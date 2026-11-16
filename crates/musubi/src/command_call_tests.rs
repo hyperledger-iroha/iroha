@@ -29,7 +29,9 @@ fn mutable_call_encodes_local_schema_and_omits_zero_argument_payload() {
     assert_eq!(intent.invocation.contract_address, address);
     assert_eq!(
         intent.invocation.expected_code_hash,
-        ivm::verify_contract_artifact(&artifact).unwrap().code_hash
+        ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .unwrap()
+            .code_hash
     );
     assert!(intent.invocation.arguments.is_some());
     assert_eq!(

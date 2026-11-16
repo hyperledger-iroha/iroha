@@ -46,14 +46,19 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 
-HEADER_SIZE = 48
-HEADER_BUDGET_OFFSET = 7
-HEADER_ABI_VERSION_OFFSET = 15
-# ZK goldens pin the compiler's default trace bound; ordinary artifacts carry none.
+# The default `abi-v1` target is the frozen baseline engine of the installed baseline selection:
+# a 49-byte header with a logical vector length after the mode byte.
+HEADER_SIZE = 49
+HEADER_VECTOR_LENGTH_OFFSET = 7
+HEADER_BUDGET_OFFSET = 8
+HEADER_ABI_VERSION_OFFSET = 16
+# Every baseline artifact carries the compiler's default cycle limit, ZK or not.
+BASELINE_MAX_CYCLES = 1_000_000
+# A C10 ZK build's trace bound; the baseline target ignores the option.
 ZK_TRACE_CYCLES = 1_000_000
 ZK_MODE_BIT = 0x01
-# ZK is the only IVM ABI v1 execution-mode bit.
-KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT
+VECTOR_MODE_BIT = 0x02
+KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
 MAP_PATH = Path("scripts/ivm_artifacts.tsv")
 ATTRIBUTES_PATH = Path(".gitattributes")
 TEST_SOURCE = Path("crates/ivm/docs/examples/19_contract_flow_test.test.ko")
@@ -619,12 +624,12 @@ def validate_artifact(path: Path, mode: str, expected_abi_hash: bytes) -> None:
     if header_mode & ~KNOWN_CONTRACT_MODE_BITS:
         raise GoldenError(f"{path} contains unknown execution-mode bits")
     is_zk = bool(header_mode & ZK_MODE_BIT)
-    # The cycle field is the ZK trace bound: nonzero exactly for ZK artifacts.
-    trace_bound = struct.unpack_from("<Q", artifact, HEADER_BUDGET_OFFSET)[0]
-    if trace_bound != (ZK_TRACE_CYCLES if is_zk else 0):
-        raise GoldenError(
-            f"{path} must declare the {ZK_TRACE_CYCLES}-cycle trace bound exactly in ZK mode"
-        )
+    if artifact[HEADER_VECTOR_LENGTH_OFFSET] != 0:
+        raise GoldenError(f"{path} must leave the logical vector length at the runtime default")
+    # Every baseline header declares the compiler's default cycle limit.
+    max_cycles = struct.unpack_from("<Q", artifact, HEADER_BUDGET_OFFSET)[0]
+    if max_cycles != BASELINE_MAX_CYCLES:
+        raise GoldenError(f"{path} must declare the {BASELINE_MAX_CYCLES}-cycle limit")
     if is_zk != (mode == "zk"):
         raise GoldenError(f"{path} has the wrong ZK execution bit for mode {mode}")
     if artifact[HEADER_SIZE : HEADER_SIZE + 4] != b"CNTR":

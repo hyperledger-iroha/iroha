@@ -95,7 +95,12 @@ fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
     // Minimal VM with header
     let mut vm = IVM::new(0);
     let header = ProgramMetadata::default().encode();
-    vm.load_program(&header).unwrap();
+    vm.load_program_for_profile(
+        &header,
+        ivm::IvmProfileId::declared(&header)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Build valid AccountId TLV for r10
     let acct_payload = norito::to_bytes(&authority).expect("encode account");
     let acct_tlv = build_tlv(0x0001, 1, &acct_payload, false);
@@ -137,7 +142,12 @@ fn mint_asset_rejects_corrupted_accountid_hash() {
     let mut host = CoreHost::new(authority.clone());
     let mut vm = IVM::new(0);
     let header = ProgramMetadata::default().encode();
-    vm.load_program(&header).unwrap();
+    vm.load_program_for_profile(
+        &header,
+        ivm::IvmProfileId::declared(&header)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Corrupted AccountId TLV for r10
     let acct_payload = norito::to_bytes(&authority).expect("encode account");
     let acct_tlv_bad = build_tlv(0x0001, 1, &acct_payload, true);
@@ -175,7 +185,12 @@ fn mint_asset_rejects_unknown_typeid() {
     let mut host = CoreHost::new(authority.clone());
     let mut vm = IVM::new(0);
     let header = ProgramMetadata::default().encode();
-    vm.load_program(&header).unwrap();
+    vm.load_program_for_profile(
+        &header,
+        ivm::IvmProfileId::declared(&header)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Valid AccountId TLV for r10
     let acct_payload = norito::to_bytes(&authority).expect("encode account");
     let acct_tlv = build_tlv(0x0001, 1, &acct_payload, false);

@@ -84,7 +84,7 @@ fn contract_artifact() -> Vec<u8> {
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
-    ivm::verify_contract_artifact(&artifact).expect("valid contract fixture");
+    ivm::verify_contract_artifact_with_declared_profile(&artifact).expect("valid contract fixture");
     artifact
 }
 fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
@@ -153,7 +153,8 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
         .execute(&authority, &mut transaction)
         .expect("grant contract lifecycle authority");
     let original = contract_artifact();
-    let verified = ivm::verify_contract_artifact(&original).expect("verify original artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&original)
+        .expect("verify original artifact");
     let original_hash = verified.code_hash;
     let signed_manifest = verified
         .manifest
@@ -223,7 +224,9 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
             Some(original.as_slice()),
             "{field} mutation changed registered bytecode"
         );
-        let Ok(mut mutated_verified) = ivm::verify_contract_artifact(&mutated) else {
+        let Ok(mut mutated_verified) =
+            ivm::verify_contract_artifact_with_declared_profile(&mutated)
+        else {
             // Invalid field values are rejected while registering the bytecode,
             // before a forged manifest can reach provenance verification.
             continue;

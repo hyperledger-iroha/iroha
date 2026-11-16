@@ -1102,6 +1102,14 @@ const fn trigger_batch_gas_budget(remaining_block_budget: u64) -> u64 {
         remaining_block_budget
     }
 }
+/// Gas limit of one IVM trigger run: the block's remaining gas, bounded for a baseline program by
+/// its header cycle budget (the anchor's `gas_limit_for_cycles(cycles).min(remaining)`); an
+/// unbounded limit takes the default trigger limit.
+fn trigger_gas_limit(effective_cycles: Option<NonZeroU64>, remaining_block_budget: u64) -> u64 {
+    trigger_batch_gas_budget(effective_cycles.map_or(remaining_block_budget, |cycles| {
+        crate::smartcontracts::ivm::gas_limit_for_cycles(cycles).min(remaining_block_budget)
+    }))
+}
 const fn remaining_trigger_batch_gas(batch_gas_limit: u64, batch_gas_used: u64) -> u64 {
     batch_gas_limit.saturating_sub(batch_gas_used)
 }
@@ -32613,18 +32621,20 @@ impl State {
             &self.world.parameters.view(),
         )
     }
-    /// Snapshot the largest ZK trace bound a newly admitted ZK-mode IVM program may declare.
+    /// Snapshot the effective cycle ceiling for newly admitted IVM programs.
     ///
-    /// The committed pipeline validity policy decides the ceiling, as in every view and block.
-    /// `max_cycles` is the trace bound of ZK artifacts alone (a non-ZK header carries zero) and
-    /// gas is the only execution budget, so governance fuel does not narrow it.
+    /// Programs submitted through the interface run the frozen baseline engine, whose header
+    /// `max_cycles` is bounded by both the committed pipeline validity policy and the
+    /// governance-controlled smart-contract fuel; producers embed the lower value in generated
+    /// program headers (the anchor's rule).
     #[must_use]
     pub fn ivm_admission_cycle_limit(&self) -> NonZeroU64 {
-        crate::pipeline_validity_policy::effective_pipeline(
-            self.pipeline.clone(),
-            &self.world.parameters.view(),
-        )
-        .ivm_max_cycles_upper_bound
+        let parameters = self.world.parameters.view();
+        let fuel = parameters.smart_contract().fuel();
+        let ceiling =
+            crate::pipeline_validity_policy::effective_pipeline(self.pipeline.clone(), &parameters)
+                .ivm_max_cycles_upper_bound;
+        NonZeroU64::new(ceiling.get().min(fuel.get())).expect("both IVM cycle limits are non-zero")
     }
     /// Snapshot the current governance configuration.
     ///
@@ -45367,8 +45377,13 @@ impl StateTransaction<'_, '_> {
             metadata,
             artifact,
         )?;
-        crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
-        // Gas is the only execution budget: a trigger draws from the block's remaining gas.
+        let effective_cycles = crate::executor::validate_prepared_ivm_execution_policy_for_profile(
+            self,
+            summary.profile(),
+            &summary.metadata,
+        )?;
+        // A trigger draws from the block's remaining gas; a baseline program is also bounded by
+        // its header cycle budget.
         let remaining_block_budget = if self.gas_limit_per_block == 0 {
             u64::MAX
         } else {
@@ -45377,7 +45392,7 @@ impl StateTransaction<'_, '_> {
                     .saturating_add(self.last_tx_gas_used),
             )
         };
-        let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
+        let gas_limit = trigger_gas_limit(effective_cycles, remaining_block_budget);
         let heap_limit = self.world.parameters.get().smart_contract().memory().get();
         let ivm_cache = self.ivm_cache;
         let (artifacts, trigger_gas_used) = IvmCache::with_locked(ivm_cache, |cache| {
@@ -45392,6 +45407,9 @@ impl StateTransaction<'_, '_> {
                         ValidationFail::InternalError(error.to_string())
                     })
                 })?;
+            if let Some(cycles) = effective_cycles {
+                vm.set_max_cycles(cycles.get());
+            }
             vm.set_gas_limit(gas_limit);
             let host_args = self
                 .trigger_host_args(event, Json::default())
@@ -45887,7 +45905,12 @@ impl StateTransaction<'_, '_> {
                     self,
                     summary.prepared_contract().syscall_policy(),
                 )?;
-                crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
+                let effective_cycles =
+                    crate::executor::validate_prepared_ivm_execution_policy_for_profile(
+                        self,
+                        summary.profile(),
+                        &summary.metadata,
+                    )?;
                 let manifest = self
                     .world
                     .contract_manifests
@@ -45918,7 +45941,7 @@ impl StateTransaction<'_, '_> {
                             .saturating_add(self.last_tx_gas_used),
                     )
                 };
-                let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
+                let gas_limit = trigger_gas_limit(effective_cycles, remaining_block_budget);
                 let entrypoint_authorization =
                     crate::executor::authorize_prepared_raw_contract_selector(
                         &self.world,
@@ -46026,6 +46049,9 @@ impl StateTransaction<'_, '_> {
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
 
+                if let Some(cycles) = effective_cycles {
+                    vm.set_max_cycles(cycles.get());
+                }
                 vm.set_gas_limit(gas_limit);
                 let precharge_result = contract_call_context
                     .prepared_argument_record()
@@ -46115,10 +46141,14 @@ impl StateTransaction<'_, '_> {
                                 self,
                                 prepared_contract.syscall_policy(),
                             )?;
-                            crate::executor::validate_prepared_ivm_execution_policy(
-                                self,
-                                prepared_contract.metadata(),
-                            )?;
+                            let effective_cycles =
+                                crate::executor::validate_prepared_ivm_execution_policy_for_profile(
+                                    self,
+                                    crate::smartcontracts::ivm::profile::ResolvedIvmProfile::of_id(
+                                        prepared_contract.profile_id(),
+                                    ),
+                                    prepared_contract.metadata(),
+                                )?;
                             let remaining_block_budget = if self.gas_limit_per_block == 0 {
                                 u64::MAX
                             } else {
@@ -46127,7 +46157,8 @@ impl StateTransaction<'_, '_> {
                                         .saturating_add(self.last_tx_gas_used),
                                 )
                             };
-                            let gas_limit = trigger_batch_gas_budget(remaining_block_budget);
+                            let gas_limit =
+                                trigger_gas_limit(effective_cycles, remaining_block_budget);
                             let selector = crate::executor::requested_contract_entrypoint(
                                 &contract_call_metadata,
                             )?
@@ -46319,6 +46350,9 @@ impl StateTransaction<'_, '_> {
                                 entrypoint_authorization,
                             ));
 
+                            if let Some(cycles) = effective_cycles {
+                                vm.set_max_cycles(cycles.get());
+                            }
                             vm.set_gas_limit(gas_limit);
                             let precharge_result = contract_call_context
                                 .prepared_argument_record()

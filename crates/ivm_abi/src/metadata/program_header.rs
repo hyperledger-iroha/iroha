@@ -8,20 +8,40 @@ use super::*;
 pub struct ParsedProgramHeader<'a> {
     bytes: &'a [u8],
     metadata: ProgramMetadata,
-    syscall_policy: crate::SyscallPolicy,
+    profile: crate::IvmProfileId,
+    header_len: usize,
+    vector_length: u8,
 }
 impl<'a> ParsedProgramHeader<'a> {
     /// Exact named policy authenticated by this original artifact's fixed header.
     #[must_use]
     pub const fn syscall_policy(&self) -> crate::SyscallPolicy {
-        self.syscall_policy
+        self.profile.policy()
+    }
+
+    /// Profile (engine and named policy) whose header layout authenticated this artifact.
+    #[must_use]
+    pub const fn profile(&self) -> crate::IvmProfileId {
+        self.profile
+    }
+
+    /// Length of the fixed header in the layout of this profile's engine.
+    #[must_use]
+    pub const fn header_len(&self) -> usize {
+        self.header_len
+    }
+
+    /// Logical vector length declared by a baseline-engine header; zero for C10 headers.
+    #[must_use]
+    pub const fn vector_length(&self) -> u8 {
+        self.vector_length
     }
 
     /// Whether the next section starts with the sole canonical CNTR marker.
     /// A true value does not establish canonical payload or contract validity.
     #[must_use]
     pub fn declares_contract_interface(&self) -> bool {
-        self.bytes.get(HEADER_SIZE..HEADER_SIZE + 4)
+        self.bytes.get(self.header_len..self.header_len + 4)
             == Some(CONTRACT_INTERFACE_SECTION_MAGIC.as_slice())
     }
 
@@ -29,7 +49,13 @@ impl<'a> ParsedProgramHeader<'a> {
     /// All section, codec-limit and malformed-input checks retain their canonical ordering.
     /// This consumes the borrowed header; it accepts no replacement bytes or offsets.
     pub fn parse_sections(self) -> Result<ParsedProgramMetadata, VMError> {
-        super::parse_program_sections(self.bytes, self.metadata, self.syscall_policy)
+        super::parse_program_sections(
+            self.bytes,
+            self.metadata,
+            self.profile,
+            self.header_len,
+            self.vector_length,
+        )
     }
 }
 
@@ -91,7 +117,7 @@ pub(super) fn parse(
         }
         _ => {}
     }
-    let expected = crate::syscalls::compute_abi_hash(syscall_policy);
+    let expected = crate::syscalls::compute_c10_abi_hash(syscall_policy);
     if abi_hash != expected {
         return Err(VMError::ArtifactAbiHashMismatch {
             expected,
@@ -105,9 +131,95 @@ pub(super) fn parse(
     if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
         return Err(VMError::InvalidMetadata);
     }
+    // This is the C10 parser: the header belongs to the C10 profile of the policy, whatever
+    // engine `IvmProfileId::of_policy` binds that policy to.
+    let profile = crate::IvmProfileId::of_engine_policy(crate::IvmEngine::C10, syscall_policy)
+        .ok_or(VMError::InvalidMetadata)?;
     Ok(ParsedProgramHeader {
         bytes,
-        syscall_policy,
+        profile,
+        header_len: HEADER_SIZE,
+        vector_length: 0,
+        metadata: ProgramMetadata {
+            version_major,
+            version_minor,
+            mode,
+            max_cycles,
+            abi_version,
+        },
+    })
+}
+
+/// Fixed-header admission of the baseline engine: the anchor's 49-byte layout and precedence.
+///
+/// Policy is checked in the anchor's stable order: version, unknown feature bits (only ZK and
+/// VECTOR are known), ABI version, vector length (0 or `1..=64`), ABI hash. Structural length and
+/// magic failures necessarily precede these. There is no `max_cycles` rule at this layer; the
+/// baseline's Core header policy requires a non-zero value separately.
+pub(super) fn parse_baseline(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
+    use crate::baseline as base;
+    if bytes.len() < base::HEADER_SIZE {
+        return Err(VMError::InvalidMetadata);
+    }
+    let magic = &bytes[0..4];
+    let version_major = bytes[4];
+    if magic != MAGIC {
+        return Err(VMError::InvalidMetadata);
+    }
+    let abi_version = bytes[base::HEADER_ABI_VERSION_OFFSET];
+    let abi_hash: [u8; 32] = bytes[base::HEADER_ABI_HASH_OFFSET..base::HEADER_SIZE]
+        .try_into()
+        .map_err(|_| VMError::InvalidMetadata)?;
+    let version_minor = bytes[5];
+    let mode = bytes[6];
+    let vector_length = bytes[base::HEADER_VECTOR_LENGTH_OFFSET];
+    let max_cycles_bytes: [u8; 8] = bytes
+        [base::HEADER_BUDGET_OFFSET..base::HEADER_ABI_VERSION_OFFSET]
+        .try_into()
+        .map_err(|_| VMError::InvalidMetadata)?;
+    let max_cycles = u64::from_le_bytes(max_cycles_bytes);
+    if version_major != 1 || version_minor != 1 {
+        return Err(VMError::UnsupportedProgramVersion {
+            major: version_major,
+            minor: version_minor,
+        });
+    }
+    let unsupported_feature_bits = mode & !base::mode::KNOWN;
+    if unsupported_feature_bits != 0 {
+        return Err(VMError::UnsupportedProgramFeatureBits {
+            bits: unsupported_feature_bits,
+        });
+    }
+    if abi_version != 1 {
+        return Err(VMError::UnsupportedProgramAbiVersion {
+            version: abi_version,
+        });
+    }
+    if vector_length > base::VECTOR_LENGTH_MAX {
+        return Err(VMError::ProgramVectorLengthTooLarge {
+            vector_length,
+            max_allowed: base::VECTOR_LENGTH_MAX,
+        });
+    }
+    let expected = base::abi_hash();
+    if abi_hash != expected {
+        return Err(VMError::ArtifactAbiHashMismatch {
+            expected,
+            actual: abi_hash,
+        });
+    }
+    let image_len = bytes
+        .len()
+        .checked_sub(base::HEADER_SIZE)
+        .ok_or(VMError::InvalidMetadata)?;
+    if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
+        return Err(VMError::InvalidMetadata);
+    }
+    Ok(ParsedProgramHeader {
+        bytes,
+        profile: crate::IvmProfileId::BASELINE_ABI_V1,
+        header_len: base::HEADER_SIZE,
+        vector_length,
         metadata: ProgramMetadata {
             version_major,
             version_minor,
@@ -155,6 +267,80 @@ mod tests {
             matches!((&(outcome.unwrap_err()), &(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })), (VMError::UnsupportedProgramVersion { major: __actual_major, minor: __actual_minor }, VMError::UnsupportedProgramVersion { major: __expected_major, minor: __expected_minor }) if __actual_major == __expected_major && __actual_minor == __expected_minor)
         );
     }
+    #[test]
+    fn baseline_header_keeps_the_anchor_layout_and_precedence() {
+        use crate::baseline as base;
+        let profile = crate::IvmProfileId::BASELINE_ABI_V1;
+        let header = base::encode_header(
+            &ProgramMetadata {
+                mode: base::mode::VECTOR,
+                max_cycles: 7,
+                ..ProgramMetadata::default()
+            },
+            8,
+        );
+        let parsed = ProgramMetadata::parse_header_for_profile(&header, profile).unwrap();
+        assert_eq!(parsed.profile(), profile);
+        assert_eq!(parsed.header_len(), base::HEADER_SIZE);
+        assert_eq!(parsed.vector_length(), 8);
+        assert_eq!(parsed.metadata.max_cycles, 7);
+        assert!(!parsed.declares_contract_interface());
+        let sections = parsed.parse_sections().unwrap();
+        assert_eq!(sections.header_len, base::HEADER_SIZE);
+        assert_eq!(sections.code_offset, base::HEADER_SIZE);
+        assert_eq!(sections.vector_length, 8);
+        assert_eq!(sections.profile, profile);
+        // A baseline header is never read in the C10 layout, and the reverse.
+        assert!(ProgramMetadata::parse_header(&header).is_err());
+        assert!(
+            ProgramMetadata::parse_header_for_profile(
+                &ProgramMetadata::default().encode(),
+                profile
+            )
+            .is_err()
+        );
+        let mut bytes = header.clone();
+        bytes[4] = 2;
+        bytes[6] = 0x80;
+        bytes[base::HEADER_VECTOR_LENGTH_OFFSET] = base::VECTOR_LENGTH_MAX + 1;
+        bytes[base::HEADER_ABI_VERSION_OFFSET] = 3;
+        let parse = |bytes: &[u8]| {
+            ProgramMetadata::parse_header_for_profile(bytes, profile).map(|header| header.metadata)
+        };
+        assert!(matches!(
+            parse(&bytes),
+            Err(VMError::UnsupportedProgramVersion { major: 2, minor: 1 })
+        ));
+        bytes[4] = 1;
+        assert!(matches!(
+            parse(&bytes),
+            Err(VMError::UnsupportedProgramFeatureBits { bits: 0x80 })
+        ));
+        bytes[6] = base::mode::ZK | base::mode::VECTOR;
+        assert!(matches!(
+            parse(&bytes),
+            Err(VMError::UnsupportedProgramAbiVersion { version: 3 })
+        ));
+        bytes[base::HEADER_ABI_VERSION_OFFSET] = 1;
+        assert!(matches!(
+            parse(&bytes),
+            Err(VMError::ProgramVectorLengthTooLarge {
+                vector_length: 65,
+                max_allowed: 64
+            })
+        ));
+        bytes[base::HEADER_VECTOR_LENGTH_OFFSET] = 0;
+        bytes[base::HEADER_ABI_HASH_OFFSET] ^= 1;
+        assert!(matches!(
+            parse(&bytes),
+            Err(VMError::ArtifactAbiHashMismatch { .. })
+        ));
+        assert!(matches!(
+            parse(&header[..base::HEADER_SIZE - 1]),
+            Err(VMError::InvalidMetadata)
+        ));
+    }
+
     #[test]
     fn cycle_bound_is_present_exactly_for_zk_headers() {
         let zk_without_bound = ProgramMetadata {

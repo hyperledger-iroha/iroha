@@ -9,7 +9,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::prelude::*;
 use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
-use ivm::{IVM, ProgramMetadata};
+use ivm::IVM;
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use mv::storage::StorageReadOnly;
 fn seeded_authority(seed: u8) -> (AccountId, KeyPair) {
@@ -18,7 +18,12 @@ fn seeded_authority(seed: u8) -> (AccountId, KeyPair) {
     (AccountId::new(keypair.public_key().clone()), keypair)
 }
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
-    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        program,
+        ivm::IvmProfileId::declared(program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
         .contract_interface
         .as_ref()
@@ -60,7 +65,12 @@ fn published_hello_example_needs_no_permission_grant() {
     let program = KotodamaCompiler::new()
         .compile_source(include_str!("../../../examples/hello/hello.ko"))
         .expect("compile hello contract");
-    let metadata = ProgramMetadata::parse(&program).expect("parse hello artifact");
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse hello artifact");
     let interface = metadata
         .contract_interface
         .as_ref()
@@ -87,7 +97,12 @@ fn selected_kotodama_hello_main_entrypoint_writes_expected_detail() {
     let (authority, authority_key) = seeded_authority(7);
     let mut vm = IVM::new(5_000_000);
     vm.set_host(CoreHost::new(authority.clone()));
-    vm.load_program(&program).expect("load hello contract");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load hello contract");
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run hello contract");
     let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions)

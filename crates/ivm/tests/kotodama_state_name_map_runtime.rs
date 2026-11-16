@@ -7,7 +7,7 @@ use ivm::{CoreHost, IVM};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::str::FromStr;
 fn run_program(src: &str) -> IVM {
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile kotodama");
     let mut vm = IVM::new(u64::MAX);
@@ -30,7 +30,7 @@ fn encoded_int_state_path(name: &str, key: i64) -> String {
     format!("{name}/{}", hex::encode(key))
 }
 fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldStateView) {
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile kotodama");
     let subject = test_subject();
@@ -160,7 +160,7 @@ fn aggregate_option_rejects_a_different_fallback_shape() {
     let src = include_str!("../fixtures/koto_v1/kotodama_state_name_map_runtime/012.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let error = KotodamaCompiler::new()
+    let error = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect_err("unwrap_or must reject a fallback with a different aggregate shape");
     assert!(

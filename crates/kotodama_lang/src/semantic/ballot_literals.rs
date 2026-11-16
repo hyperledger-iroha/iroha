@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn inline_ballot_runtime_parameters_fail_check_and_build_at_the_argument() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let nullifier = format!("b\"{}\"", "\\x00".repeat(32));
         let fields = [
             ("election_id", "string", "\"election\""),
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn inline_ballot_all_literal_fields_survive_local_and_private_specialization() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let nullifier = "\\x00".repeat(32);
         let nullifier_literal = format!("b\"{nullifier}\"");
         let fields = [
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn inline_ballot_runtime_checks_preserve_type_and_literal_error_priority() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let nullifier = "\\x00".repeat(32);
         let wrong_type = source("election", &nullifier, false)
             .replace("kotoage fn run()", "kotoage fn run(int runtime_value)")
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn inline_ballot_check_and_build_reject_invalid_literals_identically() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let overlong = "a".repeat(129);
         let valid_nullifier = "\\x00".repeat(32);
         let short_nullifier = "a".repeat(31);
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn inline_ballot_literals_and_constant_bindings_preserve_interface() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let selector = "a".repeat(128);
         let nullifier = "\\x00".repeat(32);
         for constants in [false, true] {

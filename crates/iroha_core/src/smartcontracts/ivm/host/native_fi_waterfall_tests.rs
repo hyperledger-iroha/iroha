@@ -70,7 +70,7 @@ fn check_compiled_calls(source: &str, expected_indices: &[usize]) {
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile typed FI and controlled waterfall calls");
-    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let metadata = crate::ivm_test_support::parse_declared(&program).unwrap();
     let entrypoint = metadata
         .contract_interface
         .as_ref()
@@ -125,7 +125,11 @@ fn check_compiled_calls(source: &str, expected_indices: &[usize]) {
         }));
         host.set_entrypoint_argument_record(Some(prepared.clone()));
         let mut vm = IVM::new(50_000_000);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .unwrap();
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(metadata.prefix_len() as u64 + entrypoint.entry_pc)
             .unwrap();
@@ -375,7 +379,7 @@ fn run_gas_probe(
     target: u32,
     gas_limit: u64,
 ) -> (Result<(), ivm::VMError>, IVM, GasObservedHost) {
-    let metadata = ivm::ProgramMetadata::parse(program).unwrap();
+    let metadata = crate::ivm_test_support::parse_declared(program).unwrap();
     let entrypoint = metadata
         .contract_interface
         .as_ref()
@@ -413,7 +417,8 @@ fn run_gas_probe(
         actual_gas: None,
     };
     let mut vm = IVM::new(gas_limit);
-    vm.load_program(program).unwrap();
+    vm.load_program_for_profile(program, crate::ivm_test_support::declared_profile(program))
+        .unwrap();
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(metadata.prefix_len() as u64 + entrypoint.entry_pc)
         .unwrap();

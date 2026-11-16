@@ -21,7 +21,7 @@ fn kotodama_register_domain_e2e() {
         }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let program = compiler.compile_source(src).expect("compile kotodama");
     // Set up a mock WSV with an authority having RegisterDomain permission.
     let alice = account(

@@ -48,7 +48,8 @@ fn prepared_arrays_refuse_original_pool_and_survive_eviction_until_final_owner()
     let _retention = retention();
     let program = super::tests::minimal_program();
     let hash = ivm::contract_code_hash(&program);
-    let diagnostic = ivm::prepare_contract(Arc::<[u8]>::from(program.clone())).unwrap();
+    let diagnostic =
+        crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program.clone())).unwrap();
     let budget = AllocationBudget::new(0);
     let cache = PreparedContractCache::with_execution_budget(1, budget.clone());
     assert!(matches!(
@@ -156,7 +157,12 @@ fn generic_template_refusal_releases_unpublished_vm_and_allows_retry() {
     let mut measured = ivm::IVM::try_new_with_memory_budget(GAS, &budget).unwrap();
     measured.set_zk_trace_enabled(false);
     measured.memory.set_heap_max_limit(HEAP).unwrap();
-    measured.load_program(summary.program()).unwrap();
+    measured
+        .load_program_for_profile(
+            summary.program(),
+            crate::ivm_test_support::declared_profile(summary.program()),
+        )
+        .unwrap();
     let vm_bytes = budget.reserved_bytes();
     drop(measured);
     budget.set_limit_bytes(vm_bytes);

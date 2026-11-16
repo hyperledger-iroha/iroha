@@ -12123,8 +12123,9 @@ seiyaku StateBackedBinding { permission CanExecuteContract; permission CanInspec
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
                 .expect("registry read completes")
                 .expect("installed contract record");
-        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
-            .expect("prepare installed contract");
+        let prepared =
+            crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(record.code_bytes.clone()))
+                .expect("prepare installed contract");
         let mut host = CoreHost::new(authority.clone());
         host.bind_authorized_deployed_contract_runtime_context(
             &view,
@@ -12228,8 +12229,9 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
                 .expect("registry read completes")
                 .expect("installed contract record");
-        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
-            .expect("prepare installed contract");
+        let prepared =
+            crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(record.code_bytes.clone()))
+                .expect("prepare installed contract");
         let mut host = CoreHost::new(authority);
         host.bind_authorized_deployed_contract_view_runtime_context(
             &view,
@@ -12687,12 +12689,14 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &privileged_address)
                 .expect("registry read completes")
                 .expect("privileged contract record");
-        let legitimate_prepared =
-            ivm::prepare_contract(Arc::<[u8]>::from(legitimate.code_bytes.clone()))
-                .expect("prepare legitimate contract");
-        let privileged_prepared =
-            ivm::prepare_contract(Arc::<[u8]>::from(privileged.code_bytes.clone()))
-                .expect("prepare privileged contract");
+        let legitimate_prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(
+            legitimate.code_bytes.clone(),
+        ))
+        .expect("prepare legitimate contract");
+        let privileged_prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(
+            privileged.code_bytes.clone(),
+        ))
+        .expect("prepare privileged contract");
         let mut host = CoreHost::new(authority.clone());
         let bind_legitimate = |host: &mut CoreHost| {
             host.bind_authorized_deployed_contract_runtime_context(
@@ -12824,8 +12828,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         );
         host.bind_contract_runtime_context(contract.subject_id(), authorization);
         let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("generic image parses outside deployable admission");
+        vm.load_program_for_profile(
+            &ivm::ProgramMetadata::default().encode(),
+            crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+        )
+        .expect("generic image parses outside deployable admission");
         let path: StatePath = "state".parse().expect("state path");
         let path_payload = norito::to_bytes(&path).expect("encode state path");
         let path_pointer = vm
@@ -12864,7 +12871,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             abi_version: 1,
         };
         let mut vm = ivm::IVM::new(50_000_000);
-        vm.load_program(&meta.encode()).expect("load meta");
+        vm.load_program_for_profile(
+            &meta.encode(),
+            crate::ivm_test_support::declared_profile(&meta.encode()),
+        )
+        .expect("load meta");
         // DomainId TLV payload
         let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let payload = norito::to_bytes(&did).expect("encode domain id");
@@ -15478,8 +15489,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load header");
+        vm.load_program_for_profile(
+            &ivm::ProgramMetadata::default().encode(),
+            crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+        )
+        .expect("load header");
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId =
@@ -15612,8 +15626,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             Arc::new(vec![authority.clone()]),
             args,
         );
-        vm.load_program(&ivm::ProgramMetadata::default().encode())
-            .expect("load header");
+        vm.load_program_for_profile(
+            &ivm::ProgramMetadata::default().encode(),
+            crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+        )
+        .expect("load header");
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId =
@@ -15663,7 +15680,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         // Minimal program: HALT, but we only exercise host.validate_tlv via manual call
         let code = [ivm::encoding::wide::encode_halt().to_le_bytes()].concat();
         let program = build_program(&code);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .unwrap();
         // Prepare TLVs: nft_id (correct), key (WRONG: Json instead of Name), value (Json)
         let nft_id = NftId::of(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -15702,7 +15723,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         ]
         .concat();
         let program = build_program(&code);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .unwrap();
         let res = vm.run();
         assert!(
             matches!(res, Err(ivm::VMError::NoritoInvalid)),
@@ -15720,7 +15745,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         ));
         let code = [ivm::encoding::wide::encode_halt().to_le_bytes()].concat();
         let program = build_program(&code);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .unwrap();
         // payload is a Name
         let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let key_blob = norito::to_bytes(&key).expect("encode key");

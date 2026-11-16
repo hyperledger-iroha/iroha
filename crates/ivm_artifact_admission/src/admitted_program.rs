@@ -8,13 +8,14 @@
 
 use super::VerifiedContractArtifact;
 use iroha_crypto::Hash;
-use ivm_abi::{SyscallPolicy, VMError, metadata::ProgramMetadata};
+use ivm_abi::{IvmProfileId, SyscallPolicy, VMError, metadata::ProgramMetadata};
 
 /// Fixed scalar identity derived only by the native admission owner.
 #[derive(Clone, Debug)]
 pub struct AdmittedProgramSeal {
     metadata: ProgramMetadata,
-    syscall_policy: SyscallPolicy,
+    profile: IvmProfileId,
+    vector_length: u8,
     header_len: usize,
     code_offset: usize,
     code_hash: Hash,
@@ -24,14 +25,16 @@ impl AdmittedProgramSeal {
     /// The native verifier calls this after policy/literal/interface checks have completed.
     pub(super) fn new(
         metadata: &ProgramMetadata,
-        syscall_policy: SyscallPolicy,
+        profile: IvmProfileId,
+        vector_length: u8,
         header_len: usize,
         code_offset: usize,
         code_hash: Hash,
     ) -> Self {
         Self {
             metadata: metadata.clone(),
-            syscall_policy,
+            profile,
+            vector_length,
             header_len,
             code_offset,
             code_hash,
@@ -88,12 +91,14 @@ impl VerifiedContractArtifact {
         artifact: &'a [u8],
     ) -> Result<AdmittedProgram<'a>, VMError> {
         let seal = &self.admitted_program;
-        if self.syscall_policy != seal.syscall_policy
+        if self.syscall_policy != seal.profile.policy()
+            || self.profile != seal.profile
+            || self.vector_length != seal.vector_length
             || self.code_hash != seal.code_hash
             || self.header_len != seal.header_len
             || self.code_offset != seal.code_offset
             || !same_metadata(&self.metadata, &seal.metadata)
-            || seal.header_len != ivm_abi::metadata::HEADER_SIZE
+            || seal.header_len != seal.profile.engine().header_layout().size
             || seal.code_offset < seal.header_len
             || ivm_abi::metadata::contract_code_hash(artifact) != seal.code_hash
         {
@@ -104,7 +109,7 @@ impl VerifiedContractArtifact {
             .ok_or(VMError::InvalidMetadata)?;
         Ok(AdmittedProgram {
             metadata: &seal.metadata,
-            syscall_policy: seal.syscall_policy,
+            syscall_policy: seal.profile.policy(),
             code,
         })
     }
@@ -115,7 +120,7 @@ mod tests {
     use super::*;
 
     fn actual() -> (Vec<u8>, VerifiedContractArtifact) {
-        let bytes = kotodama_lang::compiler::Compiler::new()
+        let bytes = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku AdmittedRange { view fn value() authorize(anyone) -> int { return 7; } }",
             )
@@ -147,7 +152,7 @@ mod tests {
         let bytes = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 host_policy: policy,
-                ..kotodama_lang::compiler::CompilerOptions::default()
+                ..kotodama_lang::compiler::CompilerOptions::c10()
             },
         )
         .compile_source("seiyaku NamedRange { view fn main() authorize(anyone) { () } }")

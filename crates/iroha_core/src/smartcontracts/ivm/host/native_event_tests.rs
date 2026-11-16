@@ -21,9 +21,10 @@ fn native_event_runtime(source: &str, selector: &str) -> (State, ContractAddress
     let record = crate::smartcontracts::code::fetch_bound_contract_record(&view, &address)
         .expect("registry read")
         .expect("installed native event artifact");
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
-        .expect("admitted native event artifact");
-    let metadata = ivm::ProgramMetadata::parse(&record.code_bytes).unwrap();
+    let prepared =
+        crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(record.code_bytes.clone()))
+            .expect("admitted native event artifact");
+    let metadata = crate::ivm_test_support::parse_declared(&record.code_bytes).unwrap();
     let entry_pc =
         metadata.prefix_len() as u64 + prepared.entrypoint_descriptor(selector).unwrap().entry_pc;
     let mut host = CoreHost::new(authority);
@@ -34,8 +35,11 @@ fn native_event_runtime(source: &str, selector: &str) -> (State, ContractAddress
     .map_err(crate::execution_attempt::expect_completed_rejection)
     .expect("authorized event entrypoint");
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&record.code_bytes)
-        .expect("load exact event artifact");
+    vm.load_program_for_profile(
+        &record.code_bytes,
+        crate::ivm_test_support::declared_profile(&record.code_bytes),
+    )
+    .expect("load exact event artifact");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entry_pc).unwrap();
     drop(view);

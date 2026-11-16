@@ -166,7 +166,9 @@ fn actual_by_call_callback_keeps_its_separate_instruction_scope() {
 
 fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutputV1, u64) {
     use iroha_data_model::{isi::Grant, transaction::IvmBytecode};
-    use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
+    use ivm::pointer_abi::PointerType;
+    use ivm_abi::baseline::encoding::wide;
+    use ivm_abi::baseline::instruction::wide as opcode;
     let id: TriggerId = "generic_effect_callback".parse().unwrap();
     let instruction: InstructionBox = ExecuteTrigger::new(id.clone()).into();
     // Both executions have the same committed policy. The selected signed root has a
@@ -196,7 +198,10 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         tlv
     })
     .collect();
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let padding = (4 - (data_offset + data_len) % 4) % 4;
@@ -224,7 +229,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         wide::encode_literal(opcode::memory::LDLIT, 10, 0),
         wide::encode_literal(opcode::memory::LDLIT, 11, 1),
         wide::encode_literal(opcode::memory::LDLIT, 12, 2),
-        wide::encode_scall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
+        crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL),
         wide::encode_halt(),
     ] {
         program.extend_from_slice(&instruction.to_le_bytes());

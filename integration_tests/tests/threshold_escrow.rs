@@ -246,9 +246,9 @@ fn threshold_contract_call_intent(
 ) -> Result<iroha::client::ContractCallDraftIntent> {
     use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
     let artifact = load_sample_ivm("threshold_escrow");
-    let verified = ivm::verify_contract_artifact(artifact.as_ref()).map_err(|error| {
-        eyre!("verify independently trusted threshold escrow artifact: {error}")
-    })?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact.as_ref()).map_err(
+        |error| eyre!("verify independently trusted threshold escrow artifact: {error}"),
+    )?;
     let descriptor = verified
         .contract_interface
         .entrypoints

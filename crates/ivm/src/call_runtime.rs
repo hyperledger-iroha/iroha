@@ -485,7 +485,7 @@ mod tests {
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
     fn boolean_root(gas: u64) -> IVM {
-        let (bytes, _) = KotodamaCompiler::new()
+        let (bytes, _) = KotodamaCompiler::new_c10()
             .compile_source_with_manifest(
                 "seiyaku Tables { view fn main() authorize(anyone) -> bool { true } }",
             )
@@ -543,7 +543,7 @@ mod tests {
         }
         // This host exercises typed transport only. It deliberately provides no
         // credential verification or signed-custody authority.
-        let code = KotodamaCompiler::new()
+        let code = KotodamaCompiler::new_c10()
             .compile_source(
                 r#"seiyaku Queues {
             fn relay(PendingAction _ queued) -> PendingAction { queued }
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn public_selection_and_transaction_dispatch_require_exact_selectors() {
-        let code = KotodamaCompiler::new().compile_source(
+        let code = KotodamaCompiler::new_c10().compile_source(
             "seiyaku Selectors { fn helper() -> bool { true } view fn main() authorize(anyone) -> bool { helper() } }"
         ).unwrap();
         let mut vm = IVM::new(100_000);
@@ -858,7 +858,7 @@ mod tests {
     }
 
     fn cursor_root() -> (IVM, EmbeddedCallableV1, crate::call_frame::CallTables) {
-        let bytes = KotodamaCompiler::new().compile_source(
+        let bytes = KotodamaCompiler::new_c10().compile_source(
             "seiyaku Cursors { fn echo(StateCursor<int> value) -> StateCursor<int> { value } view fn main(StateCursor<int> value) authorize(anyone) -> StateCursor<int> { echo(value: value) } }"
         ).unwrap();
         let parsed = ProgramMetadata::parse(&bytes).unwrap();

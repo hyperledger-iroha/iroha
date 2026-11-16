@@ -4,7 +4,7 @@ use super::*;
 
 fn execute(epoch: &str) -> (IVM, crate::PreparedContract, Result<(), VMError>) {
     let source = "seiyaku SeedReader { view fn read(int epoch) authorize(anyone) -> Option<bytes> { return crypto::vrf::epoch_seed(epoch: epoch); } }";
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(source)
         .unwrap();
     let prepared = crate::prepare_contract(artifact.into()).unwrap();

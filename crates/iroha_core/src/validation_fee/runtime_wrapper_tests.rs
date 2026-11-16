@@ -157,7 +157,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
                 (output.artifact, output.report)
             },
         );
-        let metadata = ivm::ProgramMetadata::parse(&code).unwrap();
+        let metadata = crate::ivm_test_support::parse_declared(&code).unwrap();
         let literal_bytes = metadata
             .literal_section
             .map_or(0, |section| section.code_offset - section.start);
@@ -180,7 +180,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
                 function.function_name, function.bytecode_bytes, function.frame_bytes,
             );
         }
-        let verified = ivm::verify_contract_artifact(&code).unwrap();
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&code).unwrap();
         let hash = crate::smartcontracts::code::register_code_bytes(
             deployer,
             DataSpaceId::UNIVERSAL,
@@ -359,8 +359,10 @@ fn preview_wrapper_effects(
         contract_alias: None,
         entrypoint: "autonomous_validation_fee_tick".to_owned(),
     };
-    let prepared =
-        ivm::prepare_contract(std::sync::Arc::<[u8]>::from(wrapper_code.clone())).unwrap();
+    let prepared = crate::ivm_test_support::prepare_declared(std::sync::Arc::<[u8]>::from(
+        wrapper_code.clone(),
+    ))
+    .unwrap();
     let mut host = CoreHostImpl::new(wrapper.subject_id());
     host.set_query_state(stx);
     host.set_durable_state_snapshot_from_world(&stx.world);
@@ -380,7 +382,11 @@ fn preview_wrapper_effects(
         },
     )));
     let mut vm = ivm::IVM::new(preview_vm_gas_limit);
-    vm.load_program(&wrapper_code).unwrap();
+    vm.load_program_for_profile(
+        &wrapper_code,
+        crate::ivm_test_support::declared_profile(&wrapper_code),
+    )
+    .unwrap();
     vm.set_program_counter(prepared.entrypoint_pc(&context.entrypoint).unwrap())
         .unwrap();
     vm.run_with_host(&mut host)

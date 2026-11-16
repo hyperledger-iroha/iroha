@@ -2375,10 +2375,20 @@ impl DefaultHost {
         }
     }
     fn execution_summary_gas_quote(vm: &IVM) -> Result<u64, VMError> {
-        let payload_len = crate::execution_summary::ExecutionSummary::encoded_len_v1()
-            .map_err(|_| VMError::NoritoInvalid)?;
+        // Each engine prices the summary layout it reports.
+        let (payload_len, event_count) = match vm.engine() {
+            crate::IvmEngine::C10 => (
+                crate::execution_summary::ExecutionSummary::encoded_len_v1(),
+                vm.execution_summary_event_count(),
+            ),
+            crate::IvmEngine::Baseline => (
+                crate::execution_summary::BaselineExecutionSummary::encoded_len_v1(),
+                vm.baseline_execution_summary_event_count(),
+            ),
+        };
+        let payload_len = payload_len.map_err(|_| VMError::NoritoInvalid)?;
         Ok(128_u64
-            .saturating_add(vm.execution_summary_event_count().saturating_mul(2))
+            .saturating_add(event_count.saturating_mul(2))
             .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX)))
     }
     fn signature_verify_gas(
@@ -3867,18 +3877,35 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_EXECUTION_SUMMARY => {
-                let summary = vm.execution_summary()?;
-                let payload = encode_canonical_norito(&summary)?;
+                // Each engine reports its own summary layout.
+                let (payload, event_count) = match vm.engine() {
+                    crate::IvmEngine::C10 => {
+                        let summary = vm.execution_summary()?;
+                        let event_count = summary
+                            .pc_trace_len
+                            .saturating_add(summary.delta_trace_len)
+                            .saturating_add(summary.register_trace_len)
+                            .saturating_add(summary.memory_log_len)
+                            .saturating_add(summary.register_log_len)
+                            .saturating_add(summary.step_log_len);
+                        (encode_canonical_norito(&summary)?, event_count)
+                    }
+                    crate::IvmEngine::Baseline => {
+                        let summary = vm.baseline_execution_summary()?;
+                        let event_count = summary
+                            .pc_trace_len
+                            .saturating_add(summary.delta_trace_len)
+                            .saturating_add(summary.register_trace_len)
+                            .saturating_add(summary.constraint_len)
+                            .saturating_add(summary.memory_log_len)
+                            .saturating_add(summary.register_log_len)
+                            .saturating_add(summary.step_log_len);
+                        (encode_canonical_norito(&summary)?, event_count)
+                    }
+                };
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, ptr);
                 vm.set_register(11, 0);
-                let event_count = summary
-                    .pc_trace_len
-                    .saturating_add(summary.delta_trace_len)
-                    .saturating_add(summary.register_trace_len)
-                    .saturating_add(summary.memory_log_len)
-                    .saturating_add(summary.register_log_len)
-                    .saturating_add(summary.step_log_len);
                 let payload_len = u64::try_from(payload.len()).unwrap_or(u64::MAX);
                 Ok(128_u64
                     .saturating_add(event_count.saturating_mul(2))
