@@ -38,7 +38,12 @@ fn koto_build_meta_header_smoke() {
             .expect("spawn CLI");
         assert!(status.success(), "CLI did not exit successfully");
         let bytes = fs::read(&out).expect("read output .to");
-        let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse header");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            &bytes,
+            ivm::IvmProfileId::declared(&bytes)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("parse header");
         assert_eq!(
             parsed.metadata.version_minor, 1,
             "contract artifacts must emit IVM 1.1"
@@ -82,7 +87,12 @@ fn compile_tuple_return_minimal() {
     let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile tuple return");
-    let parsed = ivm::ProgramMetadata::parse(&code).expect("parse compiled tuple contract");
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &code,
+        ivm::IvmProfileId::declared(&code)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse compiled tuple contract");
     assert!(parsed.contract_interface.is_some());
 }
 #[test]
@@ -599,7 +609,7 @@ fn koto_build_named_runtime_profile_smoke() {
         String::from_utf8_lossy(&named.stderr)
     );
     let bytes = fs::read(output).expect("named artifact");
-    assert!(ivm::verify_contract_artifact(&bytes).is_err());
+    assert!(ivm::verify_contract_artifact_with_declared_profile(&bytes).is_err());
     let admitted = ivm::verify_contract_artifact_with_declared_profile(&bytes)
         .expect("exact named artifact admission");
     assert_eq!(

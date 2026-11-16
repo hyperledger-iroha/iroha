@@ -10,7 +10,7 @@ fn raw_axt_pointer_constructors_are_rejected() {
             }
         }
     "#;
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source(src)
         .expect_err("raw AXT pointer constructors are not part of the V1 source language");
     assert!(
@@ -29,7 +29,7 @@ fn kotodama_zk_verify_accepts_typed_bytes_parameter() {
             }
         }
     "#;
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(src)
         .expect("compile zk_verify_batch intrinsic");
 }

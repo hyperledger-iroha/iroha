@@ -6,7 +6,7 @@ fn run_prog(body: &str) {
     let src = format!(
         "seiyaku PointerRoundtrip {{ permission FixtureAccess;  kotoage fn main() authorize(FixtureAccess) {{\n{body}\n}} }}"
     );
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(&src).expect("compile");
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

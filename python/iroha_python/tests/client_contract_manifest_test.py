@@ -1000,11 +1000,9 @@ def test_contract_manifest_rejects_nonexact_provenance(
         ContractManifest.from_payload({"provenance": provenance})
 
 
-@pytest.mark.parametrize("bits", [2, 3, 4])
-def test_contract_manifest_rejects_unknown_feature_bits(bits: int) -> None:
-    # Bit 1 was the retired VECTOR capability; ZK (bit 0) is the only V1 bit.
+def test_contract_manifest_rejects_unknown_feature_bits() -> None:
     with pytest.raises(TypeError, match="unsupported Kotodama V1 feature bits"):
-        ContractManifest.from_payload({"features_bitmap": bits})
+        ContractManifest.from_payload({"features_bitmap": 4})
 
 
 def test_contract_manifest_record_cross_checks_hash_conveniences() -> None:

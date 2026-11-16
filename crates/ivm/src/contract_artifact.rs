@@ -29,6 +29,33 @@ pub fn prepare_contract_for_policy(
 ) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare_for_policy(artifact, policy)
 }
+/// Prepare an immutable contract under one explicitly resolved profile, including the frozen
+/// baseline profile.
+///
+/// # Errors
+/// Returns the profile engine's admission rejection or a local preparation refusal.
+pub fn prepare_contract_for_profile(
+    artifact: Arc<[u8]>,
+    profile: crate::IvmProfileId,
+) -> Result<PreparedContract, ContractArtifactError> {
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_for_profile(artifact.as_ref(), profile)?;
+    PreparedContract::prepare_shared_verified(artifact.as_ref(), verified, None)
+}
+/// Prepare under an explicitly resolved profile with original State custody.
+///
+/// # Errors
+/// Returns the profile engine's admission rejection or a local preparation refusal.
+pub fn prepare_contract_with_memory_budget_for_profile(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+    profile: crate::IvmProfileId,
+) -> Result<PreparedContract, ContractArtifactError> {
+    let verified = ivm_artifact_admission::verify_contract_artifact_with_memory_budget_for_profile(
+        artifact, budget, profile,
+    )?;
+    PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
+}
 /// Prepare immutable instructions, runtime indexes and artifact bytes in the original State pool.
 ///
 /// Funded operations stay outside process-global caches. The prepared shell,
@@ -157,12 +184,14 @@ impl PreparedContract {
             instruction_entry_pc,
             literal_table.entries(),
             budget,
+            verified.profile.engine(),
         )
         .map_err(|error| ContractArtifactError::preparation("instruction preparation", error))?;
         let control_flow =
-            PreparedControlFlow::from_decoded(decoded.as_ref(), budget).map_err(|error| {
-                ContractArtifactError::preparation("control-flow preparation", error)
-            })?;
+            PreparedControlFlow::from_decoded(decoded.as_ref(), budget, verified.profile.engine())
+                .map_err(|error| {
+                    ContractArtifactError::preparation("control-flow preparation", error)
+                })?;
         PreparedContract::from_parts(PreparedContractParts {
             // Take our own byte allocation; an input Arc may have unrelated owners
             // whose lifetimes cannot be governed by this preparation reservation.
@@ -181,7 +210,8 @@ impl PreparedContract {
                 .map_err(|error| ContractArtifactError::preparation("artifact backing", error))?,
             },
             metadata: verified.metadata,
-            syscall_policy: verified.syscall_policy,
+            profile: verified.profile,
+            vector_length: verified.vector_length,
             manifest: verified.manifest,
             header_len: verified.header_len,
             code_offset: verified.code_offset,
@@ -233,7 +263,7 @@ mod preparation_deferral_tests {
 
     #[test]
     fn cold_native_preparation_defers_allocator_refusal_then_retries_same_artifact() {
-        let artifact: Arc<[u8]> = kotodama_lang::compiler::Compiler::new()
+        let artifact: Arc<[u8]> = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(r#"seiyaku PreparationRefusal { permission Entry;  kotoage fn main() authorize(Entry) -> int { return 701; } }"#)
             .expect("compile an admitted first-release artifact")
             .into();
@@ -341,7 +371,7 @@ mod koto_test_harness_tests {
     fn compile_suite() -> TestCompileOutput {
         let options = CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         };
         let target = TestSourceUnit {
             source_name: "harness_demo.ko".to_owned(),

@@ -243,7 +243,7 @@ fn locked_graph_order_preserves_complete_nominal_error_identity_and_schema() {
             assert_eq!(descriptor.variant(2).unwrap().name, "Missing");
             assert_eq!(descriptor.schema_hash(), variant_schema);
         }
-        let output = crate::compiler::Compiler::new()
+        let output = crate::compiler::Compiler::new_c10()
             .compile_typed_program_with_manifest_and_report_diagnostics(
                 linked.program,
                 Some("app.ko"),
@@ -351,7 +351,7 @@ fn imported_structs_keep_locked_identity_in_public_and_durable_schemas() {
                     LinkerOptions::default(),
                 )
                 .expect("link public imported value types");
-        crate::compiler::Compiler::new()
+        crate::compiler::Compiler::new_c10()
             .compile_typed_program_with_manifest_and_report_diagnostics(
                 linked.program,
                 Some("app.ko"),
@@ -1615,7 +1615,7 @@ fn standalone_test_graph_preserves_source_ownership_and_exact_imports() {
             std::slice::from_ref(&test),
             crate::compiler::CompilerOptions {
                 mode: crate::compiler::CompilerMode::Test,
-                ..crate::compiler::CompilerOptions::default()
+                ..crate::compiler::CompilerOptions::c10()
             },
             "contracts/app.ko",
         )
@@ -1710,7 +1710,7 @@ fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
             crate::compiler::CompilerOptions {
                 chain_discriminant: 753,
                 mode: crate::compiler::CompilerMode::Test,
-                ..crate::compiler::CompilerOptions::default()
+                ..crate::compiler::CompilerOptions::c10()
             },
             "tests/unit.ko",
         )
@@ -1772,7 +1772,7 @@ fn package_and_test_graphs_handoff_from_a_small_caller() {
                     },
                     crate::compiler::CompilerOptions {
                         mode: crate::compiler::CompilerMode::Test,
-                        ..crate::compiler::CompilerOptions::default()
+                        ..crate::compiler::CompilerOptions::c10()
                     },
                     "tests/deep.ko",
                 )

@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn invalid_trigger_literal_shapes_fail_check_and_build_at_the_argument() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for (raw, label) in [
             "{}",
             r#"{"id":null}"#,
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn trigger_literal_checks_preserve_type_and_json_diagnostics() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for (argument, code) in [
             (r#"Name::parse("wake")"#, "K2003"),
             (r#"Json::parse("{")"#, "E_JSON_LITERAL_INVALID"),
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn trigger_literal_checks_preserve_dynamic_and_specialized_inputs() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let literal = r#"Json::parse("{\"id\":\"wake\"}")"#;
         let direct = source(literal);
         let local = source("spec").replace(
@@ -176,7 +176,7 @@ mod tests {
     fn test_mode_preserves_undecodable_trigger_hint_fallback() {
         let session = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
-            ..CompilerOptions::default()
+            ..CompilerOptions::c10()
         });
         let source = source(r#"Json::parse("{}")"#);
         let request = CompileRequest {
@@ -223,7 +223,7 @@ mod tests {
         let mut bytes = ivm_abi::codec::encode_canonical_norito(&trigger).unwrap();
         let encoded = json::to_string(&STANDARD.encode(&bytes)).unwrap();
         assert_eq!(id_from_json(&encoded), Some(id));
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let source = source(&format!(
             "Json::parse({})",
             json::to_string(&encoded).unwrap()

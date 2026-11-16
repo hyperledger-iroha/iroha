@@ -66,7 +66,7 @@ export function createContractManifestNormalizer(
       return null;
     }
     const normalized = asNonNegativeInteger(value, name);
-    if (normalized > 1) {
+    if (normalized > 3) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
         `${name} contains unsupported Kotodama V1 feature bits`,

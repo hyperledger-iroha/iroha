@@ -37,8 +37,11 @@ fn header() -> BlockHeader {
 }
 
 fn program() -> Vec<u8> {
-    let mut bytes = ivm::ProgramMetadata::default().encode();
-    bytes.extend(ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut bytes = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    bytes.extend(ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
 

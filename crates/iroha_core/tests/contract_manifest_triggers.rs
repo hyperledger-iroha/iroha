@@ -120,7 +120,8 @@ fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, Contract
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
-    let verified = ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&out)
+        .expect("valid test contract artifact");
     (out, verified.manifest)
 }
 #[test]
@@ -131,7 +132,12 @@ fn trigger_fixture_authenticates_each_distinct_unit_return_entrypoint() {
         )
         .unwrap();
     let (program, _) = contract_artifact(&manifest.entrypoints.unwrap());
-    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let interface = metadata.contract_interface.as_ref().unwrap();
     assert_eq!(interface.callables.len(), 2);
     assert_ne!(
@@ -140,7 +146,12 @@ fn trigger_fixture_authenticates_each_distinct_unit_return_entrypoint() {
     );
     for entrypoint in &interface.entrypoints {
         let mut vm = ivm::IVM::new(100_000);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            ivm::IvmProfileId::declared(&program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .unwrap();
         vm.set_program_counter(metadata.prefix_len() as u64 + entrypoint.entry_pc)
             .unwrap();
         vm.run()

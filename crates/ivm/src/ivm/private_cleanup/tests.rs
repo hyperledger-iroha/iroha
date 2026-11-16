@@ -31,7 +31,7 @@ fn transition(vm: &mut IVM, action: Transition) -> Result<(), VMError> {
         Transition::Disable => vm.set_zk_mode(false),
         Transition::RawLoad => vm.load_code(&wide::encode_halt().to_le_bytes()),
         Transition::PreparedLoad => {
-            let (code, _) = kotodama_lang::compiler::Compiler::new()
+            let (code, _) = kotodama_lang::compiler::Compiler::new_c10()
                 .compile_source_with_manifest(
                     "seiyaku Cleanup { view fn main() authorize(anyone) -> bool { true } }",
                 )

@@ -1,7 +1,14 @@
-//! CPU register file: 32 general-purpose registers with optional privacy tags.
+//! CPU register file: general-purpose registers with optional privacy tags.
 //!
 //! Each register carries a 1-bit privacy tag that is meaningful when
 //! zero-knowledge mode is active. `r0` is hardwired to zero.
+//!
+//! The file is sized for the widest engine: the frozen baseline engine addresses
+//! [`BASELINE_REGISTER_COUNT`] (256) registers, the C10 engine addresses the first
+//! [`REGISTER_COUNT`] (32). The retained Merkle commitment, [`Registers::snapshot`] and every
+//! authentication path cover the C10 file; a baseline image's commitment is
+//! [`Registers::baseline_merkle_root`] over all 256 registers. A C10 image never writes the
+//! upper registers, so they stay zero and public.
 use crate::zk::{RegEvent, record_register_event};
 use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
 use iroha_allocation::{AllocationBudget, AllocationCharge};
@@ -14,12 +21,15 @@ use std::{
 };
 mod fixed_path;
 pub use fixed_path::REGISTER_MERKLE_PATH_DEPTH;
+/// Number of general-purpose registers the frozen baseline engine addresses.
+pub const BASELINE_REGISTER_COUNT: usize = 256;
 pub struct Registers {
-    /// 32 general purpose 64-bit registers. `r0` is hardwired to zero.
-    gpr: [u64; REGISTER_COUNT],
+    /// General-purpose 64-bit registers. `r0` is hardwired to zero. The C10 engine uses the
+    /// first [`REGISTER_COUNT`]; the baseline engine uses all of them.
+    gpr: [u64; BASELINE_REGISTER_COUNT],
     /// Privacy tags associated with each register. `false` denotes public data
     /// and `true` denotes private (secret) data.
-    tags: [bool; REGISTER_COUNT],
+    tags: [bool; BASELINE_REGISTER_COUNT],
     /// Merkle tree commitment to the register contents and tags (canonical type).
     tree: Mutex<crate::cache_memory::FixedAllocationValue<MerkleTree<[u8; 32]>>>,
     // Drop the node allocation above before refunding its original active charge.
@@ -45,7 +55,10 @@ impl Clone for Registers {
         let tags = self.tags;
         let tree = if self.dirty.load(Ordering::Acquire) {
             crate::cache_memory::FixedAllocationValue::new(
-                MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&gpr, &tags)),
+                MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(
+                    narrow(&gpr),
+                    narrow(&tags),
+                )),
                 MerkleTree::allocated_bytes,
             )
         } else {
@@ -148,8 +161,8 @@ impl Registers {
     }
 
     fn try_new_with_charge(tree_charge: Option<AllocationCharge>) -> Result<Self, VMError> {
-        let gpr = [0u64; REGISTER_COUNT];
-        let tags = [false; REGISTER_COUNT];
+        let gpr = [0u64; BASELINE_REGISTER_COUNT];
+        let tags = [false; BASELINE_REGISTER_COUNT];
         let zero_leaf: [u8; 32] = {
             let b = [0u8; 9];
             Sha256::digest(b).into()
@@ -177,8 +190,8 @@ impl Registers {
     /// The retained nodes are rewritten lazily: the next root or path read
     /// rebuilds them from these values, so a reset nobody reads hashes nothing.
     pub(crate) fn reset_to_zero(&mut self) {
-        self.gpr = [0; REGISTER_COUNT];
-        self.tags = [false; REGISTER_COUNT];
+        self.gpr = [0; BASELINE_REGISTER_COUNT];
+        self.tags = [false; BASELINE_REGISTER_COUNT];
         *self.dirty.get_mut() = true;
     }
 
@@ -194,7 +207,7 @@ impl Registers {
     /// Get the value of register `idx`.
     #[inline]
     pub fn get(&self, idx: usize) -> u64 {
-        debug_assert!(idx < REGISTER_COUNT);
+        debug_assert!(idx < BASELINE_REGISTER_COUNT);
         let val = self.gpr[idx];
         record_register_event(|| {
             let (root, path) = self
@@ -213,7 +226,7 @@ impl Registers {
     /// Set the value of register `idx`. Writes to x0 are ignored (x0 is always 0).
     #[inline]
     pub fn set(&mut self, idx: usize, value: u64) {
-        debug_assert!(idx < REGISTER_COUNT);
+        debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.gpr[idx] = value;
             // Exclusive access needs no atomic read-modify-write.
@@ -242,13 +255,13 @@ impl Registers {
     /// Get the privacy tag of register `idx`.
     #[inline]
     pub fn tag(&self, idx: usize) -> bool {
-        debug_assert!(idx < REGISTER_COUNT);
+        debug_assert!(idx < BASELINE_REGISTER_COUNT);
         self.tags[idx]
     }
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
     #[inline]
     pub fn set_tag(&mut self, idx: usize, value: bool) {
-        debug_assert!(idx < REGISTER_COUNT);
+        debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.tags[idx] = value;
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
@@ -314,15 +327,42 @@ impl Registers {
     pub(crate) fn has_private(&self) -> bool {
         self.tags.iter().any(|tag| *tag)
     }
-    /// Return a copy of all general-purpose registers.
+    /// Return a copy of the C10 register file.
     #[inline]
     pub fn snapshot(&self) -> [u64; REGISTER_COUNT] {
-        self.gpr
+        *narrow(&self.gpr)
     }
-    /// Return a copy of all privacy tags.
+    /// Return a copy of the C10 privacy tags.
     #[inline]
     pub fn snapshot_tags(&self) -> [bool; REGISTER_COUNT] {
+        *narrow(&self.tags)
+    }
+    /// Return a copy of the whole baseline register file.
+    #[inline]
+    pub fn baseline_snapshot(&self) -> [u64; BASELINE_REGISTER_COUNT] {
+        self.gpr
+    }
+    /// Return a copy of the whole baseline privacy-tag file.
+    #[inline]
+    pub fn baseline_snapshot_tags(&self) -> [bool; BASELINE_REGISTER_COUNT] {
         self.tags
+    }
+    /// Merkle root of the baseline register file: the SHA-256 tree over all 256 tagged
+    /// registers, as the baseline engine commits it.
+    ///
+    /// It is rebuilt from the register values on each call; no retained backing is consulted.
+    // TODO: retain a 256-leaf backing if baseline proof-trace logging is reconstructed.
+    #[must_use]
+    pub fn baseline_merkle_root(&self) -> HashOf<MerkleTree<[u8; 32]>> {
+        let leaves: Vec<[u8; 32]> = self
+            .gpr
+            .iter()
+            .zip(self.tags.iter())
+            .map(|(value, tag)| register_leaf_digest(*value, *tag))
+            .collect();
+        MerkleTree::from_hashed_leaves_sha256(leaves)
+            .root()
+            .expect("the baseline register tree has 256 leaves")
     }
     /// Return the Merkle root of the register file.
     #[inline]
@@ -370,8 +410,11 @@ impl Registers {
     {
         let mut tree = self.tree.lock();
         if self.dirty.load(Ordering::Acquire) {
-            tree.rewrite_hashed_leaves_sha256(&register_leaf_digests(&self.gpr, &self.tags))
-                .expect("register tree has fixed SHA-256 geometry");
+            tree.rewrite_hashed_leaves_sha256(&register_leaf_digests(
+                narrow(&self.gpr),
+                narrow(&self.tags),
+            ))
+            .expect("register tree has fixed SHA-256 geometry");
             self.dirty.store(false, Ordering::Release);
         }
         tree
@@ -403,6 +446,12 @@ fn register_leaf_digests(
     tags: &[bool; REGISTER_COUNT],
 ) -> [[u8; 32]; REGISTER_COUNT] {
     std::array::from_fn(|index| register_leaf_digest(gpr[index], tags[index]))
+}
+/// The C10 register file: the first [`REGISTER_COUNT`] entries of the baseline-sized storage.
+#[inline]
+fn narrow<T>(wide: &[T; BASELINE_REGISTER_COUNT]) -> &[T; REGISTER_COUNT] {
+    wide.first_chunk::<REGISTER_COUNT>()
+        .expect("the baseline register file contains the C10 file")
 }
 #[cfg(test)]
 thread_local! {
@@ -474,6 +523,44 @@ mod tests {
         assert_eq!(copied.snapshot(), source.snapshot());
         assert_eq!(copied.snapshot_tags(), source.snapshot_tags());
         assert_eq!(copied.merkle_root(), source.merkle_root());
+    }
+
+    #[test]
+    fn baseline_root_covers_all_registers_and_c10_views_cover_the_first_32() {
+        let mut regs = Registers::new();
+        let zero_leaf: [u8; 32] = Sha256::digest([0_u8; 9]).into();
+        let zero_wide = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![
+            zero_leaf;
+            BASELINE_REGISTER_COUNT
+        ]);
+        assert_eq!(regs.baseline_merkle_root(), zero_wide.root().unwrap());
+        let narrow_root = regs.merkle_root();
+        regs.set(200, 9);
+        regs.set_tag(255, true);
+        assert_eq!(regs.get(200), 9);
+        assert!(regs.tag(255));
+        assert_eq!(regs.baseline_snapshot()[200], 9);
+        assert!(regs.baseline_snapshot_tags()[255]);
+        assert_eq!(regs.snapshot(), [0; REGISTER_COUNT]);
+        assert_eq!(
+            regs.merkle_root(),
+            narrow_root,
+            "the C10 commitment ignores the upper baseline registers"
+        );
+        let mut leaves = vec![zero_leaf; BASELINE_REGISTER_COUNT];
+        leaves[200] = register_leaf_digest(9, false);
+        leaves[255] = register_leaf_digest(0, true);
+        assert_eq!(
+            regs.baseline_merkle_root(),
+            MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves)
+                .root()
+                .unwrap()
+        );
+        assert!(regs.has_private());
+        regs.scrub_private();
+        assert!(!regs.tag(255));
+        regs.reset_to_zero();
+        assert_eq!(regs.get(200), 0);
     }
 
     #[test]
@@ -669,8 +756,10 @@ mod tests {
         regs: &Registers,
         idx: usize,
     ) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
-        let canonical =
-            MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(&regs.gpr, &regs.tags));
+        let canonical = MerkleTree::from_hashed_leaves_sha256(register_leaf_digests(
+            narrow(&regs.gpr),
+            narrow(&regs.tags),
+        ));
         let root = canonical.root().expect("non-empty register tree");
         let path = canonical
             .get_proof(idx as u32)

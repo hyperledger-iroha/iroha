@@ -19,7 +19,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -67,7 +67,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -198,7 +198,7 @@ fn parse_rejects_retired_minor_zero_without_cntr() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_minor = 0;
     });
-    let current_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let current_abi_hash = ivm::IvmProfileId::C10_ABI_V1.abi_hash();
     assert_eq!(
         &bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE],
         current_abi_hash.as_slice()
@@ -227,7 +227,7 @@ fn parse_rejects_retired_pointer_layout_abi_hash_at_current_header() {
     const PRE_RESET_ABI_HASH_HEX: &str =
         "98679112b5a065a4dc962c5cfe128d0c545ed948f915ea8804767d369e4ef64f";
     let mut bytes = ProgramMetadata::default_for(1, 1, 1).encode();
-    let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let expected = ivm::IvmProfileId::C10_ABI_V1.abi_hash();
     let pre_reset = hex::decode(PRE_RESET_ABI_HASH_HEX).expect("valid pre-reset ABI hash vector");
     bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE].copy_from_slice(&pre_reset);
     let actual: [u8; 32] = bytes[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE]

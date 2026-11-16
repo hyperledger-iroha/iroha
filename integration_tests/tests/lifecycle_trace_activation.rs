@@ -126,8 +126,8 @@ fn contract_artifact() -> Result<Vec<u8>> {
 fn live_callback_contract_compiles() -> Result<()> {
     iroha_test_network::init_instruction_registry();
     let artifact = contract_artifact()?;
-    let verified =
-        ivm::verify_contract_artifact(&artifact).map_err(|e| eyre!("verify contract: {e}"))?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .map_err(|e| eyre!("verify contract: {e}"))?;
     let entries: std::collections::BTreeSet<_> = verified
         .manifest
         .entrypoints
@@ -152,8 +152,8 @@ fn live_callback_contract_compiles() -> Result<()> {
 
 fn deploy(client: &Client) -> Result<(ContractAddress, iroha_crypto::Hash)> {
     let artifact = contract_artifact()?;
-    let verified =
-        ivm::verify_contract_artifact(&artifact).map_err(|e| eyre!("verify contract: {e}"))?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .map_err(|e| eyre!("verify contract: {e}"))?;
     let encoding = ManifestEncodingBudget::new()?;
     let manifest = verified
         .manifest

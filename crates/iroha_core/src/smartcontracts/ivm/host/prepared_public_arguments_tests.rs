@@ -17,7 +17,8 @@ seiyaku PreparedArguments { permission Invoke;
 ",
         )
         .expect("compile parameterized contract");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+    let metadata =
+        crate::ivm_test_support::parse_declared(&program).expect("parse contract metadata");
     let schema = metadata
         .contract_interface
         .as_ref()
@@ -43,7 +44,11 @@ seiyaku PreparedArguments { permission Invoke;
         Some(prepared.clone()),
     );
     let mut vm = IVM::new(100_000);
-    vm.load_program(&program).expect("load table ABI contract");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load table ABI contract");
     let descriptor = metadata
         .contract_interface
         .as_ref()
@@ -69,7 +74,12 @@ seiyaku PreparedArguments { permission Invoke;
     assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
 
     let mut unpaid = IVM::new(100_000);
-    unpaid.load_program(&program).unwrap();
+    unpaid
+        .load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .unwrap();
     unpaid.set_program_counter(entry_pc).unwrap();
     assert!(matches!(
         (&(unpaid.run_with_host(&mut host)), &(VMError::DecodeError)),
@@ -94,7 +104,7 @@ seiyaku PreparedArgumentEventProbe {
 ",
         )
         .expect("compile parameter-consuming root probe");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("parse root probe");
+    let metadata = crate::ivm_test_support::parse_declared(&program).expect("parse root probe");
     let descriptor = metadata
         .contract_interface
         .as_ref()
@@ -129,8 +139,11 @@ seiyaku PreparedArgumentEventProbe {
         "the event context must not replace the original prepared argument owner"
     );
     let mut vm = IVM::new(100_000);
-    vm.load_program(&program)
-        .expect("load parameter-consuming root");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load parameter-consuming root");
     vm.set_program_counter(metadata.prefix_len() as u64 + descriptor.entry_pc)
         .expect("seek actual root entrypoint");
     prepared

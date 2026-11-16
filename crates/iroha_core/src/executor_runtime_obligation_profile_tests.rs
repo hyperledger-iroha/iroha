@@ -54,7 +54,7 @@ fn named_profile_signed_contract_calls_register_and_complete_only_the_actual_sub
     let compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..kotodama_lang::compiler::CompilerOptions::c10()
         },
     );
     let (program, manifest) = compiler

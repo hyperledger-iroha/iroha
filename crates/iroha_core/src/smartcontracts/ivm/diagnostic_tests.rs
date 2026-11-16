@@ -103,7 +103,7 @@ fn argument_precharge_fault_retains_selected_entrypoint_and_initialization() {
             "seiyaku Precharge { kotoage fn run(int value) authorize(anyone) { let _v = value; } }",
         )
         .unwrap();
-    let parsed = ivm::ProgramMetadata::parse(&artifact).unwrap();
+    let parsed = crate::ivm_test_support::parse_declared(&artifact).unwrap();
     let descriptor = &parsed.contract_interface.as_ref().unwrap().entrypoints[0];
     let schema = descriptor.argument_schema.as_ref().unwrap();
     let bytes = ivm_abi::arguments::encode_argument_record_from_json(
@@ -115,7 +115,11 @@ fn argument_precharge_fault_retains_selected_entrypoint_and_initialization() {
         ivm::prepare_argument_record_with_gas_limit(schema, std::sync::Arc::from(bytes), u64::MAX)
             .unwrap();
     let mut vm = ivm::IVM::try_new(0).unwrap();
-    vm.load_program(&artifact).unwrap();
+    vm.load_program_for_profile(
+        &artifact,
+        crate::ivm_test_support::declared_profile(&artifact),
+    )
+    .unwrap();
     vm.set_program_counter((parsed.code_offset - parsed.header_len) as u64 + descriptor.entry_pc)
         .unwrap();
     let error = record.precharge_vm(&mut vm).unwrap_err();

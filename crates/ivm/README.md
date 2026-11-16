@@ -46,9 +46,10 @@ Kotodama smart contracts compile to IVM bytecode (`.to`); they do not target “
 ## Status
 
 - Implemented:
+  - Two engines selected by authenticated profile: the frozen baseline engine that ABI V1 selects (Taira's installed instruction set: 49-byte header, 256 registers, vector, cryptographic and zero-knowledge opcodes) and the C10 profile, which the following bullets describe.
   - 32 general-purpose registers with privacy tags and a 32-leaf Merkle commitment; five-bit register fields.
   - Region-based memory with permissions and alignment checks; bulk copy helpers.
-  - A 59-opcode instruction set (scalar arithmetic, 64-bit memory, typed literals, control flow and host calls) with no vector, cryptographic or zero-knowledge opcodes; contracts reach hashing and signature verification through syscalls.
+  - A 58-opcode instruction set (scalar arithmetic, 64-bit memory, typed literals, control flow and host calls) with no vector, cryptographic or zero-knowledge opcodes; contracts reach hashing and signature verification through syscalls.
   - Gas metering with one fixed price per opcode.
   - Syscall/host trait with a default host implementation.
   - Host-side vector helpers with runtime SIMD detection (SSE/AVX/NEON) and scalar fallback; SHA-256 compression accelerated via Apple Metal when available.
@@ -85,6 +86,15 @@ High-level smart contract language targeting IVM bytecode:
 
 
 ## Features
+
+ABI V1, as every root selects it, runs the frozen baseline engine
+(`ivm::IvmProfileId::BASELINE_ABI_V1`): the 49-byte program header, 256 general-purpose registers,
+8-bit `SCALL` plus the 24-bit `SYSTEM`/`SCALLX` form, the vector, cryptographic and zero-knowledge
+opcodes, and a header `max_cycles` budget converted into gas. The instruction-set, register and
+gas descriptions in this section are those of the C10 profile, which is selected separately (the
+runtime lifecycle profile now; its own ABI V1 addition `iroha.runtime.ivm_c10.v1` in phase 5); see
+[`docs/opcodes.md`](docs/opcodes.md) and
+[`specs/runtime/ivm_baseline_and_c10_profiles.md`](../../specs/runtime/ivm_baseline_and_c10_profiles.md).
 
 - **Register-based ISA:** 32 general-purpose **64-bit** registers (`r0`–`r31`) with `r0` fixed at zero. In zero-knowledge mode each register carries a 1-bit privacy tag. The ISA supports arithmetic (ADD, SUB, MUL, DIV, etc.), logic (AND, OR, XOR), memory loads/stores, control flow (jumps and branches), and system calls.
 - **One Canonical Encoding:** Every executable instruction is one aligned 32-bit word. Program loading rejects compact and mixed-width streams before execution.
@@ -141,21 +151,32 @@ unchanged memory.
 
 ## Opcode Reference
 
-IVM standardises on the wide encoding (8-bit primary opcode + three 8-bit operand slots). ABI v1 admits 59 opcodes:
+IVM standardises on the wide encoding (8-bit primary opcode + three 8-bit operand slots). ABI V1 runs the baseline engine, whose primary opcode ranges are:
+
+- **0x01-0x2A:** Integer arithmetic and logical operations (`ADD`, `SUB`, `MULH`, `DIVU`, `ADDI`, `GCD`, `MEAN`, …).
+- **0x30-0x35:** Memory and indexed-literal access (`LOAD64`, `STORE64`, `LOAD128`, `STORE128`, `LDLIT`, `LDI64`).
+- **0x40-0x4B:** Control flow (`BEQ`, `BNE`, `JAL`, `JR`, `HALT`, `JMP`, `JALS`).
+- **0x60-0x62:** System helpers (`SCALL`, `GETGAS`, `SYSTEM`).
+- **0x70-0x78 / 0x80-0x8A:** Vector and cryptographic primitives (`VADD32`, `SETVL`, `PARBEGIN`, `SHA256BLOCK`, `POSEIDON6`, `AESENC`, `ED25519VERIFY`, …).
+- **0x8B-0x9F:** Unassigned and rejected in ABI V1.
+- **0xA0-0xA6:** Zero-knowledge field operations (`ASSERT`, `FADD`, `ASSERT_RANGE`).
+
+The C10 profile admits only these opcodes:
 
 - **0x01-0x2A:** Integer arithmetic and logical operations (`ADD`, `SUB`, `MULH`, `DIVU`, `ADDI`, `GCD`, `MEAN`, …).
 - **0x30, 0x31, 0x34, 0x35:** Memory and indexed-literal access (`LOAD64`, `STORE64`, `LDLIT`, `LDI64`).
 - **0x40-0x46, 0x48-0x4B:** Control flow (`BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU`, `JAL`, `JALR`, `HALT`, `JMP`, `JALS`).
 - **0x60:** Host call (`SCALL`, 24-bit syscall number).
 
-Every other opcode byte is unassigned and is rejected with `VMError::InvalidOpcode` carrying that byte, both at artifact admission and at runtime. The instruction set has no vector, cryptographic or zero-knowledge opcodes: contracts reach hashing and signature verification through syscalls.
+Under C10 every other opcode byte is unassigned and is rejected with `VMError::InvalidOpcode` carrying that byte, both at artifact admission and at runtime. The C10 instruction set has no vector, cryptographic or zero-knowledge opcodes: contracts reach hashing and signature verification through syscalls.
 
 See [`docs/opcodes.md`](docs/opcodes.md) for the full opcode tables, operand conventions, and encoding details. The canonical helpers in `encoding::wide` and `instruction::wide` cover the entire surface and are used throughout Kotodama and the runtime.
 
 ## Syscall Interface (ISI)
 
-Smart contracts interact with the host ledger through `SCALL` (opcode `0x60`),
-whose 24-bit operand is the syscall number. The number selects an "Iroha Special Instruction" (ISI) whose
+Smart contracts interact with the host ledger through `SCALL` (opcode `0x60`)
+for 8-bit syscall ids and `SYSTEM`/`SCALLX` (opcode `0x62`) for 24-bit syscall
+ids; under the C10 profile, `SCALL`'s 24-bit operand is the syscall number. The number selects an "Iroha Special Instruction" (ISI) whose
 numeric assignments are listed in
 [`syscalls.rs`](src/syscalls.rs).  The host implementation determines the exact
 semantics and gas costs of these calls. Before dispatch, each host provides a

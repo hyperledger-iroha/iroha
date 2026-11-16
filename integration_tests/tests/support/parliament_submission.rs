@@ -184,8 +184,8 @@ mod tests {
     #[test]
     fn parliament_artifacts_bind_identity_and_current_abi_before_submission() {
         let original = minimal_contract_artifact_with_identity("CommitteePulse", "native-tests");
-        let verified =
-            ivm::verify_contract_artifact(&original).expect("canonical fixture artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&original)
+            .expect("canonical fixture artifact");
         assert_eq!(verified.metadata.abi_version, 1);
         assert_eq!(
             verified.contract_interface.callables,
@@ -206,15 +206,17 @@ mod tests {
             verified.contract_interface.compiler_fingerprint,
             "native-tests"
         );
-        let other = ivm::verify_contract_artifact(&minimal_contract_artifact_with_identity(
-            "OtherPulse",
-            "native-tests",
-        ))
+        let other = ivm::verify_contract_artifact_with_declared_profile(
+            &minimal_contract_artifact_with_identity("OtherPulse", "native-tests"),
+        )
         .expect("distinct canonical artifact");
         assert_ne!(verified.code_hash, other.code_hash);
         let mut truncated = original;
         truncated.pop();
-        assert!(ivm::verify_contract_artifact(&truncated).is_err());
-        assert!(ivm::verify_contract_artifact(&minimal_contract_artifact()).is_ok());
+        assert!(ivm::verify_contract_artifact_with_declared_profile(&truncated).is_err());
+        assert!(
+            ivm::verify_contract_artifact_with_declared_profile(&minimal_contract_artifact())
+                .is_ok()
+        );
     }
 }

@@ -15,7 +15,7 @@ pub(super) fn execute_pool(
     entrypoint: &str,
     arguments: &Json,
 ) -> Result<HostExecutionArtifacts, ivm::VMError> {
-    let parsed = ivm::ProgramMetadata::parse(code).unwrap();
+    let parsed = crate::ivm_test_support::parse_declared(code).unwrap();
     let descriptor = parsed
         .contract_interface
         .as_ref()
@@ -56,7 +56,8 @@ pub(super) fn execute_pool(
         },
     )));
     let mut vm = ivm::IVM::new(100_000_000);
-    vm.load_program(code).unwrap();
+    vm.load_program_for_profile(code, crate::ivm_test_support::declared_profile(code))
+        .unwrap();
     vm.set_program_counter(parsed.prefix_len() as u64 + descriptor.entry_pc)
         .unwrap();
     arguments.precharge_vm(&mut vm).unwrap();
@@ -117,7 +118,8 @@ pub(super) fn execute_signed_pool(
     entrypoint: &str,
     arguments: &Json,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<TransactionRejectionReason>> {
-    let prepared = ivm::prepare_contract(std::sync::Arc::<[u8]>::from(code)).unwrap();
+    let prepared =
+        crate::ivm_test_support::prepare_declared(std::sync::Arc::<[u8]>::from(code)).unwrap();
     let schema = prepared
         .entrypoint_descriptor(entrypoint)
         .unwrap()
@@ -217,7 +219,7 @@ fn production_dlmm_rounds_at_native_asset_precision_and_conserves_both_direction
             let pool =
                 ContractAddress::derive(&stx.network_id, deployer, 220, DataSpaceId::UNIVERSAL)
                     .unwrap();
-            let verified = ivm::verify_contract_artifact(&code).unwrap();
+            let verified = ivm::verify_contract_artifact_with_declared_profile(&code).unwrap();
             let hash = crate::smartcontracts::code::register_code_bytes(
                 deployer,
                 DataSpaceId::UNIVERSAL,

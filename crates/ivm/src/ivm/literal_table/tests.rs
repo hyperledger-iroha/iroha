@@ -211,7 +211,7 @@ fn generic_runtime_and_snapshot_keep_literal_credit_through_warm_reset() {
 
 #[test]
 fn prepared_loading_shares_original_literals_and_rebinds_foreign_pool() {
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku Literals { view fn main() authorize(anyone) -> int { 701 } }")
         .unwrap();
     let first = AllocationBudget::new(128 * 1024 * 1024);

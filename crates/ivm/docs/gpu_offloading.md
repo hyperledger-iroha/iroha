@@ -1,9 +1,10 @@
 # IVM hardware acceleration
 
 IVM computes the same public result, gas, errors, state effects, event order,
-and verification decision on every hardware class. The instruction set has no
-vector or cryptographic opcodes: acceleration exists only behind host-side
-helpers (Merkle hashing, syscall primitives, proof tooling). SIMD is compiled into all
+and verification decision on every hardware class. The baseline engine that ABI
+V1 selects has vector and cryptographic opcodes; the C10 profile has none, so
+its acceleration exists only behind host-side helpers (Merkle hashing, syscall
+primitives, proof tooling). SIMD is compiled into all
 builds and selected by CPU capability. Ordinary macOS builds now compile the
 Metal backend by default; the Metal feature has target-scoped dependencies and
 is inert on other operating systems. The node's file-loaded `[accel]` policy

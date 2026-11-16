@@ -6,7 +6,7 @@ use crate::session::{CompileOutput, CompileRequest, CompilerSession};
 pub(super) fn compile(source: &str, scalar: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: Some("compact_emission.ko"),
@@ -79,13 +79,13 @@ fn syscall_words(output: &CompileOutput, number: u32) -> usize {
 #[test]
 fn shared_nominal_abort_body_keeps_original_publication_reserved_inputs_and_terminal_consumer() {
     let mut code = Vec::new();
-    emit_nominal_abort_tail(&mut code).unwrap();
+    emit_nominal_abort_tail(Isa::C10, &mut code).unwrap();
     let mut expected = Vec::new();
-    push_syscall(&mut expected, syscalls::SYSCALL_INPUT_PUBLISH_TLV);
+    push_syscall(Isa::C10, &mut expected, syscalls::SYSCALL_INPUT_PUBLISH_TLV);
     for register in 12..=15 {
         push_word(&mut expected, encode_addi(register, 0, 0).unwrap());
     }
-    push_syscall(&mut expected, syscalls::SYSCALL_CONTRACT_ABORT);
+    push_syscall(Isa::C10, &mut expected, syscalls::SYSCALL_CONTRACT_ABORT);
     assert_eq!(code, expected);
     assert_eq!(code.len(), 24);
 }
@@ -209,7 +209,7 @@ fn canonical_dlmm_compact_emission_measures_full_artifact_and_exact_unchanged_me
 fn compile_with_injected(instructions: Vec<Instr>, scalar: bool) -> Result<Vec<u8>, String> {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            let options = CompilerOptions::default();
+            let options = CompilerOptions::c10();
             let session = CompilerSession::new(options.clone());
             let source_name = "compact_invalid_literal.ko";
             let parsed = session

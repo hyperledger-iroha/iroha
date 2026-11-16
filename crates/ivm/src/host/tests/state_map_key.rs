@@ -132,7 +132,7 @@ fn tuple_records_bind_order_shape_and_every_nominal_leaf() {
 #[test]
 fn scalar_keys_require_the_same_canonical_record_and_reject_retired_pointer_carriers() {
     let source = "seiyaku Map { state StateMap<int,bool> Values; view fn read() authorize(anyone) -> bool { true } }";
-    let code = kotodama_lang::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(source)
         .unwrap();
     let mut vm = IVM::new(1_000_000);

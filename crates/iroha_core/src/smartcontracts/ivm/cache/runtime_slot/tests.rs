@@ -57,7 +57,11 @@ fn runtime_pair(budget: &AllocationBudget) -> PooledRuntime {
     let mut vm = ivm::IVM::try_new_with_memory_budget(GAS, budget).unwrap();
     vm.set_zk_trace_enabled(false);
     vm.memory.set_heap_max_limit(HEAP).unwrap();
-    vm.load_program(&generic_program()).unwrap();
+    vm.load_program_for_profile(
+        &generic_program(),
+        crate::ivm_test_support::declared_profile(&generic_program()),
+    )
+    .unwrap();
     let baseline = vm.try_runtime_template().unwrap();
     PooledRuntime { baseline, vm }
 }
@@ -526,12 +530,20 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
     let _retention = retention();
     // One canonical generic ADDI followed by HALT supplies both success and a
     // completed typed OutOfGas control, without introducing a new opcode/profile.
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 7, 0, 23)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            7,
+            0,
+            23,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     for fault in [false, true] {
         let budget = AllocationBudget::new(LIMIT);
         let mut cache = local_cache(&budget, 1);
@@ -542,7 +554,12 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         let mut measured = ivm::IVM::try_new_with_memory_budget(GAS, &budget).unwrap();
         measured.set_zk_trace_enabled(false);
         measured.memory.set_heap_max_limit(HEAP).unwrap();
-        measured.load_program(summary.program()).unwrap();
+        measured
+            .load_program_for_profile(
+                summary.program(),
+                crate::ivm_test_support::declared_profile(summary.program()),
+            )
+            .unwrap();
         measured.set_gas_limit(GAS);
         let baseline = measured.try_runtime_template().unwrap();
         let mandatory = budget.reserved_bytes();

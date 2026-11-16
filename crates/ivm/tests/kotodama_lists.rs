@@ -11,7 +11,7 @@ fn run(source: &str) -> IVM {
     run_with_gas(source).0
 }
 fn run_with_gas(source: &str) -> (IVM, u64) {
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile bounded List program");
     let metadata = ProgramMetadata::parse(&program).expect("parse contract metadata");
@@ -248,14 +248,14 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
 }
 #[test]
 fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/003.ko")
                 .strip_suffix('\n')
                 .expect("fixture sentinel newline"),
         )
         .expect("compile parameterized List get contract");
-    let control = KotodamaCompiler::new()
+    let control = KotodamaCompiler::new_c10()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/004.ko")
                 .strip_suffix('\n')
@@ -425,7 +425,7 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
 }
 #[test]
 fn failed_multiword_mutations_preserve_every_word_and_allocate_only_the_typed_result() {
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/005.ko")
                 .strip_suffix('\n')
@@ -652,7 +652,7 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
 }
 #[test]
 fn recursive_contains_support_does_not_admit_resource_elements() {
-    let error = KotodamaCompiler::new()
+    let error = KotodamaCompiler::new_c10()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/009.ko")
                 .strip_suffix('\n')
@@ -670,7 +670,7 @@ fn empty_product_elements_have_stable_unit_slot_layouts() {
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
     assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/011.ko")
                 .strip_suffix('\n')

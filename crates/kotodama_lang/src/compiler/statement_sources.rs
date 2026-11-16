@@ -147,7 +147,7 @@ mod tests {
         return first * 2;
     }
 }"#;
-        let compiler = Compiler::new();
+        let compiler = Compiler::new_c10();
         let (artifact, _, report) = compiler
             .compile_source_with_manifest_and_report(source)
             .unwrap();

@@ -92,6 +92,19 @@ pub(crate) fn lifecycle_implementation_code() -> ImplementationCodeV1 {
 pub(crate) const BASELINE_COMMITMENT_SCHEME: &str = "iroha.world.lthash16.v1";
 /// Metering class of every baseline interface: the engine's native gas schedule.
 const BASELINE_METERING: &str = "native.baseline";
+/// ABI descriptor hash of the installed baseline host profile `abi.v1`: the frozen baseline
+/// engine's descriptor (`ivm::syscalls::compute_baseline_abi_hash`), captured at the anchor
+/// `77600a4840` (`specs/runtime/ivm_baseline_and_c10_profiles.md`).
+pub(crate) const BASELINE_HOST_PROFILE_ABI_HASH: [u8; 32] = [
+    0x75, 0x31, 0xb4, 0x5d, 0xd9, 0xd7, 0x9a, 0xab, 0xc3, 0xa0, 0xf6, 0x4a, 0xb3, 0x0a, 0x05, 0x3a,
+    0xf8, 0x47, 0xdf, 0xe2, 0x48, 0x07, 0x8c, 0xff, 0x83, 0x9a, 0xb2, 0xe1, 0x4e, 0x32, 0x61, 0xa7,
+];
+/// Gas-schedule hash of the installed baseline host profile `abi.v1`: the frozen baseline
+/// engine's schedule (`ivm::gas::baseline::schedule_hash`), captured at the anchor.
+pub(crate) const BASELINE_HOST_PROFILE_METERING: [u8; 32] = [
+    0xaf, 0x5a, 0x27, 0xf5, 0xfc, 0x57, 0xeb, 0xfb, 0x9e, 0xae, 0x3c, 0x4f, 0x8a, 0x25, 0x09, 0x1c,
+    0xe7, 0x8d, 0x97, 0xff, 0x77, 0x97, 0xdb, 0xc3, 0xb3, 0x04, 0xa0, 0x09, 0x10, 0x69, 0x73, 0x1f,
+];
 /// Root-wide services of the baseline engine, sorted.
 const BASELINE_SERVICES: &[&str] = &[
     "authorization",
@@ -601,11 +614,13 @@ impl ReleaseCatalog {
                     .collect(),
             },
         ))?;
+        // Frozen constants, never the hashes of whatever engine this build compiles: an installed
+        // definition never changes meaning (`specs/live_runtime_upgrades.md` §3.1).
         let host_profile = catalog.publish(DefinitionDescriptorV1::HostProfile(
             HostProfileDescriptorV1 {
                 abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                metering: ivm::gas::schedule_hash().into(),
+                abi_hash: BASELINE_HOST_PROFILE_ABI_HASH,
+                metering: BASELINE_HOST_PROFILE_METERING,
             },
         ))?;
 

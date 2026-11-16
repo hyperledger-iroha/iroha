@@ -70,7 +70,7 @@ fn combined_index_and_nfc_admission_precedes_all_backings_and_retries() {
 
 #[test]
 fn actual_prepared_literal_index_borrows_only_original_canonical_payloads() {
-    let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
+    let artifact = kotodama_lang::compiler::Compiler::new_c10().compile_source(
         "seiyaku BorrowedText { permission CanWrite;  state StateMap<int, int> Values; kotoage fn write_one() authorize(CanWrite) { Values[1] = 10; } }",
     ).unwrap();
     let contract = crate::prepare_contract(Arc::from(artifact.as_slice())).unwrap();

@@ -1068,9 +1068,8 @@ window enters V2; V1-only windows retain their existing verification rules.
 #### Finality-reader activation prerequisite
 
 Every finality reader that will advance beyond activation MUST be rebuilt with
-this successor's data-model validation, even where `wire_schema_hash` (`072924c3` since
-the execution commitment's World roots became `KeyedStateRoot`) and the IVM ABI
-(`7531b45d`) match. Wire compatibility does not imply
+this successor's data-model validation, even where `wire_schema_hash` (`9d96f872` in this
+release) and the IVM ABI (`7531b45d`) match. Wire compatibility does not imply
 support for selected output semantics. In particular, the predecessor decoder's
 `validate_output_merkle_cache` → lifecycle `validate_state` rejects unavailable
 Time/Pipeline markers, certain typed-store repairs, and rejection-policy traces

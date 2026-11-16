@@ -286,8 +286,11 @@ fn supplied_proved_replay_cannot_derive_a_record() {
         let instructions: Vec<InstructionBox> = vec![outbound_record(2, [0x22; 20]).into()];
         // As in the monetary-staking regression, this exercises strict replay consumption
         // only; the supplied overlay is no substitute proof.
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let signed = signed(
             block,
             authority,

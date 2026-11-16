@@ -925,8 +925,11 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     let state = fixture(65_536, None);
     let id: TriggerId = "direct_deferred_callback".parse().unwrap();
     let key: Name = "deferred_native_write".parse().unwrap();
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     {
         let (mut setup, _setup_recording) = output_fixture_setup(&state);
         let mut tx = setup.transaction_for_callback_testing();

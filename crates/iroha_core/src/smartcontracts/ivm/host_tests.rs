@@ -434,7 +434,8 @@ fn grant_test_asset_transfer(state: &State, account_id: AccountId, asset: AssetI
         .expect("commit exact source-asset permission grant");
 }
 fn sanitize_test_contract_artifact_wildcards(code: &mut [u8]) {
-    let parsed = ivm::ProgramMetadata::parse(code).expect("parse compiled test contract");
+    let parsed =
+        crate::ivm_test_support::parse_declared(code).expect("parse compiled test contract");
     let section_start = parsed.header_len;
     let section_header_end = section_start
         .checked_add(8)
@@ -482,7 +483,8 @@ fn rewrite_test_contract_interface(
     code: &mut Vec<u8>,
     customize: impl FnOnce(&mut ivm::EmbeddedContractInterfaceV1),
 ) {
-    let parsed = ivm::ProgramMetadata::parse(code).expect("parse compiled test contract");
+    let parsed =
+        crate::ivm_test_support::parse_declared(code).expect("parse compiled test contract");
     let section_start = parsed.header_len;
     let section_header_end = section_start
         .checked_add(8)
@@ -655,7 +657,7 @@ fn encoded_contract_arguments_from_json(
         .contract_code()
         .get(&artifact_id)
         .expect("installed contract code");
-    let parsed = ivm::ProgramMetadata::parse(code).expect("parse installed contract");
+    let parsed = crate::ivm_test_support::parse_declared(code).expect("parse installed contract");
     let descriptor = parsed
         .contract_interface
         .as_ref()
@@ -736,8 +738,13 @@ fn bind_nested_caller<QS: Default + QueryStateAccess>(
     let manifest = state.world().contract_manifests().get(&artifact).unwrap();
     let entries = manifest.entrypoints.as_ref().unwrap();
     let entry = entries.iter().find(|entry| entry.name == "main").or_else(|| entries.iter().find(|entry| !matches!(entry.authorization, iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::RuntimeLifecycle))).unwrap();
-    vm.load_program(state.world().contract_code().get(&artifact).unwrap())
-        .unwrap();
+    vm.load_program_for_profile(
+        state.world().contract_code().get(&artifact).unwrap(),
+        crate::ivm_test_support::declared_profile(
+            state.world().contract_code().get(&artifact).unwrap(),
+        ),
+    )
+    .unwrap();
     vm.select_entrypoint(&entry.name).unwrap();
     host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
         contract_address: caller.clone(),
@@ -974,7 +981,7 @@ fn dispatch_call_contract_syscall(
     (result, vm, durable_state_overlay, target_ptr)
 }
 fn install_nested_dispatch_fixture(state: &State, authority: &AccountId, caller: &ContractAddress) {
-    use ivm::{encoding::wide, instruction::wide::arithmetic};
+    use ivm_abi::baseline::{encoding::wide, instruction::wide::arithmetic};
     let mut code = Vec::new();
     // The generic authenticated probe owns its root result table. Separate
     // staging registers preserve all six typed-call operands across root setup.
@@ -983,8 +990,11 @@ fn install_nested_dispatch_fixture(state: &State, authority: &AccountId, caller:
             &wide::encode_ri(arithmetic::ADDI, 10 + index, 18 + index, 0).to_le_bytes(),
         );
     }
-    code.extend_from_slice(&wide::encode_scall(ivm_sys::SYSCALL_CALL_CONTRACT).to_le_bytes());
-    let program = build_authenticated_test_contract_program(&code, false);
+    code.extend_from_slice(
+        &crate::ivm_test_support::baseline_syscall(ivm_sys::SYSCALL_CALL_CONTRACT).to_le_bytes(),
+    );
+    // The caller is a registered contract that the ABI V1 root runs on the baseline engine.
+    let program = build_authenticated_baseline_test_contract_program(&code, false);
     rebind_test_contract_program(state, authority, caller, program);
 }
 
@@ -994,8 +1004,8 @@ fn rebind_test_contract_program(
     caller: &ContractAddress,
     program: Vec<u8>,
 ) {
-    let verified =
-        ivm::verify_contract_artifact(&program).expect("admit exact typed dispatch fixture");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&program)
+        .expect("admit exact typed dispatch fixture");
     let view = state.view();
     if view.world().contract_instances().get(caller) == Some(&verified.code_hash) {
         return;
@@ -2476,8 +2486,13 @@ fn unaffordable_proof_instruction_preserves_queue_and_verification_latch() {
         ]
         .concat();
     let mut vm = IVM::new(10_000);
-    vm.load_program(&build_authenticated_test_contract_program(&code, true))
-        .expect("load proof instruction program");
+    vm.load_program_for_profile(
+        &build_authenticated_test_contract_program(&code, true),
+        crate::ivm_test_support::declared_profile(&build_authenticated_test_contract_program(
+            &code, true,
+        )),
+    )
+    .expect("load proof instruction program");
     let instruction_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(14, instruction_ptr);
     vm.set_register(15, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
@@ -2527,7 +2542,7 @@ seiyaku BurnWithMemo { permission AssetTransferRole;
     let (code, _manifest) = compiler
         .compile_source_with_manifest(source)
         .expect("compile by-call contract");
-    let parsed = ivm::ProgramMetadata::parse(&code).expect("parse contract metadata");
+    let parsed = crate::ivm_test_support::parse_declared(&code).expect("parse contract metadata");
     let descriptor = parsed
         .contract_interface
         .as_ref()
@@ -2568,7 +2583,8 @@ seiyaku BurnWithMemo { permission AssetTransferRole;
         Some(prepared.clone()),
     );
     let mut vm = ivm::IVM::new(50_000_000);
-    vm.load_program(&code).expect("load contract");
+    vm.load_program_for_profile(&code, crate::ivm_test_support::declared_profile(&code))
+        .expect("load contract");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entry_pc).expect("seek entrypoint");
     prepared
@@ -2633,7 +2649,8 @@ fn execute_instruction_syscall_accepts_code_literal_ballot_instruction() {
             callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "CodeLiteralBallotHarness".to_owned(),
             compiler_fingerprint: "iroha-core-host-tests".to_owned(),
-            abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            // A C10 harness program (C10 header and encoders): it binds C10's ABI V1 surface.
+            abi_hash: ivm_sys::compute_c10_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: ivm::CONTRACT_FEATURE_BIT_ZK,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -2709,7 +2726,11 @@ fn execute_instruction_syscall_accepts_code_literal_ballot_instruction() {
     );
     program.extend_from_slice(&crate::ivm_test_support::unit_return());
     let mut vm = ivm::IVM::new(50_000_000);
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load program");
     vm.select_entrypoint("dispatch_ballot")
         .expect("select the authenticated ballot entrypoint");
     vm.run_with_host(&mut host)
@@ -2755,7 +2776,10 @@ fn execute_instruction_syscall_rejects_unindexed_literal_data_without_host_effec
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = ivm::IVM::new(50_000_000);
     assert!(matches!(
-        vm.load_program(&program),
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program)
+        ),
         Err(ivm::VMError::InvalidMetadata)
     ));
     assert!(host.queued.is_empty());
@@ -2820,8 +2844,11 @@ fn create_nfts_for_all_preflights_exact_gas_before_queue_mutation() {
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&build_program(&code))
-        .expect("load create-NFTs program");
+    vm.load_program_for_profile(
+        &build_program(&code),
+        crate::ivm_test_support::declared_profile(&build_program(&code)),
+    )
+    .expect("load create-NFTs program");
     vm.set_gas_limit(20);
     let error = vm
         .run_with_host(&mut host)
@@ -2940,8 +2967,11 @@ fn fastpq_batch_entry_syscall_returns_transfer_gas() {
     let mut host = CoreHost::new(authority.clone());
     host.restrict_output_limits(HostOutputLimits::new(1, 1024 * 1024));
     let mut vm = IVM::new(1_000);
-    vm.load_program(&ivm::ProgramMetadata::default().encode())
-        .expect("load meta");
+    vm.load_program_for_profile(
+        &ivm::ProgramMetadata::default().encode(),
+        crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+    )
+    .expect("load meta");
     host.syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
         .expect("begin batch");
     let from = authority.clone();
@@ -3123,8 +3153,13 @@ fn transfer_asset_scoped_vm_completes_below_generic_response_quote() {
         host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        vm.load_program(&build_authenticated_test_contract_program(&code, false))
-            .expect("load authenticated scoped-transfer probe");
+        vm.load_program_for_profile(
+            &build_authenticated_test_contract_program(&code, false),
+            crate::ivm_test_support::declared_profile(&build_authenticated_test_contract_program(
+                &code, false,
+            )),
+        )
+        .expect("load authenticated scoped-transfer probe");
         prepare_scoped_transfer_syscall(
             &mut vm,
             &authority,
@@ -3210,8 +3245,13 @@ fn transfer_asset_scoped_vm_debits_exact_gas_before_queue_mutation() {
         host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(gas_before_syscall + available);
-        vm.load_program(&build_authenticated_test_contract_program(&code, false))
-            .expect("load authenticated exact-budget scoped-transfer probe");
+        vm.load_program_for_profile(
+            &build_authenticated_test_contract_program(&code, false),
+            crate::ivm_test_support::declared_profile(&build_authenticated_test_contract_program(
+                &code, false,
+            )),
+        )
+        .expect("load authenticated exact-budget scoped-transfer probe");
         prepare_scoped_transfer_syscall(
             &mut vm,
             &authority,
@@ -3463,8 +3503,11 @@ fn fastpq_batch_apply_syscall_returns_batch_gas() {
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority.clone());
     let mut vm = IVM::new(1_000);
-    vm.load_program(&ivm::ProgramMetadata::default().encode())
-        .expect("load meta");
+    vm.load_program_for_profile(
+        &ivm::ProgramMetadata::default().encode(),
+        crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+    )
+    .expect("load meta");
     let from = authority;
     let to: AccountId = fixture_account("bob");
     let asset_def: AssetDefinitionId =
@@ -3562,7 +3605,10 @@ fn fastpq_batch_apply_rejects_noncanonical_amount() {
     let mut control_host = CoreHost::new(entry.from.clone());
     let mut control_vm = IVM::new(1_000);
     control_vm
-        .load_program(&ivm::ProgramMetadata::default().encode())
+        .load_program_for_profile(
+            &ivm::ProgramMetadata::default().encode(),
+            crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+        )
         .expect("load control metadata");
     let control_ptr = store_tlv(&mut control_vm, PointerType::NoritoBytes, &control);
     control_vm.set_register(10, control_ptr);
@@ -3818,8 +3864,11 @@ fn get_authority_allocates_in_input_bump() {
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority.clone());
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&ivm::ProgramMetadata::default().encode())
-        .expect("load meta");
+    vm.load_program_for_profile(
+        &ivm::ProgramMetadata::default().encode(),
+        crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+    )
+    .expect("load meta");
     host.syscall(ivm::syscalls::SYSCALL_GET_AUTHORITY, &mut vm)
         .expect("authority syscall");
     let authority_ptr = vm.register(10);
@@ -3834,8 +3883,11 @@ fn get_authority_spills_to_owned_heap_after_input_exhaustion() {
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority.clone());
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&ivm::ProgramMetadata::default().encode())
-        .expect("load metadata");
+    vm.load_program_for_profile(
+        &ivm::ProgramMetadata::default().encode(),
+        crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+    )
+    .expect("load metadata");
     vm.alloc_input_tlv(&vec![
         0;
         usize::try_from(ivm::Memory::INPUT_SIZE)
@@ -3857,8 +3909,11 @@ fn current_time_syscall_uses_block_time() {
     let mut host = CoreHost::new(authority);
     host.set_block_time_ms(1_717_171_717_000);
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&ivm::ProgramMetadata::default().encode())
-        .expect("load meta");
+    vm.load_program_for_profile(
+        &ivm::ProgramMetadata::default().encode(),
+        crate::ivm_test_support::declared_profile(&ivm::ProgramMetadata::default().encode()),
+    )
+    .expect("load meta");
     assert_eq!(
         (host.syscall(ivm::syscalls::SYSCALL_CURRENT_TIME_MS, &mut vm))
             .expect("expected successful fixture result"),
@@ -4695,10 +4750,10 @@ fn typed_contract_call_rejects_private_witness_callee_before_execution() {
         "seiyaku PrivateCallee { kotoage fn main() authorize(anyone) {} }",
         1,
     );
-    let syscall = ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT);
-    let program = build_authenticated_test_contract_program(&syscall.to_le_bytes(), true);
+    let syscall = crate::ivm_test_support::baseline_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT);
+    let program = build_authenticated_baseline_test_contract_program(&syscall.to_le_bytes(), true);
     assert_eq!(
-        ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+        crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program.clone()))
             .unwrap()
             .entrypoint_requires_private_inputs("main"),
         Some(true)
@@ -4821,7 +4876,7 @@ fn completed_unit_return_vm() -> IVM {
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku ReturnBoundary { view fn main() authorize(anyone) { () } }")
         .expect("compile root result-table fixture");
-    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let metadata = crate::ivm_test_support::parse_declared(&program).unwrap();
     let entry = metadata
         .contract_interface
         .as_ref()
@@ -4832,8 +4887,11 @@ fn completed_unit_return_vm() -> IVM {
         .unwrap();
     let entry_pc = metadata.prefix_len() as u64 + entry.entry_pc;
     let mut vm = IVM::new(100_000);
-    vm.load_program(&program)
-        .expect("load root result-table fixture");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load root result-table fixture");
     vm.set_program_counter(entry_pc)
         .expect("select authenticated root entrypoint");
     vm.run().expect("complete authenticated root call");
@@ -5820,7 +5878,7 @@ seiyaku StoredAccountView { permission AssetOps;
     let (code, _manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile source with manifest");
-    let parsed = ivm::ProgramMetadata::parse(&code).expect("parse program metadata");
+    let parsed = crate::ivm_test_support::parse_declared(&code).expect("parse program metadata");
     let prefix_len = parsed.prefix_len() as u64;
     let descriptor = parsed
         .contract_interface
@@ -5846,7 +5904,8 @@ seiyaku StoredAccountView { permission AssetOps;
         entrypoint: "stored".to_owned(),
     }));
     let mut vm = IVM::new(1_000_000);
-    vm.load_program(&code).expect("load program");
+    vm.load_program_for_profile(&code, crate::ivm_test_support::declared_profile(&code))
+        .expect("load program");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entry_pc).expect("seek stored view");
     vm.run_with_host(&mut host).expect("run stored view");
@@ -5996,7 +6055,7 @@ seiyaku Callee { permission AssetOps;
     let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .unwrap();
-    let parsed = ivm::ProgramMetadata::parse(&code).unwrap();
+    let parsed = crate::ivm_test_support::parse_declared(&code).unwrap();
     let interface = parsed.contract_interface.unwrap();
     let schema = interface
         .entrypoints
@@ -6428,8 +6487,11 @@ fn artifact_test_signed_root(
     } else {
         panic!("artifact fixture requires a known actual signer");
     };
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -7617,8 +7679,11 @@ fn actual_host_artifacts_require_signed_root_before_first_effect() {
         let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(1_000_000);
-        vm.load_program(&program)
-            .expect("load valid generic Halt program");
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .expect("load valid generic Halt program");
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
         let key: Name = "artifact_root_required".parse().unwrap();
         let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
@@ -8633,7 +8698,8 @@ fn contract_address_bytes_roundtrip_through_typed_durable_state() {
     let (program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile typed bytes contract");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+    let metadata =
+        crate::ivm_test_support::parse_declared(&program).expect("parse contract metadata");
     let interface = metadata
         .contract_interface
         .as_ref()
@@ -8655,8 +8721,11 @@ fn contract_address_bytes_roundtrip_through_typed_durable_state() {
         entrypoint: "capture".to_owned(),
     }));
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&program)
-        .expect("load typed bytes contract");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load typed bytes contract");
     assert_eq!(
         (host.prepare_syscall(ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS, &vm))
             .expect("expected successful fixture result"),
@@ -8685,7 +8754,10 @@ fn contract_address_bytes_roundtrip_through_typed_durable_state() {
     }));
     let mut read_vm = IVM::new(u64::MAX);
     read_vm
-        .load_program(&program)
+        .load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
         .expect("load typed bytes contract for readback");
     read_vm.set_register(1, read_vm.memory.code_len());
     read_vm
@@ -8748,7 +8820,8 @@ fn production_typed_state_map_scans_and_writes_validate_cntr() {
     let (program, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile typed map contract");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+    let metadata =
+        crate::ivm_test_support::parse_declared(&program).expect("parse contract metadata");
     let entry_pc = metadata.prefix_len() as u64
         + metadata
             .contract_interface
@@ -8767,7 +8840,11 @@ fn production_typed_state_map_scans_and_writes_validate_cntr() {
         entrypoint: "write".to_owned(),
     }));
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&program).expect("load typed map contract");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load typed map contract");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entry_pc)
         .expect("seek write entrypoint");
@@ -8907,7 +8984,8 @@ fn contract_reads_but_cannot_mutate_consensus_conversion_offer() {
     let (code, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile validation-fee credit reader");
-    let metadata = ivm::ProgramMetadata::parse(&code).expect("parse credit-reader metadata");
+    let metadata =
+        crate::ivm_test_support::parse_declared(&code).expect("parse credit-reader metadata");
     let main_entry_pc = metadata.prefix_len() as u64
         + metadata
             .contract_interface
@@ -8923,7 +9001,9 @@ fn contract_reads_but_cannot_mutate_consensus_conversion_offer() {
     contract_host.set_contract_runtime_context(Some(context.clone()));
     let mut contract_vm = IVM::new(u64::MAX);
     contract_vm.set_host(contract_host);
-    contract_vm.load_program(&code).expect("load credit reader");
+    contract_vm
+        .load_program_for_profile(&code, crate::ivm_test_support::declared_profile(&code))
+        .expect("load credit reader");
     contract_vm.set_register(1, contract_vm.memory.code_len());
     contract_vm
         .set_program_counter(main_entry_pc)
@@ -8947,7 +9027,7 @@ fn contract_reads_but_cannot_mutate_consensus_conversion_offer() {
     let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
     host.set_contract_runtime_context(Some(context));
     let mut vm = IVM::new(10_000);
-    vm.load_program(&code)
+    vm.load_program_for_profile(&code, crate::ivm_test_support::declared_profile(&code))
         .expect("load credit-reader contract metadata for mutation checks");
     let value_ptr = store_tlv(
         &mut vm,
@@ -9399,14 +9479,26 @@ fn state_get_preflights_gas_before_world_state_output() {
     let path_ptr = store_state_path_tlv(&mut vm, &path);
     let code =
         [ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_STATE_GET).to_le_bytes()].concat();
-    vm.load_program(&build_authenticated_test_contract_program_with_states(
-        &code,
-        false,
-        vec![ivm::EmbeddedStateDescriptor {
-            name: path.to_string(),
-            ty: ivm::EmbeddedStateType::Bytes,
-        }],
-    ))
+    vm.load_program_for_profile(
+        &build_authenticated_test_contract_program_with_states(
+            &code,
+            false,
+            vec![ivm::EmbeddedStateDescriptor {
+                name: path.to_string(),
+                ty: ivm::EmbeddedStateType::Bytes,
+            }],
+        ),
+        crate::ivm_test_support::declared_profile(
+            &build_authenticated_test_contract_program_with_states(
+                &code,
+                false,
+                vec![ivm::EmbeddedStateDescriptor {
+                    name: path.to_string(),
+                    ty: ivm::EmbeddedStateType::Bytes,
+                }],
+            ),
+        ),
+    )
     .expect("load authenticated state query program");
     vm.set_register(14, path_ptr);
     vm.set_register(15, 0xfeed);
@@ -10897,7 +10989,11 @@ fn input_publish_tlv_is_forwarded_to_default_host() {
     ]
     .concat();
     let program = build_program(&code);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .unwrap();
     // Prepare a TLV in INPUT region and set x10 to its pointer (source)
     let payload = b"hello".to_vec();
     let mut tlv = Vec::new();
@@ -11054,7 +11150,8 @@ seiyaku PreparedBoundaryArguments {
 ",
         )
         .expect("compile bytes-parameter contract");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+    let metadata =
+        crate::ivm_test_support::parse_declared(&program).expect("parse contract metadata");
     let descriptor = metadata
         .contract_interface
         .as_ref()
@@ -11121,7 +11218,11 @@ seiyaku PreparedBoundaryArguments {
         Some(prepared.clone()),
     );
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&program).expect("load compiled contract");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load compiled contract");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .expect("select compiled invoke table entry");
@@ -11158,7 +11259,10 @@ seiyaku PreparedBoundaryArguments {
     );
     let mut constrained_vm = IVM::new(u64::MAX);
     constrained_vm
-        .load_program(&program)
+        .load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
         .expect("load constrained compiled contract");
     constrained_vm.set_register(1, constrained_vm.memory.code_len());
     constrained_vm
@@ -11226,8 +11330,11 @@ fn get_public_input_preflights_exact_gas_before_guest_output() {
         &encoding::wide::encode_scall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    vm.load_program(&build_program(&code))
-        .expect("load public-input program");
+    vm.load_program_for_profile(
+        &build_program(&code),
+        crate::ivm_test_support::declared_profile(&build_program(&code)),
+    )
+    .expect("load public-input program");
     vm.set_register(10, name_ptr);
     vm.set_register(11, 0xfeed);
     vm.set_gas_limit(20);
@@ -11247,7 +11354,7 @@ fn runtime_obligation_profile_vm(gas: u64) -> IVM {
     let compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..kotodama_lang::compiler::CompilerOptions::c10()
         },
     );
     let bytes = compiler
@@ -11371,7 +11478,7 @@ fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
     let compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ..Default::default()
+            ..kotodama_lang::compiler::CompilerOptions::c10()
         },
     );
     let program = compiler

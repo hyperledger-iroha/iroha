@@ -683,8 +683,8 @@ seiyaku GovernedReadFixture { permission CanTransferGovernedFixture;
 ",
         )
         .expect("compile governed contract fixture");
-    let verified =
-        ivm::verify_contract_artifact(&artifact).expect("verify governed contract fixture");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("verify governed contract fixture");
     assert!(
         manifest.same_signed_content(&verified.manifest),
         "compiler and independently verified artifact must expose exactly the same signed content",

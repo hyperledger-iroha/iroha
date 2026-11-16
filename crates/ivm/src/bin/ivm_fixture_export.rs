@@ -372,11 +372,13 @@ impl FastJsonWrite for SmartContractCodeExecutorHashesFixtureDocument {
     }
 }
 fn render_smart_contract_code_executor_hashes_fixture(artifact: &[u8]) -> Result<String, String> {
-    let parsed = ivm::ProgramMetadata::parse(artifact)
+    // The default executor runs under the interface profile (the frozen baseline engine).
+    let profile = ivm::prebuilt_fixtures::EXECUTOR_FIXTURE_PROFILE;
+    let parsed = ivm::ProgramMetadata::parse_for_profile(artifact, profile)
         .map_err(|error| format!("parse defaults/executor.to fixture: {error}"))?;
-    let abi_hash_start = ivm::HEADER_SIZE - iroha_crypto::Hash::LENGTH;
+    let layout = profile.engine().header_layout();
     let abi_hash = artifact
-        .get(abi_hash_start..ivm::HEADER_SIZE)
+        .get(layout.abi_hash_offset..layout.size)
         .ok_or_else(|| "defaults/executor.to fixture is missing its ABI hash".to_owned())?;
     let document = SmartContractCodeExecutorHashesFixtureDocument {
         artifact_length: u64::try_from(artifact.len())
@@ -626,10 +628,12 @@ mod tests {
     #[test]
     fn smart_contract_code_hash_fixture_is_metadata_validated_and_deterministic() {
         let artifact = build_default_executor_program();
-        let parsed =
-            ivm::ProgramMetadata::parse(&artifact).expect("parse default executor fixture");
-        let abi_hash_start = ivm::HEADER_SIZE - iroha_crypto::Hash::LENGTH;
-        let abi_hash_hex = hex::encode(&artifact[abi_hash_start..ivm::HEADER_SIZE]);
+        let profile = ivm::prebuilt_fixtures::EXECUTOR_FIXTURE_PROFILE;
+        let parsed = ivm::ProgramMetadata::parse_for_profile(&artifact, profile)
+            .expect("parse default executor fixture");
+        let layout = profile.engine().header_layout();
+        let abi_hash_hex = hex::encode(&artifact[layout.abi_hash_offset..layout.size]);
+        assert_eq!(abi_hash_hex, hex::encode(profile.abi_hash()));
         let rendered = render_smart_contract_code_executor_hashes_fixture(&artifact)
             .expect("render smart-contract code hash fixture");
         assert_eq!(

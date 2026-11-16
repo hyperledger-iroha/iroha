@@ -75,7 +75,7 @@ pub(crate) fn deploy_contract_locally_signed_with_registration(
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
     };
-    let verified = ivm::verify_contract_artifact(artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
         .map_err(|error| eyre!("verify contract artifact: {error}"))?;
     let authority: Account = client
         .client()

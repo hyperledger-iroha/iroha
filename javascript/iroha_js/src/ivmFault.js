@@ -6,16 +6,17 @@ import { rejectType } from "./validationThrow.js";
 const UNIT_FAULT_KINDS = new Set([
   "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
   "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow",
-  "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt", "NullifierAlreadyUsed",
-  "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+  "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength", "MissingHalt",
+  "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed", "PermissionDenied",
+  "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
   "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
-  "CallDepthExceeded", "ControlFlowViolation",
+  "CallDepthExceeded",
 ]);
-// `NumericFaultV1` codes in ABI tag order (1..=14).
+// `NumericFaultV1` codes in ABI tag order (1..=13).
 const NUMERIC_FAULT_CODES = new Set([
   "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
   "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
-  "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+  "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot",
 ]);
 // `PointerAbiFaultV1` codes in ABI tag order (1..=11).
 const POINTER_ABI_FAULT_CODES = new Set([

@@ -103,7 +103,12 @@ fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
 }
 fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
     let program = scall_program(syscall);
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load program");
     for &(reg, value) in regs {
         vm.set_register(usize::from(reg), value);
     }
@@ -157,7 +162,12 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
 fn queued_effects(program: &[u8], authority: &AccountId) -> Vec<InstructionBox> {
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
-    vm.load_program(program).expect("load literal program");
+    vm.load_program_for_profile(
+        program,
+        ivm::IvmProfileId::declared(program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load literal program");
     vm.run()
         .unwrap_or_else(|err| panic!("run literal program: {err:?}"));
     with_core_host(&mut vm, |host| {

@@ -218,23 +218,26 @@ declaration says no fresh genesis is needed. It compares bytes: it computes no
 ABI hash and admits no contract, which `abi_hash_versions` and the admission
 tests do.
 
-Declared ABI cutover: surface `abi`, cutover `contract_redeployment`. The
-current sole V1 descriptor binds the 48-byte program header, its ZK-only trace
-bound, the admitted 32-bit instruction encodings and 32-register file, and
-exact instruction faults. It also retains the compact CS1 callable schema,
-declared permissions, authenticated native events, typed contract-call records,
-generation-bound aliases, and the asset UID, linked-FI and controller-bound
-escrow operations. The baseline hash is
-`bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849`, matching the
-[ABI header contract](ivm_header.md), the shared golden and the inventory.
+Declared ABI cutover: surface `abi`, cutover `contract_redeployment`. ABI V1 is
+the interface profile, the frozen baseline engine
+([IVM baseline and C10 host profiles](runtime/ivm_baseline_and_c10_profiles.md)).
+Its descriptor binds the 49-byte program header with its vector length and
+required `max_cycles`, the baseline instruction encodings and fault layout, and
+the compact CS1 callable schema, declared permissions, authenticated native
+events, typed contract-call records, generation-bound aliases, and the asset
+UID, linked-FI and controller-bound escrow operations. The C10 48-byte header
+and encodings are refused under ABI V1. The baseline hash is
+`7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7`, matching the
+[ABI header contract](ivm_header.md), the shared golden, the inventory and the
+live baseline selection.
 
 The baseline operation-tagged `0xA0` bridge accepts `1=SubmitBallot` and
 `2=SubmitPrivacyZkX509CertificateV1`. Tag 2 consumes original signed attachment
 custody and returns a queued action ordinal; proof success and applied effects
 remain authoritative only in the transaction receipt. The independently selected
 `iroha.ivm.runtime_lifecycle.v1` host profile adds the exact runtime-obligation
-operations at tags 3 and 4 under its own authenticated descriptor. It does not
-change the baseline hash. Neither profile permits arbitrary instructions.
+operations at tags 3 and 4 under its own authenticated C10 descriptor. It does
+not change the baseline hash. Neither profile permits arbitrary instructions.
 
 The owning compiler, admission tool and fixture generators regenerate the
 bundled executor, contracts, manifests, compiler captures and SDK carriers.

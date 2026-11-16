@@ -103,7 +103,7 @@ mod tests {
     fn compile(source: &str, retain_covered_keys: bool) -> CompileOutput {
         crate::session::run_with_compiler_stack(|| {
             let build = || {
-                CompilerSession::new(CompilerOptions::default())
+                CompilerSession::new(CompilerOptions::c10())
                     .build(CompileRequest {
                         source,
                         source_name: Some("covered_state_hints.ko"),

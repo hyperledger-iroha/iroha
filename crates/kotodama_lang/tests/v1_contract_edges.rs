@@ -171,7 +171,7 @@ fn native_json_rejects_keys_that_collide_only_after_escape_decoding() {
             }
         }
     "#;
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .check(CompileRequest {
             source,
             source_name: Some("duplicate-decoded-key.ko"),
@@ -197,7 +197,7 @@ fn json_parse_rejects_duplicate_object_keys_before_artifact_emission() {
             }
         }
     "#;
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source,
             source_name: Some("duplicate-parsed-json-key.ko"),
@@ -230,7 +230,7 @@ fn json_parse_rejects_malformed_literals_before_artifact_emission() {
             }
         }
     "#;
-    let diagnostics = CompilerSession::default()
+    let diagnostics = CompilerSession::c10()
         .build(CompileRequest {
             source,
             source_name: Some("malformed-parsed-json.ko"),

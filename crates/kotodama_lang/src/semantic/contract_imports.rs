@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn colliding_package_type_paths_require_exact_identity_bindings() {
-        let output = crate::session::CompilerSession::default()
+        let output = crate::session::CompilerSession::c10()
             .build(crate::session::CompileRequest {
                 source: "seiyaku Pool { view fn value() authorize(anyone) -> int { 1 } }",
                 source_name: Some("pool.ko"),

@@ -2429,12 +2429,15 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
                 // Decode the program header to obtain the code section and enforce the global
                 // instruction count limit published via `TransactionParameters`.
-                let parsed =
-                    ivm::ProgramMetadata::parse(proved.bytecode.as_ref()).map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to parse IVM metadata: {err}"),
-                        })
-                    })?;
+                let parsed = ivm::ProgramMetadata::parse_for_profile(
+                    proved.bytecode.as_ref(),
+                    crate::smartcontracts::ivm::profile::interface_profile_id(),
+                )
+                .map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to parse IVM metadata: {err}"),
+                    })
+                })?;
                 let code = &proved.bytecode.as_ref()[parsed.code_offset..];
                 let decoded_count =
                     ivm::ivm_cache::validate_instruction_stream(code).map_err(|err| {
@@ -2492,12 +2495,15 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
                 // Decode the program header to obtain the code section and enforce the global
                 // instruction count limit published via `TransactionParameters`.
-                let parsed =
-                    ivm::ProgramMetadata::parse(smart_contract.as_ref()).map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: format!("Failed to parse IVM metadata: {err}"),
-                        })
-                    })?;
+                let parsed = ivm::ProgramMetadata::parse_for_profile(
+                    smart_contract.as_ref(),
+                    crate::smartcontracts::ivm::profile::interface_profile_id(),
+                )
+                .map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("Failed to parse IVM metadata: {err}"),
+                    })
+                })?;
                 let code = &smart_contract.as_ref()[parsed.code_offset..];
                 let decoded_count =
                     ivm::ivm_cache::validate_instruction_stream(code).map_err(|err| {
@@ -3641,8 +3647,17 @@ impl StateBlock<'_> {
                     ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
                         "unknown syscall number 0x{number:02x} for abi_version 1"
                     )),
+                    // The summary was prepared under the profile resolved for these bytes in
+                    // this root; that profile's engine owns the projection.
                     error => ValidationFail::IvmAdmission(
-                        crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
+                        crate::smartcontracts::ivm::projection::admission_error(
+                            crate::smartcontracts::ivm::profile::resolve_artifact(
+                                &state_transaction.world,
+                                bytes,
+                            )
+                            .engine(),
+                            error,
+                        ),
                     ),
                 };
                 ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(failure))
@@ -3687,7 +3702,8 @@ impl StateBlock<'_> {
             crate::executor::root_scope::captured_artifact_id(state_transaction, code_hash)
                 .map_err(TransactionRejectionReason::Validation)?;
         let abi_hash = summary.abi_hash();
-        crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
+        let engine = summary.profile().engine();
+        crate::pipeline::overlay::validate_header_policy_for(engine, &meta).map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
         })?;
         // A contract executes only under a host profile its root selected
@@ -3713,12 +3729,19 @@ impl StateBlock<'_> {
                 );
             }
         }
-        // A ZK artifact's trace bound (`max_cycles`) must lie within the committed ceiling. Gas,
-        // supplied by the caller, is the only execution budget, so a non-ZK artifact has no
-        // cycle check.
-        crate::smartcontracts::ivm::validate_zk_trace_bound(
+        // A baseline artifact's cycle limit (`max_cycles`) must be explicit and bounded by both
+        // governance fuel and the committed ceiling (the anchor's rule); a C10 artifact checks
+        // only its ZK trace bound, gas being its only budget.
+        crate::smartcontracts::ivm::execution_cycle_budget_for(
+            engine,
             &meta,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
+            state_transaction
+                .world
+                .parameters
+                .get()
+                .smart_contract()
+                .fuel(),
         )
         .map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
@@ -3787,10 +3810,9 @@ impl StateBlock<'_> {
             debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
             let policy = ivm::SyscallPolicy::AbiV1;
             for op in decoded.iter() {
-                // `SCALL` is the sole syscall opcode; it carries a 24-bit syscall number.
-                let number = (ivm::instruction::wide::opcode(op.inst)
-                    == ivm::instruction::wide::system::SCALL)
-                    .then(|| ivm::instruction::wide::syscall_number(op.inst));
+                // The syscall forms are the engine's: C10 has one 24-bit `SCALL`; the baseline an
+                // 8-bit `SCALL` and a 24-bit `SYSTEM`.
+                let number = engine.syscall_number(op.inst);
                 if let Some(number) = number
                     && !ivm::syscalls::is_syscall_allowed(policy, number)
                 {
@@ -9972,19 +9994,26 @@ pub mod tests {
         );
         assert!(AcceptedTransaction::ensure_signature_limit(2, &limits).is_ok());
     }
-    const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
+    // Transactions are admitted under the interface profile: the frozen baseline engine.
+    const IVM_METADATA_HEADER_LEN: usize = ivm_abi::baseline::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-    /// Build a minimal valid IVM program: the non-ZK 1.1 header (no trace bound) + HALT.
+    const BASELINE_HALT: u32 = ivm_abi::baseline::encoding::encode_halt();
+    /// Build a minimal valid IVM program: the baseline 1.1 header (`max_cycles=1000`) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+        minimal_ivm_program_with_max_cycles(abi_version, 1_000)
+    }
+    /// Build a minimal program declaring `max_cycles`.
+    fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         minimal_ivm_program_with_header(ivm::ProgramMetadata {
             abi_version,
+            max_cycles,
             ..ivm::ProgramMetadata::default()
         })
     }
     /// Build `header` + HALT without applying the header rules, so admission sees `header` as is.
     fn minimal_ivm_program_with_header(header: ivm::ProgramMetadata) -> Vec<u8> {
-        let mut program = header.encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut program = crate::ivm_test_support::baseline_header(header);
+        program.extend_from_slice(&BASELINE_HALT.to_le_bytes());
         program
     }
     /// Build a minimal ZK-mode program declaring the trace bound `max_cycles`.
@@ -9998,7 +10027,10 @@ pub mod tests {
     }
     /// Build a minimal self-describing view returning one initialized Unit table word.
     fn minimal_ivm_contract_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
             enum_types: Vec::new(),
@@ -10032,7 +10064,7 @@ pub mod tests {
             states: Vec::new(),
         };
         program.extend_from_slice(&interface.encode_section());
-        program.extend_from_slice(&crate::ivm_test_support::unit_return());
+        program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
         program
     }
     #[track_caller]
@@ -10043,13 +10075,13 @@ pub mod tests {
         assert!(instruction_count > 0, "instruction_count must be non-zero");
         let mut code = Vec::with_capacity(instruction_count * core::mem::size_of::<u32>());
         for _ in 0..instruction_count {
-            code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            code.extend_from_slice(&BASELINE_HALT.to_le_bytes());
         }
-        let mut program = ivm::ProgramMetadata {
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
             abi_version,
+            max_cycles: 1_000,
             ..ivm::ProgramMetadata::default()
-        }
-        .encode();
+        });
         program.extend_from_slice(&code);
         program
     }
@@ -10103,13 +10135,14 @@ pub mod tests {
     }
     /// Build a minimal program that issues a single `SCALL` (24-bit number) followed by HALT.
     fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata {
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
             abi_version,
+            max_cycles: 1_000,
             ..ivm::ProgramMetadata::default()
-        }
-        .encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        });
+        program
+            .extend_from_slice(&crate::ivm_test_support::baseline_syscall(syscall).to_le_bytes());
+        program.extend_from_slice(&BASELINE_HALT.to_le_bytes());
         program
     }
     const TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -10247,7 +10280,8 @@ pub mod tests {
                 "seiyaku StaleAbi { view fn inspect() authorize(anyone) -> int { return 1; } }",
             )
             .expect("compile self-describing contract");
-        let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiled contract");
+        let parsed =
+            crate::ivm_test_support::parse_declared(&artifact).expect("parse compiled contract");
         let mut interface = parsed
             .contract_interface
             .expect("compiled contract carries CNTR");
@@ -10255,7 +10289,8 @@ pub mod tests {
         let expected = interface.abi_hash;
         interface.abi_hash[0] ^= 0x80;
         let actual = interface.abi_hash;
-        let mut stale = parsed.metadata.encode();
+        // Re-encode the header in the compiled artifact's own (baseline) layout.
+        let mut stale = artifact[..parsed.header_len].to_vec();
         stale.extend_from_slice(&interface.encode_section());
         stale.extend_from_slice(
             artifact
@@ -10658,9 +10693,9 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_max_cycles_structured_error() {
-        // ZK program whose trace bound exceeds the default ceiling; expect a structured error.
-        let result =
-            IvmAdmissionFixture::new().validate_program(minimal_zk_ivm_program(1, 9_999_999));
+        // A program whose cycle limit exceeds the default ceiling; expect a structured error.
+        let result = IvmAdmissionFixture::new()
+            .validate_program(minimal_ivm_program_with_max_cycles(1, 9_999_999));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(..),
@@ -10670,8 +10705,9 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_missing_max_cycles_rejected() {
-        // A ZK header must declare its non-zero trace bound.
-        let result = IvmAdmissionFixture::new().validate_program(minimal_zk_ivm_program(1, 0));
+        // Every baseline header must declare a non-zero cycle limit.
+        let result =
+            IvmAdmissionFixture::new().validate_program(minimal_ivm_program_with_max_cycles(1, 0));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
@@ -10680,34 +10716,55 @@ pub mod tests {
         }
     }
     #[test]
-    fn validate_ivm_non_zk_trace_bound_rejected() {
-        // `max_cycles` is the ZK trace bound alone; a non-ZK header declaring one is malformed.
-        let result = IvmAdmissionFixture::new().validate_program(minimal_ivm_program_with_header(
-            ivm::ProgramMetadata {
-                max_cycles: 1_000,
-                ..ivm::ProgramMetadata::default()
-            },
-        ));
+    fn validate_ivm_max_cycles_exceeds_fuel_rejected() {
+        let mut fixture = IvmAdmissionFixture::new();
+        // Commit an upper bound above the fuel limit so the fuel check triggers first.
+        let mut pipeline = fixture.state.installed_pipeline().clone();
+        let fuel_limit = fixture
+            .state
+            .world
+            .parameters
+            .view()
+            .smart_contract()
+            .fuel()
+            .get();
+        pipeline.ivm_max_cycles_upper_bound =
+            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
+        fixture.state.set_pipeline(pipeline);
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit + 1));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::executor::IvmAdmissionError::MaxCyclesWithoutZk(1_000),
-            ))) => {}
-            other => panic!("Expected MaxCyclesWithoutZk error, got {other:?}"),
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(info),
+            ))) => {
+                assert_eq!(info.fuel_limit, fuel_limit);
+                assert_eq!(info.max_cycles, fuel_limit + 1);
+            }
+            other => panic!("Expected MaxCyclesExceedsFuel error, got {other:?}"),
         }
     }
-    /// Gas is the only execution budget: neither the committed trace ceiling nor the
-    /// governance fuel bounds a non-ZK program at admission.
+    /// The committed fuel is inclusive: a cycle ceiling equal to it passes admission, and
+    /// the next value is the first one refused (the test above).
     #[test]
-    fn validate_ivm_non_zk_program_has_no_cycle_check() {
+    fn validate_ivm_max_cycles_equal_to_fuel_is_admitted() {
         let mut fixture = IvmAdmissionFixture::new();
         let mut pipeline = fixture.state.installed_pipeline().clone();
+        let fuel_limit = fixture
+            .state
+            .world
+            .parameters
+            .view()
+            .smart_contract()
+            .fuel()
+            .get();
+        // Commit a ceiling above the fuel so only the fuel comparison decides.
         pipeline.ivm_max_cycles_upper_bound =
-            std::num::NonZeroU64::new(1).expect("test ceiling is non-zero");
+            std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
         fixture.state.set_pipeline(pipeline);
-        let result = fixture.validate_program(minimal_ivm_program(1));
+        let result = fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit));
         assert!(
             result.is_ok(),
-            "a non-ZK program is admitted under any trace ceiling: {result:?}"
+            "a cycle ceiling equal to the fuel is admitted: {result:?}"
         );
     }
     #[test]
@@ -10986,10 +11043,10 @@ pub mod tests {
     fn ivm_bytecode_at_limit_is_accepted_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use std::time::Duration;
-        // The 48-byte header, the literal section padded to four bytes and the code make an
-        // artifact of this shape a multiple of four bytes long, so the exact limit is one too.
-        const BYTECODE_LIMIT: u64 = 1024;
+        const BYTECODE_LIMIT: u64 = 1021;
         let (authority_id, kp) = gen_account_in("wonderland");
+        // Use an exact bytecode-size limit that can be represented by the 49-byte baseline
+        // metadata header plus a valid literal-prefix alignment.
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),

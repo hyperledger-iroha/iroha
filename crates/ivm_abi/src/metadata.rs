@@ -1489,6 +1489,10 @@ pub struct ParsedProgramMetadata {
     pub metadata: ProgramMetadata,
     /// Exact named policy authenticated by the original fixed header.
     pub syscall_policy: crate::SyscallPolicy,
+    /// Profile (engine and named policy) whose header layout authenticated the artifact.
+    pub profile: crate::IvmProfileId,
+    /// Logical vector length declared by a baseline-engine header; zero for C10 headers.
+    pub vector_length: u8,
     /// Number of bytes occupied by the metadata header.
     pub header_len: usize,
     /// Absolute offset within the artifact where executable code begins.
@@ -1523,38 +1527,80 @@ impl ParsedProgramMetadata {
     }
 }
 impl ProgramMetadata {
-    /// Validate the fixed header while borrowing the unchanged original artifact.
+    /// Validate a C10 fixed header (the explicit [`crate::IvmProfileId::C10_ABI_V1`] profile)
+    /// while borrowing the unchanged original artifact.
     ///
     /// This does not decode or validate CNTR/DBG1 payloads or executable code. Callers may use
     /// the fixed-position marker only to select the canonical admission owner, not as approval.
-    /// Header policy and error precedence are identical to [`Self::parse`].
+    /// Header policy and error precedence are identical to [`Self::parse`]. An artifact
+    /// submitted to a root is parsed under the profile resolved for it
+    /// ([`Self::parse_header_for_profile`]), never with this C10 convenience.
     pub fn parse_header(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
-        program_header::parse(bytes, crate::SyscallPolicy::AbiV1)
+        Self::parse_header_for_profile(bytes, crate::IvmProfileId::C10_ABI_V1)
     }
 
     /// Validate the fixed header against one explicitly selected named host policy.
     /// Callers with a committed root must obtain this policy from that root's selection.
+    ///
+    /// The policy is resolved before this call and decides the parser: the header is read only
+    /// in the layout of the policy's engine, and a refusal never falls back to another layout.
     pub fn parse_header_for_policy(
         bytes: &[u8],
         policy: crate::SyscallPolicy,
     ) -> Result<ParsedProgramHeader<'_>, VMError> {
-        program_header::parse(bytes, policy)
+        Self::parse_header_for_profile(bytes, crate::IvmProfileId::of_policy(policy))
     }
+
+    /// Validate the fixed header in the layout of one explicitly resolved profile's engine.
+    ///
+    /// The engine decides the layout and the rejection precedence; a refusal never falls back
+    /// to another engine's layout.
+    pub fn parse_header_for_profile(
+        bytes: &[u8],
+        profile: crate::IvmProfileId,
+    ) -> Result<ParsedProgramHeader<'_>, VMError> {
+        match profile.engine() {
+            crate::IvmEngine::C10 => program_header::parse(bytes, profile.policy()),
+            crate::IvmEngine::Baseline => program_header::parse_baseline(bytes),
+        }
+    }
+
+    /// Parse the header and ordered sections of one explicitly resolved profile.
+    pub fn parse_for_profile(
+        bytes: &[u8],
+        profile: crate::IvmProfileId,
+    ) -> Result<ParsedProgramMetadata, VMError> {
+        Self::parse_header_for_profile(bytes, profile)?.parse_sections()
+    }
+    /// Parse a C10 header and its ordered sections under the explicit
+    /// [`crate::IvmProfileId::C10_ABI_V1`] profile (see [`Self::parse_header`]).
     pub fn parse(bytes: &[u8]) -> Result<ParsedProgramMetadata, VMError> {
         Self::parse_header(bytes)?.parse_sections()
     }
-    /// Parse the unchanged header and ordered sections for an explicit named host policy.
-    /// The default parser retains the frozen baseline profile and rejection ordering.
+    /// Parse the unchanged header and ordered sections for an explicit named host policy, in
+    /// the layout of the engine [`crate::IvmProfileId::of_policy`] binds it to.
     pub fn parse_for_policy(
         bytes: &[u8],
         policy: crate::SyscallPolicy,
     ) -> Result<ParsedProgramMetadata, VMError> {
         Self::parse_header_for_policy(bytes, policy)?.parse_sections()
     }
+    /// Encode a C10 header of the explicit [`crate::IvmProfileId::C10_ABI_V1`] profile.
     pub fn encode(&self) -> Vec<u8> {
         self.encode_for_policy(crate::SyscallPolicy::AbiV1)
     }
-    /// Encode the same ABI V1 header with an explicit named host profile.
+    /// Encode the fixed header of one resolved profile in its engine's layout.
+    ///
+    /// A baseline header carries `vector_length` after the mode byte; a C10 header has no such
+    /// field and ignores it.
+    #[must_use]
+    pub fn encode_for_profile(&self, profile: crate::IvmProfileId, vector_length: u8) -> Vec<u8> {
+        match profile.engine() {
+            crate::IvmEngine::C10 => self.encode_for_policy(profile.policy()),
+            crate::IvmEngine::Baseline => crate::baseline::encode_header(self, vector_length),
+        }
+    }
+    /// Encode a 48-byte C10 header carrying the C10 surface hash of a named host policy.
     /// Admission still rejects an unsupported ABI version or malformed metadata.
     pub fn encode_for_policy(&self, policy: crate::SyscallPolicy) -> Vec<u8> {
         let mut v = Vec::new();
@@ -1565,7 +1611,7 @@ impl ProgramMetadata {
         v.extend_from_slice(&self.max_cycles.to_le_bytes());
         v.push(self.abi_version);
         let abi_hash = match self.abi_version {
-            1 => crate::syscalls::compute_abi_hash(policy),
+            1 => crate::syscalls::compute_c10_abi_hash(policy),
             _ => [0; 32],
         };
         v.extend_from_slice(&abi_hash);
@@ -1586,9 +1632,11 @@ impl ProgramMetadata {
 fn parse_program_sections(
     bytes: &[u8],
     metadata: ProgramMetadata,
-    syscall_policy: crate::SyscallPolicy,
+    profile: crate::IvmProfileId,
+    header_len: usize,
+    vector_length: u8,
 ) -> Result<ParsedProgramMetadata, VMError> {
-    let header_len = HEADER_SIZE;
+    let syscall_policy = profile.policy();
     let mut code_offset = header_len;
     let mut contract_interface = None;
     let mut contract_debug = None;
@@ -1644,6 +1692,8 @@ fn parse_program_sections(
     Ok(ParsedProgramMetadata {
         metadata,
         syscall_policy,
+        profile,
+        vector_length,
         header_len,
         code_offset,
         contract_interface,
@@ -1779,6 +1829,40 @@ fn parse_literal_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn header_encoders_follow_the_profile_engine() {
+        let meta = ProgramMetadata {
+            max_cycles: 7,
+            ..ProgramMetadata::default()
+        };
+        let baseline = meta.encode_for_profile(crate::IvmProfileId::BASELINE_ABI_V1, 3);
+        assert_eq!(baseline, crate::baseline::encode_header(&meta, 3));
+        assert_eq!(baseline.len(), crate::baseline::HEADER_SIZE);
+        let c10 = ProgramMetadata::default().encode_for_profile(crate::IvmProfileId::C10_ABI_V1, 3);
+        assert_eq!(c10, ProgramMetadata::default().encode());
+        assert_eq!(c10.len(), HEADER_SIZE);
+        assert_eq!(
+            &c10[HEADER_ABI_HASH_OFFSET..HEADER_SIZE],
+            crate::IvmProfileId::C10_ABI_V1.abi_hash().as_slice(),
+            "the C10 encoder carries C10's own surface hash"
+        );
+        assert_eq!(
+            ProgramMetadata::parse_header(&c10)
+                .expect("the C10 convenience parser reads C10")
+                .profile(),
+            crate::IvmProfileId::C10_ABI_V1
+        );
+        assert!(
+            ProgramMetadata::parse_for_policy(&c10, crate::SyscallPolicy::AbiV1).is_err(),
+            "the interface policy reads the baseline layout"
+        );
+        assert_eq!(
+            ProgramMetadata::parse_for_policy(&baseline, crate::SyscallPolicy::AbiV1)
+                .expect("the interface policy reads the baseline")
+                .profile,
+            crate::IvmProfileId::BASELINE_ABI_V1
+        );
+    }
     #[test]
     fn fixed_header_policy_errors_have_stable_precedence() {
         let mut bytes = ProgramMetadata::default().encode();

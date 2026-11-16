@@ -1,6 +1,8 @@
 //! Original-pool immutable control-flow arrays built without temporary vectors.
 
-use crate::{VMError, cache_memory::SharedAllocation, instruction::wide, ivm_cache::DecodedOp};
+use crate::{
+    IvmEngine, VMError, cache_memory::SharedAllocation, instruction::wide, ivm_cache::DecodedOp,
+};
 use iroha_allocation::AllocationBudget;
 
 #[derive(Clone, Copy, Debug)]
@@ -40,9 +42,13 @@ pub(crate) struct PreparedControlFlow {
 impl PreparedControlFlow {
     /// Build both immutable arrays directly in their original allocation owner.
     /// The decoder already established the ordered fixed-width instruction stream.
+    ///
+    /// Operands are decoded in the layout of `engine`. Both instruction sets give every shared
+    /// control opcode the same value; the baseline's `JR` is an indirect transfer like `JALR`.
     pub(crate) fn from_decoded(
         decoded: &[DecodedOp],
         budget: Option<&AllocationBudget>,
+        engine: IvmEngine,
     ) -> Result<Self, VMError> {
         let values = decoded.iter().map(|op| Ok::<_, VMError>(op.pc));
         let boundaries = match budget {
@@ -64,7 +70,7 @@ impl PreparedControlFlow {
                 | wide::control::BGE
                 | wide::control::BLTU
                 | wide::control::BGEU => {
-                    let target = direct_target(op).ok_or(VMError::DecodeError)?;
+                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
                     if !is_boundary(target) {
                         return Err(VMError::DecodeError);
                     }
@@ -76,12 +82,12 @@ impl PreparedControlFlow {
                     node.push_successor(next)?;
                 }
                 wide::control::JAL => {
-                    let target = direct_target(op).ok_or(VMError::DecodeError)?;
+                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
                     if !is_boundary(target) {
                         return Err(VMError::DecodeError);
                     }
                     node.push_successor(target)?;
-                    if wide::rd(op.inst) != 0 {
+                    if engine.destination_register(op.inst) != 0 {
                         let next = fallthrough.ok_or(VMError::DecodeError)?;
                         if !is_boundary(next) {
                             return Err(VMError::DecodeError);
@@ -90,14 +96,14 @@ impl PreparedControlFlow {
                     }
                 }
                 wide::control::JMP => {
-                    let target = direct_target(op).ok_or(VMError::DecodeError)?;
+                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
                     if !is_boundary(target) {
                         return Err(VMError::DecodeError);
                     }
                     node.push_successor(target)?;
                 }
                 wide::control::JALS => {
-                    let target = direct_target(op).ok_or(VMError::DecodeError)?;
+                    let target = direct_target(op, engine).ok_or(VMError::DecodeError)?;
                     if !is_boundary(target) {
                         return Err(VMError::DecodeError);
                     }
@@ -108,7 +114,7 @@ impl PreparedControlFlow {
                     }
                     node.push_successor(next)?;
                 }
-                wide::control::JALR => {
+                opcode if engine.is_indirect_transfer(opcode) => {
                     node.has_indirect_successor = true;
                 }
                 _ => {
@@ -132,18 +138,8 @@ impl PreparedControlFlow {
         Some(node)
     }
 }
-fn direct_target(op: &DecodedOp) -> Option<u64> {
-    let offset_words = match wide::opcode(op.inst) {
-        wide::control::BEQ
-        | wide::control::BNE
-        | wide::control::BLT
-        | wide::control::BGE
-        | wide::control::BLTU
-        | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
-        wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
-        wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
-        _ => return None,
-    };
+fn direct_target(op: &DecodedOp, engine: IvmEngine) -> Option<u64> {
+    let offset_words = engine.direct_transfer_offset(op.inst)?;
     let byte_offset = offset_words.checked_mul(4)?;
     i128::from(op.pc)
         .checked_add(i128::from(byte_offset))

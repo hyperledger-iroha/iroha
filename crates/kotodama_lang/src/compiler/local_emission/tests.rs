@@ -6,7 +6,7 @@ use crate::session::{CompileOutput, CompileRequest, CompilerSession};
 pub(super) fn compile(source: &str, scalar: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            CompilerSession::default()
+            CompilerSession::c10()
                 .build(CompileRequest {
                     source,
                     source_name: Some("local_emission.ko"),
@@ -298,12 +298,12 @@ fn consecutive_entry_parameters_keep_all_original_reads_and_late_reads_keep_save
 #[test]
 fn self_copy_and_scalar_scope_restore_keep_exact_architectural_values_and_test_baseline() {
     let mut same = Vec::new();
-    emit_move(&mut same, 10, 10).unwrap();
+    emit_move(Isa::C10, &mut same, 10, 10).unwrap();
     assert!(same.is_empty());
-    with_scalar_emission(|| emit_move(&mut same, 10, 10)).unwrap();
+    with_scalar_emission(|| emit_move(Isa::C10, &mut same, 10, 10)).unwrap();
     assert_eq!(same, encode_addi(10, 10, 0).unwrap().to_le_bytes());
     same.clear();
-    emit_move(&mut same, 11, 10).unwrap();
+    emit_move(Isa::C10, &mut same, 11, 10).unwrap();
     assert_eq!(same, encode_addi(11, 10, 0).unwrap().to_le_bytes());
     assert!(
         std::panic::catch_unwind(|| with_scalar_emission(|| panic!("restore scalar-only scope")))
@@ -378,7 +378,7 @@ fn canonical_dlmm_local_emission_measures_full_artifact_and_exact_unchanged_owne
 fn compile_with_injected(instructions: Vec<Instr>, scalar: bool) -> Result<Vec<u8>, String> {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
-            let options = CompilerOptions::default();
+            let options = CompilerOptions::c10();
             let session = CompilerSession::new(options.clone());
             let source_name = "local_invalid_literal.ko";
             let parsed = session

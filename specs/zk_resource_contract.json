@@ -7029,7 +7029,7 @@
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/pipeline/overlay.rs",
-          "contains": "enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;",
+          "contains": "summary.profile().engine(), state_ro.pipeline().ivm_max_cycles_upper_bound, &meta, )?;",
           "count": 9
         }
       ],
@@ -7044,7 +7044,7 @@
         },
         {
           "path": "crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs",
-          "name": "trigger_registration_rejects_non_zk_bound_and_over_ceiling_zk_headers"
+          "name": "trigger_registration_rejects_zero_and_over_ceiling_ivm_headers"
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/pipeline_policy.rs",
@@ -15124,16 +15124,26 @@
         }
       },
       {
-        "path": "crates/ivm_abi/src/metadata.rs",
-        "reason": "Program-header layout (the fixed header size and the offset of its ZK trace-bound field) and the debug-section decode allocation: metadata shape bounds inside guest_memory.max_program_image_bytes; the debug section is never executed.",
+        "path": "crates/ivm/src/prebuilt_fixtures.rs",
+        "reason": "Builders of checked-in executor and trigger fixtures: the cycle limit their baseline headers declare (the anchor's compiler default) and the signed 8-bit immediate range of the baseline ADDI chunking; fixture shape only, admitted under the committed ceiling like any program.",
         "symbols": [
-          "HEADER_SIZE",
+          "DEFAULT_MAX_CYCLES",
+          "WIDE_IMM_MAX"
+        ],
+        "exprs": {
+          "DEFAULT_MAX_CYCLES": "1_000_000",
+          "WIDE_IMM_MAX": "127"
+        }
+      },
+      {
+        "path": "crates/ivm_abi/src/metadata.rs",
+        "reason": "Program-header layout (the offset of the C10 header's ZK trace-bound field) and the debug-section decode allocation: metadata shape bounds inside guest_memory.max_program_image_bytes; the debug section is never executed.",
+        "symbols": [
           "HEADER_BUDGET_OFFSET",
           "CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1",
           "MAX_EMBEDDED_STATE_TYPE_DEPTH_V1"
         ],
         "exprs": {
-          "HEADER_SIZE": "48",
           "HEADER_BUDGET_OFFSET": "7",
           "CONTRACT_DEBUG_MAX_DECODE_ALLOCATION_BYTES_V1": "16 * 1024 * 1024",
           "MAX_EMBEDDED_STATE_TYPE_DEPTH_V1": "256"

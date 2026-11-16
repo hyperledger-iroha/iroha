@@ -404,14 +404,22 @@ mod zk_hydration_route_tests {
     fn trigger_route_preserves_cold_registry_owner_and_fresh_state_retry() {
         let state = route_state();
         let trigger_id: TriggerId = "hydration_registry_callback".parse().unwrap();
-        let mut program = ivm::ProgramMetadata::default().encode();
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         // HALT itself costs zero gas; execute one real arithmetic instruction so
         // the unchanged fresh-retry gas assertion witnesses actual VM execution.
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
-                .to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                5,
+                0,
+                1,
+            )
+            .to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -1371,12 +1379,20 @@ fn borrowed_transaction_proof_rejects_without_authoritative_relation() {
 fn borrowed_raw_ivm_keeps_original_bytecode_and_completed_work() {
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let state = state_after_genesis(World::with([], [account], []));
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 1)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            1,
+            0,
+            1,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let signed = TransactionBuilder::new(
         *state.network_id_ref(),
         ALICE_ID.clone(),
@@ -1477,12 +1493,20 @@ fn successful_live_batch_settlement_retains_nested_execute_trigger_ivm_gas() {
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let state = state_after_genesis(World::with([], [account], []));
     let trigger_id: TriggerId = "live_batch_ivm_gas".parse().expect("trigger id");
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 1)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            1,
+            0,
+            1,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let trigger = Trigger::new(
         trigger_id.clone(),
         Action::new(
@@ -6626,8 +6650,11 @@ fn supplied_replay_fixture_source(
     keypair: &KeyPair,
     overlay: Vec<InstructionBox>,
 ) -> SignedTransaction {
-    let mut bytecode = ivm::ProgramMetadata::default().encode();
-    bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut bytecode = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    bytecode.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     TransactionBuilder::new(
         state.network_id,
         authority.clone(),
@@ -7833,12 +7860,20 @@ fn genesis_raw_ivm_carriers_reject_before_debit_or_supply_change() {
 fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
     let (mut config, authority, fee_asset) = authenticated_genesis_fee_config();
     let trigger_id: TriggerId = "authenticated_genesis_generic_ivm".parse().unwrap();
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            5,
+            0,
+            1,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let trigger = Trigger::new(
         trigger_id.clone(),
         Action::new(
@@ -7918,12 +7953,20 @@ fn local_custody_invariant_abandons_transaction_without_gas_or_fee() {
 fn check_local_checkout_abandons_transaction(reason: ivm::error::ExecutionDeferral) {
     let (state, keypair, authority, _, _, fee_asset, _) =
         pipeline_fee_state_fixture(state_after_genesis);
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            5,
+            0,
+            1,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let transaction = TransactionBuilder::new(
         state.network_id,
         authority.clone(),
@@ -8038,7 +8081,8 @@ fn transaction_execution_keeps_rejected_genesis_prepared_contract_fee_free() {
     let (mut config, authority, fee_asset) = authenticated_genesis_fee_config();
     let (program, _) =
         contract_program_with_entrypoint("run", Some("CanRunGenesisPreparedContract"));
-    ivm::verify_contract_artifact(&program).expect("verify current prepared artifact");
+    ivm::verify_contract_artifact_with_declared_profile(&program)
+        .expect("verify current prepared artifact");
     let trigger_id: TriggerId = "authenticated_genesis_prepared_ivm".parse().unwrap();
     let mut metadata = Metadata::default();
     metadata.insert("contract_entrypoint".parse().unwrap(), Json::new("run"));
@@ -12971,7 +13015,8 @@ fn executor_result_test_context() -> ExecutorContext {
 }
 fn loaded_executor_with_result_prefix(declared_len: u64, encoded_payload: &[u8]) -> LoadedExecutor {
     let mut program = build_program_from_encoded_result(encoded_payload);
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("parse executor test program");
+    let parsed =
+        crate::ivm_test_support::parse_declared(&program).expect("parse executor test program");
     let literal_section = parsed
         .literal_section
         .expect("encoded result program has a literal section");
@@ -13162,37 +13207,52 @@ fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 100_000,
         abi_version: 1,
     };
-    let mut program = metadata.encode();
+    let mut program = crate::ivm_test_support::baseline_header(metadata.clone());
     let mut displacement = Memory::HEAP_MAX_SIZE - EXECUTOR_LENGTH_PREFIX_BYTES_U64;
     while displacement != 0 {
         let chunk = displacement.min(127);
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_ri(
-                ivm::instruction::wide::arithmetic::ADDI,
+            &ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
                 10,
                 10,
-                i16::try_from(chunk).expect("bounded ADDI chunk"),
+                i8::try_from(chunk).expect("bounded ADDI chunk"),
             )
             .to_le_bytes(),
         );
         displacement -= chunk;
     }
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 0)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            0,
+        )
+        .to_le_bytes(),
     );
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 11, 16)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            11,
+            16,
+        )
+        .to_le_bytes(),
     );
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 10, 11, 0)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            10,
+            11,
+            0,
+        )
+        .to_le_bytes(),
     );
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
     LoadedExecutor::load(raw).expect("load past-heap executor test program")
 }
@@ -13509,12 +13569,12 @@ fn contract_program_with_entrypoint_kind(
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     };
-    let mut program = metadata.encode();
+    let mut program = crate::ivm_test_support::baseline_header(metadata.clone());
     program.extend_from_slice(&interface_section);
-    program.extend_from_slice(&crate::ivm_test_support::unit_return());
+    program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
     (program, expected_entrypoint_pc)
 }
 fn contract_program_with_private_input_entrypoint(
@@ -13574,12 +13634,13 @@ fn contract_program_with_private_input_entrypoint(
         max_cycles: 1_000_000,
         abi_version: 1,
     };
-    let mut program = metadata.encode();
+    let mut program = crate::ivm_test_support::baseline_header(metadata.clone());
     program.extend_from_slice(&interface.encode_section());
     program.extend_from_slice(
-        &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT).to_le_bytes(),
+        &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT)
+            .to_le_bytes(),
     );
-    program.extend_from_slice(&crate::ivm_test_support::unit_return());
+    program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
     program
 }
 fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
@@ -13593,7 +13654,8 @@ seiyaku TriggerArguments { permission Admin;
     let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile parameterized trigger callback");
-    ivm::prepare_contract(Arc::<[u8]>::from(code)).expect("prepare parameterized trigger callback")
+    crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(code))
+        .expect("prepare parameterized trigger callback")
 }
 #[test]
 fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
@@ -13614,7 +13676,8 @@ seiyaku GuardedValue { permission CanInvokeContractEntrypoint;
 "#,
         )
         .expect("compile parameterized protected contract");
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("parse protected contract");
+    let parsed =
+        crate::ivm_test_support::parse_declared(&program).expect("parse protected contract");
     let schema = parsed
         .contract_interface
         .as_ref()
@@ -14227,7 +14290,8 @@ seiyaku OrderedBatchGuard { permission CanInvokeContractEntrypoint;
 "#,
         )
         .expect("compile ordered mixed-batch contract");
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("parse mixed-batch contract");
+    let parsed =
+        crate::ivm_test_support::parse_declared(&program).expect("parse mixed-batch contract");
     let schema = parsed
         .contract_interface
         .as_ref()
@@ -14801,7 +14865,7 @@ seiyaku ReviewedValue { permission CanInvokeContractEntrypoint;
 ",
         )
         .expect("compile reviewed contract");
-    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program.clone()))
         .expect("prepare reviewed contract");
     let schema = prepared
         .entrypoint_descriptor("write")
@@ -14979,8 +15043,8 @@ fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         EntryPointKind::View,
         Some("CanInspectConfiguration"),
     );
-    let prepared =
-        ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare nested-view contract");
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program))
+        .expect("prepare nested-view contract");
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -15027,8 +15091,8 @@ fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         ("改善", EntryPointKind::Kaizen),
     ] {
         let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
-        let prepared =
-            ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare lifecycle contract");
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program))
+            .expect("prepare lifecycle contract");
         let descriptor = prepared.entrypoint_descriptor(selector).unwrap();
         let error = nested_contract_entrypoint_authorization(descriptor, selector)
             .expect_err("nested dispatch must reject lifecycle entrypoints");
@@ -15046,8 +15110,8 @@ fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
         EntryPointKind::View,
         Some("CanInspectContract"),
     );
-    let prepared =
-        ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare view contract");
+    let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program))
+        .expect("prepare view contract");
     let (pc, permission, arguments) =
         resolve_prepared_contract_view_entrypoint(&prepared, "inspect")
             .expect("declared view resolves");
@@ -15070,8 +15134,8 @@ fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
     ] {
         let permission = (kind == EntryPointKind::Kotoage).then_some("CanInvokeContractEntrypoint");
         let (program, _) = contract_program_with_entrypoint_kind(selector, kind, permission);
-        let prepared =
-            ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare non-view contract");
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program))
+            .expect("prepare non-view contract");
         let error = resolve_prepared_contract_view_entrypoint(&prepared, selector)
             .expect_err("the view boundary must reject every non-view entrypoint kind");
         assert!(
@@ -15085,8 +15149,9 @@ fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution()
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     let transaction_program =
         contract_program_with_private_input_entrypoint("commit", EntryPointKind::Kotoage);
-    let transaction_contract = ivm::prepare_contract(Arc::<[u8]>::from(transaction_program))
-        .expect("prepare ZK private-input contract");
+    let transaction_contract =
+        crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(transaction_program))
+            .expect("prepare ZK private-input contract");
     for error in [
         resolve_prepared_contract_entrypoint(&transaction_contract, "commit")
             .expect_err("top-level transaction resolver must reject raw private witnesses"),
@@ -15105,7 +15170,7 @@ fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution()
     }
     let view_program =
         contract_program_with_private_input_entrypoint("inspect", EntryPointKind::View);
-    let view_contract = ivm::prepare_contract(Arc::<[u8]>::from(view_program))
+    let view_contract = crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(view_program))
         .expect("prepare ZK private-input view");
     let error = resolve_prepared_contract_view_entrypoint(&view_contract, "inspect")
         .expect_err("view resolver must reject raw private witnesses");
@@ -15228,8 +15293,11 @@ fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
         .build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let state = state_after_genesis(World::with([domain], [account], []));
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let generic_code_hash = ivm::contract_code_hash(&program);
     let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
     let transaction = |metadata: Metadata| {
@@ -15341,13 +15409,19 @@ fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
         block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
     state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-    // `max_cycles` bounds only a ZK trace: the live ceiling never limits a non-ZK program,
-    // whose only budget is the signed gas.
-    state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(1_u64);
-    super::Executor::Initial
+    // The live ceiling bounds the declared cycle limit of every baseline program (the anchor's
+    // rule).
+    state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
+    let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &authority, &signed, &mut ivm_cache)
         .map_err(crate::execution_attempt::expect_completed_rejection)
-        .expect("a non-ZK generic program has no cycle check");
+        .expect_err("direct generic IVM must honor the live cycle ceiling");
+    assert!(matches!(
+        error,
+        ValidationFail::IvmAdmission(
+            iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(_)
+        )
+    ));
 }
 #[test]
 fn quarantine_gas_cap_narrows_the_root_limit_only_downwards() {

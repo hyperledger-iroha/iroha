@@ -1,9 +1,12 @@
 # IVM Gas Model
 
 This document defines the canonical gas schedule for the Iroha Virtual Machine
-(IVM) and explains how the schedule is hashed and applied. The source of truth
-for costs is `crates/ivm/src/gas.rs`; the schedule table below is a rendered
-view of that canonical mapping.
+(IVM) and explains how the schedule is hashed and applied. ABI V1, as every root
+selects it, runs the frozen baseline engine and is metered by its schedule: the
+source of truth for its costs is `crates/ivm/src/gas/baseline.rs`
+(`ivm::gas::baseline::cost_of`), and the table below is a rendered view of that
+mapping. The separately selected C10 profile has its own schedule, described in
+[C10 profile schedule](#c10-profile-schedule) at the end.
 
 ## Scope
 
@@ -37,22 +40,24 @@ view of that canonical mapping.
   not commit, but all work attempted before the bound is detected remains
   accountable to the parent block exactly once. Other rejected live execution
   retains its ordinary fee lifecycle and the same exact gas total.
-- Opcode bytes outside the canonical opcode gas table are unassigned, rejected
-  as `InvalidOpcode`, and carry no gas entry.
+- ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
 
 ## Invocation gas limit
 
-Gas is the only execution budget. The caller owns it: a root invocation runs
-under the signature-bound transaction gas limit within the remaining block
-budget (and, for a quarantine-lane transaction, within the committed
-`quarantine_tx_max_gas` cap), and a nested invocation draws from its parent's
-remaining gas, which is billed back to the parent. The budget is shared by
-instructions, ZK trace padding (one gas per padded cycle) and syscalls. No
-artifact header field converts into gas; only `HALT` is free, so gas alone
-bounds the number of executed instructions.
+Under the baseline engine every artifact carries a positive `max_cycles` value
+in its hash-covered header. Admission bounds it by the available fuel and then
+by the committed `ivm_max_cycles_upper_bound`, and the host derives the
+invocation's gas limit from it with
+`iroha_core::smartcontracts::ivm::gas_limit_for_cycles`: the cycle limit times
+the most expensive instruction price of the schedule, because the interpreter
+pads ZK traces to `max_cycles` at one gas per padded cycle. A nested invocation
+draws on its parent's shared cycle allowance. A signature-bound transaction
+limit, the remaining block budget and, for a quarantine-lane transaction, the
+committed `quarantine_tx_max_gas` cap still apply: the invocation runs under the
+smallest applicable bound.
 
-The header `max_cycles` field is the ZK trace bound. It is nonzero exactly when
-the header selects ZK mode; node policy `ivm_max_cycles_upper_bound` caps it.
+Under the C10 profile gas is the only execution budget; see
+[C10 profile schedule](#c10-profile-schedule).
 
 ## Heap governance
 
@@ -159,9 +164,186 @@ these constants, and reject work that cannot fit that budget before returning
 guest-visible output. Changing any value or semantic rule above requires a
 formula-version increment and produces a different gas-schedule hash.
 
+## Ed25519 batch-verification gas
+
+`ED25519BATCHVERIFY` accepts a Norito-encoded
+`Ed25519BatchRequest { entries }` containing 1–512 entries. The encoded payload
+is capped at 512 KiB and decoded with explicit per-sequence, per-field,
+cumulative-element, cumulative-allocation, and nesting-depth limits. The
+complete formula is:
+
+```text
+gas = 500
+    + encoded_payload_bytes
+    + 1,000 * admitted_entries
+```
+
+The 500-unit opcode base is charged first. For an in-range owned public
+envelope, the byte charge is debited before checksum hashing or Norito
+decoding. After a valid request passes the entry-count bound, the complete
+entry charge is debited before verification. The opcode then performs one
+strict Ed25519 verification per entry in canonical input order and reports the
+first failure index; GPU availability cannot change acceptance or duplicate
+work through a fallback pass.
+
+The schedule descriptor commits the formula version, both rates, both request
+bounds, and every Norito decode limit. A change to any of those values or to
+the charge-point ordering therefore changes `ivm::gas::schedule_hash()` and is
+rejected by the signed peer handshake when validators disagree.
+
+## Direct signature-verification gas
+
+`ED25519VERIFY`, `ECDSAVERIFY`, and `DILITHIUMVERIFY` charge their opcode base
+plus one gas for every payload byte in the message, signature, and public-key
+TLVs:
+
+```text
+gas = opcode_base
+    + message_payload_bytes
+    + signature_payload_bytes
+    + public_key_payload_bytes
+```
+
+The VM validates the three public TLV ranges and debits the complete byte
+surcharge before checksum hashing or cryptographic verification. Operand roles
+are charged independently even when two or more registers alias the same TLV,
+because each role is validated independently. Malformed public pointers and
+unsupported versions found in the fixed TLV header retain the historical
+boolean-failure behavior and consume only the fixed base. A version-1 envelope
+with a malformed checksum is still charged by its declared payload length, and
+a private range always traps instead of being converted into a public result.
+
+The schedule descriptor commits formula version 1 and the per-payload-byte
+rate, so peers with different direct-signature metering derive different
+schedule hashes.
+
+## Vector scaling
+
+- Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical
+  vector length set by `SETVL`. The base costs in the table are scaled by
+  `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (baseline = 2 lanes).
+
 ## Canonical opcode gas table
 
-The table below lists the price of each of the 59 admitted opcodes, as returned
+The table below lists the base costs used by `ivm::gas::cost_of`. Vector scaling
+is applied on top of these base values as noted above.
+
+| Category | Opcode | Mnemonic | Base gas |
+|---|---:|---|---:|
+| arithmetic | 0x01 | `ADD` | 1 |
+| arithmetic | 0x02 | `SUB` | 1 |
+| arithmetic | 0x03 | `AND` | 1 |
+| arithmetic | 0x04 | `OR` | 1 |
+| arithmetic | 0x05 | `XOR` | 1 |
+| arithmetic | 0x06 | `SLL` | 1 |
+| arithmetic | 0x07 | `SRL` | 1 |
+| arithmetic | 0x08 | `SRA` | 1 |
+| arithmetic | 0x0D | `NEG` | 1 |
+| arithmetic | 0x0C | `NOT` | 1 |
+| arithmetic | 0x20 | `ADDI` | 1 |
+| arithmetic | 0x21 | `ANDI` | 1 |
+| arithmetic | 0x22 | `ORI` | 1 |
+| arithmetic | 0x23 | `XORI` | 1 |
+| arithmetic | 0x10 | `MUL` | 3 |
+| arithmetic | 0x11 | `MULH` | 3 |
+| arithmetic | 0x12 | `MULHU` | 3 |
+| arithmetic | 0x13 | `MULHSU` | 3 |
+| arithmetic | 0x14 | `DIV` | 10 |
+| arithmetic | 0x15 | `DIVU` | 10 |
+| arithmetic | 0x16 | `REM` | 10 |
+| arithmetic | 0x17 | `REMU` | 10 |
+| arithmetic | 0x18 | `ROTL` | 2 |
+| arithmetic | 0x19 | `ROTR` | 2 |
+| arithmetic | 0x25 | `ROTL_IMM` | 2 |
+| arithmetic | 0x26 | `ROTR_IMM` | 2 |
+| arithmetic | 0x1A | `POPCNT` | 6 |
+| arithmetic | 0x1B | `CLZ` | 6 |
+| arithmetic | 0x1C | `CTZ` | 6 |
+| arithmetic | 0x1D | `ISQRT` | 6 |
+| arithmetic | 0x1E | `MIN` | 1 |
+| arithmetic | 0x1F | `MAX` | 1 |
+| arithmetic | 0x27 | `ABS` | 1 |
+| arithmetic | 0x28 | `DIV_CEIL` | 12 |
+| arithmetic | 0x29 | `GCD` | 12 |
+| arithmetic | 0x2A | `MEAN` | 2 |
+| arithmetic | 0x09 | `SLT` | 2 |
+| arithmetic | 0x0A | `SLTU` | 2 |
+| arithmetic | 0x0E | `SEQ` | 2 |
+| arithmetic | 0x0F | `SNE` | 2 |
+| arithmetic | 0x0B | `CMOV` | 3 |
+| arithmetic | 0x24 | `CMOVI` | 3 |
+| memory | 0x30 | `LOAD64` | 3 |
+| memory | 0x31 | `STORE64` | 3 |
+| memory | 0x32 | `LOAD128` | 5 |
+| memory | 0x33 | `STORE128` | 5 |
+| memory | 0x34 | `LDLIT` | 1 |
+| memory | 0x35 | `LDI64` | 1 |
+| control | 0x40 | `BEQ` | 1 |
+| control | 0x41 | `BNE` | 1 |
+| control | 0x42 | `BLT` | 1 |
+| control | 0x43 | `BGE` | 1 |
+| control | 0x44 | `BLTU` | 1 |
+| control | 0x45 | `BGEU` | 1 |
+| control | 0x46 | `JAL` | 2 |
+| control | 0x48 | `JALR` | 2 |
+| control | 0x47 | `JR` | 2 |
+| control | 0x4A | `JMP` | 2 |
+| control | 0x4B | `JALS` | 2 |
+| control | 0x49 | `HALT` | 0 |
+| system | 0x60 | `SCALL` | 5 |
+| system | 0x61 | `GETGAS` | 0 |
+| system | 0x62 | `SYSTEM` (`SCALLX`) | 5 |
+| crypto | 0x70 | `VADD32` | 2 |
+| crypto | 0x71 | `VADD64` | 2 |
+| crypto | 0x72 | `VAND` | 1 |
+| crypto | 0x73 | `VXOR` | 1 |
+| crypto | 0x74 | `VOR` | 1 |
+| crypto | 0x75 | `VROT32` | 1 |
+| crypto | 0x76 | `SETVL` | 1 |
+| crypto | 0x77 | `PARBEGIN` | 0 |
+| crypto | 0x78 | `PAREND` | 0 |
+| crypto | 0x80 | `SHA256BLOCK` | 50 |
+| crypto | 0x81 | `SHA3BLOCK` | 50 |
+| crypto | 0x82 | `POSEIDON2` | 10 |
+| crypto | 0x83 | `POSEIDON6` | 10 |
+| crypto | 0x84 | `AESENC` | 30 |
+| crypto | 0x85 | `AESDEC` | 30 |
+| crypto | 0x86 | `BLAKE2S` | 40 |
+| crypto | 0x87 | `ED25519VERIFY` | 1000 |
+| crypto | 0x88 | `ED25519BATCHVERIFY` | 500 |
+| crypto | 0x89 | `ECDSAVERIFY` | 1500 |
+| crypto | 0x8A | `DILITHIUMVERIFY` | 5000 |
+| zk | 0xA0 | `ASSERT` | 1 |
+| zk | 0xA1 | `ASSERT_EQ` | 1 |
+| zk | 0xA2 | `FADD` | 1 |
+| zk | 0xA3 | `FSUB` | 1 |
+| zk | 0xA4 | `FMUL` | 3 |
+| zk | 0xA5 | `FINV` | 5 |
+| zk | 0xA6 | `ASSERT_RANGE` | 1 |
+
+## C10 profile schedule
+
+The C10 profile (`IvmProfileId::C10_RUNTIME_LIFECYCLE` now, and
+`IvmProfileId::C10_ABI_V1` once `iroha.runtime.ivm_c10.v1` is published) is
+metered by `ivm::gas::cost_of`, whose schedule digest is
+`ivm::gas::c10_schedule_hash()` (`ivm::gas::schedule_hash_for(IvmEngine::C10)`).
+Opcode bytes outside its table are unassigned, rejected as `InvalidOpcode`, and
+carry no gas entry; it has no vector scaling and no signature-verification
+opcodes.
+
+Gas is the only execution budget. The caller owns it: a root invocation runs
+under the signature-bound transaction gas limit within the remaining block
+budget (and, for a quarantine-lane transaction, within the committed
+`quarantine_tx_max_gas` cap), and a nested invocation draws from its parent's
+remaining gas, which is billed back to the parent. The budget is shared by
+instructions, ZK trace padding (one gas per padded cycle) and syscalls. No
+artifact header field converts into gas; only `HALT` is free, so gas alone
+bounds the number of executed instructions.
+
+The header `max_cycles` field is the ZK trace bound. It is nonzero exactly when
+the header selects ZK mode; node policy `ivm_max_cycles_upper_bound` caps it.
+
+The table below lists the price of each of the 58 admitted C10 opcodes, as returned
 by `ivm::gas::cost_of`. Every opcode has one fixed price: no operand, mode or
 hardware property scales it. `HALT` is the only free opcode, and it ends the
 run. Hashing and signature verification are syscalls, metered by the syscall
@@ -227,4 +409,3 @@ records committed in the schedule descriptor.
 | control | 0x4B | `JALS` | 2 |
 | control | 0x49 | `HALT` | 0 |
 | system | 0x60 | `SCALL` | 5 |
-| system | 0x62 | `SYSTEM` (`SCALLX`) | 5 |

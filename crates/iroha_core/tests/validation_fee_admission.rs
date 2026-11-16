@@ -102,7 +102,7 @@ fn payout_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -181,18 +181,40 @@ fn payout_contract_artifact() -> (
         error_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut artifact = metadata.encode();
+    // The interface profile's baseline header and encodings.
+    let mut artifact =
+        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
     artifact.extend_from_slice(&interface.encode_section());
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            12,
+            0,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            10,
+            12,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            1,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        ),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
-    let verified =
-        ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("valid payout contract artifact");
     (artifact, verified.manifest)
 }
 fn pool_contract_artifact() -> (
@@ -203,7 +225,7 @@ fn pool_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -270,17 +292,40 @@ fn pool_contract_artifact() -> (
         error_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut artifact = metadata.encode();
+    // The interface profile's baseline header and encodings.
+    let mut artifact =
+        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
     artifact.extend_from_slice(&interface.encode_section());
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            12,
+            0,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            10,
+            12,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            1,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        ),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
-    let verified = ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("valid pool contract artifact");
     (artifact, verified.manifest)
 }
 fn payout_binding(

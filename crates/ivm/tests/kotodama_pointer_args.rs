@@ -31,7 +31,7 @@ fn pointer_map_default_roundtrip() {
             }
         }
     "#;
-    let bytecode = Compiler::new()
+    let bytecode = Compiler::new_c10()
         .compile_source(src)
         .expect("compile pointer map contract");
     let mut vm = IVM::new(u64::MAX);
@@ -80,7 +80,7 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     "#,
         asset_definition = ASSET_DEFINITION,
     );
-    let bytecode = Compiler::new()
+    let bytecode = Compiler::new_c10()
         .compile_source(&src)
         .expect("compile asset storage contract");
     let asset: AssetDefinitionId = ASSET_DEFINITION.parse().expect("asset definition literal");

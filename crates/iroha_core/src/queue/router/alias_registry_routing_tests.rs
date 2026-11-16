@@ -961,15 +961,15 @@ fn alias_registry_routing_nested_walkers_use_universal_registry() {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut bytecode = meta.encode();
+    let mut bytecode = crate::ivm_test_support::baseline_header(meta.clone());
     bytecode.extend_from_slice(b"LTLB");
     for _ in 0..3 {
         bytecode.extend_from_slice(&0u32.to_le_bytes());
     }
-    bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    bytecode.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let executables = vec![
         Executable::Batch(
             payload

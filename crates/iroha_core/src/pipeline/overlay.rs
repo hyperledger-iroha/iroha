@@ -189,13 +189,16 @@ enum ContractDispatchSource<'a> {
 impl ContractDispatchSource<'_> {
     fn is_self_describing(&self) -> Result<bool, OverlayBuildError> {
         match self {
-            Self::Bytecode(bytecode) => ivm::ProgramMetadata::parse(bytecode)
-                .map(|parsed| parsed.contract_interface.is_some())
-                .map_err(|err| {
-                    OverlayBuildError::ContractCall(format!(
-                        "invalid contract artifact for contract call dispatch: {err}"
-                    ))
-                }),
+            Self::Bytecode(bytecode) => ivm::ProgramMetadata::parse_for_profile(
+                bytecode,
+                crate::smartcontracts::ivm::profile::interface_profile_id(),
+            )
+            .map(|parsed| parsed.contract_interface.is_some())
+            .map_err(|err| {
+                OverlayBuildError::ContractCall(format!(
+                    "invalid contract artifact for contract call dispatch: {err}"
+                ))
+            }),
             #[cfg(any(test, feature = "iroha-core-tests"))]
             Self::Prepared(_) => Ok(true),
         }
@@ -213,7 +216,11 @@ impl ContractDispatchSource<'_> {
     > {
         match self {
             Self::Bytecode(bytecode) => {
-                let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+                let parsed = ivm::ProgramMetadata::parse_for_profile(
+                    bytecode,
+                    crate::smartcontracts::ivm::profile::interface_profile_id(),
+                )
+                .map_err(|err| {
                     OverlayBuildError::ContractCall(format!(
                         "invalid contract artifact for contract call dispatch: {err}"
                     ))
@@ -294,7 +301,11 @@ fn parse_prepared_contract_call_execution_context(
     )
 }
 fn reject_raw_contract_without_state(bytecode: &[u8]) -> Result<(), OverlayBuildError> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|error| {
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    )
+    .map_err(|error| {
         OverlayBuildError::ContractCall(format!(
             "invalid contract artifact for contract call dispatch: {error}"
         ))
@@ -535,8 +546,11 @@ fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
     }
 }
 fn reject_state_free_axt_syscalls(bytecode: &[u8]) -> Result<(), OverlayBuildError> {
-    let syscalls =
-        ivm::analysis::program_syscall_numbers(bytecode).map_err(map_program_analysis_error)?;
+    let syscalls = ivm::analysis::program_syscall_numbers_for_profile(
+        bytecode,
+        crate::smartcontracts::ivm::profile::interface_profile_id(),
+    )
+    .map_err(map_program_analysis_error)?;
     if let Some(number) = syscalls
         .filter(|number| ivm::syscalls::is_axt_syscall(*number))
         .min()
@@ -553,12 +567,17 @@ fn map_artifact_admission_error(error: ivm::ContractArtifactError) -> OverlayBui
         )),
     }
 }
+/// Map a summary failure of a program prepared through the interface profile.
+///
+/// The test-and-reference overlay builders summarize through the policy-less cache methods, which
+/// prepare under the interface profile, so its engine owns the projection.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
     if error.execution_deferral().is_some() {
         return OverlayBuildError::IvmLoad(error);
     }
-    OverlayBuildError::HeaderPolicy(crate::smartcontracts::ivm::admission_reason_from_vm_error(
+    OverlayBuildError::HeaderPolicy(crate::smartcontracts::ivm::projection::admission_error(
+        crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default().engine(),
         error,
     ))
 }
@@ -609,7 +628,7 @@ fn apply_contract_call_execution_context(
         // Public by-call entrypoints are compiled as regular functions, not as
         // the artifact's top-level `main`. Seed RA with the end-of-code
         // sentinel so `return` exits execution instead of falling through to pc=0.
-        vm.set_register(1, vm.memory.code_len());
+        vm.set_register(1, vm.code_len());
         vm.set_program_counter(entrypoint_pc).map_err(|err| {
             OverlayBuildError::ContractCall(format!(
                 "contract entrypoint `{}` resolved to invalid pc: {err}",
@@ -801,16 +820,18 @@ fn compute_program_hashes(
         .get_or_insert(code_hash, computed);
     (code_hash, abi_hash)
 }
-/// Apply mutable node policy to an already admitted IVM artifact.
+/// Apply mutable node policy to an already admitted IVM artifact, under the rules of the engine
+/// that admitted it (`crate::smartcontracts::ivm::validate_cycle_ceiling_for`).
 ///
 /// Opcode and syscall validity belongs to artifact preparation. ABI V1 does not
 /// feature-gate either surface, so this metadata-only check deliberately cannot
 /// rewalk the program body on warm dispatch.
-pub(crate) fn enforce_pre_execution_policy(
+pub(crate) fn enforce_pre_execution_policy_for(
+    engine: ivm::IvmEngine,
     ivm_max_cycles_upper_bound: NonZeroU64,
     meta: &ivm::ProgramMetadata,
 ) -> Result<(), OverlayBuildError> {
-    crate::smartcontracts::ivm::validate_zk_trace_bound(meta, ivm_max_cycles_upper_bound)
+    crate::smartcontracts::ivm::validate_cycle_ceiling_for(engine, meta, ivm_max_cycles_upper_bound)
         .map_err(OverlayBuildError::HeaderPolicy)
 }
 fn contract_registry_attempt_error(
@@ -1101,7 +1122,8 @@ fn append_verified_contract_metadata_registration_without_state(
     let Some(manifest) = metadata_contract_manifest(tx.metadata())? else {
         return Ok(());
     };
-    let verified = ivm::verify_contract_artifact(bytecode).map_err(map_artifact_admission_error)?;
+    let verified = ivm::verify_contract_artifact_for_policy(bytecode, ivm::SyscallPolicy::AbiV1)
+        .map_err(map_artifact_admission_error)?;
     if !manifest.same_signed_content(&verified.manifest) {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::BytecodeDecodingFailed(
@@ -2316,14 +2338,28 @@ where
 {
     validate_generic_program_context(state_ro, tx, summary)?;
     let meta = summary.metadata.clone();
-    validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+    validate_header_policy_for(summary.profile().engine(), &meta)
+        .map_err(OverlayBuildError::HeaderPolicy)?;
     let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
     if wants_zk && !zk_enabled {
         return Err(OverlayBuildError::HeaderPolicy(
             IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
         ));
     }
-    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+    // A baseline program runs under its header cycle budget (fuel, then the ceiling); C10 has
+    // none.
+    let governed_cycles = crate::smartcontracts::ivm::execution_cycle_budget_for(
+        summary.profile().engine(),
+        &meta,
+        state_ro.pipeline().ivm_max_cycles_upper_bound,
+        state_ro.world().parameters().smart_contract().fuel(),
+    )
+    .map_err(OverlayBuildError::HeaderPolicy)?;
+    enforce_pre_execution_policy_for(
+        summary.profile().engine(),
+        state_ro.pipeline().ivm_max_cycles_upper_bound,
+        &meta,
+    )?;
     let tx_gas_limit = capped_gas_limit(require_ivm_gas_limit(tx.fee_payment_intent())?, gas_cap);
     let amx_analysis = cached_generic_amx_analysis(ivm_cache, summary)?;
     #[cfg(test)]
@@ -2366,6 +2402,9 @@ where
         host = host.with_access_logging();
     }
     begin_overlay_access_log(&mut host, capture_access_log)?;
+    if let Some(cycles) = governed_cycles {
+        vm.set_max_cycles(cycles.get());
+    }
     vm.set_gas_limit(tx_gas_limit);
     vm.set_zk_trace_enabled(false);
     run_vm_with_host(&mut vm, &mut host)?;
@@ -2479,14 +2518,19 @@ where
                 .map_err(map_program_summary_error)?;
             let gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().pipa_r.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
             let lifecycle_transition = crate::executor::validate_prepared_contract_lifecycle_call(
@@ -2631,7 +2675,8 @@ where
             };
             let gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             // ABI gating is handled in validate_header_policy (v1-only release).
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().pipa_r.enabled || state_ro.zk().stark.enabled) {
@@ -2639,7 +2684,11 @@ where
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
@@ -2795,14 +2844,19 @@ where
                 .map_err(map_program_summary_error)?;
             let gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if !wants_zk {
                 return Err(OverlayBuildError::ZkProof(
                     "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -2866,10 +2920,17 @@ pub fn build_overlay_for_transaction_with_accounts(
             "Executable::ContractCall requires a full state view for overlay building".to_owned(),
         )),
         Executable::Ivm(bytecode) => {
-            let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+            // Without a root, raw IVM execution names the interface profile, resolved before
+            // any header byte is parsed.
+            let profile =
+                crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default();
+            let parsed =
+                ivm::ProgramMetadata::parse_header_for_policy(bytecode.as_ref(), profile.policy())
+                    .and_then(|header| header.parse_sections())
+                    .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = parsed.metadata;
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(profile.engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2877,7 +2938,11 @@ pub fn build_overlay_for_transaction_with_accounts(
                 ));
             }
             let pipeline = default_pipeline_config();
-            enforce_pre_execution_policy(pipeline.ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                profile.engine(),
+                pipeline.ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             reject_raw_contract_without_state(bytecode.as_ref())?;
             crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
@@ -2906,7 +2971,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             host.set_state_free_generic_execution();
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
-            vm.load_program(bytecode.as_ref())
+            vm.load_program_for_policy(bytecode.as_ref(), profile.policy())
                 .map_err(OverlayBuildError::IvmLoad)?;
             reject_state_free_axt_syscalls(bytecode.as_ref())?;
             vm.set_gas_limit(tx_gas_limit);
@@ -3015,14 +3080,19 @@ where
                 )
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
@@ -3200,14 +3270,19 @@ where
                 }
             };
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
             let tx_gas_limit = require_ivm_gas_limit(tx.fee_payment_intent())?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
@@ -3380,8 +3455,13 @@ where
                 .summarize_program_in_world(state_ro.world(), proved.bytecode.as_ref())
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -3509,13 +3589,18 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 )
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             let tx_gas_limit = capped_gas_limit(
                 require_ivm_gas_limit(tx.fee_payment_intent())?,
                 NonZeroU64::new(max_gas_cap).map(NonZeroU64::get),
@@ -3663,13 +3748,18 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 }
             };
             let meta = summary.metadata.clone();
-            validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
+            validate_header_policy_for(summary.profile().engine(), &meta)
+                .map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                state_ro.pipeline().ivm_max_cycles_upper_bound,
+                &meta,
+            )?;
             validate_contract_binding(state_ro, tx.payload(), &summary)?;
             let tx_gas_limit = capped_gas_limit(
                 require_ivm_gas_limit(tx.fee_payment_intent())?,
@@ -4056,11 +4146,20 @@ mod tests_overlay_manifest {
     }
 
     fn analysis_with_syscalls(numbers: &[u32]) -> ivm::analysis::ProgramAnalysis {
-        let mut program = ivm::ProgramMetadata::default().encode();
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         for number in numbers {
-            program.extend_from_slice(&ivm::encoding::wide::encode_scall(*number).to_le_bytes());
+            program.extend_from_slice(
+                &crate::ivm_test_support::baseline_syscall(*number).to_le_bytes(),
+            );
         }
-        ivm::analysis::analyze_program(&program).expect("diagnostic syscall fixture")
+        ivm::analysis::analyze_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .expect("diagnostic syscall fixture")
     }
     #[test]
     fn vm_access_fence_fails_closed_by_reachable_syscall_class() {
@@ -4109,14 +4208,20 @@ mod tests_overlay_manifest {
             ivm::syscalls::SYSCALL_AXT_BEGIN,
             ivm::syscalls::SYSCALL_AXT_COMMIT,
         ];
-        let mut bytes = ivm::ProgramMetadata::default().encode();
+        let mut bytes = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         for number in numbers {
-            bytes.extend_from_slice(&ivm::encoding::wide::encode_scall(number).to_le_bytes());
+            bytes.extend_from_slice(
+                &crate::ivm_test_support::baseline_syscall(number).to_le_bytes(),
+            );
         }
-        let analysis = ivm::analysis::analyze_program(&bytes).unwrap();
+        let profile = crate::ivm_test_support::declared_profile(&bytes);
+        let analysis = ivm::analysis::analyze_program_for_profile(&bytes, profile).unwrap();
         assert_eq!(
             VmAccessFence::from_syscall_numbers(
-                ivm::analysis::program_syscall_numbers(&bytes).unwrap()
+                ivm::analysis::program_syscall_numbers_for_profile(&bytes, profile).unwrap()
             ),
             VmAccessFence::from_program_analysis(&analysis),
         );
@@ -4507,7 +4612,7 @@ mod tests_overlay_manifest {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 0,
+            max_cycles: 1_000,
             abi_version: 1,
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -4542,10 +4647,11 @@ mod tests_overlay_manifest {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = metadata.encode();
+        let mut artifact = crate::ivm_test_support::baseline_header(metadata.clone());
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&crate::ivm_test_support::unit_return());
-        let verified = ivm::verify_contract_artifact(&artifact).expect("valid hajimari artifact");
+        artifact.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid hajimari artifact");
         let code_hash = verified.code_hash;
         let manifest = verified.manifest;
         let mut world = crate::state::World::with([domain], [account], []);
@@ -4644,8 +4750,10 @@ mod tests_overlay_manifest {
         );
     }
     fn minimal_contract_artifact_bytes(abi_version: u8, permission: Option<&str>) -> Vec<u8> {
+        // The interface profile's baseline header declares its cycle limit (the anchor's 4).
         minimal_contract_artifact_bytes_with_header(
             ivm::ProgramMetadata {
+                max_cycles: 4,
                 abi_version,
                 ..ivm::ProgramMetadata::default()
             },
@@ -4693,9 +4801,9 @@ mod tests_overlay_manifest {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = meta.encode();
+        let mut artifact = crate::ivm_test_support::baseline_header(meta);
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&crate::ivm_test_support::unit_return());
+        artifact.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
         artifact
     }
     fn minimal_contract_artifact_with_permission(
@@ -4703,8 +4811,8 @@ mod tests_overlay_manifest {
         permission: Option<&str>,
     ) -> (Vec<u8>, ContractManifest) {
         let artifact = minimal_contract_artifact_bytes(abi_version, permission);
-        let verified =
-            ivm::verify_contract_artifact(&artifact).expect("valid overlay test artifact");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+            .expect("valid overlay test artifact");
         (artifact, verified.manifest)
     }
     fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, ContractManifest) {
@@ -4712,15 +4820,8 @@ mod tests_overlay_manifest {
     }
     #[test]
     fn warm_pre_execution_policy_does_not_rewalk_opcodes() {
-        // The live ceiling bounds the trace of a ZK artifact; a non-ZK artifact has no cycle check.
-        let artifact = minimal_contract_artifact_bytes_with_header(
-            ivm::ProgramMetadata {
-                mode: ivm::ivm_mode::ZK,
-                max_cycles: 4,
-                ..ivm::ProgramMetadata::default()
-            },
-            Some("CanInvoke"),
-        );
+        // The live ceiling bounds the cycle limit of every baseline artifact (the anchor's rule).
+        let artifact = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
         let code_hash = ivm::contract_code_hash(&artifact);
         let mut cache = IvmCache::with_capacity(2);
         cache
@@ -4734,13 +4835,22 @@ mod tests_overlay_manifest {
             .summarize_program_with_hash(code_hash, &[])
             .expect("warm summary lookup without artifact bytes");
         assert!(
-            enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata).is_err(),
-            "a warm summary still rejects an insufficient live trace ceiling"
+            enforce_pre_execution_policy_for(
+                summary.profile().engine(),
+                nonzero!(1_u64),
+                &summary.metadata
+            )
+            .is_err(),
+            "a warm summary still rejects an insufficient live cycle ceiling"
         );
-        enforce_pre_execution_policy(nonzero!(4_u64), &summary.metadata)
-            .expect("prepared metadata remains within the live trace ceiling");
+        enforce_pre_execution_policy_for(
+            summary.profile().engine(),
+            nonzero!(4_u64),
+            &summary.metadata,
+        )
+        .expect("prepared metadata remains within the live cycle ceiling");
         assert!(matches!(
-            enforce_pre_execution_policy(nonzero!(3_u64), &summary.metadata),
+            enforce_pre_execution_policy_for(summary.profile().engine(), nonzero!(3_u64), &summary.metadata),
             Err(OverlayBuildError::HeaderPolicy(
                 IvmAdmissionError::MaxCyclesExceedsUpperBound(info)
             )) if info.max_cycles == 4 && info.upper_bound == 3
@@ -4749,22 +4859,23 @@ mod tests_overlay_manifest {
         assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
         assert_eq!(warm_stats.artifact_hashes, cold_stats.artifact_hashes);
         assert_eq!(warm_stats.preparations, cold_stats.preparations);
-        let non_zk = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
-        let non_zk = cache
-            .summarize_program_with_hash(ivm::contract_code_hash(&non_zk), &non_zk)
-            .expect("non-ZK artifact preparation");
-        enforce_pre_execution_policy(nonzero!(1_u64), &non_zk.metadata)
-            .expect("a non-ZK artifact has no cycle check");
     }
     fn minimal_generic_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     fn minimal_generic_program_with_syscall(syscall: u32) -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        program
+            .extend_from_slice(&crate::ivm_test_support::baseline_syscall(syscall).to_le_bytes());
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         program
     }
     fn state_free_generic_transaction(
@@ -4995,7 +5106,7 @@ seiyaku RebuildArguments { permission CanInspectRebuildArguments;
 ",
             )
             .expect("compile parameterized rebuild fixture");
-        let prepared = ivm::prepare_contract(Arc::from(artifact))
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::from(artifact))
             .expect("prepare parameterized rebuild fixture");
         let schema = prepared
             .entrypoint_descriptor("inspect")
@@ -5077,7 +5188,7 @@ seiyaku RawRebuildArguments { permission CanInspectRawRebuild;
 ",
             )
             .expect("compile raw rebuild binding fixture");
-        let prepared = ivm::prepare_contract(Arc::from(artifact))
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::from(artifact))
             .expect("prepare raw rebuild binding fixture");
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -5159,9 +5270,10 @@ seiyaku QuarantineArguments { permission CanInspectQuarantine;
 ",
             )
             .expect("compile parameterized quarantine fixture");
-        let verified = ivm::verify_contract_artifact(&program).expect("verify quarantine fixture");
-        let prepared =
-            ivm::prepare_contract(Arc::from(program.clone())).expect("prepare quarantine fixture");
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&program)
+            .expect("verify quarantine fixture");
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::from(program.clone()))
+            .expect("prepare quarantine fixture");
         let schema = prepared
             .entrypoint_descriptor("inspect")
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
@@ -5585,9 +5697,9 @@ seiyaku ProtectedParameterizedOverlay { permission CanWriteParameterizedOverlay;
 ",
             )
             .expect("compile protected parameterized overlay fixture");
-        let verified =
-            ivm::verify_contract_artifact(&program).expect("verify parameterized overlay fixture");
-        let prepared = ivm::prepare_contract(Arc::from(program.clone()))
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&program)
+            .expect("verify parameterized overlay fixture");
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::from(program.clone()))
             .expect("prepare parameterized overlay fixture");
         let schema = prepared
             .entrypoint_descriptor("write")
@@ -5682,7 +5794,7 @@ seiyaku GuardedOverlay { permission CanInvokeContractEntrypoint;
                 &keypair,
             )
             .expect("sign bounded protected fixture manifest");
-        let prepared = ivm::prepare_contract(Arc::from(artifact.clone()))
+        let prepared = crate::ivm_test_support::prepare_declared(Arc::from(artifact.clone()))
             .expect("prepare parameterized guarded overlay contract");
         let schema = prepared
             .entrypoint_descriptor("main")
@@ -6861,7 +6973,7 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
     #[test]
     fn explicit_anyone_artifact_is_valid_but_policyless_descriptor_is_rejected() {
         let artifact = minimal_contract_artifact_bytes(1, None);
-        let verified = ivm::verify_contract_artifact(&artifact)
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
             .expect("explicit Anyone is an authenticated first-release authorization");
         let entrypoint = &verified
             .manifest
@@ -7154,8 +7266,59 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
         );
     }
 }
-/// Validate IVM header policy and return a structured admission error.
-pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
+/// Header admission rules of `engine`, applied to metadata that engine parsed.
+///
+/// The engine is the one of the program's resolved profile. Each engine owns its rules and
+/// their rejection order.
+pub(crate) fn validate_header_policy_for(
+    engine: ivm::IvmEngine,
+    meta: &ivm::ProgramMetadata,
+) -> Result<(), IvmAdmissionError> {
+    match engine {
+        ivm::IvmEngine::C10 => validate_c10_header_policy(meta),
+        ivm::IvmEngine::Baseline => validate_baseline_header_policy(meta),
+    }
+}
+/// Header policy of the frozen baseline engine: the anchor Core's `validate_header_policy`, on the
+/// restored original enum.
+///
+/// The baseline header parser already refused a vector length above the ABI maximum, so the
+/// policy's vector-length rule cannot fire on parsed metadata. A baseline header without a
+/// `max_cycles` is refused whatever its mode.
+fn validate_baseline_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
+    ivm_abi::baseline::validate_header_policy(meta, 0)
+}
+#[cfg(test)]
+mod baseline_header_policy_tests {
+    use super::*;
+
+    #[test]
+    fn baseline_header_policy_keeps_the_anchor_rules() {
+        let engine = ivm::IvmEngine::Baseline;
+        let mut meta = ivm::ProgramMetadata::default();
+        // The baseline requires a cycle bound for every program, not only ZK ones.
+        assert_eq!(
+            validate_header_policy_for(engine, &meta),
+            Err(IvmAdmissionError::MissingMaxCycles)
+        );
+        meta.max_cycles = 7;
+        assert_eq!(validate_header_policy_for(engine, &meta), Ok(()));
+        // The C10 engine refuses the same bound without the ZK bit (by its text: the restored
+        // baseline enum has no tag for it).
+        assert!(matches!(
+            validate_header_policy_for(ivm::IvmEngine::C10, &meta),
+            Err(IvmAdmissionError::BytecodeDecodingFailed(_))
+        ));
+        meta.mode = ivm_abi::baseline::mode::VECTOR;
+        assert_eq!(validate_header_policy_for(engine, &meta), Ok(()));
+        meta.mode = 0x80;
+        assert_eq!(
+            validate_header_policy_for(engine, &meta),
+            Err(IvmAdmissionError::UnsupportedFeatureBits(0x80))
+        );
+    }
+}
+fn validate_c10_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
     // Version: every first-release execution profile uses the sole 1.1 header.
     if meta.version_major != 1 || meta.version_minor != 1 {
         return Err(IvmAdmissionError::UnsupportedVersion(
@@ -7178,11 +7341,14 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
     }
     // `max_cycles` is the ZK trace bound: non-zero exactly when the ZK bit is set. Gas, supplied
     // by the caller, is the only execution budget.
+    // The baseline wire enum has no `MaxCyclesWithoutZk`; the rejection is carried by the VM's
+    // own text, as the C10 admission projection does.
+    // TODO: phase 5 projects it onto C10's own admission family.
     match (meta.mode & ivm::ivm_mode::ZK != 0, meta.max_cycles) {
         (true, 0) => Err(IvmAdmissionError::MissingMaxCycles),
-        (false, max_cycles) if max_cycles != 0 => {
-            Err(IvmAdmissionError::MaxCyclesWithoutZk(max_cycles))
-        }
+        (false, max_cycles) if max_cycles != 0 => Err(IvmAdmissionError::BytecodeDecodingFailed(
+            ivm::VMError::MaxCyclesWithoutZk { max_cycles }.to_string(),
+        )),
         _ => Ok(()),
     }
 }
@@ -7603,13 +7769,15 @@ seiyaku ProtectedProved { permission CanWriteProved;
     }
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
+            max_cycles: 4,
             version_minor: 1,
             ..ivm::ProgramMetadata::default()
         };
-        let mut program = meta.encode();
+        let mut program = crate::ivm_test_support::baseline_header(meta.clone());
         program.extend_from_slice(&sample_contract_interface(0).encode_section());
-        program.extend_from_slice(&crate::ivm_test_support::unit_return());
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
+        program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
+        let parsed =
+            crate::ivm_test_support::parse_declared(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
     }
     fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
@@ -7619,12 +7787,13 @@ seiyaku ProtectedProved { permission CanWriteProved;
             mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
         };
-        let mut program = meta.encode();
+        let mut program = crate::ivm_test_support::baseline_header(meta.clone());
         program.extend_from_slice(
             &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
         );
-        program.extend_from_slice(&crate::ivm_test_support::unit_return());
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
+        program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
+        let parsed =
+            crate::ivm_test_support::parse_declared(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
     }
     fn sample_contract_interface(features_bitmap: u64) -> ivm::EmbeddedContractInterfaceV1 {
@@ -7667,7 +7836,7 @@ seiyaku ProtectedProved { permission CanWriteProved;
         bytecode: &IvmBytecode,
         nonce: u64,
     ) -> ContractAddress {
-        let verified = ivm::verify_contract_artifact(bytecode.as_ref())
+        let verified = ivm::verify_contract_artifact_with_declared_profile(bytecode.as_ref())
             .expect("sample raw contract artifact must verify");
         let code_hash = verified.code_hash;
         let address = ContractAddress::derive(
@@ -7729,7 +7898,10 @@ seiyaku ProtectedProved { permission CanWriteProved;
         v
     }
     fn program_with_literals(code: &[u8], literals: &[Vec<u8>]) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata::default();
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        };
         let descriptor_bytes = literals
             .len()
             .checked_mul(core::mem::size_of::<u64>())
@@ -7742,7 +7914,7 @@ seiyaku ProtectedProved { permission CanWriteProved;
             .try_fold(0_usize, |len, literal| len.checked_add(literal.len()))
             .expect("literal data length fits");
         let post_pad = (4 - ((16 + descriptor_bytes + data_len) % 4)) % 4;
-        let mut program = meta.encode();
+        let mut program = crate::ivm_test_support::baseline_header(meta);
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(
             &u32::try_from(literals.len())
@@ -7872,8 +8044,8 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
 ",
             )
             .expect("compile parameterized ZK alias-binding fixture");
-        let parsed =
-            ivm::ProgramMetadata::parse(&program).expect("parse parameterized alias fixture");
+        let parsed = crate::ivm_test_support::parse_declared(&program)
+            .expect("parse parameterized alias fixture");
         let header_len = parsed.header_len;
         let meta = parsed.metadata;
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -8152,7 +8324,9 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             transaction::Executable,
         };
         use iroha_model_base::topology::DataSpaceId;
-        use ivm::{axt, encoding, instruction, pointer_abi::PointerType, syscalls as ivm_sys};
+        use ivm::{axt, pointer_abi::PointerType, syscalls as ivm_sys};
+        use ivm_abi::baseline::encoding;
+        use ivm_abi::baseline::instruction;
         use std::sync::Arc;
         let dsid = DataSpaceId::new(7);
         let descriptor = axt::AxtDescriptor {
@@ -8172,7 +8346,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
                 10,
                 u16::try_from(index).expect("literal index fits in u16"),
             ));
-            emit(encoding::wide::encode_scall(
+            emit(crate::ivm_test_support::baseline_syscall(
                 ivm_sys::SYSCALL_INPUT_PUBLISH_TLV,
             ));
             emit(encoding::wide::encode_rr(
@@ -8188,7 +8362,9 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             20,
             0,
         ));
-        emit(encoding::wide::encode_scall(ivm_sys::SYSCALL_AXT_BEGIN));
+        emit(crate::ivm_test_support::baseline_syscall(
+            ivm_sys::SYSCALL_AXT_BEGIN,
+        ));
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
@@ -8201,14 +8377,16 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             0,
             0,
         ));
-        emit(encoding::wide::encode_scall(ivm_sys::SYSCALL_AXT_TOUCH));
+        emit(crate::ivm_test_support::baseline_syscall(
+            ivm_sys::SYSCALL_AXT_TOUCH,
+        ));
         emit(encoding::wide::encode_rr(
             instruction::wide::arithmetic::ADD,
             10,
             21,
             0,
         ));
-        emit(encoding::wide::encode_scall(
+        emit(crate::ivm_test_support::baseline_syscall(
             ivm_sys::SYSCALL_VERIFY_DS_PROOF,
         ));
         emit(encoding::wide::encode_halt());
@@ -8464,12 +8642,16 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let state = test_support::state_after_genesis_with_chain(world, ChainId::from("chain"));
-        let meta = ivm::ProgramMetadata::default();
-        let mut program = meta.encode();
+        let meta = ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        };
+        let mut program = crate::ivm_test_support::baseline_header(meta);
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_scall(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
+            &crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_DEBUG_PRINT)
+                .to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let metadata = iroha_model_base::metadata::Metadata::default();
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
@@ -8499,7 +8681,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             &norito_blob(&vec![0x62_u8]),
         );
         let program = program_with_literals(
-            &ivm::encoding::wide::encode_halt().to_le_bytes(),
+            &ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes(),
             &[literal],
         );
         let metadata = iroha_model_base::metadata::Metadata::default();
@@ -8615,7 +8797,7 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             Executable::Ivm(code) => code.as_ref().to_vec(),
             _ => unreachable!("expected IVM executable"),
         };
-        let parsed = ivm::ProgramMetadata::parse(&bytes).expect("metadata parses");
+        let parsed = crate::ivm_test_support::parse_declared(&bytes).expect("metadata parses");
         let decoded = ivm::ivm_cache::global_get(&bytes[parsed.code_offset..])
             .expect("bytecode decodes before execution");
         let mut vm = ivm::IVM::new(TEST_GAS_LIMIT);
@@ -8624,7 +8806,8 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             Arc::new(accounts),
         );
         vm.set_host(host);
-        vm.load_program(&bytes).expect("program loads");
+        vm.load_program_for_profile(&bytes, crate::ivm_test_support::declared_profile(&bytes))
+            .expect("program loads");
         vm.set_gas_limit(TEST_GAS_LIMIT);
         if let Err(err) = vm.run() {
             let code_bytes = vm.memory.read_code_bytes();

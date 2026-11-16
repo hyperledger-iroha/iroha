@@ -17,7 +17,7 @@ fn many_locals_force_spills_and_compute() {
     body.push_str("return a39;\n");
     let src =
         format!("seiyaku SpillChain {{ view fn main() authorize(anyone) -> int {{\n{body}\n}} }}");
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(&src)
         .expect("compile spills");
     let mut vm = IVM::new(u64::MAX);
@@ -38,7 +38,7 @@ fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
         ));
     }
     src.push_str("}\n}\n");
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(&src)
         .expect("literal-heavy set_account_detail under spills");
 }
@@ -53,7 +53,7 @@ fn odd_eight_byte_nested_call_frame_is_padded_and_restored() {
             view fn main() authorize(anyone) { middle(); middle(); }
         }
     "#;
-    let (artifact, _manifest, report) = KotodamaCompiler::new()
+    let (artifact, _manifest, report) = KotodamaCompiler::new_c10()
         .compile_source_with_manifest_and_report(source)
         .expect("compile nested-call alignment fixture");
     let middle = report
@@ -97,7 +97,7 @@ fn frame_and_spill_offsets_beyond_the_immediate_reach_are_bounded_and_execute() 
     body.push_str("return total;\n");
     let source =
         format!("seiyaku WideFrame {{ view fn main() authorize(anyone) -> int {{\n{body}}}\n}}");
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let (artifact, _manifest, report) = compiler
         .compile_source_with_manifest_and_report(&source)
         .expect("compile beyond-immediate frame fixture");

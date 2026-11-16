@@ -2754,7 +2754,12 @@ fn soracloud_echo_vm(
         soracloud_typed_entrypoint("echo", &[("_request_body", kind)], soracloud_leaf(kind)),
         soracloud_echo_return_words(0),
     )]);
-    let contract = prepare_contract(Arc::from(artifact))?;
+    let contract = {
+        let artifact: std::sync::Arc<[u8]> = Arc::from(artifact);
+        let profile = ivm::IvmProfileId::declared(&artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        ivm::prepare_contract_for_profile(artifact, profile)
+    }?;
     let mut vm = IVM::new(u64::MAX);
     vm.load_prepared(&contract)?;
     let (arguments, output_kind) = prepare_soracloud_invocation(

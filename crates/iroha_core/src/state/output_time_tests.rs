@@ -1209,8 +1209,11 @@ fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
     use iroha_data_model::transaction::IvmBytecode;
     use ivm::error::ExecutionDeferral;
     let id: TriggerId = "time_local_refusal".parse().unwrap();
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let action = Action::new(
         Executable::Ivm(IvmBytecode::from_compiled(program)),
         Repeats::Exactly(2),

@@ -230,25 +230,21 @@ mod tests {
         source: &str,
         source_name: &str,
     ) -> Result<CompileOutput, DiagnosticBundle> {
-        SourcePhase::new(
-            CompilerOptions::default(),
-            source,
-            Some(source_name.to_owned()),
-        )
-        .parse()?
-        .resolve()?
-        .type_effect()?
-        .lower_ir()?
-        .construct_ssa()?
-        .optimize()?
-        .destroy_ssa()?
-        .emit()
+        SourcePhase::new(CompilerOptions::c10(), source, Some(source_name.to_owned()))
+            .parse()?
+            .resolve()?
+            .type_effect()?
+            .lower_ir()?
+            .construct_ssa()?
+            .optimize()?
+            .destroy_ssa()?
+            .emit()
     }
     #[test]
     fn phase_sequence_matches_ordinary_compilation() {
         let source = "seiyaku Bench { view fn add(int a, int b) authorize(anyone) -> int { return a + b; } }";
         let source_name = "bench/phase_agreement.ko";
-        let ordinary = CompilerSession::new(CompilerOptions::default())
+        let ordinary = CompilerSession::new(CompilerOptions::c10())
             .build(CompileRequest {
                 source,
                 source_name: Some(source_name),
@@ -289,7 +285,7 @@ mod tests {
             .stack_size(128 * 1024)
             .spawn(move || {
                 let parsed = SourcePhase::new(
-                    CompilerOptions::default(),
+                    CompilerOptions::c10(),
                     source,
                     Some("bench/parsed_owner_margin.ko".to_owned()),
                 )
@@ -315,19 +311,15 @@ mod tests {
         let source =
             "seiyaku Broken { view fn inspect() authorize(anyone) -> int { return missing; } }";
         let source_name = "bench/resolution_failure.ko";
-        let ordinary = CompilerSession::new(CompilerOptions::default())
+        let ordinary = CompilerSession::new(CompilerOptions::c10())
             .build(CompileRequest {
                 source,
                 source_name: Some(source_name),
             })
             .expect_err("unknown value must fail ordinary compilation");
-        let parsed = SourcePhase::new(
-            CompilerOptions::default(),
-            source,
-            Some(source_name.to_owned()),
-        )
-        .parse()
-        .expect("source parses before resolution");
+        let parsed = SourcePhase::new(CompilerOptions::c10(), source, Some(source_name.to_owned()))
+            .parse()
+            .expect("source parses before resolution");
         let phased = match parsed.resolve() {
             Ok(_) => panic!("unknown value must fail resolved-HIR construction"),
             Err(diagnostics) => diagnostics,
@@ -340,21 +332,18 @@ mod tests {
         let source =
             "seiyaku Broken { view fn inspect() authorize(anyone) -> int { return true + 1; } }";
         let source_name = "bench/semantic_failure.ko";
-        let ordinary = CompilerSession::new(CompilerOptions::default())
+        let ordinary = CompilerSession::new(CompilerOptions::c10())
             .build(CompileRequest {
                 source,
                 source_name: Some(source_name),
             })
             .expect_err("invalid addition must fail ordinary compilation");
-        let resolved = SourcePhase::new(
-            CompilerOptions::default(),
-            source,
-            Some(source_name.to_owned()),
-        )
-        .parse()
-        .expect("source parses")
-        .resolve()
-        .expect("source resolves before semantic typing");
+        let resolved =
+            SourcePhase::new(CompilerOptions::c10(), source, Some(source_name.to_owned()))
+                .parse()
+                .expect("source parses")
+                .resolve()
+                .expect("source resolves before semantic typing");
         let phased = match resolved.type_effect() {
             Ok(_) => panic!("invalid addition must fail typed/effect HIR construction"),
             Err(diagnostics) => diagnostics,

@@ -30,7 +30,7 @@ fn kotodama_host_state_calls_run() {
           }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile");
     let mut vm = IVM::new(u64::MAX);

@@ -1699,7 +1699,7 @@ mod tests {
         let source = format!(
             "seiyaku ReturnTable {{ view fn main() authorize(anyone) -> {value} {{ {value} }} }}"
         );
-        kotodama_lang::compiler::Compiler::new()
+        kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(&source)
             .expect("compile authenticated Unit result table")
     }

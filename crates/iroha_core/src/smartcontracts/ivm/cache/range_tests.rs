@@ -7,8 +7,9 @@ use norito::core::{DecodeLimits, with_decode_limits_measured, with_decode_limits
 fn executable_summary_uses_one_canonical_contract_admission_pass() {
     let bytes = super::tests::minimal_program();
     let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
-    let (admitted, usage) =
-        with_decode_limits_measured(limits, || ivm::verify_contract_artifact(&bytes));
+    let (admitted, usage) = with_decode_limits_measured(limits, || {
+        ivm::verify_contract_artifact_with_declared_profile(&bytes)
+    });
     let admitted = admitted.unwrap();
     assert!(usage.total_allocated_bytes() > 0);
     let original = iroha_allocation::AllocationBudget::new(16 * 1024 * 1024);

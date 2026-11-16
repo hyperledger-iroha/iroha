@@ -22,7 +22,7 @@ pub async fn stage_contract_artifact(
     artifact: &[u8],
 ) -> Result<(ContractCodeHash, ContractAbiHash)> {
     let encoding = ManifestEncodingBudget::new()?;
-    let verified = ivm::verify_contract_artifact(artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(artifact)
         .map_err(|error| eyre!("verify integration contract artifact: {error}"))?;
     let manifest = verified
         .manifest

@@ -3,24 +3,34 @@
 use super::{
     MemoryAccesses, ProgramAnalysis, RegisterUsage, SyscallUsages, syscall_usage::UsageScratch,
 };
-use crate::{ProgramMetadata, VMError, encoding, instruction::wide, ivm_cache::DecodedOp};
+use crate::{
+    IvmEngine, ProgramMetadata, VMError, encoding, instruction::wide, ivm_cache::DecodedOp,
+};
 use iroha_allocation::AllocationBudget;
 
-pub(super) fn syscall_number(op: DecodedOp) -> Option<u32> {
-    (wide::opcode(op.inst) == wide::system::SCALL).then(|| wide::syscall_number(op.inst))
+/// The syscall number of `op` in `engine`'s syscall forms: C10's 24-bit `SCALL`; the baseline's
+/// 8-bit `SCALL` and 24-bit `SYSTEM`.
+pub(super) fn syscall_number(engine: IvmEngine, op: DecodedOp) -> Option<u32> {
+    engine.syscall_number(op.inst)
 }
 
 pub(super) fn analyze<I: Iterator<Item = DecodedOp>>(
+    engine: IvmEngine,
     metadata: ProgramMetadata,
     instructions: impl Fn() -> I,
     budget: Option<&AllocationBudget>,
 ) -> Result<ProgramAnalysis, VMError> {
-    let occurrences = instructions().filter_map(syscall_number).count();
+    let occurrences = instructions()
+        .filter_map(|op| syscall_number(engine, op))
+        .count();
     let mut scratch = UsageScratch::new(occurrences, budget)?;
     let mut builder = ProgramAnalysisBuilder::new(metadata);
     for op in instructions() {
-        builder.visit(&op);
-        if let Some(number) = syscall_number(op) {
+        match engine {
+            IvmEngine::C10 => builder.visit(&op),
+            IvmEngine::Baseline => builder.visit_baseline(&op),
+        }
+        if let Some(number) = syscall_number(engine, op) {
             scratch.push(number)?;
         }
     }
@@ -153,6 +163,100 @@ impl ProgramAnalysisBuilder {
             // rd/rs1/rs2 layout.
             _ => {
                 self.two_src_one_dst(op.inst);
+            }
+        }
+    }
+    /// The anchor's register and memory accounting for the frozen baseline instruction set.
+    fn visit_baseline(&mut self, op: &DecodedOp) {
+        use ivm_abi::baseline::{encoding::wide as enc, instruction::wide as base};
+        self.instruction_count += 1;
+        match base::opcode(op.inst) {
+            // Memory access instructions.
+            base::memory::LOAD64 => {
+                self.memory.load64 += 1;
+                let (_, dest, base_register, _) = enc::decode_mem(op.inst);
+                self.write(dest);
+                self.read(base_register);
+            }
+            base::memory::STORE64 => {
+                self.memory.store64 += 1;
+                let (_, base_register, value, _) = enc::decode_mem(op.inst);
+                self.read(base_register);
+                self.read(value);
+            }
+            base::memory::LOAD128 => {
+                self.memory.load128 += 1;
+                let (_, rd_lo, base_register, rd_hi) = enc::decode_load128(op.inst);
+                self.write(rd_lo);
+                self.write(rd_hi);
+                self.read(base_register);
+            }
+            base::memory::STORE128 => {
+                self.memory.store128 += 1;
+                let (_, base_register, rs_lo, rs_hi) = enc::decode_store128(op.inst);
+                self.read(base_register);
+                self.read(rs_lo);
+                self.read(rs_hi);
+            }
+            base::memory::LDLIT | base::memory::LDI64 => {
+                self.write(Self::reg(base::rd(op.inst)));
+            }
+            // Control flow.
+            base::control::BEQ
+            | base::control::BNE
+            | base::control::BLT
+            | base::control::BGE
+            | base::control::BLTU
+            | base::control::BGEU => {
+                self.read(Self::reg(base::rd(op.inst)));
+                self.read(Self::reg(base::rs1(op.inst)));
+            }
+            base::control::JR => self.read(Self::reg(base::rd(op.inst))),
+            base::control::JALR => {
+                self.write(Self::reg(base::rd(op.inst)));
+                self.read(Self::reg(base::rs1(op.inst)));
+            }
+            base::control::JAL => self.write(Self::reg(base::rd(op.inst))),
+            base::control::JALS => self.write(1u8),
+            base::control::JMP | base::control::HALT => {}
+            // System helpers.
+            base::system::GETGAS => self.write(Self::reg(base::rd(op.inst))),
+            base::system::SCALL | base::system::SYSTEM => {}
+            // Vector configuration: SETVL carries its lane count in the rs2/immediate field; it
+            // does not consume a vector or scalar register operand.
+            base::crypto::SETVL | base::crypto::PARBEGIN | base::crypto::PAREND => {}
+            base::crypto::POSEIDON6 => {
+                self.write(Self::reg(base::rd(op.inst)));
+                if let Some((_, rs_base)) = enc::decode_poseidon6(op.inst) {
+                    for offset in 0..base::crypto::POSEIDON6_INPUTS {
+                        self.read(usize::from(rs_base) + offset);
+                    }
+                }
+            }
+            // Unary ALU operations and immediate ALU operations.
+            base::arithmetic::NOT
+            | base::arithmetic::NEG
+            | base::arithmetic::POPCNT
+            | base::arithmetic::CLZ
+            | base::arithmetic::CTZ
+            | base::arithmetic::ABS
+            | base::arithmetic::ISQRT
+            | base::arithmetic::ADDI
+            | base::arithmetic::ANDI
+            | base::arithmetic::ORI
+            | base::arithmetic::XORI
+            | base::arithmetic::CMOVI
+            | base::arithmetic::ROTL_IMM
+            | base::arithmetic::ROTR_IMM => {
+                self.write(Self::reg(base::rd(op.inst)));
+                self.read(Self::reg(base::rs1(op.inst)));
+            }
+            // Every other opcode (two-source ALU, POSEIDON2, crypto, ISO 20022, ZK, vector ALU)
+            // follows the canonical rd/rs1/rs2 layout.
+            _ => {
+                self.write(Self::reg(base::rd(op.inst)));
+                self.read(Self::reg(base::rs1(op.inst)));
+                self.read(Self::reg(base::rs2(op.inst)));
             }
         }
     }

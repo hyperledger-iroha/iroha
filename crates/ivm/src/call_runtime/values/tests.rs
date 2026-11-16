@@ -5,7 +5,7 @@ use crate::{PointerType, call_frame::CallTables, ivm::call_runtime::CallLayouts}
 use ivm_abi::{call::EmbeddedCallableV1, entrypoint::EntrypointValueKindV1 as Kind};
 
 fn root(nodes: Vec<CallTypeNodeV1>) -> (IVM, u64) {
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku Schema { view fn main() authorize(anyone) -> bool { true } }")
         .unwrap();
     let mut interface = crate::ProgramMetadata::parse(&bytes)

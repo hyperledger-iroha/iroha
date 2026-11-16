@@ -73,7 +73,7 @@ mod named_profile_tests {
         let mut artifact = kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-                ..Default::default()
+                ..kotodama_lang::compiler::CompilerOptions::c10()
             },
         )
         .compile_source("seiyaku Named { view fn read() authorize(anyone) -> int { 1 } }")

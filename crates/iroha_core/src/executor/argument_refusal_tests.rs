@@ -201,7 +201,8 @@ seiyaku DeferredArguments { permission Admin;
 ",
             )
             .unwrap();
-        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone())).unwrap();
+        let prepared =
+            crate::ivm_test_support::prepare_declared(Arc::<[u8]>::from(program.clone())).unwrap();
         let schema = prepared
             .entrypoint_descriptor("run")
             .unwrap()
@@ -293,7 +294,12 @@ seiyaku DeferredArguments { permission Admin;
             // An argument-owner assertion below prevents an earlier refusal passing this test.
             let ((), prefix) = with_decode_limits_measured(limits(usize::MAX), || {
                 root_scope::ensure_contract_scope(&mut tx, &address).unwrap();
-                validate_prepared_ivm_execution_policy(&tx, &resolved.summary.metadata).unwrap();
+                validate_prepared_ivm_execution_policy_for_profile(
+                    &tx,
+                    resolved.summary.profile(),
+                    &resolved.summary.metadata,
+                )
+                .unwrap();
                 let manifest = tx
                     .world
                     .contract_manifests()

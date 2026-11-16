@@ -40,7 +40,8 @@ fn call_authorization_resolves_only_the_authenticated_permission_declaration() -
         let artifact = kotodama_lang::compiler::Compiler::new()
             .compile_source(source)
             .map_err(|error| eyre!(error))?;
-        let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+        let verified =
+            ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
         let (intent, _) = trusted_contract_intent(
             &artifact,
             address.clone(),
@@ -480,7 +481,8 @@ fn call_rejects_retired_payload_and_conflicting_retained_evidence() -> Result<()
 fn call_both_signed_stages_are_retained_before_dispatch_and_grant_applies_first() -> Result<()> {
     let (config, mut prepared, _) = fixture()?;
     let artifact = hex::decode(&prepared.plan.artifact_hex)?;
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let verified =
+        ivm_artifact_admission::verify_contract_artifact_with_declared_profile(&artifact)?;
     let permission =
         required_permission(&verified, &prepared.plan.intent)?.expect("guarded entrypoint");
     let grant = fixture_builder(&config, &prepared)?

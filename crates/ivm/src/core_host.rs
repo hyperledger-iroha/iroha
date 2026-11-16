@@ -2128,7 +2128,7 @@ mod tests {
             }],
             seiyaku_name: "StateMapHostFixture".to_owned(),
             compiler_fingerprint: "ivm-core-host-tests".to_owned(),
-            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            abi_hash: crate::IvmProfileId::C10_ABI_V1.abi_hash(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

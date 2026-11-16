@@ -192,7 +192,7 @@ mod tests {
             hajimari() { count = 0; }
             view fn value() authorize(anyone) -> int { return count; }
         }"#;
-        let artifact = kotodama_lang::compiler::Compiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(source)
             .expect("genuine initialized native contract");
         super::super::verify_contract_artifact(&artifact).expect("native artifact admission")

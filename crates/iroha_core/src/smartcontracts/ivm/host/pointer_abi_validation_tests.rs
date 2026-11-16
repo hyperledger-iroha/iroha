@@ -62,7 +62,11 @@ fn set_account_detail_rejects_tlv_with_bad_hash() {
         authority.clone(),
         Arc::new(vec![authority]),
     ));
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load program");
     vm.set_register(10, ivm::Memory::INPUT_START);
     vm.set_register(11, ivm::Memory::INPUT_START + 256);
     vm.set_register(12, ivm::Memory::INPUT_START + 512);
@@ -127,7 +131,11 @@ fn decode_tlv_blob_accepts_code_region_literal() {
     program.extend(std::iter::repeat_n(0_u8, post_pad));
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = ivm::IVM::new(1_000_000);
-    vm.load_program(&program).expect("load abi v1 program");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load abi v1 program");
     let decoded = CoreHost::decode_tlv_blob(
         &vm,
         u64::try_from(literal_data_offset).expect("literal pointer fits u64"),

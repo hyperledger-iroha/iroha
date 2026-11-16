@@ -2335,12 +2335,15 @@ mod tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact = ivm::ProgramMetadata::default().encode();
+        let mut artifact = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         artifact.extend_from_slice(&interface.encode_section());
         // CNTR's canonical Norito frame need not end on an instruction boundary.
         // A canonical empty LTLB section owns the padding; raw bytes between
         // sections would not be a valid production artifact.
-        let literal_prefix_len = artifact.len() - ivm::HEADER_SIZE + 16;
+        let literal_prefix_len = artifact.len() - ivm_abi::baseline::HEADER_SIZE + 16;
         let post_pad = (4 - literal_prefix_len % 4) % 4;
         artifact.extend_from_slice(b"LTLB");
         artifact.extend_from_slice(&0_u32.to_le_bytes()); // Literal count.
@@ -2348,21 +2351,31 @@ mod tests {
         artifact.extend_from_slice(&0_u32.to_le_bytes()); // Literal data length.
         artifact.resize(artifact.len() + post_pad, 0);
         let executable_offset = artifact.len();
-        let code_bytes = MAX_IMAGE_BYTES - (executable_offset - ivm::HEADER_SIZE);
+        let code_bytes = MAX_IMAGE_BYTES - (executable_offset - ivm_abi::baseline::HEADER_SIZE);
         assert!(code_bytes >= 16 && code_bytes.is_multiple_of(4));
-        artifact.extend_from_slice(&crate::ivm_test_support::unit_return());
-        let filler =
-            ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
-                .to_le_bytes();
+        artifact.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
+        let filler = ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADD,
+            3,
+            1,
+            2,
+        )
+        .to_le_bytes();
         for _ in 0..((code_bytes - 16) / filler.len()) {
             artifact.extend_from_slice(&filler);
         }
-        assert_eq!(artifact.len() - ivm::HEADER_SIZE, MAX_IMAGE_BYTES);
+        assert_eq!(
+            artifact.len() - ivm_abi::baseline::HEADER_SIZE,
+            MAX_IMAGE_BYTES
+        );
         assert!(norito::codec::encode_adaptive(&artifact).len() > MAX_IMAGE_BYTES);
-        let admitted = ivm::verify_contract_artifact(&artifact)
+        let admitted = ivm::verify_contract_artifact_with_declared_profile(&artifact)
             .expect("ceiling-sized CNTR artifact is production-admitted");
         assert_eq!(admitted.code_offset, executable_offset);
-        assert_eq!((admitted.code_offset - ivm::HEADER_SIZE) % 4, 0);
+        assert_eq!(
+            (admitted.code_offset - ivm_abi::baseline::HEADER_SIZE) % 4,
+            0
+        );
         let id = iroha_data_model::smart_contract::ContractArtifactId::new(
             iroha_model_base::topology::DataSpaceId::new(u64::MAX),
             ivm::contract_code_hash(&artifact),

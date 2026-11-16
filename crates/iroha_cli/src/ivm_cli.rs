@@ -133,7 +133,11 @@ pub struct ManifestGenArgs {
 impl Run for ManifestGenArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = std::fs::read(&self.file)?;
-        let parsed = ivm::ProgramMetadata::parse(&bytes)
+        // The manifest names the ABI descriptor the artifact declares; an artifact that declares
+        // no implemented profile is checked against the interface profile and rejected.
+        let profile = ivm::IvmProfileId::declared(&bytes)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        let parsed = ivm::ProgramMetadata::parse_for_profile(&bytes, profile)
             .map_err(|_| eyre::eyre!("failed to parse IVM header"))?;
         let meta = parsed.metadata;
         if meta.abi_version != 1 {
@@ -143,7 +147,7 @@ impl Run for ManifestGenArgs {
             ));
         }
         let code_hash = ivm::contract_code_hash(&bytes);
-        let abi_hash: [u8; 32] = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        let abi_hash: [u8; 32] = profile.abi_hash();
         // Build a small JSON object for convenience
         let mut manifest = norito::json::Map::new();
         manifest.insert(

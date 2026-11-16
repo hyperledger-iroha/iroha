@@ -4,7 +4,7 @@ use super::*;
 use iroha_allocation::AllocationRefusal;
 
 fn prepared() -> PreparedContract {
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             "seiyaku FundedState { permission CanWrite;  state StateMap<int, int> Values; kotoage fn write_one() authorize(CanWrite) { Values[1] = 10; } }",
         )
@@ -107,7 +107,7 @@ fn real_text_index_refusal_releases_earlier_dataflow_owners_and_retries() {
     let contract = prepared();
     let probe = AllocationBudget::new(64 * 1024 * 1024);
     let workspace = Workspace::new(contract.decoded().len(), &probe).unwrap();
-    let keys = KeyScratch::new(contract.decoded(), &probe).unwrap();
+    let keys = KeyScratch::new(crate::IvmEngine::C10, contract.decoded(), &probe).unwrap();
     let preceding = probe.reserved_bytes();
     let literals = PreparedLiterals::new(&contract, &probe).unwrap();
     let text_bytes = probe.reserved_bytes() - preceding;

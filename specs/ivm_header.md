@@ -4,20 +4,35 @@
 Magic
 - 4 bytes: ASCII `IVM\0` at offset 0.
 
-Layout (current)
+Layout (per engine)
+
+The execution root's selected host profile fixes the engine before the header is parsed, so a
+reader never tries both layouts. ABI V1, the interface profile, is the frozen baseline engine
+([IVM baseline and C10 host profiles](runtime/ivm_baseline_and_c10_profiles.md)); the C10
+engine serves only explicitly selected profiles.
 <!-- BEGIN GENERATED HEADER LAYOUT -->
-- Offsets and sizes (48 bytes total):
+- ABI V1, the interface profile (frozen baseline engine): 49 bytes total
+  - 0..4: magic `IVM\0`
+  - 4: `version_major: u8`
+  - 5: `version_minor: u8`
+  - 6: `mode: u8` (feature bits; see below)
+  - 7: `vector_length: u8`
+  - 8..16: `max_cycles: u64` (little‑endian cycle limit; nonzero)
+  - 16: `abi_version: u8`
+  - 17..49: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor of the profile)
+- C10 profiles (`iroha.ivm.runtime_lifecycle.v1`, and C10 ABI V1 when selected explicitly): 48 bytes total
   - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
   - 6: `mode: u8` (feature bits; see below)
   - 7..15: `max_cycles: u64` (little‑endian ZK trace bound; zero without `ZK`)
   - 15: `abi_version: u8`
-  - 16..48: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)
+  - 16..48: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor of the profile)
 <!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
-- `ZK = 0x01`. It is the only mode bit.
+- Baseline: `ZK = 0x01`, `VECTOR = 0x02`.
+- C10: `ZK = 0x01`. It is the only mode bit.
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
@@ -25,15 +40,21 @@ Fields (meaning)
   final byte's least-significant bit set to 1) to the exact canonical ABI
   host descriptor selected by `abi_version` and the execution root's exact host
   profile; admission validates it before prefix or instruction decoding.
-- `mode`: feature bits; `ZK` enables privacy tags, private-memory tracking and trace padding.
-- `max_cycles`: the ZK trace bound. A ZK program traps `ExceededMaxCycles` when its executed
+- `mode`: feature bits; `ZK` enables privacy tags, private-memory tracking and trace padding;
+  the baseline `VECTOR` bit enables vector execution.
+- `vector_length` (baseline only): logical vector length for vector ops (0 selects the runtime
+  default).
+- `max_cycles`, baseline: the program's cycle limit. It is required (nonzero), bounded by the
+  `smart_contract` fuel parameter and the node's `ivm_max_cycles_upper_bound`, converts into the
+  gas limit at the maximum instruction cost, and nested calls share the parent's cycle allowance.
+- `max_cycles`, C10: the ZK trace bound. A ZK program traps `ExceededMaxCycles` when its executed
   cycles reach it and pads a successful trace to exactly this length (one gas per padded cycle).
   It is nonzero exactly when `mode` has the `ZK` bit; a header without `ZK` must carry `0`. Gas is
-  the only execution budget: the caller supplies it, nested invocations draw from the parent's
-  remaining gas, and no header field converts into gas.
+  the only C10 execution budget: the caller supplies it, nested invocations draw from the
+  parent's remaining gas, and no header field converts into gas.
 
 Notes
-- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- Endianness and layout are defined by the implementation and bound to `version` and the selected engine. The on‑wire layouts above reflect `crates/ivm_abi/src/baseline.rs` (baseline) and `crates/ivm_abi/src/metadata.rs` (C10).
 - A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
 - Hardware acceleration (SIMD/Metal/CUDA) is enabled by default when compiled and available. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation, and backend status only reports parity as OK after policy, hardware detection, and golden self-tests all pass.
 - Mobile SDKs (Android/Swift) surface the same policy. `IrohaSwift.AccelerationSettings`
@@ -51,10 +72,10 @@ Durable state helpers and ABI surface
 
 Validation
 - The fixed header `abi_hash` must equal the canonical 32-byte hash of the
-  selected host descriptor. Both the baseline and `iroha.ivm.runtime_lifecycle.v1`
-  use `abi_version = 1` with distinct exact hashes. Ordinary parser entrypoints
-  admit the baseline; explicit policy-aware entrypoints admit the selected named
-  profile. Unknown hashes never select a fallback. The parser validates this field
+  selected host descriptor. ABI V1 (baseline) and `iroha.ivm.runtime_lifecycle.v1`
+  (C10) use `abi_version = 1` with distinct exact hashes. Live admission parses
+  under the profile the execution root selects; the C10 convenience parsers of the
+  `ivm` crate read only the C10 layout. Unknown hashes never select a fallback. The parser validates this field
   before decoding `CNTR`, any other prefix section, or the instruction stream.
 - For deployable artifacts, the required `CNTR` section carries the same ABI
   hash. Admission requires the header's `abi_version`/`abi_hash` and the
@@ -90,9 +111,12 @@ Validation
   execution. Pointer provenance accepts only exact validated pointer-entry
   starts; scalar values, instruction bytes, headers, and interior addresses are
   never pointer objects.
-- Generic and deployable `mode` parsing permits only `ZK`; every other bit is
-  rejected.
-- `max_cycles` must be nonzero exactly when `ZK` is set (`MissingMaxCycles`,
+- Generic and deployable `mode` parsing permits only `ZK` and `VECTOR` under the
+  baseline and only `ZK` under C10; every other bit is rejected.
+- Baseline: `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field
+  may be non-zero even if the `VECTOR` bit is not set. `max_cycles` must be nonzero and within
+  both the fuel parameter and `ivm_max_cycles_upper_bound`.
+- C10: `max_cycles` must be nonzero exactly when `ZK` is set (`MissingMaxCycles`,
   `MaxCyclesWithoutZk`); node policy bounds a ZK trace bound by
   `ivm_max_cycles_upper_bound`.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
@@ -101,13 +125,14 @@ Validation
 The following policy summary is generated from the implementation and should not be edited manually.
 
 <!-- BEGIN GENERATED HEADER POLICY -->
-| Field | Policy |
-|---|---|
-| version_major | 1 |
-| version_minor | 1 (sole current header for every profile) |
-| mode (known bits) | 0x01 (ZK=0x01) |
-| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |
-| abi_version | 1 |
+| Field | ABI V1 (baseline) | C10 profiles |
+|---|---|---|
+| version_major | 1 | 1 |
+| version_minor | 1 | 1 |
+| mode (known bits) | 0x03 (ZK=0x01, VECTOR=0x02) | 0x01 (ZK=0x01) |
+| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) | absent |
+| max_cycles | nonzero cycle limit, bounded by fuel and the node ceiling | nonzero iff ZK (ZK trace bound; gas is the only budget) |
+| abi_version | 1 | 1 |
 <!-- END GENERATED HEADER POLICY -->
 
 ### ABI Hashes (generated)
@@ -129,12 +154,13 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849 |
+| ABI v1 | 7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7 |
 | iroha.ivm.runtime_lifecycle.v1 | 76f057f25a3ba9a1525dc9b066de73c982f49c2ffd8180e65ddaeeb64d3515af |
 <!-- END GENERATED ABI HASHES -->
 
-- ABI V1 is the sole first-release version. Named host profiles preserve its
-  instruction and pointer encodings. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and
+- ABI V1 is the sole first-release version. Each engine fixes its own instruction
+  encodings (the baseline's, or C10's for the explicitly selected C10 profiles);
+  the pointer encodings are shared. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and
   `JALS` extensions are unconditional rather than feature-gated. A future
   post-release encoding break requires an explicit protocol/ABI upgrade; it
   must not silently reinterpret ABI-v1 opcode space.

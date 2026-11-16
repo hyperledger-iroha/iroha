@@ -198,7 +198,7 @@ impl BuiltArtifact {
         if bytes.len() > MAX_DEPLOYMENT_ARTIFACT_BYTES {
             bail!("contract artifact exceeds the deployment byte limit");
         }
-        let verified = ivm::verify_contract_artifact(&bytes)
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&bytes)
             .map_err(|error| eyre!("invalid contract artifact: {error}"))?;
         if !verified.private_input_entrypoints().is_empty() {
             bail!(

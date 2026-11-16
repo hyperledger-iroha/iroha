@@ -5,7 +5,7 @@ use kotodama_lang::compiler::Compiler;
 use crate::common;
 
 fn load(source: &str) -> (IVM, Vec<u8>) {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile concise contract");
     let mut vm = IVM::new(u64::MAX);
@@ -193,7 +193,7 @@ fn expect_rejects_untyped_errors_and_nonoptional_receivers() {
         let source = format!(
             "seiyaku Invalid {{ error enum Failure {{ Missing = 1 }} view fn run() authorize(anyone) -> int {{ {binding} return {expression}; }} }}"
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&source)
             .expect_err("invalid extraction must fail at compile time");
         assert!(
@@ -396,7 +396,7 @@ fn record_fields_preserve_mutability_and_type_checks() {
             "seiyaku Immutable {{ struct Note {{ int nonce }} view fn run() authorize(anyone) {{ {body} }} }}"
         );
         assert!(
-            Compiler::new().compile_source(&source).is_err(),
+            Compiler::new_c10().compile_source(&source).is_err(),
             "invalid record mutation must be rejected: {body}"
         );
     }

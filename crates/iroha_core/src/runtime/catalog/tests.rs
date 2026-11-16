@@ -13,6 +13,52 @@ const PINNED: &str = concat!(
     "/../../specs/runtime_baseline_catalog.json"
 );
 
+/// The installed baseline host profile is built from frozen constants, which are the frozen
+/// baseline engine's own descriptors and the phase-1 descriptor fixture.
+#[test]
+fn baseline_host_profile_is_the_frozen_engine_descriptor() {
+    const HOST_PROFILE_DESCRIPTOR: &[u8] = include_bytes!(
+        "../../../../ivm/tests/fixtures/baseline_v1/descriptors/host_profile_abi_v1.descriptor.bin"
+    );
+    assert_eq!(
+        BASELINE_HOST_PROFILE_ABI_HASH,
+        ivm::syscalls::compute_baseline_abi_hash(),
+        "the frozen ABI hash is the baseline engine's descriptor"
+    );
+    assert_eq!(
+        BASELINE_HOST_PROFILE_ABI_HASH,
+        ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        "the interface policy runs the baseline engine"
+    );
+    assert_eq!(
+        BASELINE_HOST_PROFILE_METERING,
+        <[u8; 32]>::from(ivm::gas::baseline::schedule_hash()),
+        "the frozen metering hash is the baseline engine's schedule"
+    );
+    let descriptor = DefinitionDescriptorV1::HostProfile(HostProfileDescriptorV1 {
+        abi_version: 1,
+        abi_hash: BASELINE_HOST_PROFILE_ABI_HASH,
+        metering: BASELINE_HOST_PROFILE_METERING,
+    });
+    assert_eq!(
+        descriptor.canonical_bytes().expect("encode host profile"),
+        HOST_PROFILE_DESCRIPTOR,
+        "the descriptor bytes are the anchor's"
+    );
+    let catalog = release_catalog().expect("catalog");
+    let id = descriptor.id().expect("host profile id");
+    assert_eq!(
+        hex::encode(id.0),
+        "d50c38a8d0d0a229f54a43f9f7568fd45561774cb58f40668eb703ae79611b99"
+    );
+    assert!(catalog.baseline.active.contains(&id));
+    assert!(catalog.baseline_definitions.contains(&id));
+    assert_eq!(
+        hex::encode(catalog.baseline_id.0),
+        "56c2328657d63a48e18c7d1bac5ae8f2406e6e71249a630ece7b504d0f9cd491"
+    );
+}
+
 /// The baseline's identities and names in kind, name and identity order, as pinned. Additions
 /// after the baseline are not pinned here: they change with each release until activated.
 fn inventory(catalog: &ReleaseCatalog) -> String {

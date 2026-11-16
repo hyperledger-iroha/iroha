@@ -1356,3 +1356,207 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
     }
     assert_eq!(fixture.native.chain.height(), 4);
 }
+
+#[test]
+fn body_outside_provider_interval_is_refused_before_publication_and_valid_body_still_publishes() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::predecessor_with_renewal_validity(30_000);
+    fixture.wait_renewable();
+    let purpose = CustodyPurpose::Renewal(2);
+    let unsigned = fresh_unsigned(&fixture).0;
+    let fees = Fees::from_options(&fixture.options()).unwrap();
+    // The provider's original admission interval exactly as a selection records it.
+    let selection = Selection::new(&fixture.owner, purpose, &unsigned, &fees).unwrap();
+    let (from, until) = (selection.provider_from, selection.provider_until);
+    let refused = |result: Result<()>| {
+        matches!(result, Err(crate::managed::Error::Invalid(message))
+            if message == "enrollment body exceeds original provider interval")
+    };
+    // The one rule shared by a new selection and every retained parse, at its exact bounds.
+    let bounded = |issued, expires| {
+        let mut statement = unsigned.statement.clone();
+        statement.issued_at_unix_ms = issued;
+        statement.expires_at_unix_ms = expires;
+        within_provider_interval(&statement, from, until)
+    };
+    bounded(from, until).unwrap();
+    assert!(refused(bounded(from - 1, until)));
+    assert!(refused(bounded(from, until + 1)));
+
+    let directory = &fixture.owner.authority.directory;
+    let root = directory.path().join(purpose.directory_name().unwrap());
+    let reference = directory.path().join(reference_name(purpose).unwrap());
+    let terms = Terms::new(unsigned.statement.expires_at_unix_ms, &fixture.options()).unwrap();
+    let initialize = |unsigned| {
+        BodyHistory::initialize(
+            &fixture.owner,
+            purpose,
+            unsigned,
+            &fees,
+            &SigningTurn::Explicit(&terms),
+            fixture.deadline(),
+        )
+    };
+    // Issued before the interval opens, then expiring after it closes: each is refused with
+    // its own typed error before anything is published, so no retained material can later be
+    // refused on every open.
+    for (issued, expires) in [
+        (from - 1, unsigned.statement.expires_at_unix_ms),
+        (unsigned.statement.issued_at_unix_ms, until + 1),
+    ] {
+        let mut outside = unsigned.clone();
+        outside.statement.issued_at_unix_ms = issued;
+        outside.statement.expires_at_unix_ms = expires;
+        let error = match initialize(outside) {
+            Ok(_) => panic!("a body outside its provider interval must not be retained"),
+            Err(error) => error,
+        };
+        assert!(refused(Err(error)));
+        assert!(!root.exists());
+        assert!(!reference.exists());
+        assert!(
+            BodyHistory::open(&fixture.owner, purpose)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // The unchanged body inside the interval still publishes its exact selection.
+    let history = initialize(unsigned).unwrap();
+    assert!(history.has_pending());
+    assert_eq!(
+        history.selection.digest().unwrap(),
+        selection.digest().unwrap()
+    );
+    assert!(root.join("original.nrt").is_file());
+    assert!(root.join("anchor.nrt").is_file());
+    assert!(reference.is_file());
+    assert_eq!(
+        BodyHistory::open(&fixture.owner, purpose)
+            .unwrap()
+            .unwrap()
+            .selection
+            .digest()
+            .unwrap(),
+        selection.digest().unwrap()
+    );
+}
+
+/// A genuine initial selection, made as public `enroll` makes it from a caller's interval, that
+/// every other selection check accepts but that is issued before its provider's admission
+/// interval opens.
+#[test]
+fn initial_body_issued_before_provider_interval_is_refused_unretained_and_valid_retry_publishes() {
+    use crate::managed::native_operation::test_support::native_fixture::{
+        NativeFixture, quote_instructions,
+    };
+    let _guard = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+    let prepared = crate::localnet::prepare_localnet_at(
+        "custody-provider-interval",
+        &temporary.path().join("generation"),
+        &ports,
+        crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities,
+        None,
+    )
+    .unwrap();
+    let mut owner = ManagedStreamTokenCustody::open(
+        &prepared,
+        crate::managed::native_operation::test_support::provider_id(&prepared, 0),
+    )
+    .unwrap();
+    let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+    native.retain_http_listeners(&prepared, &ports);
+    let log = quote_instructions(
+        &native,
+        &owner.authority.config,
+        [iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "custody provider interval prerequisites".into(),
+            ),
+        )],
+    );
+    assert_eq!(native.chain.commit(vec![log]), vec![true]);
+    let provider_from = owner
+        .authority
+        .provider_plan()
+        .unwrap()
+        .admission_material()
+        .issued_at
+        .checked_mul(1000)
+        .unwrap();
+    // The governed policy admits a body issued before the provider interval opens, so only the
+    // provider interval can refuse it.
+    let mut policy = crate::managed::stream_token_custody::transport_tests::policy(&owner);
+    policy.active_from_unix_ms = policy.active_from_unix_ms.min(provider_from - 60_000);
+    policy.active_until_unix_ms = now_ms().unwrap() + 1_200_000;
+    policy.max_validity_ms = 600_000;
+    policy.max_anchor_age_ms = 600_000;
+    let asset = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+        crate::genesis::profile::TAIRA_XOR_ASSET_DEFINITION_ID,
+    )
+    .unwrap();
+    let options = BoundedTransactionOptions {
+        fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        max_total_fees: std::collections::BTreeMap::from([(
+            asset,
+            iroha_primitives::numeric::Quantity::from(1_000u64),
+        )]),
+        deadline: Instant::now() + Duration::from_secs(600),
+    };
+    drop(ports);
+    owner.bootstrap_native_configure(&mut native, &policy, now_ms().unwrap() + 240_000, &options);
+
+    let verifier = native.observe(&owner.authority);
+    let current = native.bootstrap_custody(&owner.authority, &policy, &verifier);
+    let now = now_ms().unwrap();
+    let select = |issued| {
+        let interval = ManagedCustodyEnrollmentInterval {
+            issued_at_unix_ms: issued,
+            expires_at_unix_ms: now + 300_000,
+            deadline_unix_ms: now + 300_000,
+        };
+        validate_interval(interval, now).unwrap();
+        owner
+            .unsigned_enrollment(&policy, &current, &verifier, interval, now)
+            .unwrap()
+    };
+    let purpose = CustodyPurpose::InitialEnroll;
+    let directory = &owner.authority.directory;
+    let root = directory.path().join(purpose.directory_name().unwrap());
+    let reference = directory.path().join(reference_name(purpose).unwrap());
+    let fees = Fees::from_options(&options).unwrap();
+    let terms = Terms::new(now + 300_000, &options).unwrap();
+    let initialize = |unsigned| {
+        BodyHistory::initialize(
+            &owner,
+            purpose,
+            unsigned,
+            &fees,
+            &SigningTurn::Explicit(&terms),
+            options.deadline,
+        )
+    };
+    let error = match initialize(select(provider_from - 1_000)) {
+        Ok(_) => panic!("a body issued before its provider interval must not be retained"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(&error, crate::managed::Error::Invalid(message)
+            if message == "enrollment body exceeds original provider interval"),
+        "{error:?}"
+    );
+    assert!(!root.exists());
+    assert!(!reference.exists());
+    assert!(BodyHistory::open(&owner, purpose).unwrap().is_none());
+
+    // Nothing was retained, so the same operation still selects a valid interval.
+    let history = initialize(select(provider_from)).unwrap();
+    assert!(history.has_pending());
+    assert!(root.join("original.nrt").is_file());
+    assert!(root.join("anchor.nrt").is_file());
+    assert!(reference.is_file());
+    assert!(BodyHistory::open(&owner, purpose).unwrap().is_some());
+}

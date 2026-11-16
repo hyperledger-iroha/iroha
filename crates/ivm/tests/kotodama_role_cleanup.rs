@@ -14,7 +14,7 @@ fn compile(body: &str) -> Vec<u8> {
     let src = format!(
         "seiyaku RoleOperation {{ permission ManageRoles;  kotoage fn main() authorize(ManageRoles) {{\n{body}\n}} }}"
     );
-    let c = KotodamaCompiler::new();
+    let c = KotodamaCompiler::new_c10();
     c.compile_source(&src).expect("compile")
 }
 fn caller_account() -> ivm::mock_wsv::AccountId {

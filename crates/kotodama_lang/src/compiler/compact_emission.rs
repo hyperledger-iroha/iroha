@@ -40,15 +40,15 @@ pub(super) fn share_nominal_abort(program: &ir::Program) -> bool {
             .count()
             == 2
 }
-pub(super) fn emit_nominal_abort_tail(code: &mut Vec<u8>) -> Result<(), String> {
+pub(super) fn emit_nominal_abort_tail(isa: Isa, code: &mut Vec<u8>) -> Result<(), String> {
     // Keep the original publication and exact reserved-register protocol.
     // request_contract_abort marks the canonical VM halted synchronously; no
     // stack adjustment or caller result publication belongs to a failed call.
-    push_syscall(code, syscalls::SYSCALL_INPUT_PUBLISH_TLV);
+    push_syscall(isa, code, syscalls::SYSCALL_INPUT_PUBLISH_TLV);
     for register in 12..=15 {
-        push_word(code, encode_addi(register, 0, 0)?);
+        push_word(code, isa.encode_addi(register, 0, 0)?);
     }
-    push_syscall(code, syscalls::SYSCALL_CONTRACT_ABORT);
+    push_syscall(isa, code, syscalls::SYSCALL_CONTRACT_ABORT);
     Ok(())
 }
 

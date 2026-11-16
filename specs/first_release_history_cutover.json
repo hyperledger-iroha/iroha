@@ -994,7 +994,12 @@
           "artifact": "scripts/ivm_artifacts.tsv",
           "generator": "scripts/regenerate_kotodama_goldens.py",
           "mention": "ivm_artifacts.tsv",
-          "carries": "artifact_map"
+          "carries": "artifact_map",
+          "carrier_owners": [
+            "default",
+            "kotodama-standard",
+            "kotodama-zk"
+          ]
         },
         {
           "artifact": "demo/authority_probe.manifest.json",
@@ -1045,32 +1050,27 @@
         {
           "artifact": "fixtures/kotodama/compact_emission/native_v1.tsv",
           "generator": "crates/kotodama_lang/src/compiler/compact_emission/native_pairs.rs",
-          "mention": "capture_actual_compact_emission_native_pairs",
-          "carries": "ivm_hex_rows"
+          "mention": "capture_actual_compact_emission_native_pairs"
         },
         {
           "artifact": "fixtures/kotodama/frame_emission/native_v1.tsv",
           "generator": "crates/kotodama_lang/src/compiler/frame_emission/native_pairs.rs",
-          "mention": "capture_actual_frame_emission_native_pairs",
-          "carries": "ivm_hex_rows"
+          "mention": "capture_actual_frame_emission_native_pairs"
         },
         {
           "artifact": "fixtures/kotodama/local_emission/native_v1.tsv",
           "generator": "crates/kotodama_lang/src/compiler/local_emission/native_pairs.rs",
-          "mention": "capture_actual_local_emission_native_pairs",
-          "carries": "ivm_hex_rows"
+          "mention": "capture_actual_local_emission_native_pairs"
         },
         {
           "artifact": "fixtures/kotodama/numeric_zero/native_v1.tsv",
           "generator": "crates/kotodama_lang/src/compiler/numeric_zero/native_pairs.rs",
-          "mention": "capture_actual_numeric_zero_native_pairs",
-          "carries": "ivm_hex_rows"
+          "mention": "capture_actual_numeric_zero_native_pairs"
         },
         {
           "artifact": "fixtures/kotodama/private_single_use/native_v1.tsv",
           "generator": "crates/kotodama_lang/src/compiler/single_use_fixtures.rs",
-          "mention": "capture_private_single_use_native_pairs",
-          "carries": "ivm_hex_rows"
+          "mention": "capture_private_single_use_native_pairs"
         },
         {
           "artifact": "crates/ivm_abi/tests/fixtures/axt_golden.rs",
@@ -1186,12 +1186,12 @@
   "declared_abi_cutover": {
     "surface": "abi",
     "cutover": "contract_redeployment",
-    "abi_hash": "bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849",
+    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
     "golden": {
       "path": "crates/iroha_data_model/tests/fixtures/abi_v1_hash.rs",
       "prefix": "pub const ABI_V1_HASH_GOLDEN: &str =\n    \""
     },
-    "change": "The sole ABI V1 descriptor binds the current 48-byte program header, its ZK-only trace bound, the admitted 32-bit instruction encodings and 32-register file, deterministic instruction faults, and the existing compact CS1 callable schema, declared permissions, authenticated native events, typed contract-call records, generation-bound aliases and asset UID, linked-FI and controller-bound escrow operations. The baseline 0xA0 bridge retains tag 1 for SubmitBallot and tag 2 for SubmitPrivacyZkX509CertificateV1. Independently selecting iroha.ivm.runtime_lifecycle.v1 adds the exact runtime-obligation operations at tags 3 and 4 under its own authenticated descriptor; it does not change the baseline hash or permit arbitrary instructions. Retired vector/system execution modes and the former header layout are refused. ABI version 1 remains the only version; the current complete baseline descriptor determines this declared hash.",
+    "change": "ABI V1 is the interface profile, the frozen baseline engine (specs/runtime/ivm_baseline_and_c10_profiles.md). Its descriptor binds the 49-byte program header with its vector length and required max_cycles, the baseline instruction encodings and fault layout, and the existing compact CS1 callable schema, declared permissions, authenticated native events, typed contract-call records, generation-bound aliases and asset UID, linked-FI and controller-bound escrow operations. The 0xA0 bridge retains tag 1 for SubmitBallot and tag 2 for SubmitPrivacyZkX509CertificateV1. Independently selecting iroha.ivm.runtime_lifecycle.v1 adds the exact runtime-obligation operations at tags 3 and 4 under its own authenticated C10 descriptor; it does not change the baseline hash or permit arbitrary instructions. The C10 48-byte header and encodings are refused under ABI V1. ABI version 1 remains the only version; the frozen baseline descriptor determines this declared hash, the hash the live baseline selection pins.",
     "redeployment": "Contracts compiled before this surface change carry an obsolete interface or abi_hash and are refused by decoding or admission. Recompile .ko to .to with the current compiler and deploy its manifest. There is no alias for former hashes or compatibility decoder.",
     "fresh_genesis": false,
     "fresh_genesis_reason": "The pinned history holds no contract and no runtime-ABI record: none of its frames contains the ABI hash, which the guard re-checks on every run. A history that holds either needs a fresh genesis with this cutover."

@@ -6,7 +6,7 @@ use iroha_data_model::smart_contract::{
     entrypoint::{EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1},
     manifest::EntryPointKind,
 };
-use ivm::contract_artifact::verify_contract_artifact;
+use ivm::contract_artifact::verify_contract_artifact_with_declared_profile;
 use std::{collections::BTreeMap, fmt::Write as _};
 
 mod kotlin;
@@ -67,7 +67,9 @@ struct Model {
 /// Returns the artifact admission error for an invalid image, or a missing required
 /// schema error. No bindings are returned unless the entire artifact is valid.
 pub fn generate(bytes: &[u8], language: Language, name: &str) -> Result<String, String> {
-    let verified = verify_contract_artifact(bytes).map_err(|error| error.to_string())?;
+    // Offline bindings admit the image under the profile its header declares.
+    let verified =
+        verify_contract_artifact_with_declared_profile(bytes).map_err(|error| error.to_string())?;
     let mut model = Model {
         namespace: format!("{}Bindings", identifier(name)),
         code_hash: verified.code_hash.to_string(),

@@ -26,7 +26,12 @@ fn domainid_allowed_under_abi_current() {
         abi_version: 1,
     };
     let mut vm = ivm::IVM::new(10_000);
-    vm.load_program(&meta.encode()).expect("load v1 meta");
+    vm.load_program_for_profile(
+        &meta.encode(),
+        ivm::IvmProfileId::declared(&meta.encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load v1 meta");
     // Prepare DomainId TLV
     let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let payload = to_bytes(&did).expect("encode DomainId");
@@ -49,7 +54,12 @@ fn unknown_pointer_type_rejected_under_current() {
         abi_version: 1, // v1
     };
     let mut vm = ivm::IVM::new(10_000);
-    vm.load_program(&meta.encode()).expect("load v1 meta");
+    vm.load_program_for_profile(
+        &meta.encode(),
+        ivm::IvmProfileId::declared(&meta.encode())
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load v1 meta");
     // Construct a TLV with an unknown type id (0x00FF)
     let payload = b"deadbeef".to_vec();
     let tlv = tlv_envelope(0x00FF, &payload);

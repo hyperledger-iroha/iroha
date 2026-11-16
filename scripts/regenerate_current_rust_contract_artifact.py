@@ -100,11 +100,13 @@ ROOT_PACKAGES = (Path("crates/kotodama_toolchain"),)
 NON_BUILD_PACKAGE_TREES = frozenset({"tests", "examples", "benches", "fuzz", "docs"})
 SOURCE_CLOSURE_DOMAIN = b"iroha-current-rust-contract-artifact-source-v3\0"
 CONTRACT_HASH_DOMAIN = b"iroha:ivm:contract-artifact:v1\0"
-# IVM V1 header: magic[0..4], version 1.1 at [4] and [5], mode [6], little-endian
-# u64 budget [7..15], ABI version [15], then the 32-byte ABI hash [16..48].
-IVM_HEADER_BYTES = 48
-IVM_HEADER_ABI_VERSION_OFFSET = 15
-IVM_HEADER_ABI_HASH_OFFSET = 16
+# IVM ABI V1 is the frozen baseline engine's header: magic[0..4], version 1.1 at [4] and [5],
+# mode [6], logical vector length [7], little-endian u64 cycle limit [8..16], ABI version [16],
+# then the 32-byte ABI hash [17..49].
+IVM_HEADER_BYTES = 49
+IVM_HEADER_VECTOR_LENGTH_OFFSET = 7
+IVM_HEADER_ABI_VERSION_OFFSET = 16
+IVM_HEADER_ABI_HASH_OFFSET = 17
 MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
 HASH_LITERAL = re.compile(r"^hash:([0-9A-F]{64})#[0-9A-F]{4}$")
 OUTPUT_STAGE_NAME = re.compile(
@@ -1209,8 +1211,13 @@ def _semantic_expectation(artifact: bytes, manifest: dict[str, Any]) -> dict[str
         raise FixtureError("generated artifact has an invalid byte length")
     if artifact[:4] != b"IVM\0" or artifact[4:6] != bytes((1, 1)):
         raise FixtureError("generated artifact is not a canonical IVM 1.1 program")
-    # ZK (0x01) is the only IVM ABI v1 execution-mode bit.
-    if artifact[6] & ~0x01 or artifact[IVM_HEADER_ABI_VERSION_OFFSET] != 1:
+    # ZK (0x01) and VECTOR (0x02) are the baseline execution-mode bits; the logical vector
+    # length is at most 64.
+    if (
+        artifact[6] & ~0x03
+        or artifact[IVM_HEADER_VECTOR_LENGTH_OFFSET] > 64
+        or artifact[IVM_HEADER_ABI_VERSION_OFFSET] != 1
+    ):
         raise FixtureError("generated artifact has unsupported execution metadata")
 
     abi_hash = _manifest_hash(manifest, "abi_hash")

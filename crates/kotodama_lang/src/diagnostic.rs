@@ -1055,7 +1055,7 @@ mod tests {
                 "seiyaku Shadow { const int limit = 1; view fn run(int limit) authorize(anyone) -> int { return limit; } }",
             ),
         ] {
-            let diagnostics = CompilerSession::default()
+            let diagnostics = CompilerSession::c10()
                 .check(CompileRequest {
                     source,
                     source_name: Some("phase-parity.ko"),

@@ -60,7 +60,7 @@ fn first_runtime_row_refuses_before_strict_default_argument_metadata_or_effects(
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         zk_trace_cycles: std::num::NonZeroU64::new(64).expect("ZK trace bound"),
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
     .compile_source("seiyaku TraceRoot { view fn main(bool ready) authorize(anyone) -> bool { return ready; } }")
     .unwrap();
@@ -111,7 +111,7 @@ fn strict_root_keeps_the_post_clear_epoch_and_initial_argument_observation() {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         zk_trace_cycles: std::num::NonZeroU64::new(64).expect("ZK trace bound"),
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
     .compile_source("seiyaku TraceRoot { view fn main() authorize(anyone) {} }")
     .unwrap();

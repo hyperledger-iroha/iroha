@@ -17,23 +17,24 @@ public sealed class IvmFaultTests
         },
     };
 
-    // `IvmFaultKindV1` in dense codec-index order (0..=27).
+    // `IvmFaultKindV1` in dense codec-index order (0..=29).
     private static readonly string[] FaultKinds =
     [
         "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
         "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow", "Numeric",
-        "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt",
-        "NullifierAlreadyUsed", "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid",
-        "AbiTypeNotAllowed", "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded",
-        "ReentrantCall", "CallDepthExceeded", "ControlFlowViolation",
+        "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength",
+        "MissingHalt", "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed",
+        "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+        "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
+        "CallDepthExceeded",
     ];
 
-    // `NumericFaultV1` in ABI tag order (1..=14).
+    // `NumericFaultV1` in ABI tag order (1..=13).
     private static readonly string[] NumericFaults =
     [
         "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
         "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
-        "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+        "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot",
     ];
 
     [Fact]
@@ -41,7 +42,8 @@ public sealed class IvmFaultTests
     {
         Assert.Equal(FaultKinds, Enum.GetNames<ToriiIvmFaultCode>());
         Assert.Equal(NumericFaults, Enum.GetNames<ToriiIvmNumericFaultCode>());
-        Assert.Equal(27, (int)ToriiIvmFaultCode.ControlFlowViolation);
+        Assert.Equal(15, (int)ToriiIvmFaultCode.InvalidVectorLength);
+        Assert.Equal(29, (int)ToriiIvmFaultCode.CallDepthExceeded);
     }
 
     [Fact]
@@ -65,11 +67,11 @@ public sealed class IvmFaultTests
         }
     }
 
+    // C10's own fault categories are not values of the original wire enum.
     [Theory]
-    [InlineData("InvalidVectorLength")]
-    [InlineData("VectorExtensionDisabled")]
-    [InlineData("ZkExtensionDisabled")]
-    public void RetiredFaultCategoriesAreRejected(string retired)
+    [InlineData("ControlFlowViolation")]
+    [InlineData("RegisterIntegerOverflow")]
+    public void UnknownFaultCategoriesAreRejected(string retired)
     {
         var json = Fixture();
         json["kind"] = new JsonObject { ["kind"] = retired, ["value"] = null };

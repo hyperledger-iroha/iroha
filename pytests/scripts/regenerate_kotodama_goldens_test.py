@@ -32,8 +32,8 @@ def artifact(mode: int = 0, suffix: bytes = b"", abi_hash: bytes = ABI_HASH) -> 
 
     return (
         b"IVM\0"
-        + bytes([1, 1, mode])
-        + struct.pack("<Q", goldens.ZK_TRACE_CYCLES if mode & goldens.ZK_MODE_BIT else 0)
+        + bytes([1, 1, mode, 0])
+        + struct.pack("<Q", goldens.BASELINE_MAX_CYCLES)
         + b"\x01"
         + abi_hash
         + b"CNTR"
@@ -146,19 +146,28 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
     with pytest.raises(goldens.GoldenError, match="forbidden debug metadata"):
         goldens.validate_artifact(path, "standard", ABI_HASH)
 
-    for retired_or_unknown in (0x02, 0x80):
+    for retired_or_unknown in (0x04, 0x80):
         mutated = bytearray(artifact())
         mutated[6] = retired_or_unknown
         path.write_bytes(mutated)
         with pytest.raises(goldens.GoldenError, match="unknown execution-mode bits"):
             goldens.validate_artifact(path, "standard", ABI_HASH)
 
-    for mode, trace_bound in ((0, 8), (goldens.ZK_MODE_BIT, 0), (goldens.ZK_MODE_BIT, 8)):
+    for mode, max_cycles in ((0, 0), (0, 8), (goldens.ZK_MODE_BIT, 0)):
         mutated = bytearray(artifact(mode))
-        struct.pack_into("<Q", mutated, goldens.HEADER_BUDGET_OFFSET, trace_bound)
+        struct.pack_into("<Q", mutated, goldens.HEADER_BUDGET_OFFSET, max_cycles)
         path.write_bytes(mutated)
-        with pytest.raises(goldens.GoldenError, match="trace bound exactly in ZK mode"):
+        with pytest.raises(goldens.GoldenError, match="cycle limit"):
             goldens.validate_artifact(path, "zk" if mode else "standard", ABI_HASH)
+
+    mutated = bytearray(artifact())
+    mutated[goldens.HEADER_VECTOR_LENGTH_OFFSET] = 4
+    path.write_bytes(mutated)
+    with pytest.raises(goldens.GoldenError, match="logical vector length"):
+        goldens.validate_artifact(path, "standard", ABI_HASH)
+    # The baseline VECTOR mode bit is a known execution mode.
+    path.write_bytes(artifact(goldens.VECTOR_MODE_BIT))
+    goldens.validate_artifact(path, "standard", ABI_HASH)
 
     with pytest.raises(goldens.GoldenError, match="compiler ABI hash"):
         goldens.validate_artifact(path, "standard", b"\xff" * 32)

@@ -49,7 +49,7 @@ fn every_admitted_opcode_has_a_bounded_public_destination_span() {
             ),
             // The rejection names the opcode byte, never the operand bits (0x0506 here).
             Err(error) => assert!(
-                matches!(error, VMError::InvalidOpcode(reported) if reported == opcode),
+                matches!(error, VMError::InvalidOpcode(reported) if reported == u16::from(opcode)),
                 "{opcode:#04x}: {error:?}"
             ),
         }

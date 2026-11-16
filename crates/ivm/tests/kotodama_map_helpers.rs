@@ -21,7 +21,7 @@ fn ephemeral_map_constructor_is_rejected() {
           }
         }
     "#;
-    let err = Compiler::new()
+    let err = Compiler::new_c10()
         .compile_source(src)
         .expect_err("ephemeral Map::new must be rejected");
     assert!(
@@ -43,7 +43,7 @@ fn get_unwrap_or_state_map() {
           }
         }
     "#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::CoreHost::new());
     vm.load_program(&code).unwrap();
@@ -212,7 +212,7 @@ fn runtime_durable_get_or_insert_state_map() {
             }
         }
     "#;
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(src)
         .expect("compile durable get_or_insert");
     let mut vm = IVM::new(u64::MAX);

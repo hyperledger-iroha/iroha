@@ -786,6 +786,8 @@ impl Scope<'_> {
                         {
                             interface.clone()
                         } else {
+                            // An imported artifact is admitted under the profile it declares, read
+                            // at each engine's own fixed-header layout (baseline or C10).
                             let admitted = ivm_artifact_admission::verify_contract_artifact_with_declared_profile(
                                     &artifact.artifact,
                                 )

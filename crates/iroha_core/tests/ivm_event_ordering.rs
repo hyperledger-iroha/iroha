@@ -117,7 +117,12 @@ fn execute(
 #[test]
 fn encode_prog_syscall_uses_valid_metadata_header() {
     let program = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
-    let parsed = ProgramMetadata::parse(&program).expect("metadata should parse");
+    let parsed = ivm::ProgramMetadata::parse_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("metadata should parse");
     assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 1);
     assert_eq!(parsed.metadata.abi_version, 1);

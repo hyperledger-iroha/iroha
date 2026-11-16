@@ -4,7 +4,7 @@ use kotodama_lang::{
 };
 use std::collections::BTreeSet;
 fn executable_code(source: &str) -> Vec<u8> {
-    let artifact = Compiler::new()
+    let artifact = Compiler::new_c10()
         .compile_source(source)
         .expect("compile Kotodama V1 source");
     let metadata = ProgramMetadata::parse(&artifact).expect("parse Kotodama V1 artifact");

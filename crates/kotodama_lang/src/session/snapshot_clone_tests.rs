@@ -9,7 +9,7 @@ fn parsed_and_resolved_snapshots_clone_without_compiler_workers() {
         "]".repeat(crate::source::MAX_NESTING_DEPTH - 2)
     );
     let source = format!("seiyaku Clone {{ hajimari() {{ let value = {expression}; }} }}");
-    let session = CompilerSession::default();
+    let session = CompilerSession::c10();
     let parsed = session
         .parse_compilation_unit(CompileRequest {
             source: &source,

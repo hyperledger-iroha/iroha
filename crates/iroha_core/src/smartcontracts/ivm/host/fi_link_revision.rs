@@ -360,7 +360,7 @@ mod tests {
         let mut block = state.block(header());
         let mut tx = block.transaction();
         f.install(&mut tx);
-        let metadata = ivm::ProgramMetadata::parse(program).unwrap();
+        let metadata = crate::ivm_test_support::parse_declared(program).unwrap();
         let entry = metadata
             .contract_interface
             .as_ref()
@@ -394,7 +394,8 @@ mod tests {
             register_before: None,
         };
         let mut vm = IVM::new(gas_limit);
-        vm.load_program(program).unwrap();
+        vm.load_program_for_profile(program, crate::ivm_test_support::declared_profile(program))
+            .unwrap();
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(metadata.prefix_len() as u64 + entry.entry_pc)
             .unwrap();

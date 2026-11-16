@@ -186,7 +186,11 @@ fn nft_mint_enqueues_register_and_transfer() {
     let program = build_program(&code);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new(authority_clone));
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .unwrap();
     vm.memory
         .preload_input(0, &nft_tlv)
         .expect("preload nft tlv");
@@ -242,7 +246,11 @@ fn sm3_syscall_records_success_metric() {
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     vm.set_host(host);
-    vm.load_program(&program).expect("load SM3 program");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load SM3 program");
     vm.set_register(10, ivm::Memory::INPUT_START);
     vm.run().expect("SM3 syscall must succeed");
     assert_eq!(
@@ -273,7 +281,11 @@ fn sm3_syscall_failure_records_failure_metric() {
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     vm.set_host(host);
-    vm.load_program(&program).expect("load SM3 program");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load SM3 program");
     vm.set_register(10, ivm::Memory::INPUT_START);
     let err = vm
         .run()

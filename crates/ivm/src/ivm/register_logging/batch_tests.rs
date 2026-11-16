@@ -32,7 +32,7 @@ fn artifact(source: &str, cycles: u64) -> PreparedContract {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         zk_trace_cycles: std::num::NonZeroU64::new(cycles).expect("ZK trace bound"),
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
     .compile_source(source)
     .unwrap();

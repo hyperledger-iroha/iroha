@@ -331,7 +331,7 @@ mod tests {
   trigger morning -> inspect { on time pre_commit; }
   trigger evening -> inspect { on time pre_commit; }
 }"#;
-        let diagnostics = CompilerSession::default()
+        let diagnostics = CompilerSession::c10()
             .check(CompileRequest {
                 source,
                 source_name: Some("timers.ko"),
@@ -484,7 +484,7 @@ mod tests {
     }
 
     fn check_errors(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
-        CompilerSession::default()
+        CompilerSession::c10()
             .check(CompileRequest {
                 source,
                 source_name: Some("probe.ko"),

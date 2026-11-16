@@ -131,7 +131,9 @@ fn assert_opaque_rejection(error: &ValidationFail) {
 // Real generic VM bytecode uses a canonical literal directory and hashed Json TLV.
 // No pre-populated host queue or VM-register injection supplies the trigger.
 pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
-    use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
+    use ivm::pointer_abi::PointerType;
+    use ivm_abi::baseline::encoding::wide;
+    use ivm_abi::baseline::instruction::wide as opcode;
     let payload = norito::to_bytes(&Json::new(trigger.clone())).unwrap();
     let mut tlv = (PointerType::Json as u16).to_be_bytes().to_vec();
     tlv.push(1);
@@ -140,7 +142,10 @@ pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
     tlv.extend_from_slice(Hash::new(&payload).as_ref());
     let data_offset = 24;
     let padding = (4 - (data_offset + tlv.len()) % 4) % 4;
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     program.extend_from_slice(b"LTLB");
     for value in [1, padding, tlv.len()] {
         program.extend_from_slice(&u32::try_from(value).unwrap().to_le_bytes());
@@ -154,7 +159,7 @@ pub(super) fn create_trigger_program(trigger: &Trigger) -> Vec<u8> {
     program.extend(std::iter::repeat_n(0, padding));
     for instruction in [
         wide::encode_literal(opcode::memory::LDLIT, 10, 0),
-        wide::encode_scall(ivm::syscalls::SYSCALL_CREATE_TRIGGER),
+        crate::ivm_test_support::baseline_syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER),
         wide::encode_halt(),
     ] {
         program.extend_from_slice(&instruction.to_le_bytes());
@@ -300,8 +305,11 @@ fn supplied_proved_staking_effects_require_signed_monetary_plan() {
         // This private-call regression exercises strict replay consumption only.
         // The production verifier still rejects proof acceptance until the complete
         // native STARK execution relation exists; these are no substitute proofs.
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
+        program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
         let signed = signed(
             block,
             authority,

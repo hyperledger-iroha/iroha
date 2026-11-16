@@ -226,6 +226,13 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         LocalDeferral: [AllocationDeferred],
         OutsideInvocation: [DecodeError, ExceededMaxCycles, PermissionDenied],
     ),
+    // The C10 header policy of the pre-execution gate. The restored baseline wire enum has no
+    // `MaxCyclesWithoutZk`, so the rejection carries the VM's own text (phase 5 gives C10 its
+    // own admission family).
+    producer!(
+        "crates/iroha_core/src/pipeline/overlay.rs",
+        PrepareRejection: [MaxCyclesWithoutZk],
+    ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/cache.rs",
         PrepareRejection: [ArtifactAbiHashMismatch, GenericSyscallNotAllowed, InvalidMetadata],
@@ -494,7 +501,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             AbiTypeNotAllowed, AssertionFailed, CallDepthExceeded, ControlFlowViolation,
             DecodeError, ExceededMaxCycles, InvalidMetadata, InvalidOpcode,
             MemoryAccessViolation, MissingHalt, NoritoInvalid, NumericFault, OutOfGas,
-            PrivacyViolation, RegisterOutOfBounds,
+            PrivacyViolation, RegisterIntegerOverflow, RegisterOutOfBounds,
         ],
         SyscallTrap: [
             AbiTypeNotAllowed, ContractAbort, DecodeError, GenericSyscallNotAllowed,
@@ -506,6 +513,21 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             SyscallMeteringModeMismatch,
         ],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
+    ),
+    // The frozen baseline engine: the anchor interpreter loop, its shared cycle allowance and
+    // its direct-crypto and vector helpers. Only an explicitly constructed baseline profile runs it.
+    producer!(
+        "crates/ivm/src/ivm/baseline.rs",
+        InitializationTrap: [ExceededMaxCycles],
+        InterpreterTrap: [
+            AssertionFailed, DecodeError, ExceededMaxCycles, GasCostOverflow, InvalidMetadata,
+            InvalidOpcode, InvalidVectorLength, MemoryAccessViolation, MisalignedAccess,
+            MissingHalt, OutOfGas, PrivacyViolation, RegisterOutOfBounds, VectorExtensionDisabled,
+            ZkExtensionDisabled,
+        ],
+        SyscallTrap: [UnknownSyscall],
+        HostInvariant: [HostUnavailable],
+        LocalDeferral: [ExecutionDeferred],
     ),
     producer!(
         "crates/ivm/src/ivm/program_load.rs",
@@ -789,8 +811,8 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         "crates/ivm_abi/src/metadata/program_header.rs",
         PrepareRejection: [
             ArtifactAbiHashMismatch, InvalidMetadata, MaxCyclesWithoutZk, MissingMaxCycles,
-            UnsupportedProgramAbiVersion, UnsupportedProgramFeatureBits,
-            UnsupportedProgramVersion,
+            ProgramVectorLengthTooLarge, UnsupportedProgramAbiVersion,
+            UnsupportedProgramFeatureBits, UnsupportedProgramVersion,
         ],
     ),
     producer!(
@@ -886,7 +908,7 @@ const fn error(variant: &'static str, trap_kind: Option<VmTrapKind>) -> VmErrorE
 }
 
 /// Number of [`VMError`] variants.
-pub const VM_ERROR_COUNT: usize = 45;
+pub const VM_ERROR_COUNT: usize = 50;
 
 /// Every [`VMError`] variant in declaration order.
 pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
@@ -918,6 +940,7 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
     error("GasCostOverflow", Some(VmTrapKind::GasCostOverflow)),
     error("SyscallOutOfGas", Some(VmTrapKind::OutOfGas)),
     error("NumericFault", Some(VmTrapKind::NumericFault)),
+    error("RegisterIntegerOverflow", Some(VmTrapKind::NumericFault)),
     error("PointerAbiFault", Some(VmTrapKind::PointerAbiFault)),
     error("AssertionFailed", Some(VmTrapKind::AssertionFailed)),
     error("ContractAbort", Some(VmTrapKind::ContractAbort)),
@@ -938,6 +961,10 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
     error("MissingMaxCycles", Some(VmTrapKind::MissingMaxCycles)),
     error("MaxCyclesWithoutZk", Some(VmTrapKind::MaxCyclesWithoutZk)),
     error(
+        "ProgramVectorLengthTooLarge",
+        Some(VmTrapKind::ProgramVectorLengthTooLarge),
+    ),
+    error(
         "ArtifactAbiHashMismatch",
         Some(VmTrapKind::ArtifactAbiHashMismatch),
     ),
@@ -945,7 +972,13 @@ pub const VM_ERRORS: &[VmErrorEntry; VM_ERROR_COUNT] = &[
         "GenericSyscallNotAllowed",
         Some(VmTrapKind::GenericSyscallNotAllowed),
     ),
+    error("InvalidVectorLength", Some(VmTrapKind::InvalidVectorLength)),
     error("MissingHalt", Some(VmTrapKind::MissingHalt)),
+    error(
+        "VectorExtensionDisabled",
+        Some(VmTrapKind::PermissionDenied),
+    ),
+    error("ZkExtensionDisabled", Some(VmTrapKind::PermissionDenied)),
     // No file in the producer scope constructs this variant; the
     // `vm_error_without_producer` open semantic tracks it.
     error("NullifierAlreadyUsed", Some(VmTrapKind::PermissionDenied)),
@@ -995,6 +1028,7 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::GasCostOverflow => "GasCostOverflow",
         VMError::SyscallOutOfGas { .. } => "SyscallOutOfGas",
         VMError::NumericFault(_) => "NumericFault",
+        VMError::RegisterIntegerOverflow => "RegisterIntegerOverflow",
         VMError::PointerAbiFault(_) => "PointerAbiFault",
         VMError::AssertionFailed => "AssertionFailed",
         VMError::ContractAbort { .. } => "ContractAbort",
@@ -1005,9 +1039,13 @@ pub const fn vm_error_variant_name(error: &VMError) -> &'static str {
         VMError::UnsupportedProgramAbiVersion { .. } => "UnsupportedProgramAbiVersion",
         VMError::MissingMaxCycles => "MissingMaxCycles",
         VMError::MaxCyclesWithoutZk { .. } => "MaxCyclesWithoutZk",
+        VMError::ProgramVectorLengthTooLarge { .. } => "ProgramVectorLengthTooLarge",
         VMError::ArtifactAbiHashMismatch { .. } => "ArtifactAbiHashMismatch",
         VMError::GenericSyscallNotAllowed { .. } => "GenericSyscallNotAllowed",
+        VMError::InvalidVectorLength { .. } => "InvalidVectorLength",
         VMError::MissingHalt => "MissingHalt",
+        VMError::VectorExtensionDisabled => "VectorExtensionDisabled",
+        VMError::ZkExtensionDisabled => "ZkExtensionDisabled",
         VMError::NullifierAlreadyUsed => "NullifierAlreadyUsed",
         VMError::PermissionDenied => "PermissionDenied",
         VMError::ReentrantCall => "ReentrantCall",
@@ -1050,8 +1088,10 @@ pub const fn trap_kind_name(kind: VmTrapKind) -> &'static str {
         VmTrapKind::UnsupportedProgramAbiVersion => "UnsupportedProgramAbiVersion",
         VmTrapKind::MissingMaxCycles => "MissingMaxCycles",
         VmTrapKind::MaxCyclesWithoutZk => "MaxCyclesWithoutZk",
+        VmTrapKind::ProgramVectorLengthTooLarge => "ProgramVectorLengthTooLarge",
         VmTrapKind::ArtifactAbiHashMismatch => "ArtifactAbiHashMismatch",
         VmTrapKind::GenericSyscallNotAllowed => "GenericSyscallNotAllowed",
+        VmTrapKind::InvalidVectorLength => "InvalidVectorLength",
         VmTrapKind::MissingHalt => "MissingHalt",
         VmTrapKind::PermissionDenied => "PermissionDenied",
         VmTrapKind::ReentrantCall => "ReentrantCall",
@@ -1119,7 +1159,7 @@ const fn kind(kind: VmTrapKind) -> TrapKindEntry {
 }
 
 /// Number of [`VmTrapKind`] variants.
-pub const TRAP_KIND_COUNT: usize = 35;
+pub const TRAP_KIND_COUNT: usize = 37;
 
 /// Every [`VmTrapKind`] in declaration order.
 pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
@@ -1144,8 +1184,10 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
     kind(VmTrapKind::UnsupportedProgramAbiVersion),
     kind(VmTrapKind::MissingMaxCycles),
     kind(VmTrapKind::MaxCyclesWithoutZk),
+    kind(VmTrapKind::ProgramVectorLengthTooLarge),
     kind(VmTrapKind::ArtifactAbiHashMismatch),
     kind(VmTrapKind::GenericSyscallNotAllowed),
+    kind(VmTrapKind::InvalidVectorLength),
     kind(VmTrapKind::MissingHalt),
     kind(VmTrapKind::PermissionDenied),
     kind(VmTrapKind::ReentrantCall),
@@ -1165,8 +1207,9 @@ pub const TRAP_KINDS: &[TrapKindEntry; TRAP_KIND_COUNT] = &[
 ///
 /// In status mode a numeric syscall returns the tag in `r11` and execution
 /// continues; in trap mode it raises `VMError::NumericFault`. Checked register
-/// division and signed overflow (`DivisionByZero`, `RegisterIntegerOverflow`)
-/// always raise `VMError::NumericFault`. The relation must
+/// division by zero always raises `VMError::NumericFault(DivisionByZero)`; the C10 signed
+/// register overflow raises the internal `VMError::RegisterIntegerOverflow`, which is not a
+/// numeric fault code. The relation must
 /// bind the selected mode, the exact tag and the gas of every completed stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumericFaultEntry {
@@ -1196,7 +1239,7 @@ macro_rules! numeric_fault {
 }
 
 /// Number of [`NumericFaultV1`] variants.
-pub const NUMERIC_FAULT_COUNT: usize = 14;
+pub const NUMERIC_FAULT_COUNT: usize = 13;
 
 /// Every [`NumericFaultV1`] in ascending tag order.
 pub const NUMERIC_FAULTS: &[NumericFaultEntry; NUMERIC_FAULT_COUNT] = &[
@@ -1213,7 +1256,6 @@ pub const NUMERIC_FAULTS: &[NumericFaultEntry; NUMERIC_FAULT_COUNT] = &[
     numeric_fault!(InvalidFailureMode),
     numeric_fault!(ReservedRegisterNonZero),
     numeric_fault!(NegativeSquareRoot),
-    numeric_fault!(RegisterIntegerOverflow),
 ];
 
 /// One stable pointer or envelope validation fault code.

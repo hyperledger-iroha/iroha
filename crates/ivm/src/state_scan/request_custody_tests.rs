@@ -6,7 +6,7 @@ use iroha_allocation::AllocationBudget;
 const POOL_BYTES: usize = 256 * 1024 * 1024;
 
 fn fixture() -> (IVM, AllocationBudget) {
-    let code = kotodama_lang::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku Scan { state StateMap<string, int> orders; view fn main() authorize(anyone) { () } }")
         .expect("compile admitted map");
     let pool = AllocationBudget::new(POOL_BYTES);

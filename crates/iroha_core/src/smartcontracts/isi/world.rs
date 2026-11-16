@@ -5523,7 +5523,8 @@ pub mod isi {
             &state_transaction.execution_budget(),
         )
         .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
-        crate::smartcontracts::ivm::validate_zk_trace_bound(
+        crate::smartcontracts::ivm::validate_cycle_ceiling_for(
+            verified.profile.engine(),
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
@@ -7929,7 +7930,8 @@ pub mod isi {
             &state_transaction.execution_budget(),
         )
         .map_err(|error| artifact_admission_instruction_error(&state_transaction.world, error))?;
-        crate::smartcontracts::ivm::validate_zk_trace_bound(
+        crate::smartcontracts::ivm::validate_cycle_ceiling_for(
+            verified.profile.engine(),
             &verified.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
@@ -26412,7 +26414,7 @@ AccountEvent::PermissionRemoved(change))
 
             // Keep retired fixture versions from changing the whole-State census.
             let _retirement_pin = crossbeam_epoch::pin();
-            let (code, manifest) = minimal_contract_artifact();
+            let (code, manifest) = contract_artifact_with_max_cycles(1000);
             let key = ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
             let mut world = World::default();
             world.contract_code.insert(key, code.clone());
@@ -26490,21 +26492,11 @@ AccountEvent::PermissionRemoved(change))
             assert_eq!(budget.reserved_bytes(), retry_baseline);
         }
 
-        /// A ZK-mode test contract declaring the trace bound `max_cycles`.
-        fn zk_contract_artifact(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
-            contract_artifact_with_header(
-                ivm::ProgramMetadata {
-                    mode: ivm::ivm_mode::ZK,
-                    max_cycles,
-                    ..ivm::ProgramMetadata::default()
-                },
-                ivm::CONTRACT_FEATURE_BIT_ZK,
-            )
-        }
-        fn contract_artifact_with_header(
-            meta: ivm::ProgramMetadata,
-            features_bitmap: u64,
-        ) -> (Vec<u8>, ContractManifest) {
+        fn contract_artifact_with_max_cycles(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
+            let meta = ivm::ProgramMetadata {
+                max_cycles,
+                ..ivm::ProgramMetadata::default()
+            };
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 events: Vec::new(),
                 enum_types: Vec::new(),
@@ -26518,7 +26510,7 @@ AccountEvent::PermissionRemoved(change))
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
                 abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                features_bitmap,
+                features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
                 entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
@@ -26544,27 +26536,42 @@ AccountEvent::PermissionRemoved(change))
             };
             let mut code = Vec::new();
             for instruction in [
-                ivm::encoding::wide::encode_store(
-                    ivm::instruction::wide::memory::STORE64,
+                ivm_abi::baseline::encoding::wide::encode_store(
+                    ivm_abi::baseline::instruction::wide::memory::STORE64,
                     12,
                     0,
                     0,
                 ),
-                ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-                ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-                ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+                ivm_abi::baseline::encoding::wide::encode_ri(
+                    ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                    10,
+                    12,
+                    0,
+                ),
+                ivm_abi::baseline::encoding::wide::encode_ri(
+                    ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                    11,
+                    0,
+                    1,
+                ),
+                ivm_abi::baseline::encoding::wide::encode_rr(
+                    ivm_abi::baseline::instruction::wide::control::JALR,
+                    0,
+                    1,
+                    0,
+                ),
             ] {
                 code.extend_from_slice(&instruction.to_le_bytes());
             }
-            let mut artifact = meta.encode();
+            let mut artifact = crate::ivm_test_support::baseline_header(meta);
             artifact.extend_from_slice(&interface.encode_section());
             artifact.extend_from_slice(&code);
-            let verified =
-                ivm::verify_contract_artifact(&artifact).expect("valid test contract artifact");
+            let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+                .expect("valid test contract artifact");
             (artifact, verified.manifest)
         }
         fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
-            contract_artifact_with_header(ivm::ProgramMetadata::default(), 0)
+            contract_artifact_with_max_cycles(4)
         }
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
             let (artifact, _) = kotodama_lang::compiler::Compiler::new()
@@ -26581,7 +26588,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
 ",
                 )
                 .expect("compile governance lifecycle fixture");
-            let verified = ivm::verify_contract_artifact(&artifact)
+            let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
                 .expect("verify governance lifecycle fixture");
             (artifact, verified.manifest)
         }
@@ -35168,8 +35175,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .expect_execute(&ALICE_ID, &mut stx, "seed upload authority");
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             stx.pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).unwrap();
-            // The live ceiling bounds the trace of a ZK artifact.
-            let (artifact, manifest) = zk_contract_artifact(2);
+            let (artifact, manifest) = contract_artifact_with_max_cycles(2);
             let code_hash = manifest.code_hash.expect("artifact code hash");
             let total_size = u64::try_from(artifact.len()).expect("artifact length fits u64");
             assert!(

@@ -194,7 +194,7 @@ fn contract_artifact_with_mode_and_code(
         callables: callable_descriptors(&entrypoints, code),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap,
         access_set_hints,
         kotoba: Vec::new(),
@@ -231,7 +231,7 @@ fn contract_artifact_with_error_messages(
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -268,7 +268,7 @@ fn contract_artifact_with_access_hints_and_states(
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints,
         kotoba: Vec::new(),
@@ -299,7 +299,7 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
         callables: vec![common::unit_callable(0)],
         seiyaku_name: seiyaku_name.to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -335,7 +335,7 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         callables: vec![common::unit_callable(0)],
         seiyaku_name: "FeatureBinding".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -540,7 +540,7 @@ fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
             }
         }
     "#;
-    let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
+    let (artifact, manifest) = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source_with_manifest(source)
         .expect("compile nested return schema");
     let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiled artifact");
@@ -635,7 +635,7 @@ fn compiler_emits_self_describing_contract_artifact() {
             }
         }
     "#;
-    let (bytes, manifest) = kotodama_lang::compiler::Compiler::new()
+    let (bytes, manifest) = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile contract");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -690,7 +690,7 @@ fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
             }
         }
     "#;
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(source)
         .expect("compile contract with CNTR, indexed literal, and code");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse compiled artifact");
@@ -720,11 +720,12 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     let source = include_str!("../../iroha/tests/fixtures/contract_code_readback/code_readback.ko");
     let artifact =
         include_bytes!("../../iroha/tests/fixtures/contract_code_readback/code_readback.to");
+    // The SDK fixture is a default (baseline) build admitted under the interface profile.
     let rebuilt = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("reproduce the checked-in SDK contract artifact");
     assert_eq!(rebuilt.as_slice(), artifact);
-    let admitted = ivm::verify_contract_artifact(artifact)
+    let admitted = ivm::verify_contract_artifact_for_policy(artifact, ivm::SyscallPolicy::AbiV1)
         .expect("admit the actual checked-in SDK contract artifact");
     assert_eq!(admitted.metadata.abi_version, 1);
     assert_eq!(
@@ -920,7 +921,7 @@ fn public_entrypoint_descriptor_targets_authenticated_callable() {
             }
         }
     "#;
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(src)
         .expect("compile contract");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -952,7 +953,7 @@ seiyaku ContractArtifactFixture { permission Entry;
 
 }
 "#;
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(src)
         .expect("compile artifact");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -1319,7 +1320,7 @@ fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
 }
 #[test]
 fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads() {
-    let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+    let bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
         "seiyaku Calls { fn leaf() -> bool { true } fn middle() -> bool { leaf() } view fn main() authorize(anyone) -> bool { middle() } }"
     ).expect("compile nested table calls");
     let prepared =

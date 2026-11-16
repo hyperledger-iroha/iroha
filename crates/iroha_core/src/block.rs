@@ -10831,7 +10831,7 @@ seiyaku GuardedOverlay { permission CanWriteGuardedOverlay;
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile protected overlay contract");
-        let interface = ivm::ProgramMetadata::parse(&program)
+        let interface = crate::ivm_test_support::parse_declared(&program)
             .expect("parse protected contract")
             .contract_interface
             .expect("compiled contract interface");
@@ -11009,7 +11009,7 @@ seiyaku DynamicAccessCounter { permission CanWriteCounters;
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic StateMap counter");
-        let contract_interface = ivm::ProgramMetadata::parse(&program)
+        let contract_interface = crate::ivm_test_support::parse_declared(&program)
             .expect("parse compiled contract")
             .contract_interface
             .expect("compiled contract interface");
@@ -11225,7 +11225,7 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic-target contract");
-        let contract_interface = ivm::ProgramMetadata::parse(&program)
+        let contract_interface = crate::ivm_test_support::parse_declared(&program)
             .expect("parse compiled contract")
             .contract_interface
             .expect("compiled contract interface");

@@ -284,10 +284,13 @@ fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
         let (program, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(&source)
             .unwrap_or_else(|error| panic!("{name} Kotodama fixture must compile: {error:?}"));
-        let interface = ivm::ProgramMetadata::parse(&program)
-            .expect("generated contract metadata")
-            .contract_interface
-            .expect("generated contract interface");
+        let interface = ivm::ProgramMetadata::parse_for_profile(
+            &program,
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("generated contract metadata")
+        .contract_interface
+        .expect("generated contract interface");
         assert!(
             !interface.entrypoints.is_empty(),
             "{name} has no entrypoints"

@@ -6,7 +6,7 @@ use iroha_allocation::AllocationBudget;
 use norito::core::{DecodeLimits, with_decode_limits_measured, with_decode_limits_scope};
 
 fn artifact() -> Vec<u8> {
-    kotodama_lang::compiler::Compiler::new()
+    kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku RangeAdmission { view fn main() authorize(anyone) {} }")
         .expect("canonical compiled Unit entrypoint")
 }
@@ -208,7 +208,7 @@ fn admitted_literal_ranges_preserve_original_index_order_and_backing() {
         ivm::DecodedLiteral,
         metadata::{LiteralDirectory, ValidatedLiteral},
     };
-    let bytes = kotodama_lang::compiler::Compiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(
             r#"seiyaku RangeLiteral { permission ReadLiteral;
             kotoage fn run() authorize(ReadLiteral) -> Name {

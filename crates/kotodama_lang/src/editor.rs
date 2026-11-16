@@ -3892,7 +3892,7 @@ mod tests {
     #[test]
     fn admitted_contract_members_offer_exact_named_signatures_without_lifecycle_hooks() {
         use crate::linker::{SourceContractArtifact, SourceModuleUnit};
-        let artifact = crate::compiler::Compiler::new().compile_source(
+        let artifact = crate::compiler::Compiler::new_c10().compile_source(
             "seiyaku Pool { struct Payload { int amount; } hajimari() {} view fn quote(Payload payload) authorize(anyone) -> Payload { payload } kotoage fn update(int amount) authorize(anyone) {} }"
         ).expect("compile imported interface");
         let source = r#"seiyaku App { import seiyaku "pool.to" as Pool; view fn relay(bytes address, Pool::Payload payload) authorize(anyone) -> Pool::Payload { let pool = Pool::at(address: address); pool.quote(payload: payload) } }"#;

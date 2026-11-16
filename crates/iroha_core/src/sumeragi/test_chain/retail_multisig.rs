@@ -115,9 +115,10 @@ fn unit_callable(entry_pc: u64) -> ivm::call::EmbeddedCallableV1 {
     }
 }
 
-/// A complete Unit return through the caller-owned result table and protected return address.
+/// A complete Unit return through the caller-owned result table and protected return address,
+/// in the baseline encoding of the interface profile (the register form of `JALR`).
 fn unit_return() -> [u8; 16] {
-    use ivm::{
+    use ivm_abi::baseline::{
         encoding::wide,
         instruction::wide::{arithmetic, control, memory},
     };
@@ -125,7 +126,7 @@ fn unit_return() -> [u8; 16] {
         wide::encode_store(memory::STORE64, 12, 0, 0),
         wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
         wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
-        wide::encode_ri(control::JALR, 0, 1, 0),
+        wide::encode_rr(control::JALR, 0, 1, 0),
     ];
     let mut code = [0; 16];
     for (slot, instruction) in code.as_chunks_mut::<4>().0.iter_mut().zip(instructions) {
@@ -180,7 +181,7 @@ fn minimal_bound_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     };
     let wrapper_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -255,10 +256,13 @@ fn minimal_bound_contract_artifact() -> (
     for _ in &entrypoints {
         instructions.extend_from_slice(&unit_return());
     }
-    let mut artifact = metadata.encode();
+    // The interface profile's baseline header (`test_chain` also builds outside `cfg(test)`).
+    let mut artifact =
+        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
     artifact.extend_from_slice(&interface.encode_section());
     artifact.extend_from_slice(&instructions);
-    let verified = ivm::verify_contract_artifact(&artifact).expect("valid bound contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("valid bound contract artifact");
     (artifact, verified.manifest)
 }
 

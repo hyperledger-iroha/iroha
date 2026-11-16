@@ -10,7 +10,7 @@ fn compile_function_returning_fourteen_values_succeeds() {
             }
         }
     "#;
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(src)
         .expect("14-word result fits the V1 table");
 }
@@ -36,7 +36,7 @@ fn compile_function_returning_thirteen_values_succeeds() {
             }
         }
     "#;
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(src)
         .expect("expected 13-value return to compile");
 }

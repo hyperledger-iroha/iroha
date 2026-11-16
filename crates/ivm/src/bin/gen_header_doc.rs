@@ -10,34 +10,62 @@ const LAYOUT_END: &str = "<!-- END GENERATED HEADER LAYOUT -->";
 const POLICY_BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const POLICY_END: &str = "<!-- END GENERATED HEADER POLICY -->";
 fn render_header_layout_markdown() -> String {
+    let baseline = ivm::IvmEngine::Baseline.header_layout();
+    let c10 = ivm::IvmEngine::C10.header_layout();
     format!(
-        "- Offsets and sizes ({} bytes total):\n\
+        "- ABI V1, the interface profile (frozen baseline engine): {} bytes total\n\
          \x20 - 0..4: magic `IVM\\0`\n\
          \x20 - 4: `version_major: u8`\n\
          \x20 - 5: `version_minor: u8`\n\
          \x20 - 6: `mode: u8` (feature bits; see below)\n\
-         \x20 - 7..15: `max_cycles: u64` (little‑endian ZK trace bound; zero without `ZK`)\n\
-         \x20 - 15: `abi_version: u8`\n\
-         \x20 - 16..48: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)\n",
-        ivm::HEADER_SIZE
+         \x20 - 7: `vector_length: u8`\n\
+         \x20 - {}..{}: `max_cycles: u64` (little‑endian cycle limit; nonzero)\n\
+         \x20 - {}: `abi_version: u8`\n\
+         \x20 - {}..{}: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor of the profile)\n\
+         - C10 profiles (`iroha.ivm.runtime_lifecycle.v1`, and C10 ABI V1 when selected explicitly): {} bytes total\n\
+         \x20 - 0..4: magic `IVM\\0`\n\
+         \x20 - 4: `version_major: u8`\n\
+         \x20 - 5: `version_minor: u8`\n\
+         \x20 - 6: `mode: u8` (feature bits; see below)\n\
+         \x20 - {}..{}: `max_cycles: u64` (little‑endian ZK trace bound; zero without `ZK`)\n\
+         \x20 - {}: `abi_version: u8`\n\
+         \x20 - {}..{}: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor of the profile)\n",
+        baseline.size,
+        baseline.budget_offset,
+        baseline.abi_version_offset,
+        baseline.abi_version_offset,
+        baseline.abi_hash_offset,
+        baseline.size,
+        c10.size,
+        c10.budget_offset,
+        c10.abi_version_offset,
+        c10.abi_version_offset,
+        c10.abi_hash_offset,
+        c10.size,
     )
 }
 fn render_header_policy_markdown() -> String {
-    // Known bits from the public ivm_mode re-export
+    // Known bits per engine: the baseline `ZK | VECTOR`, the C10 `ZK` only.
     let zk = ivm::ivm_mode::ZK;
-    let known_bits = zk;
+    let vector = ivm_abi::baseline::mode::VECTOR;
+    let baseline_bits = ivm_abi::baseline::mode::KNOWN;
     let accepted_major = 1u8;
+    let vector_max = ivm_abi::baseline::VECTOR_LENGTH_MAX;
     let mut md = String::new();
-    md.push_str("| Field | Policy |\n");
-    md.push_str("|---|---|\n");
-    md.push_str(&format!("| version_major | {accepted_major} |\n"));
-    md.push_str("| version_minor | 1 (sole current header for every profile) |\n");
+    md.push_str("| Field | ABI V1 (baseline) | C10 profiles |\n");
+    md.push_str("|---|---|---|\n");
     md.push_str(&format!(
-        "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}) |\n"
+        "| version_major | {accepted_major} | {accepted_major} |\n"
     ));
-    // First release: only ABI v1 is accepted.
-    md.push_str("| max_cycles | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
-    md.push_str("| abi_version | 1 |\n");
+    md.push_str("| version_minor | 1 | 1 |\n");
+    md.push_str(&format!(
+        "| mode (known bits) | 0x{baseline_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vector:02x}) | 0x{zk:02x} (ZK=0x{zk:02x}) |\n"
+    ));
+    md.push_str(&format!(
+        "| vector_length | 0 or 1..={vector_max} (0 selects runtime default; independent of VECTOR bit) | absent |\n"
+    ));
+    md.push_str("| max_cycles | nonzero cycle limit, bounded by fuel and the node ceiling | nonzero iff ZK (ZK trace bound; gas is the only budget) |\n");
+    md.push_str("| abi_version | 1 | 1 |\n");
     md
 }
 fn header_doc_paths(source_dir: &Path) -> Vec<PathBuf> {

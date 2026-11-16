@@ -53,8 +53,12 @@ pub enum VmTrapKind {
     UnsupportedProgramAbiVersion,
     MissingMaxCycles,
     MaxCyclesWithoutZk,
+    /// Baseline-engine header vector length above the ABI V1 maximum.
+    ProgramVectorLengthTooLarge,
     ArtifactAbiHashMismatch,
     GenericSyscallNotAllowed,
+    /// Baseline-engine `SETVL` or vector width outside the logical lane bound.
+    InvalidVectorLength,
     MissingHalt,
     PermissionDenied,
     ReentrantCall,
@@ -223,8 +227,11 @@ pub enum VMError {
     MemoryOutOfBounds,
     /// Instruction decoding failed due to invalid data or out-of-bounds fetch.
     DecodeError,
-    /// The instruction word's primary opcode byte (bits 31..24) is not an admitted opcode.
-    InvalidOpcode(u8),
+    /// An instruction word is not an admitted opcode.
+    ///
+    /// The C10 engine reports the primary opcode byte (bits 31..24). The baseline engine keeps
+    /// its original value, the low 16 bits of the rejected word.
+    InvalidOpcode(u16),
     UnknownSyscall(u32),
     /// VM was asked to run or execute a host-dependent operation without a host attached.
     HostUnavailable,
@@ -258,6 +265,13 @@ pub enum VMError {
     },
     /// A checked numeric operation failed in trap mode.
     NumericFault(NumericFaultV1),
+    /// A C10 signed 64-bit register operation overflowed (`i64::MIN / -1`, `ABS(i64::MIN)` or a
+    /// ceiling quotient beyond `i64::MAX`).
+    ///
+    /// Internal to the C10 engine (numeric tag
+    /// [`crate::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG`]); the baseline engine reports these
+    /// operations as `AssertionFailed` and its wire numeric enum has no such tag.
+    RegisterIntegerOverflow,
     /// A numeric pointer envelope failed stable ABI validation.
     PointerAbiFault(PointerAbiFaultV1),
     AssertionFailed,
@@ -303,6 +317,13 @@ pub enum VMError {
         /// Declared, non-zero `max_cycles`.
         max_cycles: u64,
     },
+    /// A baseline-engine fixed header requests more logical vector lanes than ABI V1 permits.
+    ProgramVectorLengthTooLarge {
+        /// Declared vector length.
+        vector_length: u8,
+        /// Maximum accepted vector length.
+        max_allowed: u8,
+    },
     /// A self-describing artifact targets a different canonical ABI descriptor.
     ArtifactAbiHashMismatch {
         /// ABI descriptor hash required by the runtime.
@@ -315,8 +336,17 @@ pub enum VMError {
         /// Rejected syscall number.
         syscall: u32,
     },
+    /// A baseline-engine vector instruction selected an invalid logical vector length.
+    InvalidVectorLength {
+        /// Rejected logical lane count.
+        vector_length: usize,
+    },
     /// Program reached the end of the executable region without an explicit terminating syscall or HALT.
     MissingHalt,
+    /// A baseline-engine vector or 128-bit memory instruction ran without the header VECTOR bit.
+    VectorExtensionDisabled,
+    /// A baseline-engine ZK-helper instruction ran outside ZK mode.
+    ZkExtensionDisabled,
     NullifierAlreadyUsed,
     PermissionDenied,
     /// A nested invocation targeted an address already active in its ancestry.
@@ -422,64 +452,16 @@ impl VMError {
     /// Project only deterministic failures of a started invocation.
     ///
     /// Admission errors, application rejections and local host/resource failures
-    /// deliberately have no runtime fault value. This exhaustive projection does
-    /// not use presentation strings or the coarser diagnostic trap categories.
+    /// deliberately have no runtime fault value. The projection belongs to the engine that
+    /// raised the failure ([`crate::IvmEngine::fault_kind`]); this accessor has no profile
+    /// context and applies the engine of the interface profile, the frozen baseline.
+    // TODO: only tests call this accessor; consensus paths project with the engine of the VM
+    // that ran. Delete it once those tests name their engine.
     #[must_use]
     pub fn fault_kind(&self) -> Option<IvmFaultKindV1> {
-        use IvmFaultKindV1 as F;
-        Some(match self.as_unmetered() {
-            Self::OutOfGas | Self::SyscallOutOfGas { .. } => F::OutOfGas,
-            Self::OutOfMemory => F::MemoryLimitExceeded,
-            Self::MemoryAccessViolation { .. } => F::MemoryAccessViolation,
-            Self::MisalignedAccess { .. } => F::MisalignedAccess,
-            Self::MemoryOutOfBounds => F::MemoryOutOfBounds,
-            Self::DecodeError => F::DecodeError,
-            Self::InvalidOpcode(_) => F::InvalidOpcode,
-            Self::UnknownSyscall(_) => F::UnknownSyscall,
-            Self::NotImplemented { .. } => F::UnsupportedSyscall,
-            Self::GasCostOverflow => F::GasCostOverflow,
-            Self::NumericFault(code) => F::Numeric(*code),
-            Self::PointerAbiFault(code) => F::PointerAbi(*code),
-            Self::AssertionFailed => F::AssertionFailed,
-            Self::ExceededMaxCycles => F::ExceededMaxCycles,
-            Self::InvalidMetadata => F::InvalidMetadata,
-            Self::MissingHalt => F::MissingHalt,
-            Self::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
-            Self::PermissionDenied => F::PermissionDenied,
-            Self::ReentrantCall => F::ReentrantCall,
-            Self::CallDepthExceeded => F::CallDepthExceeded,
-            Self::ControlFlowViolation => F::ControlFlowViolation,
-            Self::PrivacyViolation => F::PrivacyViolation,
-            Self::RegisterOutOfBounds => F::RegisterOutOfBounds,
-            Self::NoritoInvalid => F::NoritoInvalid,
-            Self::AbiTypeNotAllowed { .. } => F::AbiTypeNotAllowed,
-            Self::HostOutputBudgetExceeded {
-                resource: HostOutputResource::Items,
-                ..
-            } => F::HostOutputItemsExceeded,
-            Self::HostOutputBudgetExceeded {
-                resource: HostOutputResource::Bytes,
-                ..
-            } => F::HostOutputBytesExceeded,
-            Self::AmxBudgetExceeded { .. } => F::AmxBudgetExceeded,
-            Self::ExecutionDeferred(_)
-            | Self::AllocationDeferred(_)
-            | Self::AllocatorDeferred(_)
-            | Self::DecodeDeferred(_)
-            | Self::VerificationDeferred(_)
-            | Self::HostUnavailable
-            | Self::SyscallGasQuoteExceeded { .. }
-            | Self::SyscallMeteringModeMismatch { .. }
-            | Self::ContractAbort { .. }
-            | Self::UnsupportedProgramVersion { .. }
-            | Self::UnsupportedProgramFeatureBits { .. }
-            | Self::UnsupportedProgramAbiVersion { .. }
-            | Self::MissingMaxCycles
-            | Self::MaxCyclesWithoutZk { .. }
-            | Self::ArtifactAbiHashMismatch { .. }
-            | Self::GenericSyscallNotAllowed { .. } => return None,
-            Self::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
-        })
+        crate::IvmProfileId::of_policy(crate::SyscallPolicy::AbiV1)
+            .engine()
+            .fault_kind(self)
     }
     /// Construct a metered `NotImplemented` error for a known syscall.
     #[must_use]
@@ -579,6 +561,11 @@ impl fmt::Display for VMError {
             VMError::NumericFault(fault) => {
                 write!(f, "numeric operation failed with ABI fault {}", fault.tag())
             }
+            VMError::RegisterIntegerOverflow => write!(
+                f,
+                "numeric operation failed with ABI fault {}",
+                crate::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG
+            ),
             VMError::PointerAbiFault(fault) => {
                 write!(
                     f,
@@ -617,6 +604,13 @@ impl fmt::Display for VMError {
                 f,
                 "IVM program header declares trace bound {max_cycles} without ZK mode"
             ),
+            VMError::ProgramVectorLengthTooLarge {
+                vector_length,
+                max_allowed,
+            } => write!(
+                f,
+                "IVM program vector length {vector_length} exceeds maximum {max_allowed}"
+            ),
             VMError::ArtifactAbiHashMismatch { expected, actual } => write!(
                 f,
                 "contract artifact ABI hash mismatch (expected={}, actual={})",
@@ -627,7 +621,12 @@ impl fmt::Display for VMError {
                 f,
                 "syscall 0x{syscall:02x} is not allowed in a generic IVM program"
             ),
+            VMError::InvalidVectorLength { vector_length } => {
+                write!(f, "invalid vector length {vector_length}")
+            }
             VMError::MissingHalt => write!(f, "program terminated without HALT, EXIT, or ABORT"),
+            VMError::VectorExtensionDisabled => write!(f, "vector extension not enabled"),
+            VMError::ZkExtensionDisabled => write!(f, "zk extension not enabled"),
             VMError::NullifierAlreadyUsed => write!(f, "nullifier already used"),
             VMError::PermissionDenied => write!(f, "permission denied"),
             VMError::ReentrantCall => write!(f, "contract address is already active"),

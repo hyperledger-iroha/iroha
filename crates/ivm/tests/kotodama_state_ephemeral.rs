@@ -7,7 +7,7 @@ use iroha_primitives::{
 use ivm::{CoreHost, IVM};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn execute_int_result(source: &str) -> i64 {
-    let program = KotodamaCompiler::new()
+    let program = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile StateMap contract");
     let mut vm = IVM::new(u64::MAX);
@@ -71,7 +71,7 @@ fn state_map_set_get_roundtrip() {
             }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler.compile_source(src).expect("compile state map");
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -94,7 +94,7 @@ fn state_map_with_struct_value_roundtrip() {
             }
         }
     "#;
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     let prog = compiler
         .compile_source(src)
         .expect("compile state map with struct value");

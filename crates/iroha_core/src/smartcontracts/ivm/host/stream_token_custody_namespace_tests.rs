@@ -146,7 +146,11 @@ fn custody_namespace_vm(paths: &[StatePath]) -> IVM {
         .compile_source_with_manifest(&source)
         .expect("compile every declarable native-key shadow and user control");
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&program).expect("declared-state contract");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("declared-state contract");
     vm
 }
 
@@ -165,7 +169,7 @@ fn custody_namespace_bytes_record() -> Vec<u8> {
             }"#,
         )
         .expect("compile user-key positive control");
-    let metadata = ivm::ProgramMetadata::parse(&program).expect("compiled metadata");
+    let metadata = crate::ivm_test_support::parse_declared(&program).expect("compiled metadata");
     let entry = metadata.prefix_len() as u64
         + metadata
             .contract_interface
@@ -178,7 +182,11 @@ fn custody_namespace_bytes_record() -> Vec<u8> {
             .entry_pc;
     let mut host = custody_namespace_scoped_host();
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&program).expect("load user-key control");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load user-key control");
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entry).expect("select main");
     vm.run_with_host(&mut host).expect("execute user-key SET");
@@ -397,7 +405,10 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         assert!(
             matches!(
                 (
-                    &(IVM::new(u64::MAX).load_program(&invalid)),
+                    &(IVM::new(u64::MAX).load_program_for_profile(
+                        &invalid,
+                        crate::ivm_test_support::declared_profile(&invalid)
+                    )),
                     &(ivm::VMError::InvalidMetadata)
                 ),
                 (
@@ -535,7 +546,11 @@ fn stream_token_custody_namespace_scan_rejects_a_declared_opaque_map() {
             })
             .collect(),
     );
-    vm.load_program(&program).expect("declared scan maps");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("declared scan maps");
     let mut host = custody_namespace_scoped_host();
     for (path, opaque) in [(root, true), (user, false)] {
         let ptr = store_state_path_tlv(&mut vm, &path);

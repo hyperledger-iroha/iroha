@@ -140,7 +140,7 @@ fn minimal_bound_contract_artifact() -> (
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
     let wrapper_entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -215,12 +215,13 @@ fn minimal_bound_contract_artifact() -> (
     };
     let mut instructions = Vec::new();
     for _ in &entrypoints {
-        instructions.extend_from_slice(&crate::ivm_test_support::unit_return());
+        instructions.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
     }
-    let mut artifact = metadata.encode();
+    let mut artifact = crate::ivm_test_support::baseline_header(metadata.clone());
     artifact.extend_from_slice(&interface.encode_section());
     artifact.extend_from_slice(&instructions);
-    let verified = ivm::verify_contract_artifact(&artifact).expect("valid bound contract artifact");
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .expect("valid bound contract artifact");
     (artifact, verified.manifest)
 }
 

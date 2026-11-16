@@ -793,12 +793,22 @@ fn ivm_trigger_respects_the_remaining_block_gas() {
     let mut raw = Vec::new();
     // Two one-gas ADD instructions exceed the single unit of block gas left to the trigger.
     raw.extend_from_slice(
-        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADD,
+            3,
+            1,
+            2,
+        )
+        .to_le_bytes(),
     );
     raw.extend_from_slice(
-        &ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::ADD, 3, 1, 2)
-            .to_le_bytes(),
+        &ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADD,
+            3,
+            1,
+            2,
+        )
+        .to_le_bytes(),
     );
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
@@ -1188,7 +1198,10 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-    let mut program = ivm::ProgramMetadata::default().encode();
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
     let interface = ivm::EmbeddedContractInterfaceV1 {
         events: Vec::new(),
         enum_types: Vec::new(),
@@ -1222,7 +1235,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
         states: Vec::new(),
     };
     program.extend_from_slice(&interface.encode_section());
-    program.extend_from_slice(&crate::ivm_test_support::unit_return());
+    program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
     let code_hash = ivm::contract_code_hash(&program);
     let first = state
         .prepare_contract_query_program(code_hash, &program)

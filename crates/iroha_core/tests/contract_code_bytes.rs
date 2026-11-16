@@ -79,18 +79,29 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
-    ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
+    ivm::verify_contract_artifact_with_declared_profile(&out)
+        .expect("valid test contract artifact");
     out
 }
 #[test]
 fn minimal_contract_fixture_completes_its_authenticated_unit_table() {
     let program = minimal_ivm_program(1);
-    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     let interface = metadata.contract_interface.as_ref().unwrap();
     assert_eq!(interface.callables.len(), 1);
     let entry_pc = metadata.prefix_len() as u64 + interface.entrypoints[0].entry_pc;
     let mut vm = ivm::IVM::new(100_000);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.set_program_counter(entry_pc).unwrap();
     vm.run()
         .expect("fixture returns through its authenticated callable");
@@ -108,7 +119,8 @@ fn multi_chunk_ivm_program() -> Vec<u8> {
     while program.len() < minimum_len {
         program.extend_from_slice(&halt);
     }
-    ivm::verify_contract_artifact(&program).expect("valid multi-chunk contract artifact");
+    ivm::verify_contract_artifact_with_declared_profile(&program)
+        .expect("valid multi-chunk contract artifact");
     program
 }
 fn checked_random_contract_code_keypair() -> KeyPair {
@@ -1044,7 +1056,8 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .expect("finalization of already registered code remains idempotent");
     let mut corrupted_program = minimal_ivm_program(1);
     corrupted_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    ivm::verify_contract_artifact(&corrupted_program).expect("valid second race artifact");
+    ivm::verify_contract_artifact_with_declared_profile(&corrupted_program)
+        .expect("valid second race artifact");
     let corrupted_hash = ivm::contract_code_hash(&corrupted_program);
     let corrupted_size = u64::try_from(corrupted_program.len()).unwrap();
     let mut staged_corruption = corrupted_program.clone();

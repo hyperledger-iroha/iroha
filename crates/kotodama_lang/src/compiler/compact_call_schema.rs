@@ -6,7 +6,7 @@ use norito::core::{DecodeFlagsGuard, Encoder, SerializePayload};
 
 fn compile(source: &str) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
-        CompilerSession::default()
+        CompilerSession::c10()
             .build(CompileRequest {
                 source,
                 source_name: Some("compact_call_schema.ko"),

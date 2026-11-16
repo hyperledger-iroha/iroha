@@ -66,7 +66,7 @@ pub(super) fn instruction(word: u32) -> Result<usize, VMError> {
         c::JALS => 1,
         s::SCALL => crate::parallel::REGISTER_COUNT - 1,
         m::STORE64 | c::BEQ | c::BNE | c::BLT | c::BGE | c::BLTU | c::BGEU | c::HALT | c::JMP => 0,
-        opcode => return Err(VMError::InvalidOpcode(opcode)),
+        opcode => return Err(VMError::InvalidOpcode(u16::from(opcode))),
     })
 }
 

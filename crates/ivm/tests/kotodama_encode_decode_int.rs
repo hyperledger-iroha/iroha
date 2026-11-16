@@ -51,7 +51,7 @@ fn kotodama_source_rejects_retired_integer_codec_helpers() {
             }
         }
     "#;
-    let error = KotodamaCompiler::new()
+    let error = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect_err("source-level integer codec helpers are compiler-internal");
     assert!(error.contains("codec::encode_i64"), "{error}");
@@ -69,7 +69,7 @@ fn debug_info_logs_full_width_int_envelope_at_runtime() {
             }
         }
     "#;
-    let artifact = KotodamaCompiler::new()
+    let artifact = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile wide Int debug logging");
     let mut vm = IVM::new(u64::MAX);

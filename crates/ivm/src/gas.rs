@@ -9,6 +9,7 @@
 //!   from their parent's remaining gas; no program header converts into a gas limit.
 use crate::instruction::wide;
 use iroha_crypto::Hash;
+pub mod baseline;
 /// Default byte multiplier for syscall host-work gas families.
 pub const SYSCALL_GAS_PER_BYTE: u64 = 1;
 /// Fixed gas for `transfer_v1` FastPQ batch begin/end scope operations.
@@ -767,7 +768,18 @@ fn canonical_gas_schedule_descriptor() -> GasScheduleDescriptor {
             )
         })
         .collect();
-    let syscalls = crate::host::abi_v1_host_syscall_metering_registry()
+    GasScheduleDescriptor {
+        domain: GAS_SCHEDULE_DOMAIN,
+        version: GAS_SCHEDULE_DESCRIPTOR_VERSION,
+        opcodes,
+        parameters: canonical_gas_parameters(),
+        staged_phases: canonical_staged_phases(),
+        syscalls: canonical_syscall_metering(),
+    }
+}
+/// Metering records of every ABI V1 host syscall, shared by both engines' schedules.
+fn canonical_syscall_metering() -> Vec<SyscallMeteringRecord> {
+    crate::host::abi_v1_host_syscall_metering_registry()
         .iter()
         .map(|spec| SyscallMeteringRecord {
             number: spec.number,
@@ -778,22 +790,17 @@ fn canonical_gas_schedule_descriptor() -> GasScheduleDescriptor {
             parameters: parameters_tag(spec.parameters),
             minimum_gas: spec.minimum_gas,
         })
-        .collect();
-    let staged_phases = crate::syscall_metering::SyscallMeteringPhase::ALL
+        .collect()
+}
+/// Staged syscall metering phases, shared by both engines' schedules.
+fn canonical_staged_phases() -> Vec<SyscallMeteringPhaseRecord> {
+    crate::syscall_metering::SyscallMeteringPhase::ALL
         .into_iter()
         .map(|phase| SyscallMeteringPhaseRecord {
             name: phase.descriptor_name(),
             tag: phase.tag(),
         })
-        .collect();
-    GasScheduleDescriptor {
-        domain: GAS_SCHEDULE_DOMAIN,
-        version: GAS_SCHEDULE_DESCRIPTOR_VERSION,
-        opcodes,
-        parameters: canonical_gas_parameters(),
-        staged_phases,
-        syscalls,
-    }
+        .collect()
 }
 fn push_field(buffer: &mut Vec<u8>, bytes: &[u8]) {
     buffer.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
@@ -830,16 +837,29 @@ fn encode_gas_schedule_descriptor(descriptor: &GasScheduleDescriptor) -> Vec<u8>
     }
     buffer
 }
-/// Deterministic digest of the canonical gas schedule.
+/// Deterministic digest of the C10 engine's canonical gas schedule.
 ///
 /// The descriptor binds the opcode-cost table, every named formula parameter, every staged-metering
 /// phase name/tag, and the exhaustive ABI-v1 syscall metering registry so validators can assert the
 /// active schedule matches consensus configuration.
 #[must_use]
-pub fn schedule_hash() -> Hash {
+pub fn c10_schedule_hash() -> Hash {
     Hash::new(encode_gas_schedule_descriptor(
         &canonical_gas_schedule_descriptor(),
     ))
+}
+/// Gas-schedule hash of the interface policy [`crate::SyscallPolicy::AbiV1`]: the schedule of the
+/// engine it is bound to, the frozen baseline schedule (`af5a27f5…`).
+#[must_use]
+pub fn schedule_hash() -> Hash {
+    schedule_hash_for(crate::IvmProfileId::of_policy(crate::SyscallPolicy::AbiV1).engine())
+}
+/// Hash of the metering schedule that prices `engine`.
+///
+/// A host-profile definition binds this value beside the ABI hash of its policy.
+#[must_use]
+pub fn schedule_hash_for(engine: crate::IvmEngine) -> Hash {
+    crate::ivm::metering_schedule_hash(engine)
 }
 #[cfg(test)]
 mod tests {
@@ -857,7 +877,7 @@ mod tests {
     #[test]
     fn schedule_hash_binds_domain_version_opcode_order_and_costs() {
         let canonical = canonical_gas_schedule_descriptor();
-        assert_eq!(descriptor_hash(&canonical), schedule_hash());
+        assert_eq!(descriptor_hash(&canonical), c10_schedule_hash());
         assert_descriptor_mutation_changes_hash(|changed| changed.domain = "wrong-domain");
         assert_descriptor_mutation_changes_hash(|changed| changed.version += 1);
         assert_descriptor_mutation_changes_hash(|changed| changed.opcodes[0].0 ^= 1);

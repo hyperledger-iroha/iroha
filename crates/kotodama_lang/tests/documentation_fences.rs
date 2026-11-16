@@ -60,7 +60,7 @@ fn canonical_documentation_kotodama_fences_compile() {
     for relative in ["specs", "crates/ivm/docs"] {
         markdown_files(&root.join(relative), &mut markdown);
     }
-    let session = CompilerSession::default();
+    let session = CompilerSession::c10();
     let mut fence_count = 0usize;
     let mut compiled_sources = BTreeSet::new();
     for path in markdown {

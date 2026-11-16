@@ -52,15 +52,17 @@ fn assert_checked_result(
             );
         }
         None => {
-            // A zero divisor and a signed result outside i64 are distinct numeric faults.
-            let expected = if right == Some(0) {
-                ivm::numeric::NumericFaultV1::DivisionByZero
-            } else {
-                ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
-            };
+            // A zero divisor and a signed result outside i64 are distinct C10 faults.
+            let zero_divisor = right == Some(0);
             assert!(
-                matches!(result, Err(VMError::NumericFault(fault)) if fault == expected),
-                "{operation} must trap with {expected:?} for {left} and {right:?}, got {result:?}"
+                match &result {
+                    Err(VMError::NumericFault(ivm::numeric::NumericFaultV1::DivisionByZero)) => {
+                        zero_divisor
+                    }
+                    Err(VMError::RegisterIntegerOverflow) => !zero_divisor,
+                    _ => false,
+                },
+                "{operation} must trap with the C10 fault for {left} and {right:?}, got {result:?}"
             );
             assert_eq!(
                 destination, DESTINATION_SENTINEL,

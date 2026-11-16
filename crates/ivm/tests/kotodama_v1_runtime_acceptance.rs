@@ -12,7 +12,7 @@ const MAX_INT_MINUS_ONE: &str = "67039039649712985497870124991029230637396829102
 const MIN_INT: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
 const MIN_INT_PLUS_ONE: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
 fn compile_and_run(source: &str) -> IVM {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile V1 contract");
     let parsed = ProgramMetadata::parse(&code).expect("parse V1 contract metadata");
@@ -34,7 +34,7 @@ fn compile_and_run(source: &str) -> IVM {
     vm
 }
 fn compile_and_run_with_default_host(source: &str) -> IVM {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile V1 contract for the standalone host");
     let parsed = ProgramMetadata::parse(&code).expect("parse V1 contract metadata");
@@ -55,7 +55,7 @@ fn compile_and_run_with_default_host(source: &str) -> IVM {
     vm
 }
 fn compile_init_and_run(source: &str) -> IVM {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile initialized V1 contract");
     let parsed = ProgramMetadata::parse(&code).expect("parse initialized V1 contract metadata");
@@ -323,7 +323,7 @@ fn exact_numeric_state_survives_a_fresh_host_snapshot_roundtrip() {
             }
         }
     "#;
-    let program = Compiler::new()
+    let program = Compiler::new_c10()
         .compile_source(source)
         .expect("compile exact durable numeric-state contract");
     let parsed = ProgramMetadata::parse(&program).expect("parse durable numeric-state metadata");
@@ -443,7 +443,7 @@ fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
 #[test]
 fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
     let source = include_str!("../fixtures/koto_v1/kotodama_v1_runtime_acceptance/015.ko");
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile signed comparison contract");
     let parsed = ProgramMetadata::parse(&code).expect("parse comparison metadata");

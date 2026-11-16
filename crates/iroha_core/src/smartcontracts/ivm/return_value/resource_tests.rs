@@ -19,8 +19,11 @@ pub fn funded_return_vm() -> (IVM, AllocationBudget) {
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku ResourceReturn { view fn main() authorize(anyone) { () } }")
         .expect("compile authenticated root call");
-    vm.load_program(&program)
-        .expect("load authenticated root call");
+    vm.load_program_for_profile(
+        &program,
+        crate::ivm_test_support::declared_profile(&program),
+    )
+    .expect("load authenticated root call");
     vm.select_entrypoint("main").expect("select root call");
     vm.run().expect("complete root call");
     assert_eq!(vm.call_result_word_count().unwrap(), 1);

@@ -120,9 +120,7 @@ fn native_absolute_overflow_private_tag_and_gas_first_traps_cannot_commit() {
             } else {
                 assert!(matches!(
                     outcome,
-                    Err(ivm::VMError::NumericFault(
-                        ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
-                    ))
+                    Err(ivm::VMError::RegisterIntegerOverflow)
                 ));
             }
             let record = &recorder.records()[0];

@@ -38,7 +38,7 @@ pub const AREA_FIELDS: [&str; 16] = [
 
 /// Compile the actual source, returning its canonical artifact.
 pub fn compile_program() -> Result<Vec<u8>, String> {
-    Compiler::new().compile_source(SOURCE)
+    Compiler::new_c10().compile_source(SOURCE)
 }
 
 /// Select exactly the public wrapper advertised by the artifact.

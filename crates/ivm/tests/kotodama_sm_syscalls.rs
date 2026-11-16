@@ -77,7 +77,7 @@ fn kotodama_sm3_hash_returns_expected_digest() {
         }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm3 hash contract");
     let message = b"kotodama-sm3";
@@ -102,7 +102,7 @@ fn compile_sm2_verify() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm2 verify contract")
 }
@@ -114,7 +114,7 @@ fn compile_sm2_verify_with_distid() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm2 verify with distid contract")
 }
@@ -126,7 +126,7 @@ fn compile_sm4_gcm_seal() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm4 gcm seal contract")
 }
@@ -138,7 +138,7 @@ fn compile_sm4_gcm_open() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm4 gcm open contract")
 }
@@ -150,7 +150,7 @@ fn compile_sm4_ccm_seal() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm4 ccm seal contract")
 }
@@ -162,7 +162,7 @@ fn compile_sm4_ccm_open() -> Vec<u8> {
         }
         }
     "#;
-    KotodamaCompiler::new()
+    KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile sm4 ccm open contract")
 }

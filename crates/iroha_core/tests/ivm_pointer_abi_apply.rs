@@ -33,7 +33,12 @@ fn quantity_tlv(value: &Quantity) -> Vec<u8> {
     ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
-    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        program,
+        ivm::IvmProfileId::declared(program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
         .contract_interface
         .as_ref()
@@ -213,7 +218,12 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         let mut host = CoreHostImpl::new(from.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(500_000);
-        vm.load_program(&program).unwrap();
+        vm.load_program_for_profile(
+            &program,
+            ivm::IvmProfileId::declared(&program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .unwrap();
         vm.run_with_host(&mut host).unwrap();
         let queued = host
             .drain_instructions()
@@ -327,7 +337,12 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     vm.memory
         .preload_input(off_dataspace, &dataspace_bytes)
         .expect("preload input");
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.set_register(10, ptr_from);
     vm.set_register(11, ptr_to);
     vm.set_register(12, ptr_asset);
@@ -428,7 +443,12 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let program = compiler.compile_source(&src).expect("compile");
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(authority.clone()));
-    vm.load_program(&program).expect("load");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load");
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run");
     let kura = Kura::blank_kura_for_testing();

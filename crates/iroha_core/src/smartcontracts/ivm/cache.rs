@@ -64,9 +64,11 @@ fn with_cache_store<T, R>(
 
 #[derive(Debug)]
 struct PreparedContractStore {
-    entries: BTreeMap<Hash, ivm::PreparedContract>,
+    // Keyed by content address and preparing profile: an entry never serves another profile.
+    entries: BTreeMap<SummaryKey, ivm::PreparedContract>,
+    // One preparation per content address at a time, whatever profile requests it.
     preparing: BTreeSet<Hash>,
-    order: VecDeque<Hash>,
+    order: VecDeque<SummaryKey>,
     nested_runtimes: BTreeMap<RuntimeKey, SharedRuntimePool>,
     nested_runtime_order: VecDeque<RuntimeKey>,
     capacity: usize,
@@ -217,7 +219,7 @@ impl PreparedContractCache {
         code_hash: Hash,
         bytecode: &[u8],
     ) -> Result<ivm::PreparedContract, ivm::VMError> {
-        self.get_or_prepare_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
+        self.get_or_prepare_for_policy(code_hash, bytecode, interface_policy())
     }
     /// Prepare under the exact named profile selected by the caller's execution root.
     ///
@@ -239,7 +241,7 @@ impl PreparedContractCache {
     /// performs neither a bytecode clone nor another parse/hash/predecode pass.
     #[must_use]
     pub fn get(&self, code_hash: Hash) -> Option<ivm::PreparedContract> {
-        self.get_for_policy(code_hash, ivm::SyscallPolicy::AbiV1)
+        self.get_for_policy(code_hash, interface_policy())
     }
     /// Resolve trusted content only under the requested exact named profile.
     #[must_use]
@@ -248,13 +250,16 @@ impl PreparedContractCache {
         code_hash: Hash,
         policy: ivm::SyscallPolicy,
     ) -> Option<ivm::PreparedContract> {
+        let key = SummaryKey::for_policy(policy, code_hash);
         self.with_store(|store| {
-            let contract = store.entries.get(&code_hash).cloned()?;
-            if contract.syscall_policy() != policy {
+            let contract = store.entries.get(&key).cloned()?;
+            // The key already binds the profile. A resident object of another profile is
+            // never a result, even if a defect filed it under this key.
+            if contract.profile_id() != key.profile {
                 return None;
             }
             store.stats.hits = store.stats.hits.saturating_add(1);
-            store.touch(code_hash);
+            store.touch(key);
             Some(contract)
         })
     }
@@ -278,11 +283,12 @@ impl PreparedContractCache {
         bytecode: &[u8],
         policy: ivm::SyscallPolicy,
     ) -> Result<(ivm::PreparedContract, bool), ivm::VMError> {
+        let key = SummaryKey::for_policy(policy, code_hash);
         let cached = self.with_store(|store| {
             loop {
-                if let Some(contract) = store.entries.get(&code_hash).cloned() {
+                if let Some((resident, contract)) = store.entry_or_same_engine_foreign(key) {
                     store.stats.hits = store.stats.hits.saturating_add(1);
-                    store.touch(code_hash);
+                    store.touch(resident);
                     return Some(contract);
                 }
                 if store.preparing.insert(code_hash) {
@@ -294,6 +300,8 @@ impl PreparedContractCache {
             }
         });
         if let Some(contract) = cached {
+            // Only the entry of exactly this profile is a result. An entry of the same engine
+            // under another named policy reports the mismatch its header check would report.
             require_prepared_policy(&contract, policy)?;
             return Ok((contract, false));
         }
@@ -324,31 +332,31 @@ impl PreparedContractCache {
                 self.ready.notify_all();
                 return Err(ivm::VMError::InvalidMetadata);
             }
-            if let Some(existing) = store.entries.get(&code_hash).cloned() {
+            if let Some(existing) = store.entries.get(&key).cloned() {
                 if existing.artifact() != prepared.artifact() {
                     self.ready.notify_all();
                     return Err(ivm::VMError::InvalidMetadata);
                 }
-                store.touch(code_hash);
+                store.touch(key);
                 self.ready.notify_all();
                 return Ok((existing, false));
             }
-            store.insert(code_hash, prepared.clone());
+            store.insert(key, prepared.clone());
             self.ready.notify_all();
             Ok((prepared, true))
         })
     }
     fn publish(&self, contract: ivm::PreparedContract) -> Result<(), ivm::VMError> {
-        let code_hash = contract.code_hash();
+        let key = SummaryKey::for_profile(contract.profile_id(), contract.code_hash());
         self.with_store(|store| {
-            if let Some(existing) = store.entries.get(&code_hash).cloned() {
+            if let Some(existing) = store.entries.get(&key).cloned() {
                 if existing.artifact() != contract.artifact() {
                     return Err(ivm::VMError::InvalidMetadata);
                 }
-                store.touch(code_hash);
+                store.touch(key);
                 return Ok(());
             }
-            store.insert(code_hash, contract);
+            store.insert(key, contract);
             Ok(())
         })
     }
@@ -371,7 +379,8 @@ impl PreparedContractCache {
     ) -> Result<PreparedRuntimeLease, ivm::VMError> {
         #[cfg(test)]
         self.check_checkout_for_test()?;
-        let key = RuntimeKey::new(
+        let key = RuntimeKey::for_profile(
+            contract.profile_id(),
             contract.code_hash(),
             stack_limit_for_gas(gas_limit),
             heap_limit,
@@ -403,7 +412,7 @@ impl PreparedContractCache {
         }
         let mut vm = ivm::IVM::try_new_with_memory_budget(gas_limit, &self.execution_budget)?;
         vm.set_zk_trace_enabled(false);
-        vm.memory.set_heap_max_limit(heap_limit)?;
+        vm.set_heap_max_limit(heap_limit)?;
         vm.load_prepared(contract)?;
         vm.set_gas_limit(gas_limit);
         self.with_store(|store| {
@@ -420,7 +429,7 @@ impl PreparedContractCache {
         let cacheable = self.with_store(|store| {
             // The artifact may have been evicted while the template was built.
             // Cache admission uses the current store, never the earlier lookup.
-            let cacheable = store.capacity != 0 && store.entries.contains_key(&key.code_hash);
+            let cacheable = store.capacity != 0 && store.entries.contains_key(&key.summary_key());
             if cacheable && !store.nested_runtimes.contains_key(&key) {
                 store.insert_nested_runtime(
                     key,
@@ -507,7 +516,7 @@ impl Default for PreparedContractCache {
 impl PreparedContractStore {
     fn can_return_runtime(&self, key: RuntimeKey) -> bool {
         self.capacity != 0
-            && self.entries.contains_key(&key.code_hash)
+            && self.entries.contains_key(&key.summary_key())
             && self
                 .nested_runtimes
                 .get(&key)
@@ -540,7 +549,7 @@ impl PreparedContractStore {
     }
     fn index_bytes(&self) -> Option<usize> {
         let values = [
-            norito::core::owned_btree_allocation_bytes::<Hash, ivm::PreparedContract>(
+            norito::core::owned_btree_allocation_bytes::<SummaryKey, ivm::PreparedContract>(
                 self.entries.len(),
             )
             .ok()?,
@@ -550,7 +559,7 @@ impl PreparedContractStore {
             .ok()?,
             self.order
                 .capacity()
-                .checked_mul(std::mem::size_of::<Hash>())?,
+                .checked_mul(std::mem::size_of::<SummaryKey>())?,
             self.nested_runtime_order
                 .capacity()
                 .checked_mul(std::mem::size_of::<RuntimeKey>())?,
@@ -573,18 +582,36 @@ impl PreparedContractStore {
         }
     }
 
-    fn touch(&mut self, code_hash: Hash) {
-        if let Some(position) = self
-            .order
-            .iter()
-            .position(|candidate| *candidate == code_hash)
-        {
+    /// The entry prepared for exactly the profile of `key`; failing that, an entry of the same
+    /// code hash under another named policy of the same engine, returned with its own key.
+    ///
+    /// The second is never a result. Policies of one engine share a fixed-header layout and a
+    /// header carries one ABI hash, so that entry proves the requested policy's own header
+    /// check refuses the artifact; the caller reports that mismatch without re-reading bytes.
+    /// Entries of another engine prove nothing about this one and are not consulted.
+    fn entry_or_same_engine_foreign(
+        &self,
+        key: SummaryKey,
+    ) -> Option<(SummaryKey, ivm::PreparedContract)> {
+        std::iter::once(key)
+            .chain(key.same_engine_foreign())
+            .find_map(|candidate| Some((candidate, self.entries.get(&candidate)?.clone())))
+    }
+    /// The first resident entry of `code_hash` in the fixed order of implemented profiles.
+    ///
+    /// A lookup that knows only a content address uses it; its caller then accepts the
+    /// entry's own profile or refuses it for the requesting root.
+    fn entry_of_any_profile(&self, code_hash: Hash) -> Option<ivm::PreparedContract> {
+        SummaryKey::every_profile(code_hash).find_map(|key| self.entries.get(&key).cloned())
+    }
+    fn touch(&mut self, key: SummaryKey) {
+        if let Some(position) = self.order.iter().position(|candidate| *candidate == key) {
             self.order.remove(position);
         }
-        self.order.push_back(code_hash);
+        self.order.push_back(key);
         self.retain_index_or_clear();
     }
-    fn insert(&mut self, code_hash: Hash, contract: ivm::PreparedContract) {
+    fn insert(&mut self, key: SummaryKey, contract: ivm::PreparedContract) {
         if self.capacity == 0 {
             return;
         }
@@ -598,8 +625,8 @@ impl PreparedContractStore {
                 self.remove_nested_runtimes_for(evicted);
             }
         }
-        self.entries.insert(code_hash, contract);
-        self.touch(code_hash);
+        self.entries.insert(key, contract);
+        self.touch(key);
         while self.entries.len() > self.capacity {
             let Some(evicted) = self.order.pop_front() else {
                 break;
@@ -639,39 +666,98 @@ impl PreparedContractStore {
             }
         }
     }
-    fn remove_nested_runtimes_for(&mut self, code_hash: Hash) {
+    fn remove_nested_runtimes_for(&mut self, evicted: SummaryKey) {
         self.nested_runtimes
-            .retain(|key, _| key.code_hash != code_hash);
+            .retain(|key, _| key.summary_key() != evicted);
         self.nested_runtime_order
-            .retain(|key| key.code_hash != code_hash);
+            .retain(|key| key.summary_key() != evicted);
     }
 }
+/// Cache identity of a prepared artifact, summary or analysis: its content address under the
+/// profile that prepared it.
+///
+/// The profile is part of the key, so an object prepared for one profile is never looked up,
+/// touched or evicted as another's. The key grants nothing: the requesting root's selection and
+/// its effective restrictions are rechecked on every invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SummaryKey {
     code_hash: Hash,
+    profile: ivm::IvmProfileId,
 }
 impl SummaryKey {
+    fn for_profile(profile: ivm::IvmProfileId, code_hash: Hash) -> Self {
+        Self { code_hash, profile }
+    }
+    fn for_policy(policy: ivm::SyscallPolicy, code_hash: Hash) -> Self {
+        Self::for_profile(ivm::IvmProfileId::of_policy(policy), code_hash)
+    }
+    /// Key under the profile of the first-release interfaces, for tests of baseline programs.
+    #[cfg(test)]
     fn new(code_hash: Hash) -> Self {
-        Self { code_hash }
+        Self::for_profile(generic_program_profile(), code_hash)
+    }
+    /// Keys of the same code hash under every other named policy of this key's engine.
+    fn same_engine_foreign(self) -> impl Iterator<Item = Self> {
+        ivm::IvmProfileId::IMPLEMENTED
+            .into_iter()
+            .filter(move |profile| {
+                profile.engine() == self.profile.engine() && *profile != self.profile
+            })
+            .map(move |profile| Self::for_profile(profile, self.code_hash))
+    }
+    /// The key of `code_hash` under every implemented profile, in their fixed order.
+    fn every_profile(code_hash: Hash) -> impl Iterator<Item = Self> {
+        ivm::IvmProfileId::IMPLEMENTED
+            .into_iter()
+            .map(move |profile| Self::for_profile(profile, code_hash))
     }
 }
+/// Cache identity of a warmed runtime: the prepared artifact of one profile under one stack and
+/// heap authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct RuntimeKey {
     code_hash: Hash,
     stack_limit: u64,
     heap_limit: u64,
+    profile: ivm::IvmProfileId,
 }
 impl RuntimeKey {
-    fn new(code_hash: Hash, stack_limit: u64, heap_limit: u64) -> Self {
+    fn for_profile(
+        profile: ivm::IvmProfileId,
+        code_hash: Hash,
+        stack_limit: u64,
+        heap_limit: u64,
+    ) -> Self {
         Self {
             code_hash,
             stack_limit,
             heap_limit,
+            profile,
         }
     }
-    fn summary_key(&self) -> SummaryKey {
-        SummaryKey::new(self.code_hash)
+    /// Key under the profile of the first-release interfaces, for tests of baseline programs.
+    #[cfg(test)]
+    fn new(code_hash: Hash, stack_limit: u64, heap_limit: u64) -> Self {
+        Self::for_profile(
+            generic_program_profile(),
+            code_hash,
+            stack_limit,
+            heap_limit,
+        )
     }
+    fn summary_key(&self) -> SummaryKey {
+        SummaryKey::for_profile(self.profile, self.code_hash)
+    }
+}
+/// Profile of contract-less generic programs: the one the first-release interfaces name. A named
+/// profile requires a self-describing contract.
+fn generic_program_profile() -> ivm::IvmProfileId {
+    super::profile::ResolvedIvmProfile::interface_default().id()
+}
+/// Named policy of the first-release interfaces, for the entry points whose caller supplies
+/// neither a policy nor an execution root. They resolve it here and nowhere else.
+fn interface_policy() -> ivm::SyscallPolicy {
+    super::profile::ResolvedIvmProfile::interface_default().policy()
 }
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
@@ -682,7 +768,7 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
 /// admission and host dispatch so the two enforcement points cannot drift.
 #[must_use]
 pub(crate) fn is_generic_syscall_allowed(number: u32) -> bool {
-    ivm::syscalls::is_generic_program_syscall_allowed(ivm::SyscallPolicy::AbiV1, number)
+    ivm::syscalls::is_generic_program_syscall_allowed(generic_program_profile().policy(), number)
 }
 /// Summary of a compiled IVM program derived during admission.
 #[derive(Clone, Debug)]
@@ -711,6 +797,8 @@ pub struct ProgramSummary {
 #[derive(Clone, Debug)]
 pub struct GenericProgramSummary {
     program: ivm::cache_memory::SharedAllocation<u8>,
+    // Profile the verifier loaded and validated this program under.
+    profile: ivm::IvmProfileId,
     /// Parsed program metadata.
     pub metadata: ProgramMetadata,
     /// Offset to the first decoded instruction.
@@ -734,6 +822,10 @@ impl GenericProgramSummary {
     #[must_use]
     pub fn shared_program(&self) -> ivm::cache_memory::SharedAllocation<u8> {
         self.program.clone()
+    }
+    /// Profile this program was validated under and executes under.
+    pub(crate) fn profile(&self) -> super::profile::ResolvedIvmProfile {
+        super::profile::ResolvedIvmProfile::of_id(self.profile)
     }
 }
 /// Admission result for either a self-describing contract or a generic IVM program.
@@ -777,6 +869,14 @@ impl ExecutableProgramSummary {
             Self::Generic(summary) => summary.abi_hash,
         }
     }
+    /// Return the profile the program was resolved and prepared under.
+    #[must_use]
+    pub(crate) fn profile(&self) -> crate::smartcontracts::ivm::profile::ResolvedIvmProfile {
+        match self {
+            Self::Contract(summary) => summary.profile(),
+            Self::Generic(summary) => summary.profile(),
+        }
+    }
 }
 impl ProgramSummary {
     /// Prepare and summarize one complete deployable contract artifact.
@@ -794,6 +894,13 @@ impl ProgramSummary {
     #[must_use]
     pub fn prepared_contract(&self) -> &ivm::PreparedContract {
         &self.prepared
+    }
+    /// Profile the contract was admitted and prepared under.
+    ///
+    /// Every later check of this summary (execution policy, restrictions, fault projection) is
+    /// keyed by it; none re-derives a profile from the artifact.
+    pub(crate) fn profile(&self) -> super::profile::ResolvedIvmProfile {
+        super::profile::ResolvedIvmProfile::of_id(self.prepared.profile_id())
     }
     /// Return the shared bounded cache used for nested contract preparation.
     #[must_use]
@@ -1041,7 +1148,7 @@ impl IvmCache {
     /// # Errors
     /// Returns [`ivm::VMError`] if the bytecode is not a valid deployable contract.
     pub fn summarize_program(&mut self, bytecode: &[u8]) -> Result<ProgramSummary, ivm::VMError> {
-        self.summarize_program_for_policy(bytecode, ivm::SyscallPolicy::AbiV1)
+        self.summarize_program_for_policy(bytecode, interface_policy())
     }
     /// Summarize under an explicit profile selected by the root, including warm-cache checks.
     ///
@@ -1069,7 +1176,7 @@ impl IvmCache {
         &mut self,
         bytecode: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        self.summarize_executable_for_policy(bytecode, ivm::SyscallPolicy::AbiV1)
+        self.summarize_executable_for_policy(bytecode, interface_policy())
     }
     /// Validate a program under an explicitly selected named profile.
     ///
@@ -1085,7 +1192,7 @@ impl IvmCache {
             self.summarize_program_for_policy(bytecode, policy)
                 .map(ExecutableProgramSummary::Contract)
         } else {
-            if policy != ivm::SyscallPolicy::AbiV1 {
+            if policy != generic_program_profile().policy() {
                 return Err(ivm::VMError::InvalidMetadata);
             }
             self.summarize_generic_program(bytecode)
@@ -1103,7 +1210,7 @@ impl IvmCache {
     ) -> Result<GenericProgramSummary, ivm::VMError> {
         let code_hash = ivm::contract_code_hash(bytecode);
         self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
-        let key = SummaryKey::new(code_hash);
+        let key = SummaryKey::for_profile(generic_program_profile(), code_hash);
         let cached = self.with_local(|local| local.generic_summaries.get(&key).cloned());
         if let Some(hit) = cached {
             if hit.program() != bytecode {
@@ -1113,7 +1220,7 @@ impl IvmCache {
             self.touch_summary(key);
             return Ok(hit);
         }
-        let parsed = ProgramMetadata::parse(bytecode)?;
+        let parsed = ProgramMetadata::parse_for_profile(bytecode, generic_program_profile())?;
         if parsed.contract_interface.is_some() {
             return Err(ivm::VMError::InvalidMetadata);
         }
@@ -1143,7 +1250,7 @@ impl IvmCache {
         code_offset: usize,
         header_len: usize,
     ) -> Result<GenericProgramSummary, ivm::VMError> {
-        let key = SummaryKey::new(code_hash);
+        let key = SummaryKey::for_profile(generic_program_profile(), code_hash);
         let cached = self.with_local(|local| local.generic_summaries.get(&key).cloned());
         if let Some(hit) = cached {
             if hit.program() != bytecode {
@@ -1163,7 +1270,8 @@ impl IvmCache {
         code_offset: usize,
         header_len: usize,
     ) -> Result<GenericProgramSummary, ivm::VMError> {
-        let key = SummaryKey::new(code_hash);
+        let profile = generic_program_profile();
+        let key = SummaryKey::for_profile(profile, code_hash);
         // Loading performs the same literal, instruction, control-flow, and
         // syscall validation used at execution. Both immutable instruction
         // arrays consume this State's original pool, outside global caches;
@@ -1171,11 +1279,11 @@ impl IvmCache {
         let mut verifier =
             ivm::IVM::try_new_with_memory_budget(0, self.prepared_contracts.execution_budget())?;
         verifier.set_zk_trace_enabled(false);
-        verifier.load_program(bytecode)?;
+        verifier.load_program_for_policy(bytecode, profile.policy())?;
         if Hash::prehashed(verifier.code_hash()) != code_hash {
             return Err(ivm::VMError::InvalidMetadata);
         }
-        let syscalls = ivm::analysis::program_syscall_numbers(bytecode)
+        let syscalls = ivm::analysis::program_syscall_numbers_for_profile(bytecode, profile)
             .map_err(ProgramAnalysisError::into_vm_error)?;
         if let Some(forbidden) = syscalls
             .filter(|number| !is_generic_syscall_allowed(*number))
@@ -1188,10 +1296,11 @@ impl IvmCache {
                 bytecode,
                 self.prepared_contracts.execution_budget(),
             )?,
+            profile,
             code_offset,
             header_len,
-            abi_hash: Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)),
-            meta_hash: Hash::new(metadata.encode()),
+            abi_hash: Hash::prehashed(profile.abi_hash()),
+            meta_hash: Hash::new(&bytecode[..header_len]),
             metadata,
             code_hash,
         };
@@ -1213,7 +1322,7 @@ impl IvmCache {
         code_hash: Hash,
         bytecode: &[u8],
     ) -> Result<ProgramSummary, ivm::VMError> {
-        self.summarize_program_with_hash_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
+        self.summarize_program_with_hash_for_policy(code_hash, bytecode, interface_policy())
     }
     /// Summarize trusted content under an exact root-selected profile.
     ///
@@ -1228,7 +1337,7 @@ impl IvmCache {
         if let Some(hit) = self.cached_program_summary_for_policy(code_hash, policy)? {
             return Ok(hit);
         }
-        let key = SummaryKey::new(code_hash);
+        let key = SummaryKey::for_policy(policy, code_hash);
         let (prepared, prepared_now) = self
             .prepared_contracts
             .get_or_prepare_with_status_for_policy(code_hash, bytecode, policy)?;
@@ -1238,7 +1347,7 @@ impl IvmCache {
         let metadata = prepared.metadata().clone();
         let code_offset = prepared.code_offset();
         let header_len = prepared.header_len();
-        let meta_hash = Hash::new(metadata.encode_for_policy(prepared.syscall_policy()));
+        let meta_hash = Hash::new(&bytecode[..header_len]);
         // Contract preparation has already compared the authenticated CNTR
         // binding with the local descriptor. Preserve the artifact-carried
         // value here so manifest checks never substitute node-local metadata.
@@ -1270,7 +1379,7 @@ impl IvmCache {
         &mut self,
         code_hash: Hash,
     ) -> Result<Option<ProgramSummary>, ivm::VMError> {
-        self.cached_program_summary_for_policy(code_hash, ivm::SyscallPolicy::AbiV1)
+        self.cached_program_summary_for_policy(code_hash, interface_policy())
     }
     /// Read a summary only if its authenticated header matches the requested profile.
     ///
@@ -1281,14 +1390,18 @@ impl IvmCache {
         code_hash: Hash,
         policy: ivm::SyscallPolicy,
     ) -> Result<Option<ProgramSummary>, ivm::VMError> {
-        let key = SummaryKey::new(code_hash);
-        let Some(hit) = self.with_local(|local| local.summaries.get(&key).cloned()) else {
+        let key = SummaryKey::for_policy(policy, code_hash);
+        let Some((resident, hit)) =
+            self.with_local(|local| local.summary_or_same_engine_foreign(key))
+        else {
             return Ok(None);
         };
+        // Only the summary of exactly this profile is a result; another named policy of the
+        // same engine reports the mismatch its header check would report.
         require_prepared_policy(&hit.prepared, policy)?;
         self.prepared_contracts.publish(hit.prepared.clone())?;
         self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
-        self.touch_summary(key);
+        self.touch_summary(resident);
         Ok(Some(hit))
     }
     /// Resolve a locally cached generic-program summary by its authenticated content address.
@@ -1301,7 +1414,7 @@ impl IvmCache {
         &mut self,
         code_hash: Hash,
     ) -> Option<GenericProgramSummary> {
-        let key = SummaryKey::new(code_hash);
+        let key = SummaryKey::for_profile(generic_program_profile(), code_hash);
         let hit = self.with_local(|local| local.generic_summaries.get(&key).cloned())?;
         self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
         self.touch_summary(key);
@@ -1320,7 +1433,7 @@ impl IvmCache {
         summary: &ProgramSummary,
         _bytecode: &[u8],
     ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-        let key = SummaryKey::new(summary.code_hash);
+        let key = SummaryKey::for_profile(summary.prepared.profile_id(), summary.code_hash);
         let cached = self.with_local(|local| local.analyses.get(&key).cloned());
         if let Some(hit) = cached {
             self.stats.analysis_hits = self.stats.analysis_hits.saturating_add(1);
@@ -1348,7 +1461,7 @@ impl IvmCache {
         &mut self,
         summary: &GenericProgramSummary,
     ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
-        let key = SummaryKey::new(summary.code_hash);
+        let key = SummaryKey::for_profile(summary.profile, summary.code_hash);
         let cached = self.with_local(|local| local.analyses.get(&key).cloned());
         if let Some(hit) = cached {
             self.stats.analysis_hits = self.stats.analysis_hits.saturating_add(1);
@@ -1356,8 +1469,9 @@ impl IvmCache {
             return Ok(hit);
         }
         self.stats.analysis_misses = self.stats.analysis_misses.saturating_add(1);
-        let analysis = ivm::analysis::analyze_program_with_memory_budget(
+        let analysis = ivm::analysis::analyze_program_with_memory_budget_for_profile(
             summary.program(),
+            summary.profile,
             self.prepared_contracts.execution_budget(),
         )?;
         self.insert_analysis(key, &analysis);
@@ -1405,7 +1519,8 @@ impl IvmCache {
         #[cfg(test)]
         self.prepared_contracts.check_checkout_for_test()?;
         let stack_limit = stack_limit_for_gas(gas_limit);
-        let key = RuntimeKey::new(summary.code_hash, stack_limit, heap_limit);
+        let key =
+            RuntimeKey::for_profile(summary.profile, summary.code_hash, stack_limit, heap_limit);
         let cached = self.with_local(|local| {
             local.runtime_templates.get_mut(&key).and_then(|pool| {
                 pool.available
@@ -1426,8 +1541,8 @@ impl IvmCache {
                 self.prepared_contracts.execution_budget(),
             )?;
             vm.set_zk_trace_enabled(false);
-            vm.memory.set_heap_max_limit(heap_limit)?;
-            vm.load_program(summary.program())?;
+            vm.set_heap_max_limit(heap_limit)?;
+            vm.load_program_for_policy(summary.program(), summary.profile.policy())?;
             self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
             vm.set_gas_limit(gas_limit);
             self.stats.template_builds = self.stats.template_builds.saturating_add(1);
@@ -1469,7 +1584,12 @@ impl IvmCache {
         #[cfg(test)]
         self.prepared_contracts.check_checkout_for_test()?;
         let stack_limit = stack_limit_for_gas(gas_limit);
-        let key = RuntimeKey::new(summary.code_hash, stack_limit, heap_limit);
+        let key = RuntimeKey::for_profile(
+            summary.prepared.profile_id(),
+            summary.code_hash,
+            stack_limit,
+            heap_limit,
+        );
         let cached = self.with_local(|local| {
             local.runtime_templates.get_mut(&key).and_then(|pool| {
                 pool.available
@@ -1490,7 +1610,7 @@ impl IvmCache {
             self.prepared_contracts.execution_budget(),
         )?;
         vm.set_zk_trace_enabled(false);
-        vm.memory.set_heap_max_limit(heap_limit)?;
+        vm.set_heap_max_limit(heap_limit)?;
         vm.load_prepared(summary.prepared_contract())?;
         self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
         if gas_limit > 0 {
@@ -1593,6 +1713,21 @@ impl IvmCache {
     }
 }
 impl LocalCacheStore {
+    /// The summary of exactly the profile of `key`; failing that, a summary of the same code
+    /// hash under another named policy of the same engine, returned with its own key. The
+    /// second is never a result (see `PreparedContractStore::entry_or_same_engine_foreign`).
+    fn summary_or_same_engine_foreign(
+        &self,
+        key: SummaryKey,
+    ) -> Option<(SummaryKey, ProgramSummary)> {
+        std::iter::once(key)
+            .chain(key.same_engine_foreign())
+            .find_map(|candidate| Some((candidate, self.summaries.get(&candidate)?.clone())))
+    }
+    /// The first resident summary of `code_hash` in the fixed order of implemented profiles.
+    fn summary_of_any_profile(&self, code_hash: Hash) -> Option<ProgramSummary> {
+        SummaryKey::every_profile(code_hash).find_map(|key| self.summaries.get(&key).cloned())
+    }
     fn can_return_runtime(&self, key: RuntimeKey) -> bool {
         let summary_key = key.summary_key();
         self.capacity != 0
@@ -1883,15 +2018,14 @@ mod tests {
             &format!("iroha-core-cache-tests-{variant}"),
         )
     }
-    /// The same contract as a ZK-mode artifact declaring the trace bound `max_cycles`.
-    fn minimal_zk_program(max_cycles: u64) -> Vec<u8> {
+    /// The same contract declaring the cycle budget `max_cycles`.
+    fn minimal_program_with_max_cycles(max_cycles: u64) -> Vec<u8> {
         minimal_program_with(
             ivm::ProgramMetadata {
-                mode: ivm::ivm_mode::ZK,
                 max_cycles,
                 ..ivm::ProgramMetadata::default()
             },
-            ivm::CONTRACT_FEATURE_BIT_ZK,
+            0,
             "iroha-core-cache-tests",
         )
     }
@@ -1900,7 +2034,7 @@ mod tests {
         features_bitmap: u64,
         compiler_fingerprint: &str,
     ) -> Vec<u8> {
-        let mut program = header.encode();
+        let mut program = crate::ivm_test_support::baseline_header(header);
         let interface = ivm::EmbeddedContractInterfaceV1 {
             events: Vec::new(),
             enum_types: Vec::new(),
@@ -1939,20 +2073,14 @@ mod tests {
             states: Vec::new(),
         };
         program.extend_from_slice(&interface.encode_section());
-        for word in [
-            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
-        ] {
-            program.extend_from_slice(&word.to_le_bytes());
-        }
+        program.extend_from_slice(&crate::ivm_test_support::baseline_unit_return());
         program
     }
     pub(super) fn minimal_generic_program() -> Vec<u8> {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        program
+        crate::ivm_test_support::baseline_program(
+            10_000,
+            &[ivm_abi::baseline::encoding::wide::encode_halt()],
+        )
     }
     #[test]
     fn executable_summary_distinguishes_contracts_from_generic_programs() {
@@ -2076,9 +2204,13 @@ mod tests {
     }
     #[test]
     fn generic_summary_rejects_disallowed_syscalls_during_preparation() {
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_scall(0x00ff_ffff).to_le_bytes());
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let program = crate::ivm_test_support::baseline_program(
+            10_000,
+            &[
+                crate::ivm_test_support::baseline_syscall(0x00ff_ffff),
+                ivm_abi::baseline::encoding::wide::encode_halt(),
+            ],
+        );
         assert!(
             IvmCache::new().summarize_generic_program(&program).is_err(),
             "unknown generic-program syscalls must fail before execution"
@@ -2107,9 +2239,13 @@ mod tests {
             ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
         ] {
-            let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let program = crate::ivm_test_support::baseline_program(
+                10_000,
+                &[
+                    crate::ivm_test_support::baseline_syscall(syscall),
+                    ivm_abi::baseline::encoding::wide::encode_halt(),
+                ],
+            );
             let error = IvmCache::new()
                 .summarize_generic_program(&program)
                 .expect_err("generic syscall profile must reject contract-only calls");
@@ -2127,9 +2263,13 @@ mod tests {
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
         ] {
-            let mut program = ivm::ProgramMetadata::default().encode();
-            program.extend_from_slice(&ivm::encoding::wide::encode_scall(syscall).to_le_bytes());
-            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let program = crate::ivm_test_support::baseline_program(
+                10_000,
+                &[
+                    crate::ivm_test_support::baseline_syscall(syscall),
+                    ivm_abi::baseline::encoding::wide::encode_halt(),
+                ],
+            );
             IvmCache::new()
                 .summarize_generic_program(&program)
                 .expect("system trigger syscall belongs to the generic V1 profile");
@@ -2941,10 +3081,10 @@ mod tests {
     #[test]
     fn metadata_cache_distinguishes_header_changes() {
         let mut cache = IvmCache::with_capacity(4);
-        // Same body but a different header (the ZK trace bound) must not share cache entries.
-        let program = minimal_zk_program(1);
+        // Same body but different metadata (max_cycles) must not share cache entries.
+        let program = minimal_program_with_max_cycles(1);
         let summary1 = cache.summarize_program(&program).expect("first summary");
-        let program2 = minimal_zk_program(2);
+        let program2 = minimal_program_with_max_cycles(2);
         let summary2 = cache.summarize_program(&program2).expect("second summary");
         assert_ne!(summary1.meta_hash, summary2.meta_hash);
         let stats = cache.stats();
@@ -3046,6 +3186,10 @@ mod preparation_refund_tests;
 #[path = "cache/range_tests.rs"]
 mod range_tests;
 
+#[cfg(test)]
+#[path = "cache/profile_key_tests.rs"]
+mod profile_key_tests;
+
 /// Cache ownership is independent of root admission; exact requested policy remains mandatory.
 fn require_prepared_policy(
     contract: &ivm::PreparedContract,
@@ -3071,21 +3215,29 @@ impl PreparedContractCache {
         code_hash: Hash,
         bytes: &[u8],
     ) -> Result<ivm::PreparedContract, ivm::VMError> {
-        self.get_or_prepare_for_policy(code_hash, bytes, super::artifact_policy(world, bytes))
+        let profile = super::profile::resolve_artifact(world, bytes);
+        self.get_or_prepare_for_policy(code_hash, bytes, profile.policy())
     }
     /// Resolve a warm artifact without byte parsing, preserving the requesting root's policy.
+    ///
+    /// The caller knows only the content address, so the resident entry names its own profile
+    /// and the root's selection decides whether it may be used. Residency grants nothing.
     pub(crate) fn get_in_world(
         &self,
         world: &impl crate::state::WorldReadOnly,
         code_hash: Hash,
     ) -> Result<Option<ivm::PreparedContract>, ivm::VMError> {
-        let found = self.with_store(|store| store.entries.get(&code_hash).cloned());
+        let found = self.with_store(|store| store.entry_of_any_profile(code_hash));
         let Some(contract) = found else {
             return Ok(None);
         };
         let policy = contract.syscall_policy();
-        if !super::named_policy_selected(world, policy) {
-            require_prepared_policy(&contract, ivm::SyscallPolicy::AbiV1)?;
+        if super::profile::resolve_selected(world, contract.profile_id()).is_none() {
+            // An unselected named profile is refused as the interface profile refuses it.
+            require_prepared_policy(
+                &contract,
+                super::profile::ResolvedIvmProfile::interface_default().policy(),
+            )?;
         }
         Ok(self.get_for_policy(code_hash, policy))
     }
@@ -3097,7 +3249,8 @@ impl IvmCache {
         world: &impl crate::state::WorldReadOnly,
         bytes: &[u8],
     ) -> Result<ExecutableProgramSummary, ivm::VMError> {
-        self.summarize_executable_for_policy(bytes, super::artifact_policy(world, bytes))
+        let profile = super::profile::resolve_artifact(world, bytes);
+        self.summarize_executable_for_policy(bytes, profile.policy())
     }
     /// Summarize trusted content with its original root's explicit policy.
     pub(crate) fn summarize_program_with_hash_in_world(
@@ -3109,11 +3262,8 @@ impl IvmCache {
         if let Some(hit) = self.cached_program_summary_in_world(world, code_hash)? {
             return Ok(hit);
         }
-        self.summarize_program_with_hash_for_policy(
-            code_hash,
-            bytes,
-            super::artifact_policy(world, bytes),
-        )
+        let profile = super::profile::resolve_artifact(world, bytes);
+        self.summarize_program_with_hash_for_policy(code_hash, bytes, profile.policy())
     }
     /// Read a warm summary without letting shared cache residency authorize an inactive profile.
     pub(crate) fn cached_program_summary_in_world(
@@ -3121,13 +3271,16 @@ impl IvmCache {
         world: &impl crate::state::WorldReadOnly,
         code_hash: Hash,
     ) -> Result<Option<ProgramSummary>, ivm::VMError> {
-        let key = SummaryKey::new(code_hash);
-        let Some(hit) = self.with_local(|local| local.summaries.get(&key).cloned()) else {
+        let Some(hit) = self.with_local(|local| local.summary_of_any_profile(code_hash)) else {
             return Ok(None);
         };
         let policy = hit.prepared.syscall_policy();
-        if !super::named_policy_selected(world, policy) {
-            require_prepared_policy(&hit.prepared, ivm::SyscallPolicy::AbiV1)?;
+        if super::profile::resolve_selected(world, hit.prepared.profile_id()).is_none() {
+            // An unselected named profile is refused as the interface profile refuses it.
+            require_prepared_policy(
+                &hit.prepared,
+                super::profile::ResolvedIvmProfile::interface_default().policy(),
+            )?;
         }
         self.cached_program_summary_for_policy(code_hash, policy)
     }
@@ -3135,12 +3288,16 @@ impl IvmCache {
 
 impl IvmCache {
     /// Prepare and summarize a contract using the exact policy selected by its original root.
+    ///
+    /// Only the overlay builders of tests and the `iroha-core-tests` feature summarize this way.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn summarize_program_in_world(
         &mut self,
         world: &impl crate::state::WorldReadOnly,
         bytes: &[u8],
     ) -> Result<ProgramSummary, ivm::VMError> {
-        self.summarize_program_for_policy(bytes, super::artifact_policy(world, bytes))
+        let profile = super::profile::resolve_artifact(world, bytes);
+        self.summarize_program_for_policy(bytes, profile.policy())
     }
 }
 
@@ -3150,7 +3307,7 @@ mod named_profile_tests {
     use mv::storage::StorageReadOnly as _;
     fn artifact() -> Vec<u8> {
         let bytes = super::tests::minimal_program();
-        let parsed = ivm::ProgramMetadata::parse(&bytes).unwrap();
+        let parsed = crate::ivm_test_support::parse_declared(&bytes).unwrap();
         let mut interface = parsed.contract_interface.unwrap();
         interface.abi_hash =
             ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
@@ -3158,7 +3315,8 @@ mod named_profile_tests {
             .metadata
             .encode_for_policy(ivm::SyscallPolicy::AbiV1RuntimeLifecycle);
         named.extend(interface.encode_section());
-        named.extend_from_slice(&bytes[parsed.code_offset..]);
+        // The runtime lifecycle profile runs C10: its code is the C10 encoding of the same body.
+        named.extend_from_slice(&crate::ivm_test_support::unit_return());
         named
     }
     #[test]
@@ -3276,7 +3434,9 @@ mod named_profile_tests {
         summaries
             .summarize_program_with_hash_in_world(&selected.view(), hash, &bytes)
             .unwrap();
-        assert!(summaries.cached_program_summary(hash).is_err());
+        // The interface profile runs the baseline engine, so the lifecycle (C10) summary is not
+        // one of its candidates: the content-address lookup finds nothing rather than borrowing it.
+        assert!(summaries.cached_program_summary(hash).unwrap().is_none());
         assert!(
             summaries
                 .cached_program_summary_in_world(&baseline.view(), hash)

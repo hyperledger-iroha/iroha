@@ -3,6 +3,7 @@ use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, DynamicAccessHint, EntryPointKind, KotobaTranslationEntry,
     validate_contract_permission_table,
 };
+use ivm_abi::IvmEngine;
 use ivm_abi::metadata::{
     CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor, EmbeddedStateType, ProgramMetadata,
@@ -24,11 +25,15 @@ impl ValidationProfile {
             || (self == Self::KotoTest && ivm_abi::syscalls::is_koto_test_syscall(number))
     }
 }
+///
+/// The stream is decoded in the operand layout of `engine`; the baseline engine also admits the
+/// VECTOR execution capability and keeps its original opcode and indirect-transfer rules.
 pub fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
     profile: ValidationProfile,
+    engine: IvmEngine,
 ) -> Result<Vec<String>, ContractArtifactError> {
     if !is_canonical_seiyaku_name(&contract_interface.seiyaku_name) {
         return Err(ContractArtifactError::invalid(
@@ -42,10 +47,14 @@ pub fn validate_contract_interface(
         ));
     }
     let features_bitmap = contract_interface.features_bitmap;
-    if features_bitmap & !CONTRACT_FEATURE_KNOWN_BITS != 0 {
+    let known_feature_bits = match engine {
+        IvmEngine::C10 => CONTRACT_FEATURE_KNOWN_BITS,
+        IvmEngine::Baseline => ivm_abi::baseline::CONTRACT_FEATURE_KNOWN_BITS,
+    };
+    if features_bitmap & !known_feature_bits != 0 {
         return Err(ContractArtifactError::invalid(format!(
             "CNTR features_bitmap contains unsupported bits 0x{:x}",
-            features_bitmap & !CONTRACT_FEATURE_KNOWN_BITS
+            features_bitmap & !known_feature_bits
         )));
     }
     let zk_declared = features_bitmap & CONTRACT_FEATURE_BIT_ZK != 0;
@@ -54,6 +63,15 @@ pub fn validate_contract_interface(
         return Err(ContractArtifactError::invalid(
             "CNTR features_bitmap does not match metadata ZK mode",
         ));
+    }
+    if engine == IvmEngine::Baseline {
+        let vector_declared = features_bitmap & ivm_abi::baseline::CONTRACT_FEATURE_BIT_VECTOR != 0;
+        let vector_enabled = metadata.mode & ivm_abi::baseline::mode::VECTOR != 0;
+        if vector_declared != vector_enabled {
+            return Err(ContractArtifactError::invalid(
+                "CNTR features_bitmap does not match metadata VECTOR mode",
+            ));
+        }
     }
     if !validate_contract_permission_table(&contract_interface.permissions)
         || contract_interface
@@ -94,7 +112,7 @@ pub fn validate_contract_interface(
             "CNTR must declare at least one entrypoint",
         ));
     }
-    validate_bytecode_security(decoded, zk_enabled, profile)?;
+    validate_bytecode_security(engine, decoded, zk_enabled, profile)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
     let mut entrypoint_kinds = BTreeMap::new();
@@ -123,8 +141,12 @@ pub fn validate_contract_interface(
                 entrypoint.name, entrypoint.entry_pc
             )));
         }
-        let reachability =
-            reachable_syscalls(decoded, entrypoint.entry_pc, entrypoint.name.as_str())?;
+        let reachability = reachable_syscalls(
+            engine,
+            decoded,
+            entrypoint.entry_pc,
+            entrypoint.name.as_str(),
+        )?;
         if profile == ValidationProfile::KotoTest
             && reachability
                 .syscalls
@@ -288,8 +310,14 @@ pub fn validate_contract_interface(
                 .map(|callable| callable.entry_pc),
         );
     }
-    validate_nonrecursive_direct_calls(decoded, &callable_roots)?;
-    validate_callable_tables(contract_interface, decoded, &callable_roots, zk_enabled)?;
+    validate_nonrecursive_direct_calls(engine, decoded, &callable_roots)?;
+    validate_callable_tables(
+        engine,
+        contract_interface,
+        decoded,
+        &callable_roots,
+        zk_enabled,
+    )?;
     // Entrypoint authorization is enforced by dispatch metadata, not by code at
     // the target PC. Shared implementation must live in private helpers.
     for caller in &contract_interface.entrypoints {
@@ -374,6 +402,7 @@ fn is_canonical_seiyaku_name(name: &str) -> bool {
     is_canonical_source_type_declaration_name(name)
 }
 fn validate_bytecode_security(
+    engine: IvmEngine,
     decoded: &[DecodedOp],
     zk_enabled: bool,
     profile: ValidationProfile,
@@ -382,38 +411,74 @@ fn validate_bytecode_security(
     let instruction_boundaries = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     for op in decoded {
         let opcode = wide::opcode(op.inst);
-        match wide::validate_word(op.inst) {
-            Ok(_) => {}
-            Err(wide::WordError::InvalidOpcode(_)) => {
-                return Err(ContractArtifactError::invalid(format!(
-                    "invalid opcode 0x{opcode:02x} at pc {}",
-                    op.pc
-                )));
+        match engine {
+            IvmEngine::C10 => {
+                match wide::validate_word(op.inst) {
+                    Ok(_) => {}
+                    Err(wide::WordError::InvalidOpcode(_)) => {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "invalid opcode 0x{opcode:02x} at pc {}",
+                            op.pc
+                        )));
+                    }
+                    Err(wide::WordError::ReservedBits) => {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "instruction 0x{:08x} at pc {} sets reserved operand bits",
+                            op.inst, op.pc
+                        )));
+                    }
+                }
+                if opcode == wide::control::JALR {
+                    let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_ri(op.inst);
+                    if !(rd == 0 && base == 1 && immediate == 0) {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "unverifiable indirect control flow at pc {}",
+                            op.pc
+                        )));
+                    }
+                }
             }
-            Err(wide::WordError::ReservedBits) => {
-                return Err(ContractArtifactError::invalid(format!(
-                    "instruction 0x{:08x} at pc {} sets reserved operand bits",
-                    op.inst, op.pc
-                )));
+            IvmEngine::Baseline => {
+                use ivm_abi::baseline::{encoding::wide as base, instruction::wide as base_isa};
+                if !base_isa::is_valid_opcode(opcode) {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "invalid opcode 0x{opcode:02x} at pc {}",
+                        op.pc
+                    )));
+                }
+                if opcode == base_isa::crypto::POSEIDON6
+                    && base::decode_poseidon6(op.inst).is_none()
+                {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "noncanonical POSEIDON6 encoding at pc {}",
+                        op.pc
+                    )));
+                }
+                if opcode == base_isa::control::JR {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "unverifiable indirect control flow at pc {}",
+                        op.pc
+                    )));
+                }
+                if opcode == base_isa::control::JALR {
+                    let (_, rd, base_register, immediate) = base::decode_rr(op.inst);
+                    if !(rd == 0 && base_register == 1 && immediate == 0) {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "unverifiable indirect control flow at pc {}",
+                            op.pc
+                        )));
+                    }
+                }
             }
         }
-        if opcode == wide::control::JALR {
-            let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_ri(op.inst);
-            if !(rd == 0 && base == 1 && immediate == 0) {
-                return Err(ContractArtifactError::invalid(format!(
-                    "unverifiable indirect control flow at pc {}",
-                    op.pc
-                )));
-            }
-        }
-        if opcode == wide::control::JAL && !matches!(wide::rd(op.inst), 0 | 1) {
+        if opcode == wide::control::JAL && !matches!(engine.destination_register(op.inst), 0 | 1) {
             return Err(ContractArtifactError::invalid(format!(
                 "direct call at pc {} uses unsupported link register r{}",
                 op.pc,
-                wide::rd(op.inst)
+                engine.destination_register(op.inst)
             )));
         }
-        let syscall = decoded_syscall_number(op.inst);
+        let syscall = decoded_syscall_number(engine, op.inst);
         if syscall.is_some_and(|syscall| {
             matches!(
                 syscall,
@@ -435,16 +500,8 @@ fn validate_bytecode_security(
                 op.pc
             )));
         }
-        let offset_words = match opcode {
-            wide::control::BEQ
-            | wide::control::BNE
-            | wide::control::BLT
-            | wide::control::BGE
-            | wide::control::BLTU
-            | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
-            wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
-            wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
-            _ => continue,
+        let Some(offset_words) = engine.direct_transfer_offset(op.inst) else {
+            continue;
         };
         let Some(byte_offset) = offset_words.checked_mul(4) else {
             return Err(ContractArtifactError::invalid(format!(
@@ -476,7 +533,8 @@ fn validate_bytecode_security(
                 | wide::control::BLTU
                 | wide::control::BGEU
                 | wide::control::JALS
-        ) || (opcode == wide::control::JAL && wide::rd(op.inst) != 0);
+        ) || (opcode == wide::control::JAL
+            && engine.destination_register(op.inst) != 0);
         if requires_fallthrough {
             let fallthrough = op.pc.checked_add(4).ok_or_else(|| {
                 ContractArtifactError::invalid(format!(
@@ -496,6 +554,7 @@ fn validate_bytecode_security(
 }
 /// Bind the complete function graph to exact table roles and bounded stack reservations.
 fn validate_callable_tables(
+    engine: IvmEngine,
     interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
     entrypoint_pcs: &BTreeSet<u64>,
@@ -504,13 +563,15 @@ fn validate_callable_tables(
     let mut expected_roots = entrypoint_pcs.clone();
     for instruction in decoded
         .iter()
-        .filter(|instruction| is_direct_call(instruction))
+        .filter(|instruction| is_direct_call(engine, instruction))
     {
-        expected_roots.insert(direct_control_flow_target(instruction).ok_or_else(|| {
-            ContractArtifactError::invalid(
-                "callable table references an invalid direct-call target",
-            )
-        })?);
+        expected_roots.insert(direct_control_flow_target(engine, instruction).ok_or_else(
+            || {
+                ContractArtifactError::invalid(
+                    "callable table references an invalid direct-call target",
+                )
+            },
+        )?);
     }
     let mut declared_roots = BTreeSet::new();
     let mut previous = None;
@@ -560,55 +621,80 @@ fn validate_callable_tables(
     }
     Ok(())
 }
-fn decoded_syscall_number(instruction: u32) -> Option<u32> {
-    use ivm_abi::instruction::wide;
-    (wide::opcode(instruction) == wide::system::SCALL).then(|| wide::syscall_number(instruction))
+fn decoded_syscall_number(engine: IvmEngine, instruction: u32) -> Option<u32> {
+    engine.syscall_number(instruction)
 }
-fn is_direct_call(op: &DecodedOp) -> bool {
+fn is_direct_call(engine: IvmEngine, op: &DecodedOp) -> bool {
     use ivm_abi::instruction::wide;
     let opcode = wide::opcode(op.inst);
-    opcode == wide::control::JALS || (opcode == wide::control::JAL && wide::rd(op.inst) == 1)
+    opcode == wide::control::JALS
+        || (opcode == wide::control::JAL && engine.destination_register(op.inst) == 1)
 }
 /// A nominal failure cannot successfully return from its authenticated consumer.
 /// The host either rejects it or synchronously halts with the complete error.
-fn is_terminal_contract_abort(op: &DecodedOp) -> bool {
-    decoded_syscall_number(op.inst) == Some(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT)
+fn is_terminal_contract_abort(engine: IvmEngine, op: &DecodedOp) -> bool {
+    decoded_syscall_number(engine, op.inst) == Some(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT)
 }
 /// Prove the one finite nominal-abort suffix independently of compiler metadata.
 /// Only its exact beginning may receive ordinary unconditional transfers; no
 /// callable root, middle target, extra effect, return or substituted word is shared.
 fn shared_nominal_abort_tail_pcs(
+    engine: IvmEngine,
     decoded: &[DecodedOp],
     instructions: &BTreeMap<u64, &DecodedOp>,
     roots: &BTreeSet<u64>,
 ) -> BTreeSet<u64> {
     use ivm_abi::{encoding::wide as encoding, instruction::wide};
-    if !decoded.iter().any(is_terminal_contract_abort) {
+    if !decoded
+        .iter()
+        .any(|op| is_terminal_contract_abort(engine, op))
+    {
         return BTreeSet::new();
     }
     let ordinary_jump = |op: &DecodedOp| {
         wide::opcode(op.inst) == wide::control::JMP
-            || (wide::opcode(op.inst) == wide::control::JAL && wide::rd(op.inst) == 0)
+            || (wide::opcode(op.inst) == wide::control::JAL
+                && engine.destination_register(op.inst) == 0)
     };
     // One target census covers all decoded edges, including unreachable words.
     // False records any incoming edge that could call or conditionally enter.
     let mut incoming = BTreeMap::<u64, bool>::new();
     for op in decoded {
-        if let Some(target) = direct_control_flow_target(op) {
+        if let Some(target) = direct_control_flow_target(engine, op) {
             incoming
                 .entry(target)
                 .and_modify(|allowed| *allowed &= ordinary_jump(op))
                 .or_insert_with(|| ordinary_jump(op));
         }
     }
-    let expected = [
-        encoding::encode_scall(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV),
-        encoding::encode_ri(wide::arithmetic::ADDI, 12, 0, 0),
-        encoding::encode_ri(wide::arithmetic::ADDI, 13, 0, 0),
-        encoding::encode_ri(wide::arithmetic::ADDI, 14, 0, 0),
-        encoding::encode_ri(wide::arithmetic::ADDI, 15, 0, 0),
-        encoding::encode_scall(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT),
-    ];
+    let expected = match engine {
+        IvmEngine::C10 => [
+            encoding::encode_scall(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV),
+            encoding::encode_ri(wide::arithmetic::ADDI, 12, 0, 0),
+            encoding::encode_ri(wide::arithmetic::ADDI, 13, 0, 0),
+            encoding::encode_ri(wide::arithmetic::ADDI, 14, 0, 0),
+            encoding::encode_ri(wide::arithmetic::ADDI, 15, 0, 0),
+            encoding::encode_scall(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT),
+        ],
+        IvmEngine::Baseline => {
+            use ivm_abi::baseline::{encoding::wide as base, instruction::wide as base_isa};
+            let (Ok(publish), Ok(abort)) = (
+                u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV),
+                u8::try_from(ivm_abi::syscalls::SYSCALL_CONTRACT_ABORT),
+            ) else {
+                // This exact suffix requires the short baseline SCALL encoding.
+                return BTreeSet::new();
+            };
+            [
+                base::encode_sys(base_isa::system::SCALL, publish),
+                base::encode_rr(base_isa::arithmetic::ADDI, 12, 0, 0),
+                base::encode_rr(base_isa::arithmetic::ADDI, 13, 0, 0),
+                base::encode_rr(base_isa::arithmetic::ADDI, 14, 0, 0),
+                base::encode_rr(base_isa::arithmetic::ADDI, 15, 0, 0),
+                base::encode_sys(base_isa::system::SCALL, abort),
+            ]
+        }
+    };
     let mut proven = BTreeSet::new();
     for suffix in decoded.windows(expected.len()) {
         let start = suffix[0].pc;
@@ -629,7 +715,7 @@ fn shared_nominal_abort_tail_pcs(
             wide::opcode(previous.inst),
             wide::control::HALT | wide::control::JALR
         ) && !ordinary_jump(previous)
-            && !is_terminal_contract_abort(previous)
+            && !is_terminal_contract_abort(engine, previous)
         {
             // A normal path must not fall through into the borrowed failure body.
             continue;
@@ -640,6 +726,7 @@ fn shared_nominal_abort_tail_pcs(
 }
 /// Validate the deployable direct-call graph without trusting compiler metadata.
 fn validate_nonrecursive_direct_calls(
+    engine: IvmEngine,
     decoded: &[DecodedOp],
     entrypoint_pcs: &BTreeSet<u64>,
 ) -> Result<(), ContractArtifactError> {
@@ -649,8 +736,8 @@ fn validate_nonrecursive_direct_calls(
         .map(|op| (op.pc, op))
         .collect::<BTreeMap<_, _>>();
     let mut roots = entrypoint_pcs.clone();
-    for op in decoded.iter().filter(|op| is_direct_call(op)) {
-        let target = direct_control_flow_target(op).ok_or_else(|| {
+    for op in decoded.iter().filter(|op| is_direct_call(engine, op)) {
+        let target = direct_control_flow_target(engine, op).ok_or_else(|| {
             ContractArtifactError::invalid(format!(
                 "direct call at pc {} has an invalid target",
                 op.pc
@@ -658,7 +745,7 @@ fn validate_nonrecursive_direct_calls(
         })?;
         roots.insert(target);
     }
-    let terminal_tail_pcs = shared_nominal_abort_tail_pcs(decoded, &instructions, &roots);
+    let terminal_tail_pcs = shared_nominal_abort_tail_pcs(engine, decoded, &instructions, &roots);
     let mut owners = BTreeMap::<u64, u64>::new();
     let mut pending = roots
         .iter()
@@ -680,7 +767,7 @@ fn validate_nonrecursive_direct_calls(
                 "function root {owner} reaches non-instruction pc {pc}"
             ))
         })?;
-        if is_terminal_contract_abort(op) {
+        if is_terminal_contract_abort(engine, op) {
             continue;
         }
         let opcode = wide::opcode(op.inst);
@@ -693,7 +780,7 @@ fn validate_nonrecursive_direct_calls(
             })
         };
         let target = || {
-            direct_control_flow_target(op).ok_or_else(|| {
+            direct_control_flow_target(engine, op).ok_or_else(|| {
                 ContractArtifactError::invalid(format!(
                     "control-flow instruction at pc {} has an invalid target",
                     op.pc
@@ -711,12 +798,18 @@ fn validate_nonrecursive_direct_calls(
                 pending.push_back((target()?, owner));
                 pending.push_back((fallthrough()?, owner));
             }
-            wide::control::JAL if wide::rd(op.inst) == 0 => {
+            wide::control::JAL if engine.destination_register(op.inst) == 0 => {
                 pending.push_back((target()?, owner));
             }
             wide::control::JMP => pending.push_back((target()?, owner)),
             wide::control::JAL | wide::control::JALS => {
                 pending.push_back((fallthrough()?, owner));
+            }
+            ivm_abi::baseline::instruction::wide::control::JR if engine == IvmEngine::Baseline => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "unverifiable indirect control flow at pc {}",
+                    op.pc
+                )));
             }
             _ => pending.push_back((fallthrough()?, owner)),
         }
@@ -726,14 +819,14 @@ fn validate_nonrecursive_direct_calls(
         .copied()
         .map(|root| (root, BTreeSet::<u64>::new()))
         .collect::<BTreeMap<_, _>>();
-    for op in decoded.iter().filter(|op| is_direct_call(op)) {
+    for op in decoded.iter().filter(|op| is_direct_call(engine, op)) {
         let Some(owner) = owners.get(&op.pc).copied() else {
             return Err(ContractArtifactError::invalid(format!(
                 "direct call at pc {} is unreachable from every entrypoint or helper root",
                 op.pc
             )));
         };
-        let target = direct_control_flow_target(op).expect("validated direct-call target");
+        let target = direct_control_flow_target(engine, op).expect("validated direct-call target");
         calls
             .get_mut(&owner)
             .expect("every control-flow owner is a function root")
@@ -785,19 +878,8 @@ fn validate_nonrecursive_direct_calls(
     }
     Ok(())
 }
-fn direct_control_flow_target(op: &DecodedOp) -> Option<u64> {
-    use ivm_abi::instruction::wide;
-    let offset_words = match wide::opcode(op.inst) {
-        wide::control::BEQ
-        | wide::control::BNE
-        | wide::control::BLT
-        | wide::control::BGE
-        | wide::control::BLTU
-        | wide::control::BGEU => i64::from(wide::imm14(op.inst)),
-        wide::control::JAL => i64::from(wide::jal_offset(op.inst)),
-        wide::control::JMP | wide::control::JALS => i64::from(wide::imm24(op.inst)),
-        _ => return None,
-    };
+fn direct_control_flow_target(engine: IvmEngine, op: &DecodedOp) -> Option<u64> {
+    let offset_words = engine.direct_transfer_offset(op.inst)?;
     let byte_offset = offset_words.checked_mul(4)?;
     i128::from(op.pc)
         .checked_add(i128::from(byte_offset))
@@ -808,6 +890,7 @@ struct Reachability {
     pcs: BTreeSet<u64>,
 }
 fn reachable_syscalls(
+    engine: IvmEngine,
     decoded: &[DecodedOp],
     entry_pc: u64,
     entrypoint_name: &str,
@@ -829,10 +912,10 @@ fn reachable_syscalls(
                 "entrypoint `{entrypoint_name}` reaches non-instruction pc {pc}"
             ))
         })?;
-        if let Some(number) = decoded_syscall_number(op.inst) {
+        if let Some(number) = decoded_syscall_number(engine, op.inst) {
             syscalls.insert(number);
         }
-        if is_terminal_contract_abort(op) {
+        if is_terminal_contract_abort(engine, op) {
             continue;
         }
         let opcode = wide::opcode(op.inst);
@@ -845,7 +928,7 @@ fn reachable_syscalls(
             | wide::control::BGE
             | wide::control::BLTU
             | wide::control::BGEU => {
-                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                pending.push_back(direct_control_flow_target(engine, op).ok_or_else(|| {
                     ContractArtifactError::invalid(format!(
                         "entrypoint `{entrypoint_name}` has an invalid branch at pc {}",
                         op.pc
@@ -856,20 +939,20 @@ fn reachable_syscalls(
                 })?);
             }
             wide::control::JAL => {
-                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                pending.push_back(direct_control_flow_target(engine, op).ok_or_else(|| {
                     ContractArtifactError::invalid(format!(
                         "entrypoint `{entrypoint_name}` has an invalid jump at pc {}",
                         op.pc
                     ))
                 })?);
-                if wide::rd(op.inst) != 0 {
+                if engine.destination_register(op.inst) != 0 {
                     pending.push_back(fallthrough.ok_or_else(|| {
                         ContractArtifactError::invalid("call fallthrough overflows")
                     })?);
                 }
             }
             wide::control::JMP => {
-                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                pending.push_back(direct_control_flow_target(engine, op).ok_or_else(|| {
                     ContractArtifactError::invalid(format!(
                         "entrypoint `{entrypoint_name}` has an invalid jump at pc {}",
                         op.pc
@@ -877,7 +960,7 @@ fn reachable_syscalls(
                 })?);
             }
             wide::control::JALS => {
-                pending.push_back(direct_control_flow_target(op).ok_or_else(|| {
+                pending.push_back(direct_control_flow_target(engine, op).ok_or_else(|| {
                     ContractArtifactError::invalid(format!(
                         "entrypoint `{entrypoint_name}` has an invalid call at pc {}",
                         op.pc
@@ -890,13 +973,29 @@ fn reachable_syscalls(
                 );
             }
             wide::control::JALR => {
-                let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_rr(op.inst);
+                let (rd, base, immediate) = match engine {
+                    IvmEngine::C10 => {
+                        let (_, rd, base, immediate) = ivm_abi::encoding::wide::decode_rr(op.inst);
+                        (rd, base, immediate)
+                    }
+                    IvmEngine::Baseline => {
+                        let (_, rd, base, immediate) =
+                            ivm_abi::baseline::encoding::wide::decode_rr(op.inst);
+                        (rd, base, immediate)
+                    }
+                };
                 if !(rd == 0 && base == 1 && immediate == 0) {
                     return Err(ContractArtifactError::invalid(format!(
                         "entrypoint `{entrypoint_name}` reaches unverifiable indirect control flow at pc {}",
                         op.pc
                     )));
                 }
+            }
+            ivm_abi::baseline::instruction::wide::control::JR if engine == IvmEngine::Baseline => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{entrypoint_name}` reaches unverifiable indirect control flow at pc {}",
+                    op.pc
+                )));
             }
             _ => {
                 pending.push_back(fallthrough.ok_or_else(|| {
@@ -1567,7 +1666,7 @@ mod tests {
     #[test]
     fn nested_view_calls_require_global_reads_and_keep_other_effects_forbidden() {
         use ivm_abi::syscalls::{self, SyscallAccess};
-        let artifact = kotodama_lang::compiler::Compiler::new()
+        let artifact = kotodama_lang::compiler::Compiler::new_c10()
             .compile_source(
                 "seiyaku ViewCalls { view fn inspect() authorize(anyone) -> int { 1 } }",
             )
@@ -1627,7 +1726,7 @@ mod tests {
             event::ContractEventDescriptorV1,
             manifest::{ContractErrorTypeDescriptor, ContractErrorVariantDescriptor},
         };
-        let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
+        let artifact = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku Enums { enum Status { Pending = 1, Done = 7 } state Status status; hajimari() { status = Status::Pending; } view fn echo(Status value) authorize(anyone) -> Status { value } }"
         ).expect("compile ordinary enum fixture");
         let mut interface = ProgramMetadata::parse(&artifact)
@@ -1698,7 +1797,7 @@ mod tests {
     }
     #[test]
     fn callable_table_rejects_missing_roots_schema_substitution_and_invalid_privacy() {
-        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+        let bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku Calls { fn echo(bool value) -> bool { value } view fn main(bool value) authorize(anyone) -> bool { echo(value: value) } }"
         ).expect("compile table calls");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse contract");
@@ -1710,11 +1809,13 @@ mod tests {
             .iter()
             .map(|entry| entry.entry_pc)
             .collect();
-        validate_callable_tables(&interface, &decoded, &roots, false)
+        validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false)
             .expect("canonical callable table");
         let original = interface.callables.clone();
         interface.callables.clear();
-        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        assert!(
+            validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).is_err()
+        );
         interface.callables = original.clone();
         let public_pc = interface.entrypoints[0].entry_pc;
         interface
@@ -1724,19 +1825,25 @@ mod tests {
             .unwrap()
             .results
             .nodes[0] = ivm_abi::call::CallTypeNodeV1::Unit;
-        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        assert!(
+            validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).is_err()
+        );
         interface.callables = original.clone();
         interface.callables[0].arguments.nodes[0] = ivm_abi::call::CallTypeNodeV1::SecretNumeric(
             ivm_abi::pointer_abi::PointerType::Int as u16,
         );
-        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        assert!(
+            validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).is_err()
+        );
         interface.callables = original;
         interface.callables[0].frame_bytes += 1;
-        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        assert!(
+            validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).is_err()
+        );
     }
     #[test]
     fn callable_artifacts_reject_the_retired_erased_schema_surface_hash() {
-        let mut bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+        let mut bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku Cursors { view fn main(StateCursor<int> value) authorize(anyone) -> StateCursor<int> { value } }"
         ).unwrap();
         crate::verify_contract_artifact(&bytes).expect("current cursor artifact");
@@ -1746,7 +1853,7 @@ mod tests {
             0xb4, 0x31, 0x4d, 0xf2, 0x56, 0x43, 0x48, 0xa6, 0xf7, 0xbb, 0x9c, 0xeb, 0x5f, 0xa6,
             0x26, 0xa1, 0x29,
         ];
-        let current = ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1);
+        let current = ivm_abi::IvmProfileId::C10_ABI_V1.abi_hash();
         assert_ne!(current, erased_schema_surface);
         let hash_offset = ivm_abi::metadata::HEADER_ABI_HASH_OFFSET;
         bytes[hash_offset..hash_offset + erased_schema_surface.len()]
@@ -1759,7 +1866,7 @@ mod tests {
     #[test]
     fn callable_tables_bind_cursor_keys_at_public_and_private_boundaries() {
         use ivm_abi::{call::CallTypeNodeV1, entrypoint::EntrypointValueKindV1 as Kind};
-        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+        let bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku Cursors { fn echo(StateCursor<int> value) -> StateCursor<int> { value } view fn main(StateCursor<int> value) authorize(anyone) -> StateCursor<int> { echo(value: value) } }"
         ).expect("compile cursor calls");
         let parsed = ProgramMetadata::parse(&bytes).unwrap();
@@ -1770,7 +1877,7 @@ mod tests {
             .iter()
             .map(|entry| entry.entry_pc)
             .collect();
-        validate_callable_tables(&interface, &decoded, &roots, false).unwrap();
+        validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).unwrap();
         let public_pc = interface.entrypoints[0].entry_pc;
         let original = interface.callables.clone();
         assert!(
@@ -1801,7 +1908,8 @@ mod tests {
             };
             words[0] = CallTypeNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(Kind::Bool)] });
             assert!(
-                validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false)
+                    .is_err(),
                 "public cursor key substitution (results={results})"
             );
             for index in 0..original.len() {
@@ -1814,7 +1922,8 @@ mod tests {
                 };
                 words[0] = CallTypeNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(Kind::Json)] });
                 assert!(
-                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false)
+                        .is_err(),
                     "Json cursor key in callable {index} (results={results})"
                 );
             }
@@ -1823,7 +1932,7 @@ mod tests {
     #[test]
     fn callable_schemas_bind_nested_payloads_capacity_and_nominal_identity() {
         use ivm_abi::{call::CallTypeNodeV1 as Node, entrypoint::EntrypointValueKindV1 as Kind};
-        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+        let bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku Nested { struct Payload { Option<List<StateCursor<int>, 2>> values; } fn echo(Payload value) -> Payload { value } view fn main(Payload value) authorize(anyone) -> Payload { echo(value: value) } }"
         ).expect("compile complete recursive call schemas");
         let parsed = ProgramMetadata::parse(&bytes).unwrap();
@@ -1836,7 +1945,7 @@ mod tests {
             .collect();
         let public_pc = interface.entrypoints[0].entry_pc;
         let original = interface.callables.clone();
-        validate_callable_tables(&interface, &decoded, &roots, false).unwrap();
+        validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).unwrap();
         for result in [false, true] {
             for replacement in [
                 Node::Struct {
@@ -1866,7 +1975,7 @@ mod tests {
                 };
                 schema.nodes[index] = replacement;
                 assert!(
-                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false).is_err(),
                     "nested substitution (result={result}, node={index})"
                 );
             }
@@ -1880,7 +1989,8 @@ mod tests {
                 };
                 schema.nodes.pop();
                 assert!(
-                    validate_callable_tables(&interface, &decoded, &roots, false).is_err(),
+                    validate_callable_tables(IvmEngine::C10, &interface, &decoded, &roots, false)
+                        .is_err(),
                     "missing nested payload (callable={index}, result={result})"
                 );
             }

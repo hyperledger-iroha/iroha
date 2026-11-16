@@ -7,6 +7,10 @@ pub mod cache;
 pub mod host;
 /// Effective restrictions for separately selected named contract host profiles.
 pub(crate) mod host_profile;
+/// Resolution of the execution profile of an artifact, contract or invocation.
+pub(crate) mod profile;
+/// Projection of internal VM failures onto the wire error types, keyed by engine.
+pub(crate) mod projection;
 /// Exact, privacy-safe public return decoding.
 pub mod return_value;
 use crate::state::WorldReadOnly;
@@ -14,8 +18,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
     executor::{
-        ArtifactAbiHashMismatchInfo, ContractRejection, IvmAdmissionError,
-        ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
+        ContractRejection, IvmAdmissionError, ManifestAbiHashMismatchInfo,
+        ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
     },
     smart_contract::manifest::ContractManifest,
 };
@@ -23,35 +27,17 @@ use iroha_model_base::metadata::Metadata;
 use mv::storage::StorageReadOnly;
 use std::{collections::BTreeSet, num::NonZeroU64};
 /// Convert deterministic program preparation failures into public admission errors.
+///
+/// The projection belongs to the engine that raised the failure
+/// ([`projection::admission_error`]). This entry point has no profile context and applies the
+/// engine of the first-release interface profile.
+// TODO: Callers that hold a resolved profile pass its engine to `projection::admission_error`.
 #[must_use]
 pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissionError {
-    match error {
-        ivm::VMError::UnsupportedProgramVersion { major, minor } => {
-            IvmAdmissionError::UnsupportedVersion(
-                iroha_data_model::executor::UnsupportedVersionInfo { major, minor },
-            )
-        }
-        ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
-            IvmAdmissionError::UnsupportedFeatureBits(bits)
-        }
-        ivm::VMError::UnsupportedProgramAbiVersion { version } => {
-            IvmAdmissionError::UnsupportedAbiVersion(version)
-        }
-        ivm::VMError::MissingMaxCycles => IvmAdmissionError::MissingMaxCycles,
-        ivm::VMError::MaxCyclesWithoutZk { max_cycles } => {
-            IvmAdmissionError::MaxCyclesWithoutZk(max_cycles)
-        }
-        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
-            IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
-                expected: Hash::prehashed(expected),
-                actual: Hash::prehashed(actual),
-            })
-        }
-        ivm::VMError::GenericSyscallNotAllowed { syscall } => {
-            IvmAdmissionError::GenericSyscallNotAllowed(syscall)
-        }
-        other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
-    }
+    projection::admission_error(
+        profile::ResolvedIvmProfile::interface_default().engine(),
+        error,
+    )
 }
 /// Convert deterministic program preparation failures into public admission errors.
 #[must_use]
@@ -201,6 +187,67 @@ pub(crate) fn validate_zk_trace_bound(
     }
     Ok(())
 }
+/// Validate the cycle limit a header declares against the committed ceiling, under the rules of
+/// the engine that admitted it.
+///
+/// Every path that persists an artifact for later execution shares this check, so an artifact
+/// cannot be stored with a limit above the ceiling.
+///
+/// - Baseline: every artifact declares a positive `max_cycles` within the ceiling (the anchor
+///   Core's `validate_cycle_ceiling`).
+/// - C10: only a ZK artifact's trace bound is checked ([`validate_zk_trace_bound`]).
+///
+/// # Errors
+/// The first violated rule of that engine.
+pub(crate) fn validate_cycle_ceiling_for(
+    engine: ivm::IvmEngine,
+    meta: &ivm::ProgramMetadata,
+    upper_bound: NonZeroU64,
+) -> Result<(), IvmAdmissionError> {
+    match engine {
+        ivm::IvmEngine::Baseline => {
+            ivm_abi::baseline::validate_cycle_ceiling(meta, upper_bound).map(drop)
+        }
+        ivm::IvmEngine::C10 => validate_zk_trace_bound(meta, upper_bound),
+    }
+}
+/// The header-derived cycle budget of an execution, under the rules of the engine that admitted
+/// the program.
+///
+/// - Baseline: the anchor Core's `validate_cycle_limits`, governance `fuel` before the ceiling;
+///   the budget is the header's `max_cycles`. It bounds the run's cycles and, through
+///   [`gas_limit_for_cycles`], its gas where the anchor applied that bound.
+/// - C10: gas, supplied by the caller, is the only budget. Only a ZK trace bound is checked and
+///   no cycle budget results.
+///
+/// # Errors
+/// The first violated rule of that engine.
+pub(crate) fn execution_cycle_budget_for(
+    engine: ivm::IvmEngine,
+    meta: &ivm::ProgramMetadata,
+    upper_bound: NonZeroU64,
+    fuel: NonZeroU64,
+) -> Result<Option<NonZeroU64>, IvmAdmissionError> {
+    match engine {
+        ivm::IvmEngine::Baseline => {
+            ivm_abi::baseline::validate_cycle_limits(meta, upper_bound, fuel).map(Some)
+        }
+        ivm::IvmEngine::C10 => validate_zk_trace_bound(meta, upper_bound).map(|()| None),
+    }
+}
+/// Gas limit a baseline cycle budget grants: the cycles times the baseline's worst-case
+/// instruction cost (the anchor Core's conversion).
+///
+/// The baseline interpreter pads traces to exactly `max_cycles` when cycle limits apply, charging
+/// one unit of gas per padded cycle in addition to the per-instruction schedule, so the worst-case
+/// instruction cost is the multiplier. A positive budget is a [`NonZeroU64`], so this never
+/// manufactures an unbounded limit.
+#[must_use]
+pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
+    cycles
+        .get()
+        .saturating_mul(ivm::gas::baseline::max_instruction_cost())
+}
 /// Classify an original VM failure before rendering completed semantic rejection context.
 ///
 /// Local refusals retain their original release owner and never enter diagnostic
@@ -210,11 +257,13 @@ pub fn map_vm_error_with_context_to_validation(
     vm: &ivm::IVM,
     error: ivm::VMError,
 ) -> crate::execution_attempt::ExecutionAttemptError<ValidationFail> {
+    // The engine of the VM that ran owns both projections of its failure.
+    let engine = vm.engine();
     let fault = vm.execution_fault(
         &error,
         iroha_data_model::executor::fault::IvmFaultPositionV1::ReturnValidation,
     );
-    if error.fault_kind().is_some() && fault.is_none() {
+    if engine.fault_kind(&error).is_some() && fault.is_none() {
         return crate::execution_attempt::ExecutionAttemptError::Deferred(
             ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
         );
@@ -248,7 +297,12 @@ pub fn map_vm_error_with_context_to_validation(
             });
         }
         fault.map_or_else(
-            || program_admission_error(error.into_unmetered()),
+            || {
+                ValidationFail::IvmAdmission(projection::admission_error(
+                    engine,
+                    error.into_unmetered(),
+                ))
+            },
             ValidationFail::IvmFault,
         )
     })
@@ -414,36 +468,92 @@ mod tests {
     }
     #[test]
     fn header_cycle_bound_errors_map_to_their_admission_reasons() {
+        // C10 header rules are projected by the C10 engine; the restored baseline enum carries
+        // the trace bound without ZK mode by its text.
+        let c10 = |error| projection::admission_error(ivm::IvmEngine::C10, error);
         assert_eq!(
-            admission_reason_from_vm_error(ivm::VMError::MissingMaxCycles),
+            c10(ivm::VMError::MissingMaxCycles),
             IvmAdmissionError::MissingMaxCycles
         );
-        assert_eq!(
-            admission_reason_from_vm_error(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 7 }),
-            IvmAdmissionError::MaxCyclesWithoutZk(7)
-        );
+        assert!(matches!(
+            c10(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 7 }),
+            IvmAdmissionError::BytecodeDecodingFailed(message) if message.contains('7')
+        ));
         let zk_without_bound = ivm::ProgramMetadata {
             mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
         }
         .encode();
-        let error = ivm::ProgramMetadata::parse(&zk_without_bound)
+        let error = crate::ivm_test_support::parse_declared(&zk_without_bound)
             .expect_err("a ZK header requires a trace bound");
-        assert_eq!(
-            admission_reason_from_vm_error(error),
-            IvmAdmissionError::MissingMaxCycles
-        );
+        assert_eq!(c10(error), IvmAdmissionError::MissingMaxCycles);
         let bound_without_zk = ivm::ProgramMetadata {
             max_cycles: 9,
             ..ivm::ProgramMetadata::default()
         }
         .encode();
-        let error = ivm::ProgramMetadata::parse(&bound_without_zk)
+        let error = crate::ivm_test_support::parse_declared(&bound_without_zk)
             .expect_err("a non-ZK header declares no trace bound");
+        assert!(matches!(
+            c10(error),
+            IvmAdmissionError::BytecodeDecodingFailed(message) if message.contains("trace bound 9")
+        ));
+    }
+    #[test]
+    fn baseline_cycle_rules_are_the_anchor_rules() {
+        use iroha_data_model::executor::MaxCyclesExceedsFuelInfo;
+        let engine = ivm::IvmEngine::Baseline;
+        let upper_bound = NonZeroU64::new(42).expect("test ceiling is non-zero");
+        let fuel = NonZeroU64::new(40).expect("test fuel is non-zero");
+        let mut metadata = ivm::ProgramMetadata::default();
+        // A baseline header without a cycle limit is refused whatever its mode.
         assert_eq!(
-            admission_reason_from_vm_error(error),
-            IvmAdmissionError::MaxCyclesWithoutZk(9)
+            validate_cycle_ceiling_for(engine, &metadata, upper_bound),
+            Err(IvmAdmissionError::MissingMaxCycles)
         );
+        assert_eq!(
+            execution_cycle_budget_for(engine, &metadata, upper_bound, fuel),
+            Err(IvmAdmissionError::MissingMaxCycles)
+        );
+        metadata.max_cycles = 40;
+        assert_eq!(
+            execution_cycle_budget_for(engine, &metadata, upper_bound, fuel),
+            Ok(NonZeroU64::new(40))
+        );
+        assert_eq!(
+            validate_cycle_ceiling_for(engine, &metadata, upper_bound),
+            Ok(())
+        );
+        // Fuel is checked before the ceiling.
+        metadata.max_cycles = 43;
+        assert_eq!(
+            execution_cycle_budget_for(engine, &metadata, upper_bound, fuel),
+            Err(IvmAdmissionError::MaxCyclesExceedsFuel(
+                MaxCyclesExceedsFuelInfo {
+                    max_cycles: 43,
+                    fuel_limit: 40,
+                }
+            ))
+        );
+        assert!(matches!(
+            validate_cycle_ceiling_for(engine, &metadata, upper_bound),
+            Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(info))
+                if info.max_cycles == 43 && info.upper_bound == 42
+        ));
+        // C10 has no cycle budget for a non-ZK program.
+        assert_eq!(
+            execution_cycle_budget_for(
+                ivm::IvmEngine::C10,
+                &ivm::ProgramMetadata::default(),
+                upper_bound,
+                fuel
+            ),
+            Ok(None)
+        );
+        let cost = ivm::gas::baseline::max_instruction_cost();
+        assert_eq!(cost, 5_000);
+        assert_eq!(gas_limit_for_cycles(NonZeroU64::new(2).unwrap()), 2 * cost);
+        assert_eq!(gas_limit_for_cycles(NonZeroU64::MAX), u64::MAX);
     }
     #[test]
     fn zk_trace_bound_validation_applies_only_to_zk_artifacts() {
@@ -473,11 +583,14 @@ mod tests {
     }
     #[test]
     fn compiler_and_node_release_cycle_defaults_match() {
-        // A default ZK build's trace bound fits the default admission ceiling.
-        let compiler_default = kotodama_lang::compiler::CompilerOptions::default().zk_trace_cycles;
+        // A default (baseline) build's cycle limit and a C10 ZK build's trace bound both fit the
+        // default admission ceiling.
+        let options = kotodama_lang::compiler::CompilerOptions::default();
+        assert_eq!(options.engine, ivm::IvmEngine::Baseline);
         let node_default = iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND;
-        assert_eq!(compiler_default, node_default);
-        assert_eq!(compiler_default.get(), 1_000_000);
+        assert_eq!(options.baseline_max_cycles, node_default);
+        assert_eq!(options.zk_trace_cycles, node_default);
+        assert_eq!(node_default.get(), 1_000_000);
     }
     #[test]
     fn vm_error_maps_to_not_permitted() {
@@ -507,8 +620,11 @@ mod tests {
             )
             .expect("compile contract rejection fixture");
         let mut vm = ivm::IVM::new(u64::MAX);
-        vm.load_program(&artifact)
-            .expect("load contract rejection fixture");
+        vm.load_program_for_profile(
+            &artifact,
+            crate::ivm_test_support::declared_profile(&artifact),
+        )
+        .expect("load contract rejection fixture");
         let entry_pc = vm
             .contract_interface()
             .expect("embedded contract interface")
@@ -517,7 +633,9 @@ mod tests {
             .find(|entrypoint| entrypoint.name == "reject")
             .expect("reject entrypoint")
             .entry_pc;
-        let prefix = ivm::ProgramMetadata::parse(&artifact).unwrap().prefix_len() as u64;
+        let prefix = crate::ivm_test_support::parse_declared(&artifact)
+            .unwrap()
+            .prefix_len() as u64;
         vm.set_program_counter(prefix + entry_pc)
             .expect("select reject entrypoint");
         let error = vm.run().expect_err("declared require must abort");
@@ -564,40 +682,19 @@ mod tests {
 /// Select only the exact named profile advertised by the artifact and active in this root.
 /// This is a policy choice, not header admission: the explicit parser still authenticates every
 /// header field in its original order. Unselected/unknown hashes retain baseline rejection.
-pub(crate) fn artifact_policy(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::SyscallPolicy {
-    let named = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
-    if bytes.get(ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE)
-        == Some(ivm::syscalls::compute_abi_hash(named).as_slice())
-        && named_policy_selected(world, named)
-    {
-        named
-    } else {
-        ivm::SyscallPolicy::AbiV1
-    }
+///
+/// [`profile::resolve_artifact`] decides; this accessor returns the named policy of its result.
+/// Readers outside Core (Torii) parse, verify and prepare stored artifacts under this policy,
+/// whose engine [`ivm::IvmProfileId::of_policy`] fixes.
+#[must_use]
+pub fn artifact_policy(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::SyscallPolicy {
+    profile::resolve_artifact(world, bytes).policy()
 }
-/// Exact named-policy support in this execution selection; baseline consumers keep their
-/// existing admission boundary and rejection precedence.
-pub(crate) fn named_policy_selected(
-    world: &impl WorldReadOnly,
-    policy: ivm::SyscallPolicy,
-) -> bool {
-    if policy == ivm::SyscallPolicy::AbiV1 {
-        return true;
-    }
-    let hash = ivm::syscalls::compute_abi_hash(policy);
-    world.runtime_selection().active.iter().any(|id| {
-        matches!(world.runtime_definitions().get(id),
-        Some(iroha_data_model::runtime::definition::DefinitionDescriptorV1::HostProfile(profile))
-            if profile.abi_version == 1 && profile.abi_hash == hash)
-    })
-}
-
 /// Preserve baseline hash acceptance and admit only an exact compiled named profile selected
 /// by this root. Runtime execution still enforces the effective restrictions at its block height.
 #[must_use]
 pub fn known_selected_abi(world: &impl WorldReadOnly, hash: &[u8; 32]) -> bool {
-    ivm::syscalls::policy_for_abi_hash(hash)
-        .is_some_and(|policy| named_policy_selected(world, policy))
+    profile::resolve_abi_hash(world, hash).is_some()
 }
 /// Verify an original contract under its root's selection using the original State pool.
 pub(crate) fn verify_contract_in_world(
@@ -608,6 +705,6 @@ pub(crate) fn verify_contract_in_world(
     ivm::verify_contract_artifact_with_memory_budget_for_policy(
         bytes,
         budget,
-        artifact_policy(world, bytes),
+        profile::resolve_artifact(world, bytes).policy(),
     )
 }

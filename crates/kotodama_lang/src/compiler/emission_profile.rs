@@ -96,7 +96,7 @@ fn canonical_dlmm_lowering_attribution_preserves_exact_artifact_and_reports_comp
     let source = include_str!("../../../iroha_core/src/validation_fee/fixtures/dlmm_pool.ko");
     let (plain, profiled, report) = crate::session::run_with_compiler_stack(|| {
         let compile = || {
-            CompilerSession::new(CompilerOptions::default())
+            CompilerSession::new(CompilerOptions::c10())
                 .build(CompileRequest {
                     source,
                     source_name: Some("dlmm_pool.ko"),

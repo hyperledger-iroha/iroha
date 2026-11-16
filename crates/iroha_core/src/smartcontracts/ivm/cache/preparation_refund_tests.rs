@@ -55,7 +55,7 @@ impl Wake for ReenterPreparation {
 
 fn first_preparation_demand(program: &[u8]) -> usize {
     let probe = AllocationBudget::new(0);
-    let refused = ivm::prepare_contract_with_memory_budget(program, &probe)
+    let refused = crate::ivm_test_support::prepare_declared_with_memory_budget(program, &probe)
         .unwrap_err()
         .into_vm_error();
     let ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {

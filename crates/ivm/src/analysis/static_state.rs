@@ -19,6 +19,7 @@ pub(super) fn analyze(
     entrypoint: Option<&str>,
     budget: &AllocationBudget,
 ) -> Result<Option<StaticStateAccessAnalysis>, VMError> {
+    let engine = contract.profile_id().engine();
     let Some(roots) = Roots::new(contract, entrypoint) else {
         return Ok(None);
     };
@@ -29,7 +30,7 @@ pub(super) fn analyze(
         return Ok(None);
     }
     let mut workspace = Workspace::new(contract.decoded().len(), budget)?;
-    let mut keys = KeyScratch::new(contract.decoded(), budget)?;
+    let mut keys = KeyScratch::new(engine, contract.decoded(), budget)?;
     let literals = PreparedLiterals::new(contract, budget)?;
     let Some(mut result) = traverse(contract, &roots, &mut workspace, &mut keys, &literals)? else {
         return Ok(None);
@@ -45,6 +46,8 @@ fn traverse(
     keys: &mut KeyScratch,
     literals: &impl LiteralSource,
 ) -> Result<Option<StaticStateAccessAnalysis>, VMError> {
+    // The prepared image's engine decides every operand decoding below.
+    let engine = contract.profile_id().engine();
     let decoded = contract.decoded();
     for root in roots.iter() {
         let Ok(index) = decoded.binary_search_by_key(&root, |op| op.pc) else {
@@ -66,10 +69,12 @@ fn traverse(
             return Ok(None);
         };
         let pc = op.pc;
-        if let Some(key) = transfer_static_state_facts(op, literals, &mut outgoing, &mut result) {
+        if let Some(key) =
+            transfer_static_state_facts(engine, op, literals, &mut outgoing, &mut result)
+        {
             keys.record(pc, key, literals)?;
         }
-        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(op) {
+        if contract.has_indirect_control_flow(pc) && !is_protected_contract_return(engine, op) {
             // A general indirect edge has no authenticated target in the
             // prepared control-flow graph. Treat the proof as incomplete even
             // when the visible instruction itself is not a durable-state
@@ -87,7 +92,7 @@ fn traverse(
         let Some(successors) = contract.control_flow_successors(pc) else {
             return Ok(None);
         };
-        let call_edges = direct_call_edges(op);
+        let call_edges = direct_call_edges(engine, op);
         // Production Kotodama entrypoints are authenticated two-instruction
         // thunks (`call body; halt`). Crossing that compiler-owned boundary is
         // still direct entrypoint code; calls made by the body remain

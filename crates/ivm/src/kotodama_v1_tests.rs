@@ -3,7 +3,7 @@ use crate::{CoreHost, IVM, VMError, host::IVMHost, parallel::StateAccessSet};
 use kotodama_lang::compiler::Compiler;
 
 fn compiled_main(source: &str) -> IVM {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(source)
         .expect("compile final V1 contract");
     let mut vm = IVM::new(1_000_000_000);
@@ -25,7 +25,7 @@ fn returned_int(vm: &IVM) -> String {
 }
 
 fn transaction_main(source: &str) -> Vec<u8> {
-    Compiler::new().compile_source(source).unwrap()
+    Compiler::new_c10().compile_source(source).unwrap()
 }
 
 /// Execute `code` as one transaction against the VM's installed host `H`.
@@ -480,10 +480,10 @@ fn static_error_messages_preserve_nominal_schema_and_reach_rejections() {
         }}"#
         )
     }
-    let (first, first_manifest) = Compiler::new()
+    let (first, first_manifest) = Compiler::new_c10()
         .compile_source_with_manifest(&source("残高が不足しています"))
         .unwrap();
-    let (second, second_manifest) = Compiler::new()
+    let (second, second_manifest) = Compiler::new_c10()
         .compile_source_with_manifest(&source("Insufficient balance"))
         .unwrap();
     assert_eq!(first_manifest.error_types, second_manifest.error_types);

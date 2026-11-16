@@ -40,7 +40,7 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         contract.artifact(),
         ivm::SyscallPolicy::AbiV1,
     )
-        .expect("registration validates the typed callback without a fabricated payload");
+    .expect("registration validates the typed callback without a fabricated payload");
     let context =
         parse_prepared_trigger_call_execution_context(&metadata, &contract, &event_args, u64::MAX)
             .expect("bind typed trigger arguments");
@@ -1577,7 +1577,12 @@ fn migrate_fails_on_invalid_bytecode() {
     let mut prog = Vec::new();
     // Start with a fully valid authenticated header so rejection exercises the
     // oversized code section rather than an earlier metadata failure.
-    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 1, 1).encode());
+    prog.extend_from_slice(&crate::ivm_test_support::baseline_header(
+        ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default_for(1, 1, 1)
+        },
+    ));
     // Oversized code
     let heap_start =
         usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");

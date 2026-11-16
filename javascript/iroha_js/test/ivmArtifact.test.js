@@ -10,28 +10,27 @@ import {
 
 const ARTIFACT = Uint8Array.from([
   0x49, 0x56, 0x4d, 0x00,
-  0x01, 0x01, 0x01,
-  0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x01, 0x01, 0x01, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x01,
   ...Array(32).fill(0),
 ]);
 
 test("computeIvmArtifactHashes matches ledger full-artifact fixtures", () => {
-  assert.equal(IVM_PROGRAM_HEADER_LENGTH, 48);
-  assert.equal(ARTIFACT.length, IVM_PROGRAM_HEADER_LENGTH);
+  assert.equal(IVM_PROGRAM_HEADER_LENGTH, 49);
   assert.equal(IVM_ARTIFACT_MAX_BYTES, 4 * 1024 * 1024);
   assert.deepEqual(computeIvmArtifactHashes(ARTIFACT), {
     codeHashHex:
-      "4a792a013d50d682f9f7fadbeb49f2fea050d92056c63c1389b132e08ac0f4e9",
+      "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
     artifactSha256Hex:
-      "32b7de41ef7d6e98df7599798877b113c2bbafc3872de12ca242cd8dbf88c07d",
+      "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
   });
 });
 
 test("computeIvmArtifactHashes distinguishes header and body substitution", () => {
   const original = computeIvmArtifactHashes(ARTIFACT);
   const changedHeader = ARTIFACT.slice();
-  changedHeader[15] ^= 0x80;
+  changedHeader[16] ^= 0x80;
   const headerHashes = computeIvmArtifactHashes(changedHeader);
   assert.notEqual(headerHashes.codeHashHex, original.codeHashHex);
   assert.notEqual(headerHashes.artifactSha256Hex, original.artifactSha256Hex);
@@ -48,12 +47,12 @@ test("computeIvmArtifactHashes rejects ambiguous or malformed binary inputs", ()
     /Uint8Array, ArrayBuffer, or ArrayBuffer view/,
   );
   assert.throws(
-    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 16)),
-    /at least the 48-byte program header/,
+    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 17)),
+    /at least the 49-byte program header/,
   );
   assert.throws(
-    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 47)),
-    /at least the 48-byte program header/,
+    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 48)),
+    /at least the 49-byte program header/,
   );
   const badMagic = ARTIFACT.slice();
   badMagic[0] ^= 0xff;

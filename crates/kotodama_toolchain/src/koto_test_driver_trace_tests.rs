@@ -12,7 +12,12 @@ fn traced_vm(budget: &AllocationBudget, mode: TraceMode, value: u64) -> IVM {
     let mut vm = IVM::try_new_with_memory_budget(u64::MAX, budget).unwrap();
     let mut code = ivm::ProgramMetadata::default().encode();
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    vm.load_program(&code).unwrap();
+    vm.load_program_for_profile(
+        &code,
+        ivm::IvmProfileId::declared(&code)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.set_max_cycles(0);
     vm.set_register(5, value);
     vm.set_trace_mode(mode);

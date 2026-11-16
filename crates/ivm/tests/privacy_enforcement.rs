@@ -559,7 +559,7 @@ fn compiled_secret_commitment_executes_end_to_end() {
     let artifact = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             force_zk: true,
-            ..kotodama_lang::compiler::CompilerOptions::default()
+            ..kotodama_lang::compiler::CompilerOptions::c10()
         },
     )
     .compile_source(source)
@@ -605,7 +605,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
         kotodama_lang::compiler::Compiler::new_with_options(
             kotodama_lang::compiler::CompilerOptions {
                 force_zk: true,
-                ..kotodama_lang::compiler::CompilerOptions::default()
+                ..kotodama_lang::compiler::CompilerOptions::c10()
             },
         )
         .compile_source(&source)

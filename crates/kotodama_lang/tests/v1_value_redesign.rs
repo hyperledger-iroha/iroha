@@ -24,7 +24,7 @@ fn unit_is_a_value_in_aggregates_state_and_public_schemas() {
         fn some_unit() -> Option<()> { Option::some(()) }
         fn result_unit() -> Result<(), ListError> { Result::ok(()) }
     }"#;
-    let bytes = Compiler::new()
+    let bytes = Compiler::new_c10()
         .compile_source(source)
         .expect("compile composable Unit");
     let metadata = kotodama_lang::metadata::ProgramMetadata::parse(&bytes).unwrap();
@@ -227,7 +227,7 @@ fn structural_equality_accepts_nested_values_and_consumes_results() {
             compare(left: first, right: second)
         }
     }"#;
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("compile recursive value equality");
     checked("fn f() { let left = [quantity::try_from_int(1)]; let right = [quantity::try_from_int(1)]; let equal = left == right; }")
@@ -271,7 +271,7 @@ fn call_tables_flatten_large_products_and_bind_all_callable_signatures() {
     let source = format!(
         "seiyaku Wide {{ struct Record {{ {fields}; }} fn echo(Record value) -> Record {{ value }} view fn main(Record value) authorize(anyone) -> Record {{ echo(value: value) }} }}"
     );
-    let bytes = Compiler::new()
+    let bytes = Compiler::new_c10()
         .compile_source(&source)
         .expect("compile 32-word arguments and results");
     let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -321,7 +321,7 @@ fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
     let source = format!(
         "seiyaku Bound {{ fn too_wide({parameters}) -> bool {{ p0 }} view fn main() authorize(anyone) -> bool {{ true }} }}"
     );
-    let error = kotodama_lang::session::CompilerSession::default()
+    let error = kotodama_lang::session::CompilerSession::c10()
         .check(kotodama_lang::session::CompileRequest {
             source: &source,
             source_name: Some("bound.ko"),
@@ -334,7 +334,7 @@ fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
             .any(|diagnostic| diagnostic.code == "K2007" && diagnostic.message.contains("8192"))
     );
     let inclusive = source.replace(&format!(", bool p{limit}"), "");
-    kotodama_lang::session::CompilerSession::default()
+    kotodama_lang::session::CompilerSession::c10()
         .check(kotodama_lang::session::CompileRequest {
             source: &inclusive,
             source_name: Some("inclusive.ko"),
@@ -343,7 +343,7 @@ fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
     // Two call sites keep `echo` out of single-use private-call inlining, so
     // the artifact really contains a small call through the call table.
     let source = "seiyaku Small { fn echo(bool value) -> bool { value } view fn main() authorize(anyone) -> bool { echo(value: true) || echo(value: false) } }";
-    let bytes = Compiler::new()
+    let bytes = Compiler::new_c10()
         .compile_source(source)
         .expect("small calls use the same descriptor");
     let interface = ivm_abi::metadata::ProgramMetadata::parse(&bytes)
@@ -384,7 +384,7 @@ fn call_tables_reject_oversized_shared_product_returns_before_lowering() {
     let source = format!(
         "seiyaku Bound {{ {declarations} fn too_wide(B13 value) -> B14 {{ B14 {{ left: value, right: value }} }} view fn main() authorize(anyone) -> bool {{ true }} }}"
     );
-    let error = kotodama_lang::session::CompilerSession::default()
+    let error = kotodama_lang::session::CompilerSession::c10()
         .check(kotodama_lang::session::CompileRequest {
             source: &source,
             source_name: Some("return-bound.ko"),

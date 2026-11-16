@@ -32,7 +32,7 @@ fn compile(source: &str, retain_publication: bool) -> CompileOutput {
         // optimization; both sides keep their original exact frame geometry.
         let build = || {
             crate::regalloc::with_conservative_host_operands(|| {
-                CompilerSession::new(CompilerOptions::default())
+                CompilerSession::new(CompilerOptions::c10())
                     .build(CompileRequest {
                         source,
                         source_name: Some("state_operands.ko"),

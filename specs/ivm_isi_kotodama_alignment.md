@@ -138,9 +138,10 @@ before state changes are committed.
 5. Determinism across acceleration paths
 
 Hardware-assisted paths keep deterministic CPU fallbacks, and blockchain-visible
-results must remain byte-for-byte identical across peers. The instruction set
-has no vector or parallel-marker opcodes: acceleration exists only behind
-host-side helpers and must preserve the same observable trace semantics.
+results must remain byte-for-byte identical across peers. The baseline engine
+that ABI V1 selects keeps its vector opcodes and no-op parallel markers; the
+C10 instruction set has neither, and its acceleration exists only behind
+host-side helpers. Both must preserve the same observable trace semantics.
 
 6. Kotodama language surface vs. ledger semantics
 

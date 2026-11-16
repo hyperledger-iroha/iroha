@@ -663,7 +663,10 @@ fn deferred_host_setup_charges_a_representative_contract_identically() {
         );
         let mut eager_vm = IVM::new(u64::MAX);
         eager_vm
-            .load_program(&program)
+            .load_program_for_profile(
+                &program,
+                crate::ivm_test_support::declared_profile(&program),
+            )
             .expect("load fixture program");
         eager_vm.set_register(10, epoch);
         eager_vm
@@ -671,7 +674,10 @@ fn deferred_host_setup_charges_a_representative_contract_identically() {
             .expect("run with the eager host");
         let mut deferred_vm = IVM::new(u64::MAX);
         deferred_vm
-            .load_program(&program)
+            .load_program_for_profile(
+                &program,
+                crate::ivm_test_support::declared_profile(&program),
+            )
             .expect("load fixture program");
         deferred_vm.set_register(10, epoch);
         deferred_vm

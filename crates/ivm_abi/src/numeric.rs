@@ -53,23 +53,32 @@ pub const NUMERIC_SCALE_REGISTER: usize = 12;
 pub const NUMERIC_ROUNDING_REGISTER: usize = 13;
 /// Failure-mode register for arithmetic operations: zero traps, one returns status.
 pub const NUMERIC_FAILURE_MODE_REGISTER: usize = 14;
+/// Numeric fault tag the C10 engine assigns to a signed 64-bit register overflow
+/// ([`crate::VMError::RegisterIntegerOverflow`]).
+///
+/// It is not a [`NumericFaultV1`] value: the wire enum is the baseline's (tags 1–13), numeric
+/// syscalls never return this tag, and the C10 ABI descriptor binds it on its own.
+pub const C10_REGISTER_INTEGER_OVERFLOW_TAG: u64 = 14;
 /// Trap on an arithmetic-domain failure.
 pub const NUMERIC_FAILURE_TRAP: u64 = 0;
 /// Return an arithmetic-domain failure in `r11` without trapping.
 pub const NUMERIC_FAILURE_STATUS: u64 = 1;
 #[cfg(test)]
 mod tests {
-    use super::{NumericFaultV1, PointerAbiFaultV1, RoundingModeV1};
+    use super::{
+        C10_REGISTER_INTEGER_OVERFLOW_TAG, NumericFaultV1, PointerAbiFaultV1, RoundingModeV1,
+    };
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
-        for tag in 1..=14 {
+        for tag in 1..=13 {
             assert_eq!(
                 NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag),
                 Some(tag)
             );
         }
         assert_eq!(NumericFaultV1::from_tag(0), None);
-        assert_eq!(NumericFaultV1::from_tag(15), None);
+        assert_eq!(NumericFaultV1::from_tag(14), None);
+        assert_eq!(C10_REGISTER_INTEGER_OVERFLOW_TAG, 14);
     }
     #[test]
     fn rounding_tags_are_complete_and_stable() {

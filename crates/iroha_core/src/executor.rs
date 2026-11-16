@@ -1339,7 +1339,8 @@ mod encoded_result_program_tests {
     fn encoded_result_program_is_admitted_and_copies_exact_bytes() {
         let result = [0xde, 0xad, 0xbe, 0xef, 0x42];
         let program = build_program_from_encoded_result(&result);
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("program metadata parses");
+        let parsed =
+            crate::ivm_test_support::parse_declared(&program).expect("program metadata parses");
         assert!(
             parsed
                 .literal_section
@@ -1347,8 +1348,11 @@ mod encoded_result_program_tests {
             "encoded bytes must live in authenticated typed literals"
         );
         let mut vm = ivm::IVM::new(1_000_000);
-        vm.load_program(&program)
-            .expect("encoded-result program passes strict admission");
+        vm.load_program_for_profile(
+            &program,
+            crate::ivm_test_support::declared_profile(&program),
+        )
+        .expect("encoded-result program passes strict admission");
         vm.set_register(10, ivm::Memory::OUTPUT_START);
         vm.run().expect("encoded-result program runs");
         let output = vm.read_output_used();
@@ -3243,10 +3247,11 @@ enum PreparedIvmZkAvailability {
 }
 fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
     state: &R,
+    profile: crate::smartcontracts::ivm::profile::ResolvedIvmProfile,
     metadata: &ivm::ProgramMetadata,
     zk_availability: PreparedIvmZkAvailability,
-) -> Result<(), ValidationFail> {
-    crate::pipeline::overlay::validate_header_policy(metadata)
+) -> Result<Option<std::num::NonZeroU64>, ValidationFail> {
+    crate::pipeline::overlay::validate_header_policy_for(profile.engine(), metadata)
         .map_err(ValidationFail::IvmAdmission)?;
     if zk_availability == PreparedIvmZkAvailability::RequireLocalBackend
         && metadata.mode & ivm::ivm_mode::ZK != 0
@@ -3258,25 +3263,42 @@ fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
             ),
         ));
     }
-    crate::pipeline::overlay::enforce_pre_execution_policy(
+    // The anchor's order: governance fuel and the ceiling yield the baseline budget, then the
+    // ceiling is applied again as node pre-execution policy.
+    let effective_cycles = crate::smartcontracts::ivm::execution_cycle_budget_for(
+        profile.engine(),
+        metadata,
+        state.pipeline().ivm_max_cycles_upper_bound,
+        state.world().parameters().smart_contract().fuel(),
+    )
+    .map_err(ValidationFail::IvmAdmission)?;
+    crate::pipeline::overlay::enforce_pre_execution_policy_for(
+        profile.engine(),
         state.pipeline().ivm_max_cycles_upper_bound,
         metadata,
     )
-    .map_err(overlay_build_error_to_validation_fail)
+    .map_err(overlay_build_error_to_validation_fail)?;
+    Ok(effective_cycles)
 }
-/// Apply the canonical first-release IVM admission policy to an already prepared program.
+/// Apply the admission policy of `profile` to a program already prepared under it.
 ///
-/// Preparation authenticates and predecodes the image, while this check binds a ZK artifact's
-/// trace bound to the committed ceiling and requires a locally enabled backend for ZK-mode
-/// execution. Gas, owned by the caller, is the only execution budget, so nothing here derives a
-/// limit from the artifact. The metadata-only interface prevents warm dispatch from rewalking
-/// authenticated opcode bytes.
-pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
+/// Preparation authenticates and predecodes the image, while this check applies the header and
+/// cycle rules of the profile's engine and requires a locally enabled backend for ZK-mode
+/// execution. The metadata-only interface prevents warm dispatch from rewalking authenticated
+/// opcode bytes.
+///
+/// Returns the header-derived cycle budget of a baseline program (the anchor's
+/// `validate_cycle_limits`): the caller sets it as the run's cycle limit and, where the anchor did,
+/// bounds the gas limit by [`crate::smartcontracts::ivm::gas_limit_for_cycles`]. A C10 program has
+/// no cycle budget; gas, owned by the caller, is its only budget.
+pub(crate) fn validate_prepared_ivm_execution_policy_for_profile<R: StateReadOnly>(
     state: &R,
+    profile: crate::smartcontracts::ivm::profile::ResolvedIvmProfile,
     metadata: &ivm::ProgramMetadata,
-) -> Result<(), ValidationFail> {
+) -> Result<Option<std::num::NonZeroU64>, ValidationFail> {
     validate_prepared_ivm_execution_policy_with_availability(
         state,
+        profile,
         metadata,
         PreparedIvmZkAvailability::RequireLocalBackend,
     )
@@ -3286,10 +3308,12 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
 // availability toggles. `verify_ivm_proved_execution` performs that governed verification.
 fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
     state: &R,
+    profile: crate::smartcontracts::ivm::profile::ResolvedIvmProfile,
     metadata: &ivm::ProgramMetadata,
-) -> Result<(), ValidationFail> {
+) -> Result<Option<std::num::NonZeroU64>, ValidationFail> {
     validate_prepared_ivm_execution_policy_with_availability(
         state,
+        profile,
         metadata,
         PreparedIvmZkAvailability::GovernedProof,
     )
@@ -3835,7 +3859,7 @@ fn resolve_callable_contract_entrypoint(
     selector: &str,
     interface_required_message: &'static str,
 ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+    let parsed = crate::ivm_test_support::parse_declared(bytecode).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for contract call dispatch: {err}"
         ))
@@ -7212,7 +7236,16 @@ impl Executor {
             state_transaction,
             summary.prepared_contract().syscall_policy(),
         )?;
-        validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
+            state_transaction,
+            summary.profile(),
+            &summary.metadata,
+        )?;
+        // A baseline contract's gas is bounded by its header cycle budget, as the anchor
+        // bounded it; a C10 contract has no cycle budget.
+        let effective_limit = effective_cycles.map_or(effective_limit, |cycles| {
+            effective_limit.min(crate::smartcontracts::ivm::gas_limit_for_cycles(cycles))
+        });
         let manifest = state_transaction
             .world
             .contract_manifests()
@@ -7271,6 +7304,9 @@ impl Executor {
                     ValidationFail::InternalError(error.to_string())
                 })
             })?;
+        if let Some(cycles) = effective_cycles {
+            runtime.set_max_cycles(cycles.get());
+        }
         runtime.set_gas_limit(effective_limit);
         if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
             let code_len = runtime.memory.code_len();
@@ -7923,7 +7959,11 @@ impl Executor {
                 .summarize_program(proved.bytecode.as_ref())
                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
             let meta = summary.metadata.clone();
-            validate_governed_ivm_proved_execution_policy(state_transaction, &meta)?;
+            validate_governed_ivm_proved_execution_policy(
+                state_transaction,
+                summary.profile(),
+                &meta,
+            )?;
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
                 transaction.payload(),
@@ -8424,7 +8464,11 @@ impl Executor {
                     md,
                     artifact,
                 )?;
-                validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+                let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
+                    state_transaction,
+                    summary.profile(),
+                    &summary.metadata,
+                )?;
                 let prepared_contract_cache = ivm_cache.prepared_contract_cache();
                 let amx_analysis =
                     ivm_cache
@@ -8453,6 +8497,9 @@ impl Executor {
                             ValidationFail::InternalError(error.to_string())
                         })
                     })?;
+                if let Some(cycles) = effective_cycles {
+                    runtime.set_max_cycles(cycles.get());
+                }
                 runtime.set_gas_limit(effective_limit);
                 let accounts = state_transaction.accounts_snapshot();
                 let mut host =
@@ -8565,7 +8612,11 @@ impl Executor {
             state_transaction,
             summary.prepared_contract().syscall_policy(),
         )?;
-        validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
+            state_transaction,
+            summary.profile(),
+            &summary.metadata,
+        )?;
         crate::pipeline::overlay::validate_contract_binding(
             state_transaction,
             transaction_for_fee.payload(),
@@ -8644,6 +8695,9 @@ impl Executor {
                     ValidationFail::InternalError(error.to_string())
                 })
             })?;
+        if let Some(cycles) = effective_cycles {
+            runtime.set_max_cycles(cycles.get());
+        }
         runtime.set_gas_limit(effective_limit);
         if let Some(context) = contract_call_context.as_ref()
             && let Some(entrypoint_pc) = context.entrypoint_pc
@@ -10644,7 +10698,12 @@ impl LoadedExecutor {
                 }
             }
         }
-        IVM::validate_program(original_executor.bytecode().as_ref())?;
+        // An executor upgrade is a first-release interface: its bytecode runs under the interface
+        // profile, resolved before any header byte is read.
+        IVM::validate_program_for_profile(
+            original_executor.bytecode().as_ref(),
+            crate::smartcontracts::ivm::profile::interface_profile_id(),
+        )?;
         // Normalize caller spare Vec capacity, then charge the actual owned Vec.
         let bytecode = original_executor.bytecode().as_ref().to_vec();
         let bytecode_capacity = bytecode.capacity();
@@ -10685,8 +10744,10 @@ impl LoadedExecutor {
         budget: &iroha_allocation::AllocationBudget,
     ) -> Result<IVM, VMError> {
         let mut vm = IVM::try_new_with_memory_budget(gas_limit, budget)?;
-        vm.memory.set_heap_max_limit(heap_limit)?;
-        vm.load_program(raw_executor.bytecode().as_ref())?;
+        vm.set_heap_max_limit(heap_limit)?;
+        // The executor-upgrade interface names the first-release interface profile.
+        let profile = crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default();
+        vm.load_program_for_policy(raw_executor.bytecode().as_ref(), profile.policy())?;
         vm.set_gas_limit(gas_limit);
         Ok(vm)
     }

@@ -21,20 +21,21 @@ test("HTTP errors preserve the canonical typed fault without diagnostic strings"
   assert.throws(() => new ToriiError("bad wire", { details: { ivm_fault: { ...fault(), trace: "unbounded" } } }), /exactly/);
 });
 
-// `IvmFaultKindV1` in codec-index order (0..=27).
+// `IvmFaultKindV1` in codec-index order (0..=29).
 const FAULT_KINDS = [
   "OutOfGas", "MemoryLimitExceeded", "MemoryAccessViolation", "MisalignedAccess", "MemoryOutOfBounds",
   "DecodeError", "InvalidOpcode", "UnknownSyscall", "UnsupportedSyscall", "GasCostOverflow", "Numeric",
-  "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "MissingHalt",
-  "NullifierAlreadyUsed", "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid",
-  "AbiTypeNotAllowed", "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded",
-  "ReentrantCall", "CallDepthExceeded", "ControlFlowViolation",
+  "PointerAbi", "AssertionFailed", "ExceededMaxCycles", "InvalidMetadata", "InvalidVectorLength",
+  "MissingHalt", "VectorExtensionDisabled", "ZkExtensionDisabled", "NullifierAlreadyUsed",
+  "PermissionDenied", "PrivacyViolation", "RegisterOutOfBounds", "NoritoInvalid", "AbiTypeNotAllowed",
+  "HostOutputItemsExceeded", "HostOutputBytesExceeded", "AmxBudgetExceeded", "ReentrantCall",
+  "CallDepthExceeded",
 ];
-// `NumericFaultV1` in ABI tag order (1..=14).
+// `NumericFaultV1` in ABI tag order (1..=13).
 const NUMERIC_FAULTS = [
   "MantissaOverflow", "ScaleOverflow", "DivisionByZero", "RepeatingDecimal", "ExactDivisionScaleOverflow",
   "InvalidScale", "InexactConversion", "NegativeQuantity", "QuantityUnderflow", "InvalidRoundingMode",
-  "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot", "RegisterIntegerOverflow",
+  "InvalidFailureMode", "ReservedRegisterNonZero", "NegativeSquareRoot",
 ];
 // `PointerAbiFaultV1` in ABI tag order (1..=11).
 const POINTER_ABI_FAULTS = [
@@ -43,7 +44,7 @@ const POINTER_ABI_FAULTS = [
 ];
 
 test("every current fault category and exact subtype code is accepted", () => {
-  assert.equal(FAULT_KINDS.length, 28);
+  assert.equal(FAULT_KINDS.length, 30);
   for (const category of FAULT_KINDS.filter((name) => name !== "Numeric" && name !== "PointerAbi")) {
     const value = fault();
     value.kind = { kind: category, value: null };
@@ -58,19 +59,20 @@ test("every current fault category and exact subtype code is accepted", () => {
   }
 });
 
-test("retired categories and cross-category subtype codes are rejected", () => {
-  for (const retired of ["InvalidVectorLength", "VectorExtensionDisabled", "ZkExtensionDisabled"]) {
+test("unknown categories and cross-category subtype codes are rejected", () => {
+  // C10's own fault categories are not values of the original wire enum.
+  for (const retired of ["ControlFlowViolation"]) {
     const value = fault();
     value.kind = { kind: retired, value: null };
     assert.throws(() => normalizeIvmFault(value, "fault"), /category/, retired);
   }
-  for (const [category, code] of [["Numeric", "WrongType"], ["PointerAbi", "RegisterIntegerOverflow"], ["Numeric", "ControlFlowViolation"]]) {
+  for (const [category, code] of [["Numeric", "WrongType"], ["Numeric", "RegisterIntegerOverflow"], ["PointerAbi", "DivisionByZero"], ["Numeric", "MissingHalt"]]) {
     const value = fault();
     value.kind = { kind: category, value: { kind: code, value: null } };
     assert.throws(() => normalizeIvmFault(value, "fault"), /fault code/, `${category}(${code})`);
   }
   const unitWithPayload = fault();
-  unitWithPayload.kind = { kind: "ControlFlowViolation", value: { kind: "DivisionByZero", value: null } };
+  unitWithPayload.kind = { kind: "InvalidVectorLength", value: { kind: "DivisionByZero", value: null } };
   assert.throws(() => normalizeIvmFault(unitWithPayload, "fault"), /category/);
 });
 

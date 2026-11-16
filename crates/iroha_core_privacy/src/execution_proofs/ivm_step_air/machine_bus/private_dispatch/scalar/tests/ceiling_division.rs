@@ -239,14 +239,16 @@ fn private_divceil_native_private_arithmetic_and_gas_traps_refuse_completed_rows
             } else if tags != [false, false] {
                 assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
             } else {
-                let fault = if right == 0 {
-                    ivm::numeric::NumericFaultV1::DivisionByZero
+                assert!(if right == 0 {
+                    matches!(
+                        outcome,
+                        Err(ivm::VMError::NumericFault(
+                            ivm::numeric::NumericFaultV1::DivisionByZero
+                        ))
+                    )
                 } else {
-                    ivm::numeric::NumericFaultV1::RegisterIntegerOverflow
-                };
-                assert!(
-                    matches!(outcome, Err(ivm::VMError::NumericFault(actual)) if actual == fault)
-                );
+                    matches!(outcome, Err(ivm::VMError::RegisterIntegerOverflow))
+                });
             }
             let record = &recorder.records()[0];
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));

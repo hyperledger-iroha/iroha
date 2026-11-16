@@ -20,7 +20,8 @@ use owner::{PreparedOwner, PreparedShell};
 pub(crate) struct PreparedContractParts {
     pub(crate) artifact: crate::cache_memory::SharedAllocation<u8>,
     pub(crate) metadata: ProgramMetadata,
-    pub(crate) syscall_policy: crate::SyscallPolicy,
+    pub(crate) profile: crate::IvmProfileId,
+    pub(crate) vector_length: u8,
     pub(crate) manifest: ContractManifest,
     pub(crate) header_len: usize,
     pub(crate) code_offset: usize,
@@ -34,7 +35,8 @@ pub(crate) struct PreparedContractParts {
 struct PreparedContractInner {
     artifact: crate::cache_memory::SharedAllocation<u8>,
     metadata: ProgramMetadata,
-    syscall_policy: crate::SyscallPolicy,
+    profile: crate::IvmProfileId,
+    vector_length: u8,
     manifest: SharedValue<ContractManifest>,
     header_len: usize,
     code_offset: usize,
@@ -110,12 +112,14 @@ impl PreparedContract {
             &parts.control_flow,
             instruction_entry_pc,
             budget,
+            parts.profile.engine(),
         )?;
         Ok(Self {
             inner: shell.initialize(PreparedContractInner {
                 artifact: parts.artifact,
                 metadata: parts.metadata,
-                syscall_policy: parts.syscall_policy,
+                profile: parts.profile,
+                vector_length: parts.vector_length,
                 manifest: {
                     let exclusively_owned =
                         parts.manifest.entrypoints.as_ref().is_none_or(|entries| {
@@ -184,7 +188,20 @@ impl PreparedContract {
     /// Exact named host policy authenticated at artifact admission.
     #[must_use]
     pub fn syscall_policy(&self) -> crate::SyscallPolicy {
-        self.inner.syscall_policy
+        self.inner.profile.policy()
+    }
+    /// Compiled identity of the profile this contract was admitted and prepared under.
+    ///
+    /// Caches bind it into their keys: a contract prepared for one profile is never a valid
+    /// result for another, whatever its code hash.
+    #[must_use]
+    pub fn profile_id(&self) -> crate::IvmProfileId {
+        self.inner.profile
+    }
+    /// Logical vector length a baseline header declared; zero for a C10 contract.
+    #[must_use]
+    pub fn vector_length(&self) -> u8 {
+        self.inner.vector_length
     }
     /// Return the manifest derived from the validated artifact.
     ///

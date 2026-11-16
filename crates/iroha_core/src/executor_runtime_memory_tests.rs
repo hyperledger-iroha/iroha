@@ -49,7 +49,10 @@ fn restore_performs_static_admission_without_a_vm_or_funding_owner() {
         pool.execution_budget.is_none()
     }));
     for program in [vec![0], {
-        let mut program = ivm::ProgramMetadata::default().encode();
+        let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        });
         program.extend_from_slice(&[0xff; 4]);
         program
     }] {

@@ -593,8 +593,8 @@ mod tests {
             collect_markdown_files(&root, &mut paths);
         }
         paths.sort();
-        let compiler = Compiler::new();
-        let session = CompilerSession::new(CompilerOptions::default());
+        let compiler = Compiler::new_c10();
+        let session = CompilerSession::new(CompilerOptions::c10());
         let mut failures = Vec::new();
         for path in paths {
             let text = fs::read_to_string(&path).unwrap_or_else(|err| {

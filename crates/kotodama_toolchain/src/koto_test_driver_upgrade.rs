@@ -39,11 +39,12 @@ impl KotoTestHost {
         let transition = (|| {
             // This explicit fixture describes a completed historical instance. Every old scalar
             // must actually exist with its canonical value schema before replacement is allowed.
-            self.inner.install_contract_fixture(
+            self.inner.install_contract_fixture_for_profile(
                 self.contract_address.clone(),
                 previous.artifact().to_vec(),
                 lifecycle,
                 None,
+                previous.profile_id(),
             )?;
             self.inner.replace_contract_fixture(
                 &self.contract_address,

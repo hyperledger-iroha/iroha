@@ -105,7 +105,7 @@ fn english_words_remain_available_as_ordinary_identifiers() {
     }"#;
     let output = parse_source(source);
     assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
-    CompilerSession::default()
+    CompilerSession::c10()
         .check(CompileRequest {
             source,
             source_name: Some("ordinary-words.ko"),

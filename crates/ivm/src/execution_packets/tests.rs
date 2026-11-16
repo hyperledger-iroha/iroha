@@ -20,7 +20,7 @@ fn contract(source: &str, max_cycles: u64) -> PreparedContract {
     let bytes = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
         zk_trace_cycles: std::num::NonZeroU64::new(max_cycles).expect("ZK trace bound"),
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
     .compile_source(source)
     .unwrap();
@@ -301,7 +301,7 @@ fn private_selector_arguments_unsupported_results_and_nonzk_profiles_are_closed_
         drop(parent);
         assert_eq!(budget.reserved_bytes(), 0);
     }
-    let bytes = Compiler::new()
+    let bytes = Compiler::new_c10()
         .compile_source("seiyaku S { view fn main() authorize(anyone) { } }")
         .unwrap();
     let mut parent = parent(&budget);

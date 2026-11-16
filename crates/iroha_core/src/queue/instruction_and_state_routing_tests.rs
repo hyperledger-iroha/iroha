@@ -1,9 +1,12 @@
 // Instruction fixtures and committed-state routing regression tests.
 use ivm::ProgramMetadata;
 fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    ProgramMetadata::parse(&program).expect("parse minimal program");
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
+    crate::ivm_test_support::parse_declared(&program).expect("parse minimal program");
     let code_hash = ivm::contract_code_hash(&program);
     (code_hash, program)
 }
@@ -144,13 +147,12 @@ fn accepted_ivm_tx_by(
 }
 #[cfg(feature = "telemetry")]
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    let mut program = ProgramMetadata {
+    let mut program = crate::ivm_test_support::baseline_header(ProgramMetadata {
         abi_version,
         ..ProgramMetadata::default()
-    }
-    .encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    ProgramMetadata::parse(&program).expect("parse minimal IVM program");
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
+    crate::ivm_test_support::parse_declared(&program).expect("parse minimal IVM program");
     program
 }
 /// Build a routing component World with the shared authority and explicit Global metadata.

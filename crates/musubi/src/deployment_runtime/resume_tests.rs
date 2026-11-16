@@ -67,7 +67,8 @@ fn plan_for_source(
     let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .map_err(|error| eyre!(error))?;
-    let verified = ivm::verify_contract_artifact(&artifact).map_err(|error| eyre!(error))?;
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
+        .map_err(|error| eyre!(error))?;
     let alias: ContractAlias = alias.parse()?;
     let address = ContractAddress::derive(
         &config.network_id,

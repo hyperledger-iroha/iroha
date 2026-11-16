@@ -80,7 +80,12 @@ fn tlv_zero_hash_rejected() {
     vm.set_register(10, ivm::Memory::INPUT_START + off_acc);
     vm.set_register(11, ivm::Memory::INPUT_START + off_name);
     vm.set_register(12, ivm::Memory::INPUT_START + off_json);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Should fail under single ABI
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
@@ -130,7 +135,12 @@ fn tlv_valid_hash_accepted() {
     vm.set_register(10, ivm::Memory::INPUT_START + off_acc);
     vm.set_register(11, ivm::Memory::INPUT_START + off_name);
     vm.set_register(12, ivm::Memory::INPUT_START + off_json);
-    vm.load_program(&program).unwrap();
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     vm.run()
         .expect("execution should succeed with valid TLV digests");
 }

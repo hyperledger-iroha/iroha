@@ -305,8 +305,11 @@ fn unaffordable_zk_verification_stops_before_verifier_or_latch_mutation() {
     ]
     .concat();
     let mut vm = IVM::new(20);
-    vm.load_program(&build_program(&code))
-        .expect("load verifier program");
+    vm.load_program_for_profile(
+        &build_program(&code),
+        crate::ivm_test_support::declared_profile(&build_program(&code)),
+    )
+    .expect("load verifier program");
     let payload_ptr = store_tlv(
         &mut vm,
         PointerType::NoritoBytes,
@@ -382,8 +385,11 @@ fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
     ]
     .concat();
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&build_program(&code))
-        .expect("load batch verifier program");
+    vm.load_program_for_profile(
+        &build_program(&code),
+        crate::ivm_test_support::declared_profile(&build_program(&code)),
+    )
+    .expect("load batch verifier program");
     let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, pointer);
     vm.set_register(11, 0xfeed);

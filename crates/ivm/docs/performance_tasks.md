@@ -3,7 +3,8 @@
 This document lists potential optimizations that could speed up the IVM
 implementation. Each bullet can be turned into an issue or a future pull
 request. The vector, hashing, AES and Poseidon functions named below are
-host-side helpers; the instruction set has no vector or cryptographic opcodes.
+host-side helpers; the baseline engine that ABI V1 selects reaches them through
+its vector and cryptographic opcodes, and the C10 instruction set has none.
 
 ## SIMD and Vector Optimizations
 

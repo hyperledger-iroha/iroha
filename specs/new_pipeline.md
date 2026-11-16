@@ -625,9 +625,11 @@ Vectorization, AOT_SIMD, and Acceleration
   bit‑exact results across backends.
 
 SIMD op exposure
-- SIMD vectorization is an implementation detail of host‑side helpers (Merkle
-  hashing, syscall primitives, proof tooling). The IVM instruction set has no
-  vector opcodes, vector registers, logical vector length or parallel markers.
+- SIMD vectorization is an implementation detail. The baseline engine that ABI
+  V1 selects has vector opcodes scaled by a declared logical vector length and
+  no-op parallel markers; the C10 instruction set has no vector opcodes, vector
+  registers, logical vector length or parallel markers, so its SIMD lives in
+  host‑side helpers (Merkle hashing, syscall primitives, proof tooling).
   Hardware SIMD width MUST NOT change a result or a gas charge.
 - Each contract executes sequentially; scheduling and parallelism are driven
   by the block‑level scheduler only.

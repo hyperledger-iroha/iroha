@@ -7,7 +7,7 @@ fn kotodama_state_scalar_reads_durable() {
     let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/001.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile scalar state reader");
     let mut host = CoreHost::new();
@@ -24,7 +24,7 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     let src = include_str!("../fixtures/koto_v1/kotodama_state_scalar/002.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile struct state helper");
     let mut vm = IVM::new(u64::MAX);
@@ -35,7 +35,7 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     assert_eq!(common::decode_i64_return_word(&vm, 0), 8);
 }
 fn run_named_struct_order(source: &str) -> (i64, i64) {
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(source)
         .expect("compile named-struct source-order fixture");
     let mut host = CoreHost::new();

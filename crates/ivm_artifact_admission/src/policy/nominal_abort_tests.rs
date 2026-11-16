@@ -39,14 +39,19 @@ fn graph_roots(decoded: &[DecodedOp], entries: &BTreeSet<u64>) -> BTreeSet<u64> 
     roots.extend(
         decoded
             .iter()
-            .filter(|op| is_direct_call(op))
-            .map(|op| direct_control_flow_target(op).unwrap()),
+            .filter(|op| is_direct_call(ivm_abi::IvmEngine::C10, op))
+            .map(|op| direct_control_flow_target(ivm_abi::IvmEngine::C10, op).unwrap()),
     );
     roots
 }
 fn proven(decoded: &[DecodedOp], entries: &BTreeSet<u64>) -> BTreeSet<u64> {
     let instructions = decoded.iter().map(|op| (op.pc, op)).collect();
-    shared_nominal_abort_tail_pcs(decoded, &instructions, &graph_roots(decoded, entries))
+    shared_nominal_abort_tail_pcs(
+        ivm_abi::IvmEngine::C10,
+        decoded,
+        &instructions,
+        &graph_roots(decoded, entries),
+    )
 }
 fn assert_shared_refusal(words: &[u32], roots: &BTreeSet<u64>) {
     let decoded = ops(words);
@@ -54,7 +59,7 @@ fn assert_shared_refusal(words: &[u32], roots: &BTreeSet<u64>) {
         proven(&decoded, roots).is_empty(),
         "mutation must not acquire a shared suffix proof"
     );
-    let error = validate_nonrecursive_direct_calls(&decoded, roots)
+    let error = validate_nonrecursive_direct_calls(ivm_abi::IvmEngine::C10, &decoded, roots)
         .expect_err("original ownership rule rejects unproven sharing");
     assert!(
         error.to_string().contains("ordinary control flow"),
@@ -70,10 +75,16 @@ fn exact_terminal_abort_suffix_alone_may_be_shared_without_call_or_return() {
         proven(&decoded, &roots),
         BTreeSet::from([8, 12, 16, 20, 24, 28])
     );
-    validate_bytecode_security(&decoded, false, ValidationProfile::Production).unwrap();
-    validate_nonrecursive_direct_calls(&decoded, &roots).unwrap();
+    validate_bytecode_security(
+        ivm_abi::IvmEngine::C10,
+        &decoded,
+        false,
+        ValidationProfile::Production,
+    )
+    .unwrap();
+    validate_nonrecursive_direct_calls(ivm_abi::IvmEngine::C10, &decoded, &roots).unwrap();
     for root in roots {
-        let reach = reachable_syscalls(&decoded, root, "source").unwrap();
+        let reach = reachable_syscalls(ivm_abi::IvmEngine::C10, &decoded, root, "source").unwrap();
         assert_eq!(
             reach.syscalls,
             BTreeSet::from([
@@ -174,21 +185,29 @@ fn terminal_abort_suffix_does_not_relax_original_direct_recursion_or_unknown_sys
     let decoded = ops(&words);
     let roots = BTreeSet::from([0, 8]);
     assert!(!proven(&decoded, &roots).is_empty());
-    let error = validate_nonrecursive_direct_calls(&decoded, &roots).unwrap_err();
+    let error =
+        validate_nonrecursive_direct_calls(ivm_abi::IvmEngine::C10, &decoded, &roots).unwrap_err();
     assert!(error.to_string().contains("recursive direct-call cycle"));
     let unknown = ops(&[
         enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT),
         enc::encode_scall(0x00ff_ffff),
     ]);
     assert_eq!(
-        reachable_syscalls(&unknown, 0, "source").unwrap().pcs,
+        reachable_syscalls(ivm_abi::IvmEngine::C10, &unknown, 0, "source")
+            .unwrap()
+            .pcs,
         BTreeSet::from([0])
     );
     assert!(
-        validate_bytecode_security(&unknown, false, ValidationProfile::Production)
-            .unwrap_err()
-            .to_string()
-            .contains("disallowed syscall")
+        validate_bytecode_security(
+            ivm_abi::IvmEngine::C10,
+            &unknown,
+            false,
+            ValidationProfile::Production
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("disallowed syscall")
     );
 }
 
@@ -197,17 +216,24 @@ fn terminal_abort_reachability_keeps_prior_effects_and_stops_before_following_en
     let abort = enc::encode_scall(syscalls::SYSCALL_CONTRACT_ABORT);
     let write = enc::encode_scall(syscalls::SYSCALL_STATE_SET);
     let after = ops(&[abort, write, enc::encode_halt()]);
-    let reach = reachable_syscalls(&after, 0, "source").unwrap();
+    let reach = reachable_syscalls(ivm_abi::IvmEngine::C10, &after, 0, "source").unwrap();
     assert_eq!(reach.pcs, BTreeSet::from([0]));
     assert_eq!(
         reach.syscalls,
         BTreeSet::from([syscalls::SYSCALL_CONTRACT_ABORT])
     );
     validate_view_effects("source", &reach.syscalls).unwrap();
-    validate_bytecode_security(&after, false, ValidationProfile::Production).unwrap();
-    validate_nonrecursive_direct_calls(&after, &BTreeSet::from([0, 4])).unwrap();
+    validate_bytecode_security(
+        ivm_abi::IvmEngine::C10,
+        &after,
+        false,
+        ValidationProfile::Production,
+    )
+    .unwrap();
+    validate_nonrecursive_direct_calls(ivm_abi::IvmEngine::C10, &after, &BTreeSet::from([0, 4]))
+        .unwrap();
     let before = ops(&[write, abort, enc::encode_halt()]);
-    let reach = reachable_syscalls(&before, 0, "source").unwrap();
+    let reach = reachable_syscalls(ivm_abi::IvmEngine::C10, &before, 0, "source").unwrap();
     assert_eq!(reach.pcs, BTreeSet::from([0, 4]));
     assert!(validate_view_effects("source", &reach.syscalls).is_err());
 }
@@ -323,7 +349,7 @@ fn genuine_complete_scalar_and_compact_artifacts_both_pass_canonical_admission_w
 fn current_compiler_complete_cross_function_nominal_abort_artifact_is_admissible() {
     use kotodama_lang::session::{CompileRequest, CompilerSession};
     let source = include_str!("../../../../fixtures/kotodama/compact_emission/abort_second.ko");
-    let output = CompilerSession::default()
+    let output = CompilerSession::c10()
         .build(CompileRequest {
             source,
             source_name: Some("compact_emission.ko"),
@@ -344,7 +370,7 @@ fn current_compiler_complete_cross_function_nominal_abort_artifact_is_admissible
     assert!(
         decoded
             .iter()
-            .filter(|op| direct_control_flow_target(op) == Some(start))
+            .filter(|op| direct_control_flow_target(ivm_abi::IvmEngine::C10, op) == Some(start))
             .count()
             >= 2
     );
@@ -360,7 +386,8 @@ fn current_compiler_complete_cross_function_nominal_abort_artifact_is_admissible
         .iter()
         .find(|entry| entry.name == "hajimari")
         .unwrap();
-    let reach = reachable_syscalls(&decoded, main.entry_pc, "main").unwrap();
+    let reach =
+        reachable_syscalls(ivm_abi::IvmEngine::C10, &decoded, main.entry_pc, "main").unwrap();
     assert!(tail.is_subset(&reach.pcs));
     assert!(!reach.pcs.contains(&hajimari.entry_pc));
     let owners = output
@@ -376,7 +403,7 @@ fn current_compiler_complete_cross_function_nominal_abort_artifact_is_admissible
 #[test]
 fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_isolation() {
     let source = include_str!("../../../../fixtures/kotodama/compact_emission/abort_second.ko");
-    let artifact = kotodama_lang::compiler::Compiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(source)
         .unwrap();
     let parsed = ProgramMetadata::parse(&artifact).unwrap();
@@ -387,6 +414,7 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
         &interface,
         &decoded,
         ValidationProfile::Production,
+        ivm_abi::IvmEngine::C10,
     )
     .unwrap();
     let main = interface
@@ -410,7 +438,8 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
             &parsed.metadata,
             &unauthenticated,
             &decoded,
-            ValidationProfile::Production
+            ValidationProfile::Production,
+            ivm_abi::IvmEngine::C10,
         )
         .unwrap_err()
         .to_string()
@@ -423,7 +452,8 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
             &parsed.metadata,
             &view,
             &decoded,
-            ValidationProfile::Production
+            ValidationProfile::Production,
+            ivm_abi::IvmEngine::C10,
         )
         .unwrap_err()
         .to_string()
@@ -439,7 +469,8 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
             &parsed.metadata,
             &interface,
             &bypass,
-            ValidationProfile::Production
+            ValidationProfile::Production,
+            ivm_abi::IvmEngine::C10,
         )
         .is_err()
     );
@@ -456,7 +487,8 @@ fn complete_shared_abort_artifact_retains_dispatch_authorization_and_entrypoint_
             &parsed.metadata,
             &exported_tail,
             &decoded,
-            ValidationProfile::Production
+            ValidationProfile::Production,
+            ivm_abi::IvmEngine::C10,
         )
         .is_err()
     );

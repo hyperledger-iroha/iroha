@@ -16,7 +16,7 @@ fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMErr
 fn test_compiler() -> Compiler {
     Compiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
 }
 fn parse(source: &str) -> Result<kd_ast::Program, String> {
@@ -24,7 +24,7 @@ fn parse(source: &str) -> Result<kd_ast::Program, String> {
 }
 #[test]
 fn create_compiler() {
-    let _c = Compiler::new();
+    let _c = Compiler::new_c10();
 }
 #[test]
 fn lex_simple_function() {
@@ -130,7 +130,7 @@ enum CaseCompiler {
 impl CaseCompiler {
     fn build(self) -> Compiler {
         match self {
-            Self::Production => Compiler::new(),
+            Self::Production => Compiler::new_c10(),
             Self::Test => test_compiler(),
         }
     }
@@ -511,7 +511,7 @@ fn run_semantic_rejection_cases(cases: &[SemanticRejectionCase]) {
 
 fn run_vm_result_cases(cases: &[VmResultCase]) {
     for case in cases {
-        let code = Compiler::new()
+        let code = Compiler::new_c10()
             .compile_source(case.source.text(case.id))
             .unwrap_or_else(|error| panic!("{} should compile: {error}", case.id));
         let mut vm = ivm::IVM::new(u64::MAX);
@@ -597,7 +597,7 @@ fn many_string_literals_load_under_wide_guard() {
     }
     src.push_str(" return;");
     src.push_str("} }");
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(&src)
         .expect("compile program with many literals");
     let mut vm = ivm::IVM::new(u64::MAX);
@@ -609,7 +609,7 @@ fn compile_domain_literal_emits_tlv_domainid() {
     let src = include_str!("../fixtures/koto_v1/kotodama/018.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let bytes = compiler.compile_source(src).expect("compile ok");
     assert!(
         bytes.windows(2).any(|w| w == [0x00, 0x08]),
@@ -622,7 +622,7 @@ fn compile_register_domain_emits_syscall_0x10() {
     let src = include_str!("../fixtures/koto_v1/kotodama/019.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let bytes = compiler.compile_source(src).expect("compile ok");
     // Expected sys encoding for SCALL with imm8=0x10 (SYSCALL_REGISTER_DOMAIN)
     let word = encoding::wide::encode_scall(0x10);
@@ -638,7 +638,7 @@ fn compile_zk_verify_batch_emits_syscall_0x64() {
     let src = include_str!("../fixtures/koto_v1/kotodama/020.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let bytes = compiler.compile_source(src).expect("compile ok");
     let word = encoding::wide::encode_scall(0x64);
     let needle = word.to_le_bytes();
@@ -653,7 +653,7 @@ fn compile_blob_literal_emits_tlv_blob() {
     let src = include_str!("../fixtures/koto_v1/kotodama/021.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let bytes = Compiler::new().compile_source(src).expect("compile ok");
+    let bytes = Compiler::new_c10().compile_source(src).expect("compile ok");
     assert!(
         bytes.windows(2).any(|w| w == [0x00, 0x06]),
         "expected bytes TLV type (0x0006) in compiled artifact"
@@ -662,7 +662,7 @@ fn compile_blob_literal_emits_tlv_blob() {
 #[test]
 fn compile_emits_get_authority_syscall() {
     let src = r#"seiyaku Authority { view fn f() authorize(anyone) -> AccountId { return context::authority(); } }"#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
     let mut i = off;
@@ -676,7 +676,7 @@ fn compile_emits_get_authority_syscall() {
 #[test]
 fn compile_emits_current_time_syscall() {
     let src = r#"seiyaku Time { view fn f() authorize(anyone) -> int { return context::transaction_time_ms(); } }"#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
     let mut i = off;
@@ -690,7 +690,7 @@ fn compile_emits_current_time_syscall() {
 #[test]
 fn compile_emits_block_height_syscall() {
     let src = r#"seiyaku Height { view fn f() authorize(anyone) -> int { return context::block_height(); } }"#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     let want = encoding::wide::encode_scall(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT).to_le_bytes();
@@ -704,7 +704,7 @@ fn compile_emits_extended_sysvar_helpers() {
     let src = include_str!("../fixtures/koto_v1/kotodama/023.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
@@ -781,7 +781,7 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
         }}
     "#
     );
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(&src)
         .expect("compile manifest with typed query hints");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
@@ -865,7 +865,7 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     "#,
         roots_literal, tally_literal
     );
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(&src)
         .expect("compile manifest with ZK read hints");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
@@ -891,7 +891,7 @@ fn compile_emits_state_introspection_helpers() {
     let src = include_str!("../fixtures/koto_v1/kotodama/027.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
@@ -912,7 +912,7 @@ fn compile_emits_extended_hash_syscalls() {
     let src = include_str!("../fixtures/koto_v1/kotodama/028.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
     let mut i = off;
@@ -932,7 +932,7 @@ fn compile_emits_extended_hash_syscalls() {
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"seiyaku ResolveAlias { view fn f() authorize(anyone) { let a = ledger::account::resolve_alias(alias: "banking@centralbank"); } }"#;
-    let code = Compiler::new().compile_source(src).expect("compile");
+    let code = Compiler::new_c10().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
     let mut i = off;
@@ -971,7 +971,7 @@ fn encode_helpers() {
 #[test]
 fn compile_and_run_add() {
     let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } view fn main() authorize(anyone) -> int { return add(a: 4, b: 7); } }";
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode, 0);
@@ -1012,7 +1012,7 @@ fn non_json_pointer_constructors_accept_string_variables() {
     let src = include_str!("../fixtures/koto_v1/kotodama/032.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = kotodama_lang::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(src)
         .expect("compile pointer from vars");
     // Expect SCALLs present for set detail and transfer domain
@@ -1043,7 +1043,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
 #[test]
 fn compile_typed_nft_syscalls() {
     let src = "seiyaku NftCalls { permission ManageNfts;  kotoage fn main() authorize(ManageNfts) { ledger::nft::mint(nft: NftId::parse(\"n0$wonderland.universal\"), owner: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source(src)
         .expect("compile typed NFT");
     let (_meta, off) = parse_meta_offset(&code).unwrap();
@@ -1055,7 +1055,7 @@ fn compile_typed_nft_syscalls() {
 }
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
-    let code = Compiler::new()
+    let code = Compiler::new_c10()
         .compile_source("seiyaku FixedAbi { view fn f() authorize(anyone) -> int { return 3; } }")
         .expect("compile");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
@@ -1064,25 +1064,23 @@ fn compiler_owns_first_release_abi_metadata() {
 }
 #[test]
 fn compile_emits_manifest_hashes() {
-    use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
     let src = "seiyaku ManifestHash { view fn f() authorize(anyone) { let x = 1 + 2; } }";
-    let (code, manifest) = Compiler::new()
+    let (code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile with manifest");
     let parsed = ProgramMetadata::parse(&code).expect("parse header");
     let meta = parsed.metadata;
     let expected_code_hash = ivm::contract_code_hash(&code);
     assert_eq!(manifest.code_hash, Some(expected_code_hash));
-    let policy = match meta.abi_version {
-        1 => SyscallPolicy::AbiV1,
-        _ => unreachable!("compiler emits ABI v1 only"),
-    };
-    let expected_abi = iroha_crypto::Hash::prehashed(compute_abi_hash(policy));
+    assert_eq!(meta.abi_version, 1, "compiler emits ABI v1 only");
+    // A C10 build carries the hash of its own profile, C10's ABI V1 surface.
+    assert_eq!(parsed.profile, ivm::IvmProfileId::C10_ABI_V1);
+    let expected_abi = iroha_crypto::Hash::prehashed(parsed.profile.abi_hash());
     assert_eq!(manifest.abi_hash, Some(expected_abi));
 }
 #[test]
 fn manifest_code_hash_reflects_literals() {
-    let compiler = Compiler::new();
+    let compiler = Compiler::new_c10();
     let (_, manifest_a) = compiler
         .compile_source_with_manifest(
             "seiyaku LiteralAlpha { view fn f() authorize(anyone) -> string { return \"alpha\"; } }",
@@ -1103,7 +1101,7 @@ fn manifest_includes_entrypoints_and_features() {
     let src = include_str!("../fixtures/koto_v1/kotodama/048.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let (code, manifest) = Compiler::new()
+    let (code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile manifest with entrypoints");
     let parsed = ProgramMetadata::parse(&code).expect("parse compiled artifact");
@@ -1142,7 +1140,7 @@ fn manifest_includes_trigger_descriptors() {
     let src = include_str!("../fixtures/koto_v1/kotodama/049.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile manifest with triggers");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
@@ -1167,7 +1165,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     let src = include_str!("../fixtures/koto_v1/kotodama/050.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("compile manifest with ISI hints");
     let hints = manifest
@@ -1208,7 +1206,7 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
     let src = include_str!("../fixtures/koto_v1/kotodama/051.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("production compile must accept authority placeholder access");
     let hints = manifest
@@ -1248,7 +1246,7 @@ fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints(
     let src = include_str!("../fixtures/koto_v1/kotodama/052.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let (_code, manifest) = Compiler::new()
+    let (_code, manifest) = Compiler::new_c10()
         .compile_source_with_manifest(src)
         .expect("parameter-dependent asset transfers have bounded coarse hints");
     let hints = manifest
@@ -1289,7 +1287,7 @@ fn source_localization_blocks_are_rejected() {
             }}
             "#
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source_with_manifest(&src)
             .expect_err("source localization tables are not part of V1");
         assert!(error.contains("error[K1001] parse:"), "{error}");
@@ -1339,7 +1337,7 @@ fn build_options_control_header_and_source_meta_is_unavailable() {
     // A non-ZK artifact carries no trace bound even when the option is set: gas is its only budget.
     let code = Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         zk_trace_cycles: std::num::NonZeroU64::new(1234).expect("trace bound"),
-        ..Default::default()
+        ..kotodama_lang::compiler::CompilerOptions::c10()
     })
     .compile_source(src)
     .expect("compile build-selected metadata");
@@ -1351,7 +1349,7 @@ fn build_options_control_header_and_source_meta_is_unavailable() {
 #[test]
 fn removed_in_memory_map_indexing_is_rejected() {
     let src = "module RemovedMap { fn f(Map<int, int> m, int k) -> int { return m[k]; } }";
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source(src)
         .expect_err("in-memory Map must not compile in V1");
     assert!(error.contains("Map"), "unexpected error: {error}");
@@ -1359,7 +1357,7 @@ fn removed_in_memory_map_indexing_is_rejected() {
 #[test]
 fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
     let src = include_str!("../fixtures/koto_v1/kotodama/058.ko");
-    let (code, _manifest, report) = Compiler::new()
+    let (code, _manifest, report) = Compiler::new_c10()
         .compile_source_with_manifest_and_report(src)
         .expect("compile simple branch");
     let metadata = ProgramMetadata::parse(&code).expect("parse metadata");
@@ -1417,7 +1415,7 @@ fn truncated_poseidon2_is_not_a_source_api() {
     // Truncated scalar proof gadgets are internal VM operations.
     let src =
         "module Poseidon { fn f(int a, int b) { let h = crypto::poseidon2(left: a, right: b); } }";
-    let error = Compiler::new()
+    let error = Compiler::new_c10()
         .compile_source(src)
         .expect_err("truncated Poseidon must not be a source API");
     assert!(error.contains("crypto::poseidon2"));
@@ -1427,7 +1425,7 @@ fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
     let src = "module Commitment { fn main(int a, int b) -> int { return crypto::valcom(left: a, right: b); } }";
     let error = Compiler::new_with_options(CompilerOptions {
         force_zk: true,
-        ..CompilerOptions::default()
+        ..CompilerOptions::c10()
     })
     .compile_source(src)
     .expect_err("public valcom operands must not select the truncated opcode");
@@ -1487,7 +1485,7 @@ fn typed_json_access_spills_are_handled() {
                 !alloc.stack.is_empty(),
                 "fixture must compile typed Json access in a spilled stack frame"
             );
-            Compiler::new()
+            Compiler::new_c10()
                 .compile_source(&src)
                 .expect("compile typed Json spill");
         })
@@ -1498,13 +1496,17 @@ fn typed_json_access_spills_are_handled() {
 #[test]
 fn compile_from_file() {
     let path = std::path::Path::new("tests/data/add.ko");
-    let code = Compiler::new().compile_file(path).expect("compile failed");
+    let code = Compiler::new_c10()
+        .compile_file(path)
+        .expect("compile failed");
     assert!(!code.is_empty());
 }
 #[test]
 fn compile_complex_program() {
     let path = std::path::Path::new("tests/data/complex.ko");
-    let code = Compiler::new().compile_file(path).expect("compile failed");
+    let code = Compiler::new_c10()
+        .compile_file(path)
+        .expect("compile failed");
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
 }
@@ -1854,7 +1856,7 @@ fn typed_vrf_syscalls_are_present() {
     let src = include_str!("../fixtures/koto_v1/kotodama/071.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    let code = kotodama_lang::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source(src)
         .expect("compile vrf intrinsic");
     let (_meta, off) = parse_meta_offset(&code).unwrap();

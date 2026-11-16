@@ -275,7 +275,7 @@ mod depth_tests {
 
 #[test]
 fn funded_arguments_install_once_without_public_input_transport_or_record_decode() {
-    let (code, manifest) = kotodama_lang::compiler::Compiler::new().compile_source_with_manifest(
+    let (code, manifest) = kotodama_lang::compiler::Compiler::new_c10().compile_source_with_manifest(
         "seiyaku DirectArguments { view fn echo(bool value) authorize(anyone) -> bool { value } }"
     ).unwrap();
     let entry = manifest
@@ -315,7 +315,7 @@ fn funded_arguments_install_once_without_public_input_transport_or_record_decode
 
 #[test]
 fn captured_argument_local_refusal_and_gas_exhaustion_leave_child_unprepared() {
-    let (code, manifest) = kotodama_lang::compiler::Compiler::new().compile_source_with_manifest(
+    let (code, manifest) = kotodama_lang::compiler::Compiler::new_c10().compile_source_with_manifest(
         "seiyaku DirectArguments { view fn echo(bool value) authorize(anyone) -> bool { value } }"
     ).unwrap();
     let schema = manifest.entrypoints.as_ref().unwrap()[0]
@@ -400,7 +400,7 @@ fn funded_return_transfer_uses_explicit_escrow_and_preserves_call_descriptors() 
 
 #[test]
 fn empty_captured_root_is_metered_and_selection_invalidates_preparation() {
-    let code = kotodama_lang::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new_c10()
         .compile_source("seiyaku DirectEmpty { view fn echo() authorize(anyone) -> bool { true } }")
         .unwrap();
     let mut child = IVM::new(100_000);

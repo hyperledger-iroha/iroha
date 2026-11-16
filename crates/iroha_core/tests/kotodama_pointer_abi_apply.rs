@@ -11,7 +11,7 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use ivm::{IVM, ProgramMetadata};
+use ivm::IVM;
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
 use mv::storage::StorageReadOnly;
@@ -23,7 +23,12 @@ fn pointer_abi_test_compiler() -> KotodamaCompiler {
     })
 }
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
-    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        program,
+        ivm::IvmProfileId::declared(program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
         .contract_interface
         .as_ref()
@@ -42,7 +47,12 @@ fn prepare_kotodama_arguments(
     entrypoint_name: &str,
     payload: &Json,
 ) -> ivm::PreparedArgumentRecord {
-    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let metadata = ivm::ProgramMetadata::parse_for_profile(
+        program,
+        ivm::IvmProfileId::declared(program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse Kotodama V1 artifact");
     let schema = metadata
         .contract_interface
         .as_ref()
@@ -127,7 +137,12 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let mut host = CoreHostImpl::new(from.clone());
     host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load program");
     select_kotodama_entrypoint(&mut vm, &program, "execute");
     vm.run_with_host(&mut host).expect("run VM");
     // Drain queued ISIs
@@ -247,7 +262,12 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     host.set_local_contract_debug_execution();
     host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
-    vm.load_program(&program).expect("load program");
+    vm.load_program_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("load program");
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run_with_host(&mut host)
         .expect("state-loaded pointers should be accepted by transfer_asset");
@@ -350,7 +370,13 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let mut write_host = CoreHost::new(authority.clone());
     write_host.set_local_contract_debug_execution();
     write_vm.set_host(write_host);
-    write_vm.load_program(&write_program).expect("load writer");
+    write_vm
+        .load_program_for_profile(
+            &write_program,
+            ivm::IvmProfileId::declared(&write_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
@@ -375,7 +401,13 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
-    read_vm.load_program(&read_program).expect("load reader");
+    read_vm
+        .load_program_for_profile(
+            &read_program,
+            ivm::IvmProfileId::declared(&read_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load reader");
     select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
@@ -431,7 +463,13 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let mut write_host = CoreHost::new(authority.clone());
     write_host.set_local_contract_debug_execution();
     write_vm.set_host(write_host);
-    write_vm.load_program(&write_program).expect("load writer");
+    write_vm
+        .load_program_for_profile(
+            &write_program,
+            ivm::IvmProfileId::declared(&write_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
@@ -456,7 +494,13 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
-    read_vm.load_program(&read_program).expect("load reader");
+    read_vm
+        .load_program_for_profile(
+            &read_program,
+            ivm::IvmProfileId::declared(&read_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load reader");
     select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
@@ -514,7 +558,13 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let mut write_host = CoreHost::new(authority.clone());
     write_host.set_local_contract_debug_execution();
     write_vm.set_host(write_host);
-    write_vm.load_program(&write_program).expect("load writer");
+    write_vm
+        .load_program_for_profile(
+            &write_program,
+            ivm::IvmProfileId::declared(&write_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
@@ -539,7 +589,13 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
-    read_vm.load_program(&read_program).expect("load reader");
+    read_vm
+        .load_program_for_profile(
+            &read_program,
+            ivm::IvmProfileId::declared(&read_program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load reader");
     select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
@@ -595,7 +651,12 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let program = pointer_abi_test_compiler()
         .compile_source(source)
         .expect("compile dlmm_pool");
-    let artifact = ProgramMetadata::parse(&program).expect("parse contract artifact");
+    let artifact = ivm::ProgramMetadata::parse_for_profile(
+        &program,
+        ivm::IvmProfileId::declared(&program)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .expect("parse contract artifact");
     let contract_interface = artifact
         .contract_interface
         .as_ref()
@@ -634,7 +695,13 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         Some(init_arguments.clone()),
     );
     init_host.set_local_contract_debug_execution();
-    init_vm.load_program(&program).expect("load dlmm_pool");
+    init_vm
+        .load_program_for_profile(
+            &program,
+            ivm::IvmProfileId::declared(&program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load dlmm_pool");
     init_vm
         .set_program_counter(init_pool_pc)
         .expect("set init_pool pc");
@@ -679,7 +746,13 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     seed_host.set_local_contract_debug_execution();
     seed_host.set_durable_state_snapshot_from_world(&view.world);
     seed_host.set_query_state(&view);
-    seed_vm.load_program(&program).expect("load dlmm_pool");
+    seed_vm
+        .load_program_for_profile(
+            &program,
+            ivm::IvmProfileId::declared(&program)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
+        .expect("load dlmm_pool");
     seed_vm
         .set_program_counter(seed_bin_pc)
         .expect("set seed_bin pc");

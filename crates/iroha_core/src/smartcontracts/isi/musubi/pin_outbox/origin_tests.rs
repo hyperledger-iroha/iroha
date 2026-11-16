@@ -163,8 +163,11 @@ fn native_origin_cannot_be_minted_from_genesis_header_or_ivm_payload() {
         );
         assert!(instruction.execute(signed.authority(), &mut tx).is_err());
     }
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let mut builder = TransactionBuilder::new(
         chain.network_id(),
         signed.authority().clone(),

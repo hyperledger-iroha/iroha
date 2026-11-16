@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn pointer_constructors_reject_external_runtime_parameters_during_check() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let mut cases = [
             "AccountId",
             "AssetDefinitionId",
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn json_runtime_parameter_preserves_its_literal_diagnostic() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         let request = CompileRequest {
             source: "seiyaku Runtime { view fn parse(string raw) authorize(anyone) -> Json { return Json::parse(raw); } }",
             source_name: Some("runtime_json.ko"),
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn pointer_constructors_preserve_literals_specialization_and_typed_parameters() {
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for source in [
             r#"seiyaku Direct { view fn run() authorize(anyone) -> Name { return Name::parse("key"); } }"#,
             r#"seiyaku Constant { const string KEY = "key"; view fn run() authorize(anyone) -> Name { return Name::parse(KEY); } }"#,
@@ -259,7 +259,7 @@ mod tests {
         let mut invalid_spend = spend;
         invalid_spend.authorization.expiry_slot = 0;
         let structurally_invalid = [encoded(&invalid_descriptor), encoded(&invalid_spend)];
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for kind in 0..2 {
             let trailing = format!("{}00", valid[kind]);
             for raw in [
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn axt_pointer_literals_preserve_valid_bindings_and_specialized_calls() {
         let (descriptor, spend) = fixtures();
-        let session = CompilerSession::default();
+        let session = CompilerSession::c10();
         for style in ["literal", "const", "local", "private"] {
             let source = source(&encoded(&descriptor), &encoded(&spend), style);
             let request = CompileRequest {

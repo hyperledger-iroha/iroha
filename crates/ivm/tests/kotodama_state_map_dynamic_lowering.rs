@@ -14,7 +14,7 @@ fn dynamic_map_set_uses_durable_state() {
             }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let code = KotodamaCompiler::new_c10()
         .compile_source(src)
         .expect("compile");
     let mut vm = IVM::new(u64::MAX);

@@ -6,7 +6,6 @@ use crate::{
     cache_memory::MemoryReservation,
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
-    instruction::wide,
     ivm_cache::DecodedOp,
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedShared};
@@ -201,8 +200,14 @@ pub(super) struct KeyScratch {
     sites: ExecutionBuffer<Site>,
 }
 impl KeyScratch {
-    pub(super) fn new(decoded: &[DecodedOp], budget: &AllocationBudget) -> Result<Self, VMError> {
-        let sites = decoded.iter().filter(|op| state_syscall(op).is_some());
+    pub(super) fn new(
+        engine: crate::IvmEngine,
+        decoded: &[DecodedOp],
+        budget: &AllocationBudget,
+    ) -> Result<Self, VMError> {
+        let sites = decoded
+            .iter()
+            .filter(move |op| state_syscall(engine, op).is_some());
         let count = sites.clone().count();
         let plan =
             ExecutionMemoryPlan::array::<Site>(count).map_err(VMError::AllocationDeferred)?;
@@ -356,11 +361,8 @@ impl KeyScratch {
         Ok((read_keys, write_keys))
     }
 }
-fn state_syscall(op: &DecodedOp) -> Option<u32> {
-    if wide::opcode(op.inst) != wide::system::SCALL {
-        return None;
-    }
-    let number = wide::syscall_number(op.inst);
+fn state_syscall(engine: crate::IvmEngine, op: &DecodedOp) -> Option<u32> {
+    let number = engine.syscall_number(op.inst)?;
     matches!(
         crate::syscalls::syscall_access(number),
         crate::syscalls::SyscallAccess::StateRead | crate::syscalls::SyscallAccess::StateWrite

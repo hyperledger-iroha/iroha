@@ -1034,19 +1034,13 @@ impl BuildDriver {
         }
         let manifest_text = std::str::from_utf8(&manifest_bytes).ok()?;
         let manifest: ContractManifest = json::from_str(manifest_text).ok()?;
+        let profile = self.session.target_profile().ok()?;
         if manifest.code_hash.as_ref() != Some(&artifact_hash)
-            || manifest.abi_hash
-                != Some(Hash::prehashed(crate::syscalls::compute_abi_hash(
-                    self.session.host_policy(),
-                )))
+            || manifest.abi_hash != Some(Hash::prehashed(profile.abi_hash()))
         {
             return None;
         }
-        crate::metadata::ProgramMetadata::parse_header_for_policy(
-            &artifact,
-            self.session.host_policy(),
-        )
-        .ok()?;
+        crate::metadata::ProgramMetadata::parse_header_for_profile(&artifact, profile).ok()?;
         if !valid_sidecar(&source_map, "source-map", &record.artifact_hash)
             || !valid_sidecar(&budget, "budget", &record.artifact_hash)
             || interface
@@ -1081,14 +1075,15 @@ impl BuildDriver {
                 "compiler manifest hash does not match deployable artifact".to_owned(),
             ));
         }
-        let policy = self.session.host_policy();
-        crate::metadata::ProgramMetadata::parse_header_for_policy(&output.artifact, policy)
+        let profile = self
+            .session
+            .target_profile()
+            .map_err(BuildError::Internal)?;
+        crate::metadata::ProgramMetadata::parse_header_for_profile(&output.artifact, profile)
             .map_err(|error| {
                 BuildError::Internal(format!("compiler artifact profile mismatch: {error}"))
             })?;
-        if output.manifest.abi_hash
-            != Some(Hash::prehashed(crate::syscalls::compute_abi_hash(policy)))
-        {
+        if output.manifest.abi_hash != Some(Hash::prehashed(profile.abi_hash())) {
             return Err(BuildError::Internal(
                 "compiler manifest ABI hash differs from its selected host profile".into(),
             ));
@@ -2051,7 +2046,7 @@ mod tests {
             imports: Vec::new(),
             packages: Vec::new(),
         };
-        let warnings = BuildDriver::new(CompilerSession::default(), "shared-state-lints")
+        let warnings = BuildDriver::new(CompilerSession::c10(), "shared-state-lints")
             .check_project(graph)
             .expect("shared unit is valid");
         let unused = warnings
@@ -2079,7 +2074,7 @@ mod tests {
     }
     #[test]
     fn standalone_module_check_uses_include_and_import_closure_without_artifact() {
-        let driver = BuildDriver::new(CompilerSession::default(), "module-check");
+        let driver = BuildDriver::new(CompilerSession::c10(), "module-check");
         let root = SourceModuleUnit {
             source_name: "module.ko".into(),
             source: "module Example { include \"body.ko\"; import \"helper.ko\" as helper; }"
@@ -2190,7 +2185,7 @@ mod tests {
     }
     #[test]
     fn lsp_open_sources_require_explicit_graph_and_reuse_cached_parses() {
-        let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
+        let driver = BuildDriver::new(CompilerSession::c10(), "editor-test");
         let sources = vec![
             SourceModuleUnit {
                 source_name: "open/app.ko".to_owned(),
@@ -2224,7 +2219,7 @@ mod tests {
     }
     #[test]
     fn exact_project_check_links_only_declared_imports_and_preserves_lint_owner() {
-        let driver = BuildDriver::new(CompilerSession::default(), "check-test");
+        let driver = BuildDriver::new(CompilerSession::c10(), "check-test");
         let graph = SourceLinkRequest { artifacts: Vec::new(),
             sources: Vec::new(),
             root: SourceModuleUnit {
@@ -2294,7 +2289,7 @@ mod tests {
                 assert_eq!(linked.program.unit.name, "StackMargin");
                 drop(linked);
 
-                let output = BuildDriver::new(CompilerSession::default(), "stack-margin-test")
+                let output = BuildDriver::new(CompilerSession::c10(), "stack-margin-test")
                     .compile_project(graph, "contracts/stack-margin.ko")
                     .expect("boundary-depth graph codegen must stay on the compiler worker");
                 assert!(!output.artifact.is_empty());
@@ -2338,7 +2333,7 @@ mod tests {
     }
     #[test]
     fn lsp_open_sources_reject_multiple_seiyaku_roots_with_cross_file_spans() {
-        let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
+        let driver = BuildDriver::new(CompilerSession::c10(), "editor-test");
         let error = driver
             .check_lsp_open_sources(vec![
                 SourceModuleUnit {
@@ -2394,7 +2389,7 @@ mod tests {
         let named = BuildDriver::new(
             CompilerSession::new(crate::compiler::CompilerOptions {
                 host_policy: crate::SyscallPolicy::AbiV1RuntimeLifecycle,
-                ..Default::default()
+                ..crate::compiler::CompilerOptions::c10()
             }),
             "profile-toolchain",
         );
@@ -2411,6 +2406,7 @@ mod tests {
             named.build_source(request(&root, source)).unwrap().status,
             BuildStatus::Fresh
         );
+        // The default session is the interface profile: ABI V1 on the frozen baseline engine.
         let baseline = BuildDriver::new(CompilerSession::default(), "profile-toolchain");
         let replaced = baseline.build_source(request(&root, source)).unwrap();
         assert_eq!(replaced.status, BuildStatus::Built);
@@ -2447,10 +2443,63 @@ mod tests {
     }
 
     #[test]
+    fn baseline_engine_builds_publish_verify_and_stay_fresh() {
+        let root = temp_root("baseline-engine");
+        let source = "seiyaku Baseline { view fn read() authorize(anyone) -> int { 1 } }";
+        let baseline = BuildDriver::new(
+            CompilerSession::new(crate::compiler::CompilerOptions {
+                engine: crate::IvmEngine::Baseline,
+                ..crate::compiler::CompilerOptions::c10()
+            }),
+            "profile-toolchain",
+        );
+        let first = baseline.build_source(request(&root, source)).unwrap();
+        assert_eq!(first.status, BuildStatus::Built);
+        assert_eq!(
+            first.manifest.abi_hash,
+            Some(Hash::prehashed(
+                crate::IvmProfileId::BASELINE_ABI_V1.abi_hash()
+            ))
+        );
+        assert_eq!(
+            baseline
+                .build_source(request(&root, source))
+                .unwrap()
+                .status,
+            BuildStatus::Fresh
+        );
+        // The C10 build of the same source is a different artifact, not a cache hit.
+        let c10 = BuildDriver::new(CompilerSession::c10(), "profile-toolchain");
+        let replaced = c10.build_source(request(&root, source)).unwrap();
+        assert_eq!(replaced.status, BuildStatus::Built);
+        assert_ne!(replaced.artifact_hash, first.artifact_hash);
+        // A manifest carrying another profile's ABI hash is refused.
+        let mut bad = baseline
+            .session
+            .build(CompileRequest {
+                source,
+                source_name: Some("baseline.ko"),
+            })
+            .unwrap();
+        bad.manifest.abi_hash = replaced.manifest.abi_hash;
+        assert!(
+            baseline
+                .finish_build(
+                    bad,
+                    &request(&root, source).layout,
+                    "mismatched",
+                    PublishMode::Write
+                )
+                .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn authenticated_noop_build_writes_nothing_and_tampering_rebuilds() {
         let root = temp_root("fresh");
         let source = "seiyaku Demo { view fn ping() authorize(anyone) -> int { return 1; } }";
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let initial = driver
             .build_source(request(&root, source))
             .expect("initial build");
@@ -2499,7 +2548,7 @@ mod tests {
     #[test]
     fn authenticated_module_graph_hit_with_fresh_driver_performs_zero_work_or_writes() {
         let root = temp_root("linked-fresh");
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let module_v1 = "module Math { export fn value() -> int { return 1; } }";
         let first = driver
             .build_project(linked_request(&root, module_v1))
@@ -2519,7 +2568,7 @@ mod tests {
             .iter()
             .map(|path| fs::metadata(path).expect("output metadata").modified().ok())
             .collect::<Vec<_>>();
-        let fresh_driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let fresh_driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let fresh = fresh_driver
             .build_project(linked_request(&root, module_v1))
             .expect("authenticated linked no-op");
@@ -2568,7 +2617,7 @@ mod tests {
         );
         request.graph.root.source = root_source.to_owned();
         request.graph.packages[0].exports.clear();
-        let error = BuildDriver::new(CompilerSession::default(), "test-toolchain")
+        let error = BuildDriver::new(CompilerSession::c10(), "test-toolchain")
             .build_linked_source(&ModuleBuildGraph::default(), request)
             .expect_err("unexported linked calls must fail before publication");
         let diagnostics = error
@@ -2601,7 +2650,7 @@ mod tests {
     fn sidecar_manifest_avoids_an_unrequested_sibling_and_remains_cacheable() {
         let root = temp_root("sidecar-manifest");
         let source = "seiyaku Demo { view fn ping() authorize(anyone) -> int { return 1; } }";
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let mut build = request(&root, source);
         let sibling_manifest = build.layout.manifest.clone();
         build.layout = build.layout.with_sidecar_manifest();
@@ -2641,7 +2690,7 @@ mod tests {
         let mut second = request(&root, source);
         second.source_name = "contracts/other.ko".to_owned();
         second.layout.artifact = root.join("test/sub/../demo.to");
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let error = driver
             .build_source_batch(vec![first, second])
             .expect_err("colliding output roots must fail preflight");
@@ -2658,7 +2707,7 @@ mod tests {
         );
         build.layout = PublishLayout::for_artifact(output.clone(), Some(output.clone()), None)
             .expect("construct adversarial layout");
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let error = driver
             .build_source(build)
             .expect_err("one path cannot contain both artifact and manifest bytes");
@@ -2679,7 +2728,7 @@ mod tests {
         first.source_name = "contracts/first.ko".to_owned();
         let mut second = request(&alias, source);
         second.source_name = "contracts/second.ko".to_owned();
-        let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let driver = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let error = driver
             .build_source_batch(vec![first, second])
             .expect_err("physical output aliases must fail before parallel publication");
@@ -2691,10 +2740,10 @@ mod tests {
     fn profile_and_policy_are_cache_dimensions() {
         let root = temp_root("policy");
         let source = "seiyaku Demo { view fn ping() authorize(anyone) -> int { return 1; } }";
-        let plain = BuildDriver::new(CompilerSession::default(), "test-toolchain");
+        let plain = BuildDriver::new(CompilerSession::c10(), "test-toolchain");
         let zk_options = crate::compiler::CompilerOptions {
             force_zk: true,
-            ..crate::compiler::CompilerOptions::default()
+            ..crate::compiler::CompilerOptions::c10()
         };
         let zk = BuildDriver::new(CompilerSession::new(zk_options), "test-toolchain");
         let request = request(&root, source);

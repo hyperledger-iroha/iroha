@@ -8,7 +8,6 @@ use std::{
     path::{Component, Path},
     sync::{Mutex, OnceLock},
 };
-const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_1_mode01_cycles1000_abi1";
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
 /// Results are cached in-memory so repeated calls do not recompile.
@@ -34,9 +33,11 @@ pub fn kotodama_program(name: &str) -> Result<IvmBytecode> {
         .compile_file(&path)
         .map_err(|msg| eyre!("failed to compile Kotodama sample `{validated_name}`: {msg}"))?;
     let program = IvmBytecode::from_compiled(bytecode);
-    let metadata = ivm::ProgramMetadata::parse(program.as_ref()).map_err(|err| {
-        eyre!("failed to parse metadata for Kotodama sample `{validated_name}`: {err}")
-    })?;
+    let profile = ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1);
+    let metadata =
+        ivm::ProgramMetadata::parse_for_profile(program.as_ref(), profile).map_err(|err| {
+            eyre!("failed to parse metadata for Kotodama sample `{validated_name}`: {err}")
+        })?;
     if metadata.metadata.abi_version != 1 {
         return Err(eyre!(
             "Kotodama sample `{validated_name}` uses unsupported ABI version {}",
@@ -49,27 +50,15 @@ pub fn kotodama_program(name: &str) -> Result<IvmBytecode> {
         .insert(validated_name, program.clone());
     Ok(program)
 }
-/// Load a precompiled IVM bytecode artifact from the fixtures directory.
+/// Build the raw IVM program used by Izanami trigger deployment.
 ///
-/// Files live under `crates/ivm/tests/fixtures/predecoder/mixed/artifacts`.
-pub fn ivm_artifact(name: &str) -> Result<IvmBytecode> {
-    let validated_name = validate_name(name, "IVM artifact")?;
-    let mut path = repo_root();
-    path.push("crates/ivm/tests/fixtures/predecoder/mixed/artifacts");
-    let mut file_name = validated_name.clone();
-    file_name.push_str(".to");
-    path.push(file_name);
-    let blob = std::fs::read(&path).map_err(|err| {
-        eyre!(
-            "failed to load IVM artifact `{validated_name}` from {}: {err}",
-            path.display()
-        )
-    })?;
-    Ok(IvmBytecode::from_compiled(blob))
-}
-/// Load the IVM artifact used by Izanami trigger deployment.
+/// Triggers run under the interface profile (the frozen baseline engine), so this is the baseline
+/// raw program from [`ivm::prebuilt_fixtures::build_raw_trigger_program`], not a C10 predecoder
+/// fixture.
 pub fn ivm_trigger_program() -> Result<IvmBytecode> {
-    ivm_artifact(IVM_TRIGGER_ARTIFACT)
+    Ok(IvmBytecode::from_compiled(
+        ivm::prebuilt_fixtures::build_raw_trigger_program(),
+    ))
 }
 fn validate_name(name: &str, context: &str) -> Result<String> {
     let path = Path::new(name);
@@ -107,19 +96,21 @@ mod tests {
     fn kotodama_program_compiles() {
         let program = kotodama_program("asset_ops").expect("compilation succeeds");
         assert!(program.size_bytes() > 0);
-        let parsed = ivm::ProgramMetadata::parse(program.as_ref()).expect("valid metadata");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            program.as_ref(),
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("valid metadata");
         assert_eq!(parsed.metadata.abi_version, 1);
-    }
-    #[test]
-    fn ivm_artifact_loads() {
-        let artifact =
-            ivm_artifact("artifact_v1_1_mode00_cycles0_abi1").expect("artifact should be readable");
-        assert!(artifact.size_bytes() > 0);
     }
     #[test]
     fn ivm_trigger_program_metadata_parses() {
         let artifact = ivm_trigger_program().expect("trigger program should load");
-        let parsed = ivm::ProgramMetadata::parse(artifact.as_ref()).expect("valid metadata");
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
+            artifact.as_ref(),
+            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1),
+        )
+        .expect("valid metadata");
         assert_eq!(parsed.metadata.version_major, 1);
         assert_eq!(parsed.metadata.version_minor, 1);
         assert_eq!(parsed.metadata.abi_version, 1);
@@ -129,15 +120,6 @@ mod tests {
         for invalid in ["", ".", "..", "../secret", "secret/../../", "/etc/passwd"] {
             assert!(
                 kotodama_program(invalid).is_err(),
-                "expected `{invalid}` to fail"
-            );
-        }
-    }
-    #[test]
-    fn ivm_artifact_rejects_invalid_names() {
-        for invalid in ["", ".", "..", "artifact/..", "../artifact", "C:/absolute"] {
-            assert!(
-                ivm_artifact(invalid).is_err(),
                 "expected `{invalid}` to fail"
             );
         }

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
 const MIN_INT: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
 fn compile(source: &str) -> Vec<u8> {
-    Compiler::new()
+    Compiler::new_c10()
         .compile_source(source)
         .expect("compile arithmetic contract")
 }
@@ -254,7 +254,7 @@ fn assert_numeric_fold_runtime_parity(
     );
     let payload = Json::from_str_norito(runtime_payload).expect("valid numeric argument JSON");
     let runtime = execute_numeric_program(&runtime_program, Some(&payload), kind);
-    let folded = match Compiler::new().compile_source(folded_source) {
+    let folded = match Compiler::new_c10().compile_source(folded_source) {
         Ok(program) => {
             let contains = contains_extended_syscall(&program, syscall);
             match folded_syscall {
@@ -298,7 +298,7 @@ fn folded_outcome(expression: &str) -> ArithmeticOutcome {
     let source = format!(
         "seiyaku FoldedArithmetic {{ view fn run() authorize(anyone) -> int {{ return {expression}; }} }}"
     );
-    let program = match Compiler::new().compile_source(&source) {
+    let program = match Compiler::new_c10().compile_source(&source) {
         Ok(program) => program,
         Err(error) if error.contains("E_INT_OVERFLOW") => {
             return ArithmeticOutcome::MantissaOverflow;
@@ -833,7 +833,7 @@ fn constant_quantity_exact_division_rejects_each_failure_class_at_compile_time()
         let source = format!(
             "seiyaku InvalidConstantQuantityDivision {{\nconst quantity VALUE = {value};\nconst decimal DIVISOR = {divisor};\nview fn run() authorize(anyone) -> quantity {{ return VALUE / DIVISOR; }}\n}}"
         );
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&source)
             .expect_err("invalid constant Quantity division must be rejected before bytecode");
         assert!(
@@ -1019,7 +1019,7 @@ fn constant_folding_uses_checked_signed_512_bit_rules() {
         "seiyaku OverflowAdd { view fn run() authorize(anyone) -> int { return 6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047 + 1; } }",
         "seiyaku OverflowNeg { view fn run() authorize(anyone) -> int { return -(-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048); } }",
     ] {
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(source)
             .expect_err("constant overflow must fail compilation");
         assert!(
@@ -1127,7 +1127,7 @@ fn full_width_math_helpers_match_constant_folding_and_runtime() {
             "E_INT_OVERFLOW",
         ),
     ] {
-        let error = Compiler::new()
+        let error = Compiler::new_c10()
             .compile_source(&format!(
                 "seiyaku Math {{ view fn run() authorize(anyone) -> int {{ return {expression}; }} }}"
             ))
@@ -1139,7 +1139,7 @@ fn full_width_math_helpers_match_constant_folding_and_runtime() {
 #[test]
 fn rematerialized_literal_call_pressure_keeps_runtime_values_and_overflow() {
     let source = include_str!("../../kotodama_lang/src/compiler/fixtures/v1/literal_homes.ko");
-    let (program, _, report) = Compiler::new()
+    let (program, _, report) = Compiler::new_c10()
         .compile_source_with_manifest_and_report(source)
         .expect("compile pressure fixture");
     let frame_sum = report

@@ -54,7 +54,11 @@ fn deny_unlisted_syscall_in_current() {
     let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority));
     let err = vm
-        .load_program(&prog)
+        .load_program_for_profile(
+            &prog,
+            ivm::IvmProfileId::declared(&prog)
+                .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        )
         .expect_err("strict program loading must reject an unknown syscall");
     assert!(
         matches!(err, ivm::VMError::UnknownSyscall(__actual_error_field) if __actual_error_field == unlisted_syscall_number())
@@ -67,7 +71,12 @@ fn allow_forwarded_alloc_in_current() {
     let mut vm = IVM::new(u64::MAX);
     let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority));
-    vm.load_program(&prog).unwrap();
+    vm.load_program_for_profile(
+        &prog,
+        ivm::IvmProfileId::declared(&prog)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+    )
+    .unwrap();
     // Set x10 = 16 for allocation size
     vm.set_register(10, 16);
     vm.run().expect("alloc should be allowed under policy");

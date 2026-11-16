@@ -183,7 +183,7 @@ fn contract_lifecycle_activates_exact_profile_after_kernel_storage_on_every_comp
             host.abi_hash,
             ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
         );
-        let expected_metering: [u8; 32] = ivm::gas::schedule_hash().into();
+        let expected_metering: [u8; 32] = ivm::gas::c10_schedule_hash().into();
         assert_eq!(host.metering, expected_metering);
         assert!(selected.active.contains(&composed.host));
         assert_eq!(catalog.unsupported(&selected), None);

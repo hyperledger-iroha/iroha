@@ -441,8 +441,11 @@ fn lifecycle_executor_applies_create_enabled_and_remove_only_when_executed() {
     let mut block = state.block(header());
     // Bind the real signed-root budget required by the existing artifact apply
     // boundary. Host syscalls are driven directly below to isolate this seam.
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut program = crate::ivm_test_support::baseline_header(ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    });
+    program.extend_from_slice(&ivm_abi::baseline::encoding::wide::encode_halt().to_le_bytes());
     let signed = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),

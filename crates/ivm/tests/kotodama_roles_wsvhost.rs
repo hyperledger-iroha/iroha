@@ -23,7 +23,7 @@ fn make_vm_with_wsv() -> (IVM, AccountId) {
 #[test]
 fn kotodama_roles_roundtrip_on_wsvhost() {
     let (mut vm, alice) = make_vm_with_wsv();
-    let compiler = KotodamaCompiler::new();
+    let compiler = KotodamaCompiler::new_c10();
     // 1) Create role `minter` with permission mint_asset:rose#wonder
     let src_create = r#"
         seiyaku CreateRole { permission ManageRoles;

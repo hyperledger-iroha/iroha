@@ -129,7 +129,8 @@ fn prepared_lru_eviction_refund_reenters_cache_after_unlock() {
     // under full original-pool pressure.
     let before = budget.reserved_bytes();
     let next = super::tests::minimal_program_variant(23);
-    let next = ivm::prepare_contract_with_memory_budget(&next, &budget).unwrap();
+    let next =
+        crate::ivm_test_support::prepare_declared_with_memory_budget(&next, &budget).unwrap();
     let next_bytes = budget.reserved_bytes() - before;
     budget.set_limit_bytes(budget.reserved_bytes());
     let (wait, probe) = observe_capacity(&cache, &budget, None, &mut registration);

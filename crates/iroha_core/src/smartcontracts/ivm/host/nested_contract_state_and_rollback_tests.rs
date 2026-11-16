@@ -232,7 +232,7 @@ seiyaku Callee {{ permission AssetOps;
         "quote",
     );
     let code = installed_contract_artifact(&state, &target_contract);
-    let interface = ivm::ProgramMetadata::parse(&code)
+    let interface = crate::ivm_test_support::parse_declared(&code)
         .unwrap()
         .contract_interface
         .unwrap();
@@ -406,7 +406,7 @@ seiyaku RootResult { permission AssetOps;
     let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .unwrap();
-    let parsed = ivm::ProgramMetadata::parse(&code).unwrap();
+    let parsed = crate::ivm_test_support::parse_declared(&code).unwrap();
     let interface = parsed.contract_interface.as_ref().unwrap();
     let authority: AccountId = fixture_account("alice");
     let state = contract_test_state(&authority);
@@ -419,7 +419,8 @@ seiyaku RootResult { permission AssetOps;
                 .find(|entrypoint| entrypoint.name == selector)
                 .unwrap();
             let mut vm = IVM::new(1_000_000);
-            vm.load_program(&code).unwrap();
+            vm.load_program_for_profile(&code, crate::ivm_test_support::declared_profile(&code))
+                .unwrap();
             vm.set_register(1, vm.memory.code_len());
             vm.set_program_counter(parsed.prefix_len() as u64 + descriptor.entry_pc)
                 .unwrap();

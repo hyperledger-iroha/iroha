@@ -77,6 +77,83 @@ impl ExecutionSummary {
         norito::encode_canonical(&Self::default()).map(|bytes| bytes.len())
     }
 }
+/// Execution summary in the layout the baseline engine
+/// ([`crate::IvmEngine::Baseline`]) reports: the anchor `77600a4840` summary, which also binds
+/// the constraint log digest, count and failure flag.
+///
+/// It keeps the original schema identity, so a baseline program reading its own summary sees
+/// the exact bytes it saw before C10. It is not a proof and is not independently verifiable.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "ivm::execution_summary::ExecutionSummary")]
+pub struct BaselineExecutionSummary {
+    /// Summary format version.
+    pub version: u16,
+    /// Hash of the loaded executable code.
+    pub code_hash: [u8; 32],
+    /// Root of the final register file.
+    pub final_register_root: [u8; 32],
+    /// Root of the final memory image.
+    pub final_memory_root: [u8; 32],
+    /// Hash of the VM output region.
+    pub output_hash: [u8; 32],
+    /// Hash of the compact runtime PC trace.
+    pub pc_trace_hash: [u8; 32],
+    /// Hash of the compact delta-register trace.
+    pub delta_trace_hash: [u8; 32],
+    /// Hash of the ZK register-state trace.
+    pub register_trace_hash: [u8; 32],
+    /// Hash of logged constraints.
+    pub constraint_hash: [u8; 32],
+    /// Hash of logged memory-access diagnostics.
+    pub memory_log_hash: [u8; 32],
+    /// Hash of logged register accesses and their authentication paths.
+    pub register_log_hash: [u8; 32],
+    /// Hash of per-cycle register and memory roots.
+    pub step_log_hash: [u8; 32],
+    /// Cycles consumed at the time the summary was created.
+    pub cycles: u64,
+    /// Maximum cycle bound active for this execution.
+    pub max_cycles: u64,
+    /// Gas consumed at the time the summary was created.
+    pub gas_used: u64,
+    /// Gas remaining at the time the summary was created.
+    pub gas_remaining: u64,
+    /// Number of compact PC trace entries.
+    pub pc_trace_len: u64,
+    /// Number of compact delta-register trace entries.
+    pub delta_trace_len: u64,
+    /// Number of expanded ZK register-state trace entries.
+    pub register_trace_len: u64,
+    /// Number of logged constraints.
+    pub constraint_len: u64,
+    /// Number of logged memory events.
+    pub memory_log_len: u64,
+    /// Number of logged register events.
+    pub register_log_len: u64,
+    /// Number of per-cycle Merkle-root entries.
+    pub step_log_len: u64,
+    /// Whether ZK mode was active.
+    pub zk_mode: bool,
+    /// Whether execution had halted when the summary was created.
+    pub halted: bool,
+    /// Whether a constraint failure had been observed when the summary was created.
+    pub constraint_failed: bool,
+}
+impl BaselineExecutionSummary {
+    /// Return the exact framed Norito length of a baseline execution summary.
+    pub(crate) fn encoded_len_v1() -> Result<usize, norito::Error> {
+        norito::encode_canonical(&Self::default()).map(|bytes| bytes.len())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +204,18 @@ mod tests {
         assert_eq!(
             ExecutionSummary::encoded_len_v1().expect("canonical length ignores ambient layout"),
             expected
+        );
+    }
+    #[test]
+    fn baseline_summary_keeps_the_anchor_layout_and_schema_identity() {
+        let baseline = BaselineExecutionSummary::encoded_len_v1().expect("baseline summary");
+        let current = ExecutionSummary::encoded_len_v1().expect("current summary");
+        // Constraint digest (32) and count (8) and failure flag (1), each length-framed.
+        assert!(baseline > current);
+        assert_eq!(
+            norito::schema::identity::frame_hash::<BaselineExecutionSummary>(),
+            norito::schema::identity::frame_hash::<ExecutionSummary>(),
+            "the baseline summary keeps its original schema identity"
         );
     }
 }

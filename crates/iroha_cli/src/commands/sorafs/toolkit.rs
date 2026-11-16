@@ -279,7 +279,9 @@ impl CompileArgs {
             })
         }
         .map_err(|error| eyre!(error))?;
-        let abi_version = ivm::ProgramMetadata::parse(&output.artifact)
+        let profile = ivm::IvmProfileId::declared(&output.artifact)
+            .unwrap_or(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1));
+        let abi_version = ivm::ProgramMetadata::parse_for_profile(&output.artifact, profile)
             .wrap_err("compiler produced an invalid IVM artifact")?
             .metadata
             .abi_version;

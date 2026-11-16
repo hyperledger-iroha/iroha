@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn real_literal_views_keep_original_envelope_and_payload_addresses() {
-        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+        let bytes = kotodama_lang::compiler::Compiler::new_c10().compile_source(
             "seiyaku BorrowedStateLiterals { permission CanWrite;  state StateMap<int, int> Values; kotoage fn write_one() authorize(CanWrite) { Values[1] = 10; } }",
         ).unwrap();
         let contract = crate::prepare_contract(std::sync::Arc::from(bytes.as_slice())).unwrap();
