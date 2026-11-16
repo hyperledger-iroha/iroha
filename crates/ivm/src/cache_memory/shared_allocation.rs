@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 use super::REFUSE_NEXT_SHARED_ALLOCATION;
-use super::{MemoryBudget, MemoryReservation, global_budget, strong_owner::StrongOwner};
+use super::{MemoryBudget, MemoryReservation, current_budget, strong_owner::StrongOwner};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedShared};
 use std::ops::Deref;
 
@@ -91,7 +91,7 @@ impl<T: Copy> SharedAllocation<T> {
         values: &[T],
         budget: &AllocationBudget,
     ) -> Result<Self, crate::VMError> {
-        Self::try_copy_with_budgets(values, budget, global_budget())
+        Self::try_copy_with_budgets(values, budget, &current_budget())
     }
 
     fn try_copy_with_budgets(
@@ -115,7 +115,7 @@ impl<T: Copy> SharedAllocation<T> {
         values: impl ExactSizeIterator<Item = Result<T, E>>,
         budget: &AllocationBudget,
     ) -> Result<Self, E> {
-        Self::try_from_iter_with_budgets(values, budget, global_budget())
+        Self::try_from_iter_with_budgets(values, budget, &current_budget())
     }
 
     fn try_from_iter_with_budgets<E: From<crate::VMError>>(
@@ -177,7 +177,7 @@ impl<T: Copy> SharedAllocation<T> {
     pub(crate) fn try_from_iter<E: From<crate::error::VMError>>(
         values: impl ExactSizeIterator<Item = Result<T, E>>,
     ) -> Result<Self, E> {
-        Self::try_from_iter_with_budget(values, global_budget())
+        Self::try_from_iter_with_budget(values, &current_budget())
     }
 
     pub(super) fn try_from_iter_with_budget<E: From<crate::error::VMError>>(
@@ -239,7 +239,7 @@ impl<T: Copy> SharedAllocation<T> {
 
     /// Take exclusive ownership of a slice and begin tracking its allocation.
     pub fn from_boxed(values: Box<[T]>) -> Self {
-        Self::with_budget(values, global_budget())
+        Self::with_budget(values, &current_budget())
     }
 
     pub(super) fn with_budget(values: Box<[T]>, budget: &MemoryBudget) -> Self {

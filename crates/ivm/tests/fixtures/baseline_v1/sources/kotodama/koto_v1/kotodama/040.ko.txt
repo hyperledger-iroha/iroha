@@ -1,0 +1,6 @@
+
+        module UnknownStructField {
+        struct A { int x, int y }
+        fn f() { let a = A { x: 1, y: 2 }; let v = a.z; }
+        }
+    

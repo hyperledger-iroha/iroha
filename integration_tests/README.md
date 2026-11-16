@@ -787,3 +787,34 @@ the scenario's in-process serial guard does not replace those two permits. Wrong
 settings fail immediately rather than hanging on the second root. The separate
 four-validator fixture needs one permit and logs the SHA-256 of its exact compiled
 and deployed artifact for comparison with the component benchmark.
+
+The test is ignored until both roots can activate game partitions through governance.
+The draft route refuses `iroha.game_partition.v1` on its own; the only draftable route,
+`iroha.runtime.native_game_capture.v1`, refuses the unreserved export and import this
+scenario and the daemon's delivery worker use, and Parliament cannot yet enact any runtime
+change set (next section).
+
+### Governed runtime activation
+
+`governed_activation` in `core_api` drives a release addition's activation through public
+interfaces only (`tests/support/governed_activation.rs`, `specs/runtime_upgrades.md`
+"Lifecycle"): every validator drafts the change set from its release catalog
+(`POST /v1/runtime/upgrades/draft`) and all must agree; Alice, granted
+`CanProposeRuntimeChangeSet` in genesis beside the committed `runtime_upgrade_policy_v1`
+notice, signs the baseline proposal the node drafts (`POST /v1/runtime/upgrades/propose`) and
+opens its baseline Parliament attempt; Parliament's enactment records the change set
+`Scheduled`; every node signs its support (`POST /v1/runtime/upgrades/attest/{id}`); and
+signed carriers reach the effective height, where every peer must report the activation, the
+successor selection and a release that executes it. There is no configuration toggle, no
+injected certificate or record, and no fixture activation.
+
+On this release the path stops at Parliament approval: a runtime-upgrade attempt ends in the
+Policy Jury's hidden ballot, the baseline's is the retired timed-OVN ballot, and the anonymous
+ballot family is itself an inactive addition that enacts nothing
+(`ParliamentApprovalUnavailable`). `governed_activation_reaches_parliament_and_schedules_nothing_without_it`
+runs every earlier step on four `NPoS` validators and checks that no node attests and no
+selection moves past the effective height;
+`four_validators_activate_the_anonymous_ballot_family_through_parliament` is the complete
+path and stays ignored until Parliament can enact the change set. Run the first with
+`cargo test -p integration_tests --test core_api governed_activation:: -- --nocapture --test-threads=1`
+against a same-source `iroha3d`.

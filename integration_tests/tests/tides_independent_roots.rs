@@ -206,12 +206,22 @@ async fn verify_all(network: &Network) -> Result<()> {
     Ok(())
 }
 
-// TODO(`specs/runtime_upgrades.md`): game partitions are the release addition
-// `iroha.game_partition.v1`, so both roots must activate it through a governed change set
-// (Parliament enactment plus every validator's support attestation) before the first
-// `InstallGamePartitionV1`. Restore this test once the test network can drive that activation.
+// TODO(`specs/runtime_upgrades.md`, roadmap N14): game partitions are a release addition, so
+// both roots must activate them through a governed change set (Parliament enactment plus every
+// validator's support attestation) before the first `InstallGamePartitionV1`. Two things block
+// that:
+// - `iroha.game_partition.v1` alone is refused by the operator draft route
+//   (`runtime::catalog::unqualified_native_activation`); a root activates game partitions only
+//   with `iroha.runtime.native_game_capture.v1`, which rebinds `ExportGameUnitV1` and
+//   `ImportGameUnitV1` to refuse the unreserved transfer this scenario and the daemon's delivery
+//   worker (`crates/irohad/src/game_partition.rs`) still use;
+// - Parliament cannot enact a runtime change set on this release: the governed-activation
+//   harness (`support/governed_activation.rs`, exercised by `governed_activation` in this
+//   harness) stops at `ParliamentApprovalUnavailable`.
+// Restore this test on that harness once Parliament can enact the capture activation and the
+// scenario and delivery worker use the certified reservation-based transfer.
 #[test]
-#[ignore = "needs governed activation of the iroha.game_partition.v1 addition on both roots"]
+#[ignore = "needs governed activation of iroha.runtime.native_game_capture.v1 on both roots, which Parliament cannot enact on this release, and a reservation-based transfer scenario"]
 fn tides_independent_roots_native_restart() -> Result<()> {
     let permits = std::env::var("IROHA_TEST_NETWORK_PARALLELISM")
         .ok()

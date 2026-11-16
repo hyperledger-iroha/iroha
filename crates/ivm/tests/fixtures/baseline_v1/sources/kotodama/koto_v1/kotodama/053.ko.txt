@@ -1,0 +1,10 @@
+
+        module Literals {
+          fn f() {
+            /* comment */
+            let a = 0x10;
+            let b = 0b1010;
+            let c = 10_000;
+          }
+        }
+    

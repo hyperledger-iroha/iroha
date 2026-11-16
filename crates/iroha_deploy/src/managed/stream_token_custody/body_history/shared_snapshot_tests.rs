@@ -46,17 +46,12 @@ fn counted<T>(action: impl FnOnce() -> T) -> (T, Counts) {
 }
 
 // Parser equivalence fixtures need time for genuine proof and wallet preparation on loaded
-// debug builds. These original finite intervals do not change the separate short-expiry or
+// debug builds: their setup predecessor signs under half the selected validity plus its
+// midpoint lead. These original finite intervals do not change the separate short-expiry or
 // deep-history latency controls, and are never extended after signing or authorization.
 pub(super) fn ready_fixture(renewal_validity_ms: u64) -> Fixture {
-    let fixture = Fixture::enrolled_with_renewal_validity(20_000, renewal_validity_ms);
-    let readiness_budget = Duration::from_millis(
-        fixture
-            .initial
-            .expires_at_unix_ms
-            .saturating_sub(now_ms().unwrap()),
-    );
-    wait_until(fixture.initial.issued_at_unix_ms + 10_000, readiness_budget);
+    let fixture = Fixture::predecessor_with_renewal_validity(renewal_validity_ms);
+    fixture.wait_renewable();
     fixture
 }
 
@@ -131,11 +126,11 @@ fn build_history_with_bodies(
                 .unwrap()
                 .unwrap();
             let authorization = turn
-                .authorize_retained(&fixture.owner, &previous, fixture.options.deadline)
+                .authorize_retained(&fixture.owner, &previous, fixture.deadline())
                 .unwrap();
             let terms = Terms::new(
                 now_ms().unwrap() + fixture.policy.max_validity_ms,
-                &fixture.options,
+                &fixture.options(),
             )
             .unwrap();
             let unsigned = fixture
@@ -146,7 +141,7 @@ fn build_history_with_bodies(
                     &current,
                     &checkpoint,
                     &terms,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             let selected = previous
@@ -155,7 +150,7 @@ fn build_history_with_bodies(
                     unsigned,
                     &current,
                     authorization,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             let finished = selected
@@ -163,7 +158,7 @@ fn build_history_with_bodies(
                     &fixture.owner,
                     &current,
                     &SigningTurn::Generated(authorization),
-                    fixture.options.deadline,
+                    fixture.deadline(),
                     &NativeEnrollmentReads(&fixture.native),
                 )
                 .unwrap();
@@ -171,7 +166,7 @@ fn build_history_with_bodies(
         } else {
             let terms = Terms::new(
                 now_ms().unwrap() + fixture.policy.max_validity_ms,
-                &fixture.options,
+                &fixture.options(),
             )
             .unwrap();
             let unsigned = fixture
@@ -182,27 +177,27 @@ fn build_history_with_bodies(
                     &current,
                     &checkpoint,
                     &terms,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             let selected = BodyHistory::initialize(
                 &fixture.owner,
                 CustodyPurpose::Renewal(2),
                 unsigned,
-                &Fees::from_options(&fixture.options).unwrap(),
+                &Fees::from_options(&fixture.options()).unwrap(),
                 &SigningTurn::RenewalSelection(&turn),
-                fixture.options.deadline,
+                fixture.deadline(),
             )
             .unwrap();
             let authorization = turn
-                .authorize_retained(&fixture.owner, &selected, fixture.options.deadline)
+                .authorize_retained(&fixture.owner, &selected, fixture.deadline())
                 .unwrap();
             let finished = selected
                 .finish_pending_with_reads(
                     &fixture.owner,
                     &current,
                     &SigningTurn::Generated(authorization),
-                    fixture.options.deadline,
+                    fixture.deadline(),
                     &NativeEnrollmentReads(&fixture.native),
                 )
                 .unwrap();
@@ -236,6 +231,8 @@ fn build_history_with_bodies(
             retained = Some(finished.reopen(&fixture.owner).unwrap());
         }
     }
+    // Each body above was its own startup turn; the caller's reads are their own operation.
+    fixture.begin_operation();
     (fixture, retained.unwrap())
 }
 

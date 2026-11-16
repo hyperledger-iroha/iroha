@@ -10,6 +10,11 @@
 //! The attempt runs on the governance clock of design §8.1: transactions record facts and
 //! intents, and the positioned block-start pass applies every transition at its anchor.
 //!
+//! - **Proposal.** The attempt stores the exact admitted proposal. Its content identifier,
+//!   the family's attempt identifier, the proposal digest and the effect hash are
+//!   derivations of it, and its expected head governs the proposal's subject. Creation and
+//!   restore recompute all of them, so the proposal an enactment would execute is the one
+//!   every body decided.
 //! - **Purpose.** The attempt records why it may exist, from creation, and the purpose
 //!   travels into its certificate. A candidate-testing attempt ends at its certificate:
 //!   every execution outcome requires production authority, so a candidate certificate is
@@ -57,8 +62,9 @@
 //! on a live network: binding production use stays disabled until the owner records the
 //! proof profile's qualification.
 //!
-//! TODO(design §12.3, slice 5): production enactment (G3) of a certified production attempt.
-//! This release certifies no production attempt.
+//! TODO(design §12.3, slice 5): production enactment (G3) of a certified production attempt,
+//! which executes the stored proposal against its expected head. This release certifies no
+//! production attempt.
 
 use std::collections::BTreeMap;
 
@@ -69,17 +75,19 @@ use iroha_data_model::{
         GovernanceAnchorV1,
         anonymous_ballot::{
             AnonymousBallotBindingErrorV1, AnonymousBallotCertificateBindingV1,
-            AnonymousBodyResultV1, AnonymousGovernanceAttemptV1,
+            AnonymousBallotCodecErrorV1, AnonymousBodyResultV1, AnonymousGovernanceAttemptV1,
             AnonymousGovernanceCertificateErrorV1, AnonymousGovernanceCertificateV1,
             AnonymousParliamentBodyBindingV1, AnonymousPublicFindingResultV1,
             AnonymousSealedBodyV1, BallotClosureRecordV1, BallotOutcomeV1, BodyDecisionModeV1,
             Digest512, FrozenBallotPolicyErrorV1, FrozenParliamentAttemptPolicyV1,
             ParliamentBallotPurposeErrorV1, ParliamentBallotPurposeV1,
-            anonymous_execution_failure_root_v1,
+            anonymous_execution_failure_root_v1, anonymous_governance_attempt_id_v1,
+            digests::proposal_digest_v1,
         },
         types::{
             DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, RiskTierV1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
+            ProposalKind, RiskTierV1,
         },
     },
 };
@@ -134,9 +142,23 @@ pub enum AnonymousParliamentErrorV1 {
     /// A closure record fails its policy.
     #[error(transparent)]
     Ballot(#[from] AnonymousBallotBindingErrorV1),
-    /// The attempt identifier is not the family's derivation, or a binding is inert.
+    /// The attempt identifier is not the family's derivation for the stored proposal and
+    /// sequence, a binding is inert, or the expected head has no valid shape.
     #[error("the attempt's immutable bindings are not canonical")]
     ImmutableBinding,
+    /// A binding fixed at creation is not the one the stored proposal gives.
+    #[error("the attempt's {field} is not the one its stored proposal gives")]
+    ProposalBinding {
+        /// The binding that differs.
+        field: &'static str,
+    },
+    /// The stored proposal has no canonical `Enc` frame, so its digest cannot be derived.
+    /// Every node derives the same frame, so this is a refusal and never a deferral.
+    #[error("the stored proposal has no canonical frame: {0}")]
+    ProposalFrame(AnonymousBallotCodecErrorV1),
+    /// The stored proposal carries an integer the first release cannot represent exactly.
+    #[error("the stored proposal is not admissible: {0}")]
+    ProposalInvariant(&'static str),
     /// The retry sequence exceeds the frozen limit.
     #[error("the attempt's retry sequence exceeds the frozen limit")]
     RetryLimitExceeded,
@@ -550,10 +572,16 @@ pub struct AnonymousParliamentAttemptStateV1 {
     purpose: ParliamentBallotPurposeV1,
     attempt: AnonymousGovernanceAttemptV1,
     policy: FrozenParliamentAttemptPolicyV1,
-    /// `proposal_digest` of the full canonical proposal, fixed at creation; every board and
-    /// closure record of the attempt carries it.
+    /// The exact admitted proposal: the source of the attempt's content identifier and
+    /// identifier, of the two derivations below and of the expected head's subject.
+    proposal: ProposalKind,
+    /// `proposal_digest` of the stored proposal, fixed at creation; every board and closure
+    /// record of the attempt carries it.
     proposal_digest: Digest512,
+    /// Hash of the stored proposal's exact deterministic effect preimage; the certificate
+    /// binds it.
     effect_preimage_hash: [u8; 32],
+    /// The compare-and-set head of the proposal's subject, as Core read it at creation.
     expected_head: GovernanceExpectedHeadV1,
     /// Proposal-wide redraw units its predecessor attempts consumed.
     randomness_redraws_before_attempt: u32,
@@ -681,30 +709,37 @@ pub struct AnonymousAttemptOriginV1 {
 }
 
 impl AnonymousParliamentAttemptStateV1 {
-    /// Create the State of a new attempt.
+    /// Create the State of a new attempt about `proposal`, which the State stores.
     ///
     /// `purpose` is what Core selected for an attempt created now
     /// ([`ParliamentBallotPurposeV1::select_v1`]) and `policy` the snapshot it froze from
-    /// committed parameters; the caller of the instruction chooses neither. `origin` is the
-    /// creating block's time and the redraw count the predecessor attempt ended with.
+    /// committed parameters; the caller of the instruction chooses neither. `attempt` is the
+    /// family's initial snapshot of `proposal` and `expected_head` the head of the proposal's
+    /// subject that Core read at creation. The proposal digest and the effect hash are
+    /// derived here. `origin` is the creating block's time and the redraw count the
+    /// predecessor attempt ended with.
     ///
     /// # Errors
     /// [`AnonymousParliamentErrorV1`] for an unrecognized purpose, an invalid snapshot, a
-    /// noncanonical or over-limit attempt, an inert binding, a redraw prefix outside the
-    /// lineage, or a noninitial snapshot.
+    /// proposal that is inadmissible or has no canonical frame, a snapshot or head that is
+    /// not the proposal's, an over-limit attempt, an inert binding, a redraw prefix outside
+    /// the lineage, or a noninitial snapshot.
     pub fn try_new(
         purpose: ParliamentBallotPurposeV1,
         attempt: AnonymousGovernanceAttemptV1,
         policy: FrozenParliamentAttemptPolicyV1,
-        proposal_digest: Digest512,
-        effect_preimage_hash: [u8; 32],
+        proposal: ProposalKind,
         expected_head: GovernanceExpectedHeadV1,
         origin: AnonymousAttemptOriginV1,
     ) -> Result<Self, AnonymousParliamentErrorV1> {
+        let proposal_digest =
+            proposal_digest_v1(&proposal).map_err(AnonymousParliamentErrorV1::ProposalFrame)?;
+        let effect_preimage_hash = proposal.effect_preimage_hash_v1();
         let state = Self {
             purpose,
             attempt,
             policy,
+            proposal,
             proposal_digest,
             effect_preimage_hash,
             expected_head,
@@ -740,13 +775,13 @@ impl AnonymousParliamentAttemptStateV1 {
         let attempt = &self.attempt;
         if attempt.id.as_bytes() == &[0; 32]
             || attempt.proposal_content_id.as_bytes() == &[0; 32]
-            || !attempt.has_canonical_id()
             || self.effect_preimage_hash == [0; 32]
             || self.proposal_digest == Digest512::new([0; 64])
             || !expected_head_is_valid(self.expected_head)
         {
             return Err(AnonymousParliamentErrorV1::ImmutableBinding);
         }
+        self.validate_proposal_bindings()?;
         if attempt.sequence > self.policy.sortition_policy.max_governance_attempt_retries {
             return Err(AnonymousParliamentErrorV1::RetryLimitExceeded);
         }
@@ -756,6 +791,45 @@ impl AnonymousParliamentAttemptStateV1 {
         let ceiling = self.policy.sortition_policy.max_randomness_redraws;
         if (attempt.sequence == 0 && before != 0) || (attempt.sequence > 0 && before >= ceiling) {
             return Err(AnonymousParliamentErrorV1::RedrawLineage);
+        }
+        Ok(())
+    }
+
+    /// The stored proposal is the source of every binding fixed at creation: the content
+    /// identifier, the family's attempt identifier for the stored sequence, the proposal
+    /// digest and the effect hash are recomputed from it and compared, and the expected head
+    /// governs its subject.
+    ///
+    /// The head's presence, version and root stay as Core read them at creation. A restore
+    /// does not compare them with the subject's current head, which may have moved since:
+    /// that compare-and-set is decided when the effect executes.
+    fn validate_proposal_bindings(&self) -> Result<(), AnonymousParliamentErrorV1> {
+        use AnonymousParliamentErrorV1 as Error;
+
+        let binding = |field| Error::ProposalBinding { field };
+        let proposal = &self.proposal;
+        if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
+            return Err(Error::ProposalInvariant(reason));
+        }
+        let content = ProposalContentId::derive_v1(proposal);
+        if self.attempt.proposal_content_id != content {
+            return Err(binding("proposal_content_id"));
+        }
+        if self.attempt.id != anonymous_governance_attempt_id_v1(content, self.attempt.sequence) {
+            return Err(Error::ImmutableBinding);
+        }
+        if self.proposal_digest != proposal_digest_v1(proposal).map_err(Error::ProposalFrame)? {
+            return Err(binding("proposal_digest"));
+        }
+        if self.effect_preimage_hash != proposal.effect_preimage_hash_v1() {
+            return Err(binding("effect_preimage_hash"));
+        }
+        // A proposal without a subject has no head the attempt could expect.
+        let subject = proposal
+            .governed_subject_id_v1()
+            .map_err(|_| binding("expected_head"))?;
+        if expected_head_subject(self.expected_head) != subject {
+            return Err(binding("expected_head"));
         }
         Ok(())
     }
@@ -778,19 +852,25 @@ impl AnonymousParliamentAttemptStateV1 {
         &self.policy
     }
 
-    /// `proposal_digest` of the full canonical proposal, fixed at creation.
+    /// The exact admitted proposal the attempt decides.
+    #[must_use]
+    pub const fn proposal(&self) -> &ProposalKind {
+        &self.proposal
+    }
+
+    /// `proposal_digest` of the stored proposal, fixed at creation.
     #[must_use]
     pub const fn proposal_digest(&self) -> &Digest512 {
         &self.proposal_digest
     }
 
-    /// Hash of the exact deterministic effect preimage.
+    /// Hash of the stored proposal's exact deterministic effect preimage.
     #[must_use]
     pub const fn effect_preimage_hash(&self) -> [u8; 32] {
         self.effect_preimage_hash
     }
 
-    /// Compare-and-set head required when the effect executes.
+    /// Compare-and-set head of the proposal's subject required when the effect executes.
     #[must_use]
     pub const fn expected_head(&self) -> GovernanceExpectedHeadV1 {
         self.expected_head

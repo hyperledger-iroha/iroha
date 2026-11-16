@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn native_current_read_keeps_expired_deadline_before_transport_and_original_retry() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let verifier = fixture.native.observe(&fixture.owner.authority);
     let original = verifier.checkpoint().encode_canonical().unwrap();
     let height = fixture.native.chain.height();
@@ -23,7 +23,7 @@ fn native_current_read_keeps_expired_deadline_before_transport_and_original_retr
     // Unavailable transport remains refusal; it cannot manufacture a current custody proof.
     let error = fixture
         .owner
-        .read_current(&fixture.policy.binding, &verifier, fixture.options.deadline)
+        .read_current(&fixture.policy.binding, &verifier, fixture.deadline())
         .unwrap_err();
     assert!(!matches!(&error, crate::managed::Error::NativeDeadline));
     assert!(!peers.requests.lock().unwrap().is_empty());

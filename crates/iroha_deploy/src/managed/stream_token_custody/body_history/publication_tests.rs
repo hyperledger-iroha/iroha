@@ -148,24 +148,27 @@ pub(super) fn advance_with_reads(
     }
     let mut turn = fixture.renewal_turn();
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms()? + fixture.policy.max_validity_ms, &fixture.options)?;
+    let terms = Terms::new(
+        now_ms()? + fixture.policy.max_validity_ms,
+        &fixture.options(),
+    )?;
     let unsigned = fixture.owner.select_renewal_unsigned(
         2,
         &fixture.policy,
         &current,
         &checkpoint,
         &terms,
-        fixture.options.deadline,
+        fixture.deadline(),
     )?;
     let (selected, authorization) = if let Some(previous) = previous {
         let authorization =
-            turn.authorize_retained(&fixture.owner, &previous, fixture.options.deadline)?;
+            turn.authorize_retained(&fixture.owner, &previous, fixture.deadline())?;
         let selected = previous.reserve_successor(
             &fixture.owner,
             unsigned,
             &current,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
         )?;
         (selected, authorization)
     } else {
@@ -175,17 +178,17 @@ pub(super) fn advance_with_reads(
             unsigned,
             &terms.fees,
             &SigningTurn::RenewalSelection(&turn),
-            fixture.options.deadline,
+            fixture.deadline(),
         )?;
         let authorization =
-            turn.authorize_retained(&fixture.owner, &selected, fixture.options.deadline)?;
+            turn.authorize_retained(&fixture.owner, &selected, fixture.deadline())?;
         (selected, authorization)
     };
     let finished = selected.finish_pending_with_reads(
         &fixture.owner,
         &current,
         &SigningTurn::Generated(authorization),
-        fixture.options.deadline,
+        fixture.deadline(),
         reads,
     )?;
     if request_only {
@@ -204,11 +207,8 @@ fn every_successful_local_publication_matches_genuine_cold_recovery() {
 }
 fn every_successful_local_publication_matches_genuine_cold_recovery_original() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 30_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(30_000);
+    fixture.wait_renewable();
     let observed = Rc::new(RefCell::new(Vec::new()));
     let capture = Rc::clone(&observed);
     let history = with_hook(
@@ -378,11 +378,8 @@ fn successful_unused_retirement_matches_cold_recovery_without_wallet_or_signatur
 }
 fn successful_unused_retirement_matches_cold_recovery_without_wallet_or_signature_original() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    fixture.wait_renewable();
     let fired = Rc::new(Cell::new(false));
     let capture = Rc::clone(&fired);
     let interrupted = with_hook(

@@ -88,26 +88,23 @@ fn observe<T>(hook: Hook, finish: impl FnOnce() -> T) -> (T, Counts) {
 }
 
 fn run(cancelled: Arc<AtomicBool>, hook: Hook) -> (Fixture, Result<BodyHistory>, Counts) {
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    fixture.wait_renewable();
     let initial = fixture
         .owner
-        .retained_initial_enrollment(&fixture.policy, fixture.initial, fixture.options.deadline)
+        .retained_initial_enrollment(&fixture.policy, fixture.initial, fixture.deadline())
         .unwrap();
     let mut turn = renewal::GeneratedRenewalTurn::begin(
         &fixture.owner,
         &fixture.policy,
-        Fees::from_options(&fixture.options).unwrap(),
+        Fees::from_options(&fixture.options()).unwrap(),
         *initial.finalized(),
-        fixture.options.deadline,
+        fixture.deadline(),
         cancelled,
     )
     .unwrap();
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -116,7 +113,7 @@ fn run(cancelled: Arc<AtomicBool>, hook: Hook) -> (Fixture, Result<BodyHistory>,
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     let selected = BodyHistory::initialize(
@@ -125,18 +122,18 @@ fn run(cancelled: Arc<AtomicBool>, hook: Hook) -> (Fixture, Result<BodyHistory>,
         unsigned,
         &terms.fees,
         &SigningTurn::RenewalSelection(&turn),
-        fixture.options.deadline,
+        fixture.deadline(),
     )
     .unwrap();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &selected, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &selected, fixture.deadline())
         .unwrap();
     let (result, counts) = observe(hook, || {
         selected.finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
     });

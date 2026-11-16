@@ -111,11 +111,11 @@ const FIXTURES: [Fixture; 5] = [
 /// `print_fixture_stamp_targets` prints; the `mine_fixture_stamp` example of
 /// `iroha_parliament_ballot` finds one.
 const STAMPS: [u64; 5] = [
-    150_271_695,
-    21_001_429,
-    153_397_210,
-    905_274_527,
-    85_105_371,
+    320_215_013,
+    2_641_794,
+    351_904_051,
+    153_063_640,
+    123_913_680,
 ];
 
 /// Byte of the proof flipped in a forged fixture.

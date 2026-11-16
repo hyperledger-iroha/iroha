@@ -4,7 +4,7 @@ use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use iroha_model_base::name::Name;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
 use norito::to_bytes;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
 #[test]

@@ -5,9 +5,7 @@ use crate::executor::attachment_custody::AttachmentCustody;
 use iroha_data_model::{
     Level,
     isi::{InstructionBox, Log},
-    privacy::{
-        PrivacyRuntimeProtocolIdV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-    },
+    privacy::{PrivacyRuntimeProtocolIdV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1},
     transaction::{Executable, FeePaymentIntent, TransactionBuilder, signed_attachments::*},
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};

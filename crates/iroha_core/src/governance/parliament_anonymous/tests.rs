@@ -10,13 +10,17 @@ use iroha_data_model::governance::{
         ParliamentLifecycleParametersV1, anonymous_body_instance_id_v1,
         anonymous_governance_attempt_id_v1,
     },
-    types::{GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1, ProposalContentId},
+    types::{
+        ContractLifecycleGovernanceActionV1, ContractLifecycleGovernanceProposalV1,
+        FIRST_RELEASE_MAX_EXACT_JSON_U64, GovernanceExpectedHeadAbsentV1,
+        GovernanceExpectedHeadPresentV1, ProposalContentId,
+    },
 };
 
 use super::{
     test_driver::{
-        Answer, CONTENT, Driver, SUBJECT, assert_restores, attempt, candidate, head, network,
-        pipeline, policy, public_bodies,
+        Answer, Driver, assert_restores, attempt, candidate, content, head, network, pipeline,
+        policy, proposal, proposal_digest, public_bodies, subject,
     },
     *,
 };
@@ -363,7 +367,7 @@ fn a_candidate_certificate_is_never_executed() {
             attempt,
             late,
             GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
-                subject_id: SUBJECT,
+                subject_id: subject(),
                 version: 1,
                 head_root: [0xe1; 32],
             }),
@@ -470,13 +474,13 @@ fn execution_is_due_on_the_governance_clock_and_superseded_only_by_another_head(
         })
     };
     assert_eq!(
-        head_supersedes(certificate, present(SUBJECT, 1, [0xe1; 32])),
+        head_supersedes(certificate, present(subject(), 1, [0xe1; 32])),
         Ok(())
     );
     for invalid in [
         present([0xe9; 32], 1, [0xe1; 32]),
-        present(SUBJECT, 0, [0xe1; 32]),
-        present(SUBJECT, 1, [0; 32]),
+        present(subject(), 0, [0xe1; 32]),
+        present(subject(), 1, [0; 32]),
     ] {
         assert_eq!(
             head_supersedes(certificate, invalid),
@@ -724,9 +728,8 @@ fn a_closure_is_the_record_of_the_sealed_jury_under_the_locked_policy() {
         context("proposal_content_id")
     );
     assert_eq!(
-        refused(
-            &|record| record.governance_attempt_id = anonymous_governance_attempt_id_v1(CONTENT, 1)
-        ),
+        refused(&|record| record.governance_attempt_id =
+            anonymous_governance_attempt_id_v1(content(), 1)),
         context("governance_attempt_id")
     );
     assert_eq!(
@@ -862,19 +865,18 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
         created_at_ms: test_driver::CREATED_MS,
         randomness_redraws_before_attempt: 0,
     };
-    let create = |purpose, attempt, policy, effect, head, origin| {
+    let create = |purpose, attempt, policy, head, origin| {
         AnonymousParliamentAttemptStateV1::try_new(
             purpose,
             attempt,
             policy,
-            test_driver::PROPOSAL_DIGEST,
-            effect,
+            proposal(),
             head,
             origin,
         )
     };
     let valid = attempt(0, RiskTierV1::Standard);
-    let created = create(candidate(), valid, policy(), [0xd0; 32], head(), origin).expect("valid");
+    let created = create(candidate(), valid, policy(), head(), origin).expect("valid");
     assert_restores(&created);
     assert_eq!(created.randomness_redraws_before_attempt(), 0);
     assert_eq!(
@@ -884,34 +886,24 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
 
     // The baseline derivation of the identifier is another attempt's.
     let mut baseline = valid;
-    baseline.id = GovernanceAttemptId::derive_v1(CONTENT, 0);
+    baseline.id = GovernanceAttemptId::derive_v1(content(), 0);
     assert_eq!(
-        create(candidate(), baseline, policy(), [0xd0; 32], head(), origin),
+        create(candidate(), baseline, policy(), head(), origin),
         Err(Error::ImmutableBinding)
     );
+    // The digest and the effect hash are derived from the stored proposal, never supplied
+    // (`a_restored_state_whose_proposal_or_derivation_was_altered_is_refused` covers inert
+    // and altered ones).
+    assert_eq!(created.proposal_digest(), &proposal_digest());
     assert_eq!(
-        create(candidate(), valid, policy(), [0; 32], head(), origin),
-        Err(Error::ImmutableBinding)
+        created.effect_preimage_hash(),
+        proposal().effect_preimage_hash_v1()
     );
-    assert_eq!(
-        AnonymousParliamentAttemptStateV1::try_new(
-            candidate(),
-            valid,
-            policy(),
-            Digest512::new([0; 64]),
-            [0xd0; 32],
-            head(),
-            origin,
-        ),
-        Err(Error::ImmutableBinding)
-    );
-    assert_eq!(created.proposal_digest(), &test_driver::PROPOSAL_DIGEST);
     assert_eq!(
         create(
             candidate(),
             valid,
             policy(),
-            [0xd0; 32],
             GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
                 subject_id: [0; 32]
             }),
@@ -926,7 +918,6 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
             ParliamentBallotPurposeV1::Qualified(Digest512::new([0x42; 64])),
             valid,
             policy(),
-            [0xd0; 32],
             head(),
             origin
         ),
@@ -935,21 +926,14 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
 
     let over_limit = attempt(u32::MAX, RiskTierV1::Standard);
     assert_eq!(
-        create(
-            candidate(),
-            over_limit,
-            policy(),
-            [0xd0; 32],
-            head(),
-            origin
-        ),
+        create(candidate(), over_limit, policy(), head(), origin),
         Err(Error::RetryLimitExceeded)
     );
 
     let mut started = valid;
     started.stage = GovernanceStageV1::Rules;
     assert_eq!(
-        create(candidate(), started, policy(), [0xd0; 32], head(), origin),
+        create(candidate(), started, policy(), head(), origin),
         Err(Error::NotInitial)
     );
 
@@ -961,14 +945,7 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
         randomness_redraws_before_attempt: count,
     };
     assert_eq!(
-        create(
-            candidate(),
-            valid,
-            policy(),
-            [0xd0; 32],
-            head(),
-            inherited(1)
-        ),
+        create(candidate(), valid, policy(), head(), inherited(1)),
         Err(Error::RedrawLineage)
     );
     let successor = attempt(1, RiskTierV1::Standard);
@@ -977,21 +954,13 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
             candidate(),
             successor,
             policy(),
-            [0xd0; 32],
             head(),
             inherited(ceiling - 1)
         )
         .is_ok()
     );
     assert_eq!(
-        create(
-            candidate(),
-            successor,
-            policy(),
-            [0xd0; 32],
-            head(),
-            inherited(ceiling)
-        ),
+        create(candidate(), successor, policy(), head(), inherited(ceiling)),
         Err(Error::RedrawLineage)
     );
 
@@ -1005,11 +974,294 @@ fn creation_takes_only_the_family_identifier_a_recognized_purpose_and_a_binding_
     )
     .expect("public pipeline");
     assert_eq!(
-        create(candidate(), valid, public_only, [0xd0; 32], head(), origin),
+        create(candidate(), valid, public_only, head(), origin),
         Err(Error::Policy(
             FrozenBallotPolicyErrorV1::MissingBindingPolicy
         ))
     );
+}
+
+#[test]
+fn the_driver_runs_the_pipeline_and_the_head_of_its_proposal() {
+    // The driver's proposal is a real one: the pipeline, the tier and the subject the tests
+    // run are the ones the creation interface derives for it.
+    let (risk_tier, required) =
+        crate::governance::parliament::parliament_attempt_policy_v1(&proposal());
+    let mut bodies: Vec<_> = required.iter().map(|required| required.body).collect();
+    bodies.push(ParliamentBody::ConfirmationJury);
+    assert_eq!(bodies, pipeline());
+    assert_eq!(risk_tier, RiskTierV1::Standard);
+    assert_eq!(
+        proposal().first_release_exact_json_u64_invariant_error(),
+        None
+    );
+    assert_eq!(expected_head_subject(head()), subject());
+    assert_eq!(content(), ProposalContentId::derive_v1(&proposal()));
+}
+
+#[test]
+fn the_stored_proposal_is_the_source_of_every_binding_fixed_at_creation() {
+    use AnonymousParliamentErrorV1 as Error;
+
+    let origin = AnonymousAttemptOriginV1 {
+        created_at_ms: test_driver::CREATED_MS,
+        randomness_redraws_before_attempt: 0,
+    };
+    let create = |proposal, attempt, head| {
+        AnonymousParliamentAttemptStateV1::try_new(
+            candidate(),
+            attempt,
+            policy(),
+            proposal,
+            head,
+            origin,
+        )
+    };
+    let binding = |field| Error::ProposalBinding { field };
+    let valid = attempt(0, RiskTierV1::Standard);
+    let created = create(proposal(), valid, head()).expect("valid");
+
+    // The reducer keeps the proposal and derives the digest and the effect hash from it; the
+    // snapshot and the head are the proposal's own.
+    assert_eq!(created.proposal(), &proposal());
+    assert_eq!(
+        created.attempt().proposal_content_id,
+        ProposalContentId::derive_v1(&proposal())
+    );
+    assert_eq!(
+        created.attempt().id,
+        anonymous_governance_attempt_id_v1(ProposalContentId::derive_v1(&proposal()), 0)
+    );
+    assert_eq!(
+        created.proposal_digest(),
+        &proposal_digest_v1(&proposal()).expect("a canonical proposal")
+    );
+    assert_eq!(
+        created.effect_preimage_hash(),
+        proposal().effect_preimage_hash_v1()
+    );
+    assert_eq!(
+        expected_head_subject(created.expected_head()),
+        proposal().governed_subject_id_v1().expect("subject")
+    );
+    assert_restores(&created);
+
+    // Another deployment of the same contract contends on the same subject, but this
+    // snapshot is not its own.
+    let other = test_driver::deployment(0xd1);
+    assert_eq!(other.governed_subject_id_v1().expect("subject"), subject());
+    assert_eq!(
+        create(other.clone(), valid, head()).unwrap_err(),
+        binding("proposal_content_id")
+    );
+    let own = AnonymousGovernanceAttemptV1::new_v1(
+        ProposalContentId::derive_v1(&other),
+        0,
+        RiskTierV1::Standard,
+    );
+    let another = create(other, own, head()).expect("the other proposal's own attempt");
+    assert_ne!(another.attempt().id, created.attempt().id);
+    assert_ne!(another.proposal_digest(), created.proposal_digest());
+    assert_ne!(
+        another.effect_preimage_hash(),
+        created.effect_preimage_hash()
+    );
+    // The identifier is the family's derivation for the stored sequence.
+    let mut resequenced = attempt(1, RiskTierV1::Standard);
+    resequenced.id = valid.id;
+    assert_eq!(
+        create(proposal(), resequenced, head()).unwrap_err(),
+        Error::ImmutableBinding
+    );
+
+    // The head governs the proposal's subject. Its presence, version and root are whatever
+    // Core read at creation.
+    let foreign = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+        subject_id: [0xe9; 32],
+    });
+    assert_eq!(
+        create(proposal(), valid, foreign).unwrap_err(),
+        binding("expected_head")
+    );
+    let present = GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
+        subject_id: subject(),
+        version: 3,
+        head_root: [0xe1; 32],
+    });
+    let captured = create(proposal(), valid, present).expect("a present head of the subject");
+    assert_eq!(captured.expected_head(), present);
+    assert_restores(&captured);
+
+    // A proposal the first release cannot represent exactly is never stored.
+    let inexact =
+        ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
+            proposal_operator: test_driver::operator(),
+            contract_address: test_driver::contract(),
+            expected_revision: FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1,
+            action: ContractLifecycleGovernanceActionV1::CancelOwnershipOffer,
+        });
+    assert_eq!(
+        inexact.governed_subject_id_v1().expect("subject"),
+        subject()
+    );
+    let snapshot = AnonymousGovernanceAttemptV1::new_v1(
+        ProposalContentId::derive_v1(&inexact),
+        0,
+        RiskTierV1::Standard,
+    );
+    assert!(matches!(
+        create(inexact, snapshot, head()),
+        Err(Error::ProposalInvariant(_))
+    ));
+}
+
+#[test]
+fn a_restored_state_whose_proposal_or_derivation_was_altered_is_refused() {
+    use AnonymousParliamentErrorV1 as Error;
+
+    /// The State a node decodes from the canonical bytes of `state`. Decoding checks no
+    /// binding: the restore check does.
+    fn decoded(state: &AnonymousParliamentAttemptStateV1) -> AnonymousParliamentAttemptStateV1 {
+        let bytes = norito::encode_canonical(state).expect("encode");
+        norito::decode_canonical(&bytes).expect("decode")
+    }
+
+    let binding = |field| Err::<(), _>(Error::ProposalBinding { field });
+    let other = test_driver::deployment(0xd1);
+    let other_content = ProposalContentId::derive_v1(&other);
+    let other_digest = proposal_digest_v1(&other).expect("a canonical proposal");
+    let foreign = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+        subject_id: [0xe9; 32],
+    });
+
+    let fresh = Driver::new(RiskTierV1::Standard, 40).state;
+    let certified = certified().state;
+    for source in [&fresh, &certified] {
+        // The State roundtrips with its proposal through Norito and through JSON.
+        assert_restores(source);
+        assert_eq!(decoded(source).proposal(), &proposal());
+        let json = norito::json::to_json(source).expect("encode the State as JSON");
+        let from_json: AnonymousParliamentAttemptStateV1 =
+            norito::json::from_json(&json).expect("decode the State from JSON");
+        assert_eq!(&from_json, source);
+        assert_eq!(from_json.proposal(), &proposal());
+        assert_eq!(from_json.validate(&network()), Ok(()));
+
+        // An altered State is well-formed bytes and decodes; only the restore check, which
+        // recomputes every binding from the stored proposal, refuses it.
+        let restore = |edit: &dyn Fn(&mut AnonymousParliamentAttemptStateV1)| {
+            let mut altered = decoded(source);
+            edit(&mut altered);
+            decoded(&altered).validate(&network())
+        };
+
+        // Another proposal under the attempt's identifiers.
+        assert_eq!(
+            restore(&|state| state.proposal = other.clone()),
+            binding("proposal_content_id")
+        );
+        // The identifiers follow the substituted proposal: the digest is still the original's.
+        let relabel = |state: &mut AnonymousParliamentAttemptStateV1| {
+            state.proposal = other.clone();
+            state.attempt.proposal_content_id = other_content;
+            state.attempt.id =
+                anonymous_governance_attempt_id_v1(other_content, state.attempt.sequence);
+        };
+        assert_eq!(restore(&relabel), binding("proposal_digest"));
+        // The digest follows too: the effect hash is still the original's.
+        assert_eq!(
+            restore(&|state| {
+                relabel(&mut *state);
+                state.proposal_digest = other_digest;
+            }),
+            binding("effect_preimage_hash")
+        );
+
+        // An altered or inert digest.
+        assert_eq!(
+            restore(&|state| state.proposal_digest = Digest512::new([0x77; 64])),
+            binding("proposal_digest")
+        );
+        assert_eq!(
+            restore(&|state| state.proposal_digest = Digest512::new([0; 64])),
+            Err(Error::ImmutableBinding)
+        );
+        // An altered or inert effect hash.
+        assert_eq!(
+            restore(&|state| state.effect_preimage_hash = [0xd1; 32]),
+            binding("effect_preimage_hash")
+        );
+        assert_eq!(
+            restore(&|state| state.effect_preimage_hash = [0; 32]),
+            Err(Error::ImmutableBinding)
+        );
+        // An altered content identifier, alone or with the identifier the family derives
+        // from it, and an inert one.
+        assert_eq!(
+            restore(&|state| state.attempt.proposal_content_id = other_content),
+            binding("proposal_content_id")
+        );
+        assert_eq!(
+            restore(&|state| {
+                state.attempt.proposal_content_id = other_content;
+                state.attempt.id =
+                    anonymous_governance_attempt_id_v1(other_content, state.attempt.sequence);
+            }),
+            binding("proposal_content_id")
+        );
+        assert_eq!(
+            restore(&|state| state.attempt.proposal_content_id = ProposalContentId::new([0; 32])),
+            Err(Error::ImmutableBinding)
+        );
+        // An identifier that is not the family's derivation for the stored sequence: the
+        // baseline's derivation, and the canonical identifier of another sequence.
+        assert_eq!(
+            restore(&|state| {
+                state.attempt.id =
+                    GovernanceAttemptId::derive_v1(content(), state.attempt.sequence);
+            }),
+            Err(Error::ImmutableBinding)
+        );
+        assert_eq!(
+            restore(&|state| state.attempt.sequence += 1),
+            Err(Error::ImmutableBinding)
+        );
+        // A head of another subject, and an inert one.
+        assert_eq!(
+            restore(&|state| state.expected_head = foreign),
+            binding("expected_head")
+        );
+        assert_eq!(
+            restore(&|state| {
+                state.expected_head =
+                    GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                        subject_id: [0; 32],
+                    });
+            }),
+            Err(Error::ImmutableBinding)
+        );
+    }
+
+    // A complete rederivation is another attempt: consistent in itself, and of another
+    // identifier, so the table refuses it under this attempt's key (`validate_cut`).
+    let mut rederived = decoded(&fresh);
+    rederived.proposal = other.clone();
+    rederived.attempt =
+        AnonymousGovernanceAttemptV1::new_v1(other_content, 0, RiskTierV1::Standard);
+    rederived.proposal_digest = other_digest;
+    rederived.effect_preimage_hash = other.effect_preimage_hash_v1();
+    assert_eq!(decoded(&rederived).validate(&network()), Ok(()));
+    assert_ne!(rederived.attempt().id, fresh.attempt().id);
+
+    // A restore compares the captured head with no current State: the presence, version and
+    // root Core read at creation stay, and the compare-and-set is decided at execution.
+    let mut moved = decoded(&fresh);
+    moved.expected_head = GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
+        subject_id: subject(),
+        version: 7,
+        head_root: [0xe1; 32],
+    });
+    assert_eq!(decoded(&moved).validate(&network()), Ok(()));
 }
 
 #[test]

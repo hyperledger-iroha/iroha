@@ -359,7 +359,7 @@ fn attempts_root_scope_keeps_genuine_reserved_absent_and_empty_tail_owners() {
                 .test_attempts_pending(
                     authorization.origin().unwrap(),
                     authorization
-                        .terms(fixture.options.deadline, Some(validity.expires_at_unix_ms))
+                        .terms(fixture.deadline(), Some(validity.expires_at_unix_ms))
                         .unwrap(),
                 )
                 .unwrap();

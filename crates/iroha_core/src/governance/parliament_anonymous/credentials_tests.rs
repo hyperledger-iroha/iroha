@@ -28,8 +28,8 @@ use iroha_parliament_ballot::{
 
 use super::{
     test_driver::{
-        Answer, CONTENT, CREATED_HEIGHT, Driver, anchor, attempt, candidate, citizens,
-        lifecycle_parameters, network, pipeline, policy_with,
+        Answer, CREATED_HEIGHT, Driver, anchor, attempt, candidate, citizens, content,
+        lifecycle_parameters, network, pipeline, policy_with, proposal_digest,
     },
     *,
 };
@@ -465,7 +465,8 @@ fn a_binding_jury_seals_exactly_its_seated_credentials_and_the_plan_predicts_it(
     assert_eq!(board.board.roster_root, sealed.roster_root);
     // The board starts from the facts the attempt fixed.
     assert_eq!(board.board.purpose, candidate());
-    assert_eq!(board.board.proposal_content_id, CONTENT);
+    assert_eq!(board.board.proposal_content_id, content());
+    assert_eq!(board.board.context.proposal_digest, proposal_digest());
     assert_eq!(
         board.board.sealed_timestamp_ms,
         state.sealed_at().timestamp_ms

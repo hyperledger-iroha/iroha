@@ -1,0 +1,2114 @@
+{
+  "anchor_commit": "77600a4840bd5f37f167c46b11b9f5ab73c97ae2",
+  "artifacts": 304,
+  "capture_host": {
+    "arch": "aarch64",
+    "os": "macos"
+  },
+  "cases": 499,
+  "cases_by_host": {
+    "core": 123,
+    "default": 326,
+    "wsv": 47,
+    "wsv_contract": 3
+  },
+  "cases_by_kind": {
+    "asm": 285,
+    "kotodama": 214
+  },
+  "core_admission": {
+    "ArtifactAbiHashMismatch": 2,
+    "BytecodeDecodingFailed": 17,
+    "GenericSyscallNotAllowed": 1,
+    "MaxCyclesExceedsFuel": 4,
+    "MaxCyclesExceedsUpperBound": 3,
+    "MissingMaxCycles": 3,
+    "Ok": 455,
+    "UnsupportedAbiVersion": 3,
+    "UnsupportedFeatureBits": 3,
+    "UnsupportedVersion": 4,
+    "VectorLengthTooLarge": 4
+  },
+  "cover_tags": {
+    "admission:ArtifactAbiHashMismatch": 2,
+    "admission:GenericSyscallNotAllowed": 1,
+    "admission:InvalidOpcode": 4,
+    "admission:MaxCyclesExceedsFuel": 5,
+    "admission:MaxCyclesExceedsUpperBound": 4,
+    "admission:MissingMaxCycles": 2,
+    "admission:UnsupportedAbiVersion": 2,
+    "admission:UnsupportedFeatureBits": 2,
+    "admission:UnsupportedVersion": 3,
+    "admission:VectorLengthTooLarge": 3,
+    "admission:code": 1,
+    "admission:header": 3,
+    "admission:literal": 4,
+    "admission:ok": 4,
+    "admission:precedence": 4,
+    "admission:syscall": 5,
+    "admission:zk": 1,
+    "arguments:missing": 3,
+    "arguments:record": 66,
+    "cycles:multi-cycle-opcode": 49,
+    "cycles:non-zk-ceiling": 7,
+    "cycles:shared-budget": 30,
+    "encoding:branch-imm8": 7,
+    "encoding:imm8": 4,
+    "encoding:jal-imm16": 1,
+    "encoding:jals-imm24": 1,
+    "encoding:jmp-imm24": 2,
+    "encoding:scall-imm8": 2,
+    "encoding:system-imm24": 5,
+    "events": 2,
+    "family:arithmetic": 24,
+    "family:arithmetic-immediate": 3,
+    "family:control": 1,
+    "family:control-branch": 8,
+    "family:control-jump": 8,
+    "family:direct-crypto": 22,
+    "family:memory": 10,
+    "family:memory-128": 6,
+    "family:memory-literal": 4,
+    "family:parallel": 1,
+    "family:system": 28,
+    "family:vector": 18,
+    "family:zk-helper": 24,
+    "fault:AssertionFailed": 5,
+    "fault:AssertionFailed-for-arithmetic": 16,
+    "fault:ContractAbort": 2,
+    "fault:DecodeError": 2,
+    "fault:ExceededMaxCycles": 40,
+    "fault:InvalidVectorLength": 2,
+    "fault:MissingHalt": 2,
+    "fault:NoritoInvalid": 1,
+    "fault:Numeric": 6,
+    "fault:OutOfGas": 19,
+    "fault:PermissionDenied": 3,
+    "fault:PrivacyViolation": 9,
+    "fault:RegisterOutOfBounds": 2,
+    "fault:UnknownSyscall": 5,
+    "fault:UnsupportedSyscall": 1,
+    "fault:VectorExtensionDisabled": 12,
+    "fault:ZkExtensionDisabled": 7,
+    "fault:execute-permission": 5,
+    "fault:memory": 10,
+    "fault:memory-limit": 4,
+    "fault:numeric": 5,
+    "fault:pointer": 2,
+    "fault:pointer-abi": 1,
+    "gas:boundary": 18,
+    "gas:header-to-gas": 5,
+    "gas:signature-payload": 4,
+    "gas:vector-scaling": 4,
+    "gas:zk-padding": 11,
+    "header:49-byte": 34,
+    "header:vector-length": 6,
+    "header:zk-mode": 14,
+    "high-registers": 15,
+    "host:contract-fixture": 3,
+    "kotodama": 214,
+    "opcode:AESDEC": 1,
+    "opcode:AESENC": 1,
+    "opcode:BLAKE2S": 1,
+    "opcode:ED25519BATCHVERIFY": 2,
+    "opcode:POSEIDON2": 1,
+    "opcode:POSEIDON6": 1,
+    "opcode:SETVL": 1,
+    "opcode:SHA256BLOCK": 1,
+    "opcode:SHA3BLOCK": 1,
+    "privacy:equal-tags": 9,
+    "syscall:ALLOC": 4,
+    "syscall:EXECUTION_SUMMARY": 1,
+    "syscall:GROW_HEAP": 1,
+    "syscall:context": 1,
+    "syscall:numeric": 13,
+    "syscall:pointer-abi": 4,
+    "syscall:public-input": 2
+  },
+  "executed_opcodes": [
+    {
+      "executed": 1796,
+      "family": "arithmetic",
+      "name": "ADD",
+      "opcode": "0x01"
+    },
+    {
+      "executed": 9,
+      "family": "arithmetic",
+      "name": "SUB",
+      "opcode": "0x02"
+    },
+    {
+      "executed": 73,
+      "family": "arithmetic",
+      "name": "AND",
+      "opcode": "0x03"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "OR",
+      "opcode": "0x04"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "XOR",
+      "opcode": "0x05"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "SLL",
+      "opcode": "0x06"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "SRL",
+      "opcode": "0x07"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "SRA",
+      "opcode": "0x08"
+    },
+    {
+      "executed": 14,
+      "family": "arithmetic",
+      "name": "SLT",
+      "opcode": "0x09"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "SLTU",
+      "opcode": "0x0a"
+    },
+    {
+      "executed": 17,
+      "family": "arithmetic",
+      "name": "CMOV",
+      "opcode": "0x0b"
+    },
+    {
+      "executed": 9,
+      "family": "arithmetic",
+      "name": "NOT",
+      "opcode": "0x0c"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "NEG",
+      "opcode": "0x0d"
+    },
+    {
+      "executed": 92,
+      "family": "arithmetic",
+      "name": "SEQ",
+      "opcode": "0x0e"
+    },
+    {
+      "executed": 65,
+      "family": "arithmetic",
+      "name": "SNE",
+      "opcode": "0x0f"
+    },
+    {
+      "executed": 118,
+      "family": "arithmetic",
+      "name": "MUL",
+      "opcode": "0x10"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "MULH",
+      "opcode": "0x11"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "MULHU",
+      "opcode": "0x12"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "MULHSU",
+      "opcode": "0x13"
+    },
+    {
+      "executed": 12,
+      "family": "arithmetic",
+      "name": "DIV",
+      "opcode": "0x14"
+    },
+    {
+      "executed": 10,
+      "family": "arithmetic",
+      "name": "DIVU",
+      "opcode": "0x15"
+    },
+    {
+      "executed": 11,
+      "family": "arithmetic",
+      "name": "REM",
+      "opcode": "0x16"
+    },
+    {
+      "executed": 10,
+      "family": "arithmetic",
+      "name": "REMU",
+      "opcode": "0x17"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "ROTL",
+      "opcode": "0x18"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "ROTR",
+      "opcode": "0x19"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "POPCNT",
+      "opcode": "0x1a"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "CLZ",
+      "opcode": "0x1b"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "CTZ",
+      "opcode": "0x1c"
+    },
+    {
+      "executed": 22,
+      "family": "arithmetic",
+      "name": "ISQRT",
+      "opcode": "0x1d"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "MIN",
+      "opcode": "0x1e"
+    },
+    {
+      "executed": 8,
+      "family": "arithmetic",
+      "name": "MAX",
+      "opcode": "0x1f"
+    },
+    {
+      "executed": 2,
+      "family": "arithmetic",
+      "name": "ABS",
+      "opcode": "0x27"
+    },
+    {
+      "executed": 19,
+      "family": "arithmetic",
+      "name": "DIV_CEIL",
+      "opcode": "0x28"
+    },
+    {
+      "executed": 22,
+      "family": "arithmetic",
+      "name": "GCD",
+      "opcode": "0x29"
+    },
+    {
+      "executed": 22,
+      "family": "arithmetic",
+      "name": "MEAN",
+      "opcode": "0x2a"
+    },
+    {
+      "executed": 5926,
+      "family": "arithmetic-immediate",
+      "name": "ADDI",
+      "opcode": "0x20"
+    },
+    {
+      "executed": 6,
+      "family": "arithmetic-immediate",
+      "name": "ANDI",
+      "opcode": "0x21"
+    },
+    {
+      "executed": 6,
+      "family": "arithmetic-immediate",
+      "name": "ORI",
+      "opcode": "0x22"
+    },
+    {
+      "executed": 57,
+      "family": "arithmetic-immediate",
+      "name": "XORI",
+      "opcode": "0x23"
+    },
+    {
+      "executed": 9,
+      "family": "arithmetic-immediate",
+      "name": "CMOVI",
+      "opcode": "0x24"
+    },
+    {
+      "executed": 6,
+      "family": "arithmetic-immediate",
+      "name": "ROTL_IMM",
+      "opcode": "0x25"
+    },
+    {
+      "executed": 6,
+      "family": "arithmetic-immediate",
+      "name": "ROTR_IMM",
+      "opcode": "0x26"
+    },
+    {
+      "executed": 1991,
+      "family": "memory",
+      "name": "LOAD64",
+      "opcode": "0x30"
+    },
+    {
+      "executed": 2168,
+      "family": "memory",
+      "name": "STORE64",
+      "opcode": "0x31"
+    },
+    {
+      "executed": 2,
+      "family": "memory-128",
+      "name": "LOAD128",
+      "opcode": "0x32"
+    },
+    {
+      "executed": 5,
+      "family": "memory-128",
+      "name": "STORE128",
+      "opcode": "0x33"
+    },
+    {
+      "executed": 914,
+      "family": "memory-literal",
+      "name": "LDLIT",
+      "opcode": "0x34"
+    },
+    {
+      "executed": 477,
+      "family": "memory-literal",
+      "name": "LDI64",
+      "opcode": "0x35"
+    },
+    {
+      "executed": 224,
+      "family": "control-branch",
+      "name": "BEQ",
+      "opcode": "0x40"
+    },
+    {
+      "executed": 1463,
+      "family": "control-branch",
+      "name": "BNE",
+      "opcode": "0x41"
+    },
+    {
+      "executed": 95,
+      "family": "control-branch",
+      "name": "BLT",
+      "opcode": "0x42"
+    },
+    {
+      "executed": 3,
+      "family": "control-branch",
+      "name": "BGE",
+      "opcode": "0x43"
+    },
+    {
+      "executed": 3,
+      "family": "control-branch",
+      "name": "BLTU",
+      "opcode": "0x44"
+    },
+    {
+      "executed": 3,
+      "family": "control-branch",
+      "name": "BGEU",
+      "opcode": "0x45"
+    },
+    {
+      "executed": 517,
+      "family": "control-jump",
+      "name": "JAL",
+      "opcode": "0x46"
+    },
+    {
+      "executed": 5,
+      "family": "control-jump",
+      "name": "JR",
+      "opcode": "0x47"
+    },
+    {
+      "executed": 197,
+      "family": "control-jump",
+      "name": "JALR",
+      "opcode": "0x48"
+    },
+    {
+      "executed": 142,
+      "family": "control",
+      "name": "HALT",
+      "opcode": "0x49"
+    },
+    {
+      "executed": 3,
+      "family": "control-jump",
+      "name": "JMP",
+      "opcode": "0x4a"
+    },
+    {
+      "executed": 1,
+      "family": "control-jump",
+      "name": "JALS",
+      "opcode": "0x4b"
+    },
+    {
+      "executed": 802,
+      "family": "system",
+      "name": "SCALL",
+      "opcode": "0x60"
+    },
+    {
+      "executed": 11,
+      "family": "system",
+      "name": "GETGAS",
+      "opcode": "0x61"
+    },
+    {
+      "executed": 453,
+      "family": "system",
+      "name": "SYSTEM",
+      "opcode": "0x62"
+    },
+    {
+      "executed": 10,
+      "family": "vector",
+      "name": "VADD32",
+      "opcode": "0x70"
+    },
+    {
+      "executed": 6,
+      "family": "vector",
+      "name": "VADD64",
+      "opcode": "0x71"
+    },
+    {
+      "executed": 5,
+      "family": "vector",
+      "name": "VAND",
+      "opcode": "0x72"
+    },
+    {
+      "executed": 5,
+      "family": "vector",
+      "name": "VXOR",
+      "opcode": "0x73"
+    },
+    {
+      "executed": 5,
+      "family": "vector",
+      "name": "VOR",
+      "opcode": "0x74"
+    },
+    {
+      "executed": 8,
+      "family": "vector",
+      "name": "VROT32",
+      "opcode": "0x75"
+    },
+    {
+      "executed": 6,
+      "family": "vector",
+      "name": "SETVL",
+      "opcode": "0x76"
+    },
+    {
+      "executed": 2,
+      "family": "parallel",
+      "name": "PARBEGIN",
+      "opcode": "0x77"
+    },
+    {
+      "executed": 2,
+      "family": "parallel",
+      "name": "PAREND",
+      "opcode": "0x78"
+    },
+    {
+      "executed": 3,
+      "family": "direct-crypto",
+      "name": "SHA256BLOCK",
+      "opcode": "0x80"
+    },
+    {
+      "executed": 1,
+      "family": "direct-crypto",
+      "name": "SHA3BLOCK",
+      "opcode": "0x81"
+    },
+    {
+      "executed": 2,
+      "family": "direct-crypto",
+      "name": "POSEIDON2",
+      "opcode": "0x82"
+    },
+    {
+      "executed": 4,
+      "family": "direct-crypto",
+      "name": "POSEIDON6",
+      "opcode": "0x83"
+    },
+    {
+      "executed": 3,
+      "family": "direct-crypto",
+      "name": "AESENC",
+      "opcode": "0x84"
+    },
+    {
+      "executed": 2,
+      "family": "direct-crypto",
+      "name": "AESDEC",
+      "opcode": "0x85"
+    },
+    {
+      "executed": 1,
+      "family": "direct-crypto",
+      "name": "BLAKE2S",
+      "opcode": "0x86"
+    },
+    {
+      "executed": 3,
+      "family": "direct-crypto",
+      "name": "ED25519VERIFY",
+      "opcode": "0x87"
+    },
+    {
+      "executed": 2,
+      "family": "direct-crypto",
+      "name": "ED25519BATCHVERIFY",
+      "opcode": "0x88"
+    },
+    {
+      "executed": 3,
+      "family": "direct-crypto",
+      "name": "ECDSAVERIFY",
+      "opcode": "0x89"
+    },
+    {
+      "executed": 3,
+      "family": "direct-crypto",
+      "name": "DILITHIUMVERIFY",
+      "opcode": "0x8a"
+    },
+    {
+      "executed": 6,
+      "family": "zk-helper",
+      "name": "ASSERT",
+      "opcode": "0xa0"
+    },
+    {
+      "executed": 5,
+      "family": "zk-helper",
+      "name": "ASSERT_EQ",
+      "opcode": "0xa1"
+    },
+    {
+      "executed": 6,
+      "family": "zk-helper",
+      "name": "FADD",
+      "opcode": "0xa2"
+    },
+    {
+      "executed": 7,
+      "family": "zk-helper",
+      "name": "FSUB",
+      "opcode": "0xa3"
+    },
+    {
+      "executed": 4,
+      "family": "zk-helper",
+      "name": "FMUL",
+      "opcode": "0xa4"
+    },
+    {
+      "executed": 4,
+      "family": "zk-helper",
+      "name": "FINV",
+      "opcode": "0xa5"
+    },
+    {
+      "executed": 8,
+      "family": "zk-helper",
+      "name": "ASSERT_RANGE",
+      "opcode": "0xa6"
+    }
+  ],
+  "fault_kinds": {
+    "AssertionFailed": 15,
+    "DecodeError": 21,
+    "ExceededMaxCycles": 39,
+    "InvalidMetadata": 7,
+    "InvalidOpcode": 4,
+    "InvalidVectorLength": 2,
+    "MemoryAccessViolation": 10,
+    "MemoryLimitExceeded": 2,
+    "MisalignedAccess": 2,
+    "MissingHalt": 3,
+    "NoritoInvalid": 5,
+    "Numeric(DivisionByZero)": 4,
+    "Numeric(InexactConversion)": 1,
+    "Numeric(MantissaOverflow)": 3,
+    "Numeric(RepeatingDecimal)": 3,
+    "OutOfGas": 8,
+    "PermissionDenied": 12,
+    "PointerAbi(InvalidAddress)": 1,
+    "PrivacyViolation": 9,
+    "RegisterOutOfBounds": 2,
+    "UnknownSyscall": 5,
+    "UnsupportedSyscall": 25,
+    "VectorExtensionDisabled": 12,
+    "ZkExtensionDisabled": 7
+  },
+  "kotodama_sources": [
+    {
+      "artifact": "artifacts/kotodama/samples/asset_ops.to.bin",
+      "artifact_sha256": "5a627ffe68eb8b32fbb2b9605c94db3604c7200314c8a730225c23943da62970",
+      "id": "samples/asset_ops",
+      "origin": "crates/kotodama_lang/src/samples/asset_ops.ko",
+      "source": "sources/kotodama/samples/asset_ops.ko.txt",
+      "source_sha256": "53343ae93a873e18baba037792e0ff0a31a59c1b0db1a14e37a126002e8b3626"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/create_nft_for_every_user_trigger.to.bin",
+      "artifact_sha256": "6599691f2c558ad2138dd9caf8a533142600c2f269f426428c314b8ce51b3edc",
+      "id": "samples/create_nft_for_every_user_trigger",
+      "origin": "crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.ko",
+      "source": "sources/kotodama/samples/create_nft_for_every_user_trigger.ko.txt",
+      "source_sha256": "7adf7524ff7b245aea817f26fdf52cbc1ff42f9b5ed55217a37abd831c1cac4e"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/dex_contract.to.bin",
+      "artifact_sha256": "f3d41e340cb23e4401ec210745f6428313bdbb726f1701d18dac478d1762c665",
+      "id": "samples/dex_contract",
+      "origin": "crates/kotodama_lang/src/samples/dex_contract.ko",
+      "source": "sources/kotodama/samples/dex_contract.ko.txt",
+      "source_sha256": "763e72937fc1fd23df8cac1714002c38836b9bf27924b3c730bd9c30e5d5939f"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/dex_simple.to.bin",
+      "artifact_sha256": "5894281946e5f9df321621938b96dab76303d6813a3a5ff0119c42b58cb4ca08",
+      "id": "samples/dex_simple",
+      "origin": "crates/kotodama_lang/src/samples/dex_simple.ko",
+      "source": "sources/kotodama/samples/dex_simple.ko.txt",
+      "source_sha256": "14cee419c4a7b5065847e4217b0d9cc4cd06cb2208cbc68241ee0332f07c9fab"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/domain_ops.to.bin",
+      "artifact_sha256": "8516da0dde05fbc5e19a7a4990f013dd754fdd3b191dd2c8a6d12a6aded3ec64",
+      "id": "samples/domain_ops",
+      "origin": "crates/kotodama_lang/src/samples/domain_ops.ko",
+      "source": "sources/kotodama/samples/domain_ops.ko.txt",
+      "source_sha256": "968c4b10136ee937116a5609d2663a42c9bc5a966c4553eb73dc60eea60ff58c"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/irohaswap.to.bin",
+      "artifact_sha256": "52e86f0287838caf6fe72055a272fa4c6b9cc9b14f950779eaf1dbeb2cb2d068",
+      "id": "samples/irohaswap",
+      "origin": "crates/kotodama_lang/src/samples/irohaswap.ko",
+      "source": "sources/kotodama/samples/irohaswap.ko.txt",
+      "source_sha256": "eaa97327acf129265a6656565321f53b468e2049f364bafe17e0b900155305be"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/kotodama_swap.to.bin",
+      "artifact_sha256": "6becdcfd5e948f6ee18c8afa700dcdd1c06a2809f288abc809a6a53b58fc7485",
+      "id": "samples/kotodama_swap",
+      "origin": "crates/kotodama_lang/src/samples/kotodama_swap.ko",
+      "source": "sources/kotodama/samples/kotodama_swap.ko.txt",
+      "source_sha256": "ea87fbe170720bb6fc3a02e23b12ee0425bfbdc19aeb6ab365f51baad422ee45"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/lending_simple.to.bin",
+      "artifact_sha256": "83f286191e2c1cccfb5ca4a53bbefa6f0110e0183cfb5f42287fa1061133e0a4",
+      "id": "samples/lending_simple",
+      "origin": "crates/kotodama_lang/src/samples/lending_simple.ko",
+      "source": "sources/kotodama/samples/lending_simple.ko.txt",
+      "source_sha256": "304ec0161fe1bf3b0918ae80c0f8d919a032dead81a5689ab32b50a5ada82ed3"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/mint_rose_trigger.to.bin",
+      "artifact_sha256": "c4a2a9eb5eb6e2ff12159ee0505301dba51eaf702bc1cf5d1eca41c35ac5d5f6",
+      "id": "samples/mint_rose_trigger",
+      "origin": "crates/kotodama_lang/src/samples/mint_rose_trigger.ko",
+      "source": "sources/kotodama/samples/mint_rose_trigger.ko.txt",
+      "source_sha256": "1fa8db90e33016f4067fcb254e4ec9b024ed11debc6fea271a0541fbb8d8cc82"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/native_escrow.to.bin",
+      "artifact_sha256": "42ce5b23a18089532ca5e8e3996072ba593849bbb3215084b0414eaea4e3b737",
+      "id": "samples/native_escrow",
+      "origin": "crates/kotodama_lang/src/samples/native_escrow.ko",
+      "source": "sources/kotodama/samples/native_escrow.ko.txt",
+      "source_sha256": "4ba32a631fd4201fed367bf002125c7570a15d5ad20897cd0a749b05821b65da"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/perp_funding.to.bin",
+      "artifact_sha256": "95372f8fa8a4c3284c0887f901409568a0b34c4f7e3be6af1dab7eaf0db66d4c",
+      "id": "samples/perp_funding",
+      "origin": "crates/kotodama_lang/src/samples/perp_funding.ko",
+      "source": "sources/kotodama/samples/perp_funding.ko.txt",
+      "source_sha256": "c886395a8bd98f493c1ecb0b299724e9e76e71f1b8d7a744a04c362627762bb5"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/query_assets_and_save_cursor.to.bin",
+      "artifact_sha256": "c14d7f1cfb4f5828f3842867e60eac1a879fedbf819fc1fb3dfb150445d732c5",
+      "id": "samples/query_assets_and_save_cursor",
+      "origin": "crates/kotodama_lang/src/samples/query_assets_and_save_cursor.ko",
+      "source": "sources/kotodama/samples/query_assets_and_save_cursor.ko.txt",
+      "source_sha256": "c08804ba292ba16b5c6d2ae4d7bd6331c09b140294ebde7ad317ce2c6e291e2a"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/smart_contract_can_filter_queries.to.bin",
+      "artifact_sha256": "e7e7d3544c17fec18599ba90dcd77405f6501bf079b6789602f509de5498dcc6",
+      "id": "samples/smart_contract_can_filter_queries",
+      "origin": "crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.ko",
+      "source": "sources/kotodama/samples/smart_contract_can_filter_queries.ko.txt",
+      "source_sha256": "097666e238102814aceb36071ff42eedcc2a1041afeeea1d4b6acd559ac6a96c"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/stablecoin_simple.to.bin",
+      "artifact_sha256": "85e79a01ddc82d6103c1749e68c0f236cab744cade4ce4db063fbed7709cc601",
+      "id": "samples/stablecoin_simple",
+      "origin": "crates/kotodama_lang/src/samples/stablecoin_simple.ko",
+      "source": "sources/kotodama/samples/stablecoin_simple.ko.txt",
+      "source_sha256": "b004cc876bafbc5d8c13c2e285c5e8d54af3b1123078fea1de52dad2cf68d0ac"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/subscription_billing_trigger.to.bin",
+      "artifact_sha256": "316dc2b1e537a9f6ab895090554b10b46189bbb1cf6238f75b8561fa60a7ed19",
+      "id": "samples/subscription_billing_trigger",
+      "origin": "crates/kotodama_lang/src/samples/subscription_billing_trigger.ko",
+      "source": "sources/kotodama/samples/subscription_billing_trigger.ko.txt",
+      "source_sha256": "d02dd3887a3fbed960bda97db020e2a43e955939c26fb6fda623ef1605ff0221"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/subscription_usage_recorder.to.bin",
+      "artifact_sha256": "6d7efaaba7b6564e9ae7c3a954f73f603ed7aa19957b3918b41bf4958e56b94a",
+      "id": "samples/subscription_usage_recorder",
+      "origin": "crates/kotodama_lang/src/samples/subscription_usage_recorder.ko",
+      "source": "sources/kotodama/samples/subscription_usage_recorder.ko.txt",
+      "source_sha256": "ba169dd177b19528c3644c04f1949a7707f13ccb79313563d34088c87a74575e"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/threshold_escrow.to.bin",
+      "artifact_sha256": "2a6da43e76321762af312f7e5e07c1d3aa97384b3d176a96e57c622313c3b8d8",
+      "id": "samples/threshold_escrow",
+      "origin": "crates/kotodama_lang/src/samples/threshold_escrow.ko",
+      "source": "sources/kotodama/samples/threshold_escrow.ko.txt",
+      "source_sha256": "e6eb4b7b9fc7a25e3b822e3d2324b6dc52175b3934a03bbcd2400259073b7415"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/tuple_return_demo.to.bin",
+      "artifact_sha256": "f750430fdd5b692da4202f2aa621d468039f215d7c0005f83c9375a9d525ff22",
+      "id": "samples/tuple_return_demo",
+      "origin": "crates/kotodama_lang/src/samples/tuple_return_demo.ko",
+      "source": "sources/kotodama/samples/tuple_return_demo.ko.txt",
+      "source_sha256": "ee9914aca5b7b99cfa2ecf2fe404109448166af4224ffeb7d27b255ff4cc7087",
+      "zk_artifact": "artifacts/kotodama/zk/samples/tuple_return_demo.to.bin",
+      "zk_artifact_sha256": "83c7befe9b8ca10d3cb848c2a93d1d4e418bbe59dd80724b694d5e1e6f3a85a3"
+    },
+    {
+      "artifact": "artifacts/kotodama/samples/zk_vote_ballot.to.bin",
+      "artifact_sha256": "e371b60d04f1859327cf64a00f0802c8a8ae83acf3920ce921a00de181119c99",
+      "id": "samples/zk_vote_ballot",
+      "origin": "crates/kotodama_lang/src/samples/zk_vote_ballot.ko",
+      "source": "sources/kotodama/samples/zk_vote_ballot.ko.txt",
+      "source_sha256": "5a4b0979cd58815f1d9a287b66be482cd71dc148c1a35530fa5b7424447ae044",
+      "zk_artifact": "artifacts/kotodama/zk/samples/zk_vote_ballot.to.bin",
+      "zk_artifact_sha256": "e371b60d04f1859327cf64a00f0802c8a8ae83acf3920ce921a00de181119c99"
+    },
+    {
+      "artifact": "artifacts/kotodama/ivm_tests_data/add.to.bin",
+      "artifact_sha256": "140b37a238705c5ab1475255fc06c5161b23f4a2e6abccbbfce3fc7daabae9d5",
+      "id": "ivm_tests_data/add",
+      "origin": "crates/ivm/tests/data/add.ko",
+      "source": "sources/kotodama/ivm_tests_data/add.ko.txt",
+      "source_sha256": "a3dbbc8a103b7531934a4e13747610198f408c3fcc2f1c79c2f2f25e9f7c028f"
+    },
+    {
+      "artifact": "artifacts/kotodama/ivm_tests_data/amm.to.bin",
+      "artifact_sha256": "dd5030b7de7a872123be99db5f990f2ddc9e83294511a6ccb6bbecc662ad87f0",
+      "id": "ivm_tests_data/amm",
+      "origin": "crates/ivm/tests/data/amm.ko",
+      "source": "sources/kotodama/ivm_tests_data/amm.ko.txt",
+      "source_sha256": "adb85835f51a1abf9fb09caf55cf2fea7b426b274449621e3979d9d374866cbb"
+    },
+    {
+      "artifact": "artifacts/kotodama/ivm_tests_data/complex.to.bin",
+      "artifact_sha256": "0d3da63553153e3ee83fbb25aa780bc766316dfff116cce7938d21a4ee7a90fb",
+      "id": "ivm_tests_data/complex",
+      "origin": "crates/ivm/tests/data/complex.ko",
+      "source": "sources/kotodama/ivm_tests_data/complex.ko.txt",
+      "source_sha256": "65e1622325428cb020daf06d09c5d1731d82f4113775b775a1661f8d5e90f533"
+    },
+    {
+      "artifact": "artifacts/kotodama/ivm_tests_data/control.to.bin",
+      "artifact_sha256": "8558b41380d3b9f8774f61da4618477daf6e68da6ff24bcf6d3c270b7d75fddd",
+      "id": "ivm_tests_data/control",
+      "origin": "crates/ivm/tests/data/control.ko",
+      "source": "sources/kotodama/ivm_tests_data/control.ko.txt",
+      "source_sha256": "78998cf9e855fcc1ad0f81c541e9d2b34426157302fd398223e5400838a4138d"
+    },
+    {
+      "compile_error": "error[K4003] artifact: a reusable module cannot be emitted as a deployable .to artifact\n  --> <source>:1:1\n  = help: link the module into exactly one seiyaku root, then build that seiyaku",
+      "id": "ivm_tests_data/dai",
+      "origin": "crates/ivm/tests/data/dai.ko",
+      "source": "sources/kotodama/ivm_tests_data/dai.ko.txt",
+      "source_sha256": "94f097b1b0572853c342f43613063cea3284a23bc15c7ef359633cfd59cce0c1"
+    },
+    {
+      "artifact": "artifacts/kotodama/ivm_tests_data/mfc.to.bin",
+      "artifact_sha256": "27b8ba4433946c774339ddd530eda88faa48d8eacbe0cdb3ecffc25ad7145c4f",
+      "id": "ivm_tests_data/mfc",
+      "origin": "crates/ivm/tests/data/mfc.ko",
+      "source": "sources/kotodama/ivm_tests_data/mfc.ko.txt",
+      "source_sha256": "71111dc873dec2a3977044e765a33003f41cc9980c0281a7708875cfe955267d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/001.to.bin",
+      "artifact_sha256": "183bdef5bb55f66dbe54da031b1ae9b46f6feb89ce6f468c9645d9e460a439c6",
+      "id": "koto_v1/kotodama/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/001.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/001.ko.txt",
+      "source_sha256": "07141b75744ea9ac3373cb382947983f68acbd4856f7aeaf8d751dcdc817c591"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/002.to.bin",
+      "artifact_sha256": "4ccdf5af66a635b43b9fb05697affe5dd09961a195da0153294762b2034f4da4",
+      "id": "koto_v1/kotodama/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/002.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/002.ko.txt",
+      "source_sha256": "6180e45937157fb5ce92dca836c317e3c7506dcd1511de5c889735e25f4eebd4"
+    },
+    {
+      "compile_error": "error[E_NEGATIVE_QUANTITY] semantic: a contextual quantity literal cannot be negative\n  --> <source>:4:17\n    4 |                 let quantity a = -1;\n      |                 ^^^^^^^^^^^^^^^^^^^^\n  = help: Use decimal when the value may be negative, or prove the value non-negative before an explicit quantity conversion.",
+      "id": "koto_v1/kotodama/003",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/003.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/003.ko.txt",
+      "source_sha256": "5f5cd528ab5386aadb7336fb8647bc68b0fe183948f0186e38b8340dff6d2476"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/004.to.bin",
+      "artifact_sha256": "e0a0db8dd3dd5cc217d95a6363dbb6bd4915f980140d58239806ba468c2d0411",
+      "id": "koto_v1/kotodama/004",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/004.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/004.ko.txt",
+      "source_sha256": "ece8ae5ce94235e7d5ab1f8e8704403ca88ef38f4e96fdc0e6cacf79945d5a1b"
+    },
+    {
+      "compile_error": "error[E_TYPE_ANNOTATION_MISMATCH] semantic: type annotation mismatch: expected `int`, found `decimal`\n  --> <source>:4:17\n    4 |                 let int a = 1.5;\n      |                 ^^^^^^^^^^^^^^^^\n  = help: Keep type-first annotations exact and use only explicit V1 conversions.",
+      "id": "koto_v1/kotodama/005",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/005.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/005.ko.txt",
+      "source_sha256": "225f4cd8f25de64de067fb8adf1ba213da4169905e4c08faf8327be7f897b499"
+    },
+    {
+      "compile_error": "error[E_TYPE_ANNOTATION_MISMATCH] semantic: type annotation mismatch: expected `int`, found `quantity`\n  --> <source>:5:17\n    5 |                 let int c = a;\n      |                 ^^^^^^^^^^^^^^\n  = help: Keep type-first annotations exact and use only explicit V1 conversions.",
+      "id": "koto_v1/kotodama/006",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/006.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/006.ko.txt",
+      "source_sha256": "ae01c94eb2a92140b4f80ea7d7131deebf097f90902ccb920f6e23017536344c"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/007.to.bin",
+      "artifact_sha256": "d56b4629e647c128911dfc9590438c1f7e88ef3995cfa4c003e1b1888f1fee8e",
+      "id": "koto_v1/kotodama/007",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/007.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/007.ko.txt",
+      "source_sha256": "abaeeb0f6a59f981e6f812019ef527be580dcf1762c0d20d2a0587432b27df91"
+    },
+    {
+      "compile_error": "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: kotoage function `run` requires an explicit `authorize(...)` policy\n  --> <source>:3:29\n    3 |             kotoage fn run() {\n      |                             ^\n  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
+      "id": "koto_v1/kotodama/008",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/008.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/008.ko.txt",
+      "source_sha256": "c578f1e78b23fd1ec6413da2a55f1bdffd8bafd96c7d85a6fb2c75c12e05c320"
+    },
+    {
+      "compile_error": "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: kotoage function `add` requires an explicit `authorize(...)` policy\n  --> <source>:3:29\n    3 |             kotoage fn add() {\n      |                             ^\n  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
+      "id": "koto_v1/kotodama/009",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/009.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/009.ko.txt",
+      "source_sha256": "dac90f6666b54f616f59087d68f913fe77afca610b518b7abed44b4a8f2bd702"
+    },
+    {
+      "compile_error": "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: kotoage function `add` requires an explicit `authorize(...)` policy\n  --> <source>:3:29\n    3 |             kotoage fn add() {\n      |                             ^\n  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
+      "id": "koto_v1/kotodama/010",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/010.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/010.ko.txt",
+      "source_sha256": "654bba7dd379dac1b11ef487518a0dba0e931141a94d048d438b78f0cdee0b5f"
+    },
+    {
+      "compile_error": "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: kotoage function `add` requires an explicit `authorize(...)` policy\n  --> <source>:3:29\n    3 |             kotoage fn add() {\n      |                             ^\n  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
+      "id": "koto_v1/kotodama/011",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/011.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/011.ko.txt",
+      "source_sha256": "0c790a76e46137bbb54938deccb7d4b4468fe944e6a55a9bda20b842bed64061"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/012.to.bin",
+      "artifact_sha256": "9cc63e73d806228461a1d935f674899cf786b5a7edcf4a459f1c9831268e80b4",
+      "id": "koto_v1/kotodama/012",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/012.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/012.ko.txt",
+      "source_sha256": "1f117272c0d33df8dd6262d3dc31b7be12e013521fb8ed6418e5acf3506303d9"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown type `Map`\n  --> <source>:3:19\n    3 |             state Map<string, int> detail;\n      |                   ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/013",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/013.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/013.ko.txt",
+      "source_sha256": "16ea2b39e8e5937b5783434aec57d4a357a97ac2b5b1b2425e88ade9979e6aa2"
+    },
+    {
+      "compile_error": "error[E_UNBOUNDED_ITERATION] semantic: for iteration requires a bounded List; use StateMap.take(N) or StateMap.page(after: cursor, limit: N).items\n  --> <source>:4:45\n    4 |             view fn f() authorize(anyone) { for (k, v) in (values) { let seen = v; } }\n      |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: Iterate a List with capacity at most 64; use map.page(after: cursor, limit: N) or map.take(N) with a compile-time integer expression in 1..=64.",
+      "id": "koto_v1/kotodama/014",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/014.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/014.ko.txt",
+      "source_sha256": "d08205ec5218439fae924729d26b1843ff6549ad376ae043cc48553494439835"
+    },
+    {
+      "compile_error": "error[K3099] lowering: bytecode generation failed: no functions to compile\n  = help: When the message names a source construct (for example an argument that must be a literal), fix that construct. Any other message describes a compiler defect, not a problem in the source: report it with a minimal source reproducer. Valid V1 programs always assemble deterministically.",
+      "id": "koto_v1/kotodama/015",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/015.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/015.ko.txt",
+      "source_sha256": "0b9575a592e847bcb82799963ace7cfb21c10b7b49fd82fb24a9d6e8529cbb23"
+    },
+    {
+      "compile_error": "error[K1001] parse: expected `{`, found `#`\n  --> <source>:4:43\n    4 |             fn f() { for (k, v) in values #[bounded(1)] { let z = k; } }\n      |                                           ^\n  = help: blocks, declaration bodies and struct or JSON literals start with `{`",
+      "id": "koto_v1/kotodama/016",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/016.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/016.ko.txt",
+      "source_sha256": "787da095c8502d1925a7da4fe6e2a388dbbefbf21ff865a22d359eb53d47f9e6"
+    },
+    {
+      "compile_error": "error[K3099] lowering: bytecode generation failed: no functions to compile\n  = help: When the message names a source construct (for example an argument that must be a literal), fix that construct. Any other message describes a compiler defect, not a problem in the source: report it with a minimal source reproducer. Valid V1 programs always assemble deterministically.",
+      "id": "koto_v1/kotodama/017",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/017.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/017.ko.txt",
+      "source_sha256": "21450031be3cea6c45863306a9bdd5524f2f512772b55f75172a4c3f565e0160"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/018.to.bin",
+      "artifact_sha256": "c3e87f35ee86e4e73f63fec17edd5167461e08d8605d3eff11a7541c0c249209",
+      "id": "koto_v1/kotodama/018",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/018.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/018.ko.txt",
+      "source_sha256": "62be658af5fc7bcffe53b2673f483f518f491621ba6a022f18a0c345086c14c5"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/019.to.bin",
+      "artifact_sha256": "907a7697c66ae477556cb5ff728ed56fdb4c7b316bf4b69b5ef4e2fca53cadd9",
+      "id": "koto_v1/kotodama/019",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/019.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/019.ko.txt",
+      "source_sha256": "dd9ed88e255a479e20a54db50a5e0472df200072260faeca5794e7711e287d1c"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/020.to.bin",
+      "artifact_sha256": "e4465908c286f471025ff801ac8aa3b29fc24e83100fa3eeed51f032453c1dcb",
+      "id": "koto_v1/kotodama/020",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/020.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/020.ko.txt",
+      "source_sha256": "3e09b73b7b8db30bbf91595da0a11a5bf9413a1980f3a4244166b76ee439e1d1"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/021.to.bin",
+      "artifact_sha256": "b707d9a357a67971fb5eae4ab8b32f2543608df399a38fa6472f27099261a26c",
+      "id": "koto_v1/kotodama/021",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/021.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/021.ko.txt",
+      "source_sha256": "23c50c8243f3f269b5c66ab2406d59e78d5c535a5b221d05aac8d94755a2107d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/022.to.bin",
+      "artifact_sha256": "a7608d207e88bc595adfca924e207ad8dd98f808528a24ce7e0e41c550c5d87b",
+      "id": "koto_v1/kotodama/022",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/022.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/022.ko.txt",
+      "source_sha256": "37ebc1bc7f9cc2f0b647526991100f9e1edfb6169354eccd52561dbaf56ae924"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/023.to.bin",
+      "artifact_sha256": "efb7bdeb27fb0ae59ca1dde2910e6359e83f21b0bc29322b3802a02b2e2a6183",
+      "id": "koto_v1/kotodama/023",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/023.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/023.ko.txt",
+      "source_sha256": "ae466f8dfd9932ef278586d6b369e0be01aeb7a3081ef8470264d0a6e01daf42"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown function or builtin `query_execute_norito`\n  --> <source>:4:20\n    4 |             return query_execute_norito(payload);\n      |                    ^^^^^^^^^^^^^^^^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/024",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/024.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/024.ko.txt",
+      "source_sha256": "1c8945eaa777d069ba1bc54c6925290e130a3b8a5918f1e8c8b6a9f7b850f538"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/025.to.bin",
+      "artifact_sha256": "fc623e2255b6af56fb5120768310b9d1eb33b44b1efc70eaa89355eb68e37db0",
+      "id": "koto_v1/kotodama/025",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/025.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/025.ko.txt",
+      "source_sha256": "4ace683e58260946a785f299ff9ff56b6d8c8b687f5012de9d8cd94c9375e291"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/026.to.bin",
+      "artifact_sha256": "66f9caf6108712d7846f055f64579ce23fdd640d52727b34242733f811b4621b",
+      "id": "koto_v1/kotodama/026",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/026.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/026.ko.txt",
+      "source_sha256": "1e2b122c3cb2308945f5abefb4b2021db590c665c0357fc953278f0cea29f61c"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/027.to.bin",
+      "artifact_sha256": "3ebf7d2d010b7eff59d244b920270e0e0a85886e95bf639077f51930157fec55",
+      "id": "koto_v1/kotodama/027",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/027.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/027.ko.txt",
+      "source_sha256": "4e327de2005b0d2e9eb4a029c67fc0b94cf1637780235a6dcdc784de5ee74e93"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/028.to.bin",
+      "artifact_sha256": "3fc264b6869a440fc3fddac1e4cdf522bde79d02780847cecad9c26b213b0283",
+      "id": "koto_v1/kotodama/028",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/028.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/028.ko.txt",
+      "source_sha256": "82b550cfc907e062571e40f30f909e33db0066529e93bbece03acc502e187d34"
+    },
+    {
+      "compile_error": "error[K3099] lowering: bytecode generation failed: no functions to compile\n  = help: When the message names a source construct (for example an argument that must be a literal), fix that construct. Any other message describes a compiler defect, not a problem in the source: report it with a minimal source reproducer. Valid V1 programs always assemble deterministically.",
+      "id": "koto_v1/kotodama/029",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/029.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/029.ko.txt",
+      "source_sha256": "c1aa27d585975c6bade9ba92851d148606e8be7c8b592bbf2324bb03bc573bfd"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/030.to.bin",
+      "artifact_sha256": "2dd1b3e62ea8403eb10984b84795cedbfefc8d11959d4935bce6373f3e24f48f",
+      "id": "koto_v1/kotodama/030",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/030.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/030.ko.txt",
+      "source_sha256": "6ca668c7d5f635ce08b213a06f48ff77db4291293642ff7342d049539b7d45fa"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/031.to.bin",
+      "artifact_sha256": "8d576187ed1e83cb625816f67cb8b6d803535d4f2841d25ee17f2b4a3e8be74c",
+      "id": "koto_v1/kotodama/031",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/031.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/031.ko.txt",
+      "source_sha256": "e60c2b9f595a1bf5e7dbfb6b2b92d8311f8eda5b2fba53d28bc0387afd7d439a"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/032.to.bin",
+      "artifact_sha256": "cb40cbb49d2642e5d9df3d8ce85e6e4df21a6cc7fa63dfe7fdf5dcc82f4470a8",
+      "id": "koto_v1/kotodama/032",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/032.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/032.ko.txt",
+      "source_sha256": "a03b5c471c25d7e1d65fd9f71cff66e341583f6aece9312807c451553252d4b3"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/033.to.bin",
+      "artifact_sha256": "0b7c5d83126276a3907a6b73240a2ac09ad70f950d958d2284e2f16c02dc4a5c",
+      "id": "koto_v1/kotodama/033",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/033.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/033.ko.txt",
+      "source_sha256": "6786bcb04ea1439fb1f02cf92d6e1fe7dbf963ecbf9f4c210d13c26a625ec8ad"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/034.to.bin",
+      "artifact_sha256": "4735f0cb42ced585ec920a976e15563a91fc040329a3f58de7a48afcde5d7085",
+      "id": "koto_v1/kotodama/034",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/034.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/034.ko.txt",
+      "source_sha256": "90ba5cb34f4bfda0326a5dd08a284ffc0de75f172be31a18c3f279b9e8ed2a28"
+    },
+    {
+      "compile_error": "error[K2002] resolve: tuple index on non-tuple type struct InvalidStructIndex::A; unknown field '0' on struct InvalidStructIndex::A\n  --> <source>:4:46\n    4 |         fn f() { let a = A { x: 1 }; let v = a.0; }\n      |                                              ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/035",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/035.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/035.ko.txt",
+      "source_sha256": "f9840f99980fdada17f47ef481701d4c68cc52408d6277104718102c96f9b936"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown field 'a' on tuple\n  --> <source>:3:41\n    3 |         fn f() { let t = (1,2); let v = t.a; }\n      |                                         ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/036",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/036.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/036.ko.txt",
+      "source_sha256": "492705bb31a33f1d6e16009dc864216bd1c230488ee302d9e87c7c1684e28b31"
+    },
+    {
+      "compile_error": "error[E_TUPLE_INDEX] semantic: tuple index 3 out of bounds (len=2)\n  --> <source>:3:41\n    3 |         fn f() { let t = (1,2); let v = t.3; }\n      |                                         ^^^\n  = help: Use a zero-based tuple index smaller than the tuple length.",
+      "id": "koto_v1/kotodama/037",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/037.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/037.ko.txt",
+      "source_sha256": "a219e87a0123e9b19ae4f0e7921a16461932e178d369ce653297d222a7776a67"
+    },
+    {
+      "compile_error": "error[K2002] resolve: tuple index on non-tuple type struct InvalidStructTupleIndex::A; unknown field '0' on struct InvalidStructTupleIndex::A\n  --> <source>:4:46\n    4 |         fn f() { let s = A { x: 1 }; let v = s.0; }\n      |                                              ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/038",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/038.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/038.ko.txt",
+      "source_sha256": "1b78194a3c569ceb283fd1e655e533d38e5d596f4bf8640ef4f254562ccf5c53"
+    },
+    {
+      "compile_error": "error[K2003] semantic: tuple index on non-tuple type int\n  --> <source>:3:37\n    3 |         fn f() { let n = 1; let v = n.0; }\n      |                                     ^^^\n  = help: Use the exact declared type and an explicit conversion operation where one exists.",
+      "id": "koto_v1/kotodama/039",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/039.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/039.ko.txt",
+      "source_sha256": "62677f7d11b9d27496ba3fa6586d20ddf19ed6a70aeb954d29da0aec78588926"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown field 'z' on struct UnknownStructField::A (available: x, y)\n  --> <source>:4:52\n    4 |         fn f() { let a = A { x: 1, y: 2 }; let v = a.z; }\n      |                                                    ^^^\n  = help: struct `UnknownStructField::A` declares `x`, `y`; read one of those fields.",
+      "id": "koto_v1/kotodama/040",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/040.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/040.ko.txt",
+      "source_sha256": "7be35a2b121be4cb8b36a18c5c4d2278cc4248d825b382d1febfee6e0e12cc28"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown field 'foo' on type int\n  --> <source>:3:37\n    3 |         fn f() { let n = 1; let v = n.foo; }\n      |                                     ^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/041",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/041.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/041.ko.txt",
+      "source_sha256": "2133d3189363e67cf38f7acb78748735fe9813c26c343ddf32ce0bfaaf9d4458"
+    },
+    {
+      "compile_error": "error[K2003] semantic: indexing not supported on this type\n  --> <source>:4:46\n    4 |         fn f() { let a = A { x: 1 }; let v = a[0]; }\n      |                                              ^^^^\n  = help: Use the exact declared type and an explicit conversion operation where one exists.",
+      "id": "koto_v1/kotodama/042",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/042.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/042.ko.txt",
+      "source_sha256": "f7f03cc27a660b57559fbfb56fb6e03a833cd2d6da7201a62b2251d77fbc8a7e"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/043.to.bin",
+      "artifact_sha256": "2814cc9e7199103fff183ceba889591219c2fb4fa15a90ec294ea81914be0857",
+      "id": "koto_v1/kotodama/043",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/043.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/043.ko.txt",
+      "source_sha256": "1766ce5f997652f0387b5f69428cd619fd82989db34e7c0eae7cf4431806fcea"
+    },
+    {
+      "compile_error": "error[K2002] resolve: `StateMap` has no method `range`\n  --> <source>:4:42\n    4 |             fn f() { for (key, value) in values.range(5, 2) { let seen = value; } }\n      |                                          ^^^^^^^^^^^^^^^^^^\n  = help: `StateMap` methods are `get`, `contains`, `get_or_insert`, `remove`, `page`, and `take`; write with `map[key] = value`.",
+      "id": "koto_v1/kotodama/044",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/044.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/044.ko.txt",
+      "source_sha256": "26bba21ca30f9ebe549cdeb8280d64708e391831d1762f4e73a21237c00a28e5"
+    },
+    {
+      "compile_error": "error[K2002] resolve: `StateMap` has no method `range`\n  --> <source>:4:42\n    4 |             fn f() { for (key, value) in values.range(\"a\", \"b\") { let seen = value; } }\n      |                                          ^^^^^^^^^^^^^^^^^^^^^^\n  = help: `StateMap` methods are `get`, `contains`, `get_or_insert`, `remove`, `page`, and `take`; write with `map[key] = value`.",
+      "id": "koto_v1/kotodama/045",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/045.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/045.ko.txt",
+      "source_sha256": "b685291a3a24348c050a4d33bc9c0d42dc80bcc28f61d52c5f3222c6f2a85a1d"
+    },
+    {
+      "compile_error": "error[E_UNBOUNDED_ITERATION] semantic: bound must be a compile-time int constant expression\n  --> <source>:6:45\n    6 |             for (key, value) in values.take(n) { acc = acc + value; }\n      |                                             ^\n  = help: Iterate a List with capacity at most 64; use map.page(after: cursor, limit: N) or map.take(N) with a compile-time integer expression in 1..=64.",
+      "id": "koto_v1/kotodama/046",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/046.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/046.ko.txt",
+      "source_sha256": "871613baec58a3e4074f3322e465c2995c31cbb44704cbb0c55f71a748d7a5cf"
+    },
+    {
+      "compile_error": "error[K2002] resolve: `StateMap` has no method `range`\n  --> <source>:6:33\n    6 |             for (key, value) in values.range(start, end) { acc = acc + value; }\n      |                                 ^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: `StateMap` methods are `get`, `contains`, `get_or_insert`, `remove`, `page`, and `take`; write with `map[key] = value`.",
+      "id": "koto_v1/kotodama/047",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/047.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/047.ko.txt",
+      "source_sha256": "9d536b5d46339c4f30afd31687f32fb4949d31f9482d6254a131988f4e931402"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/048.to.bin",
+      "artifact_sha256": "ee86964eca86d23910160d3e6210530d9132dfa25512b23b204e2227641794e1",
+      "id": "koto_v1/kotodama/048",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/048.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/048.ko.txt",
+      "source_sha256": "ac3d36c7a38781ab73c108ef52e22cfbfe2b8012b5d75639d753a2546093790a"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/049.to.bin",
+      "artifact_sha256": "f7ac40bffd43e21a8fd6bb2da6bb0e6f2d64907cec191274bc0bf9069c935927",
+      "id": "koto_v1/kotodama/049",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/049.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/049.ko.txt",
+      "source_sha256": "0de20c5a5a02a4fd970574811c92b7bbe366c916e36380097a9d179cc7ea4a76"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/050.to.bin",
+      "artifact_sha256": "06441b5237953edd6be29f14cd1dd7fed9b6b41b3f085620fac76f7180dfdddb",
+      "id": "koto_v1/kotodama/050",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/050.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/050.ko.txt",
+      "source_sha256": "3985b09f25448e6e187d1619b45179c567b3a5e5b3c5881e0ddbec47f9c297a2"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/051.to.bin",
+      "artifact_sha256": "f6246a78511fea41c4194686f49a975d0f4d3bdc287482b0d4068c76c5863fd1",
+      "id": "koto_v1/kotodama/051",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/051.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/051.ko.txt",
+      "source_sha256": "854a8a83ce9f1af833b904e71b7ef0b2745129c97c78913b5fbe4ddb61443f28"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/052.to.bin",
+      "artifact_sha256": "fae604bbf15d51e299a4175b73285676de29b3393c0f9ce0069d54cd4543aced",
+      "id": "koto_v1/kotodama/052",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/052.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/052.ko.txt",
+      "source_sha256": "f27670ae5e6816fd403a13140d1f302e7b35964ebb26b3695a0149491977797b"
+    },
+    {
+      "compile_error": "error[K4003] artifact: a reusable module cannot be emitted as a deployable .to artifact\n  --> <source>:1:1\n  = help: link the module into exactly one seiyaku root, then build that seiyaku",
+      "id": "koto_v1/kotodama/053",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/053.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/053.ko.txt",
+      "source_sha256": "3508225dacec27b2a2e7c456efffe141d954d7294596e61dc055eefd6c003610"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/054.to.bin",
+      "artifact_sha256": "5142f616511cd2c9a7405eb7c40ef1dc8a086039ed7e6cddcc8cd08789b19e98",
+      "id": "koto_v1/kotodama/054",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/054.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/054.ko.txt",
+      "source_sha256": "ccda6098ccccf30bc9595eb8fe7802cbe0a386bd8a3731900a42537f8225f3fd"
+    },
+    {
+      "compile_error": "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: kotoage function `public_entry` requires an explicit `authorize(...)` policy\n  --> <source>:7:34\n    7 |         kotoage fn public_entry() {\n      |                                  ^\n  = help: use a declared permission such as `authorize(Admin)`, or explicitly allow every caller with `authorize(anyone)`",
+      "id": "koto_v1/kotodama/055",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/055.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/055.ko.txt",
+      "source_sha256": "0767f28060857fd752c4bb32f810ac15f6f4ec22d37ab5bb565016b90711a3ab"
+    },
+    {
+      "compile_error": "error[E_UNSUPPORTED_LOOP] parse: `while` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound\n  --> <source>:11:17\n   11 |                 while i < times {\n      |                 ^^^^^\n  = help: execution is metered and must be bounded: iterate `for i in range(N)` with a compile-time `N`, or a collection with a proven capacity, and exit early with `break`",
+      "id": "koto_v1/kotodama/056",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/056.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/056.ko.txt",
+      "source_sha256": "d1a1ae1f89b2ccf57af40a9fddbc36ae0a5dc52c53e616703370c0d929457d74"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/057.to.bin",
+      "artifact_sha256": "c6d0cc352a9e94aad1e69bf6571f8bdc26a814347b07709e00d54de7580d5cb1",
+      "id": "koto_v1/kotodama/057",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/057.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/057.ko.txt",
+      "source_sha256": "c67d51b9cd457287966ca3c9a350a998de9fddc7be88de09ea9afb1f049c9c47"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/058.to.bin",
+      "artifact_sha256": "f10955c660a7f9376d61af2950ea9e38ab7b01da4ec1986e7647a1f900269aad",
+      "id": "koto_v1/kotodama/058",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/058.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/058.ko.txt",
+      "source_sha256": "1549b393aa5c26932e8b8b646fbf436de55287fec7c7ac32890967cd15da4b37"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown function or builtin `decode_json`\n  --> <source>:4:24\n    4 |                 return decode_json(payload);\n      |                        ^^^^^^^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/059",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/059.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/059.ko.txt",
+      "source_sha256": "c7ba3c7f7a81c0801a9d263d2d70f6397f7a22ddeeb5320a4e99de7a913632a8"
+    },
+    {
+      "compile_error": "error[E_UNKNOWN_BUILTIN] resolve: unknown builtin `crypto::poseidon2`\n  --> <source>:4:20\n    4 |         let pair = crypto::poseidon2(left: 123456789, right: 987654321);\n      |                    ^^^^^^^^^^^^^^^^^\n  = note: `crypto` provides `blake2b256`, `commit_output`, `execution_summary`, `iroha_hash`, `keccak256`, `private_input`, `sha256`, `sha3`, `sm3`, `valcom`, `verify_proof`, `verify_signature`\n  = help: Use a builtin of that namespace; the diagnostic suggests the closest spelling, including the branded spelling of English concept words such as `entrypoint` (kotoage/言挙げ).\nerror[E_UNKNOWN_BUILTIN] resolve: unknown builtin `crypto::poseidon6`\n  --> <source>:5:22\n    5 |         let sextet = crypto::poseidon6(a: 3, b: 5, c: 8, d: 13, e: 21, f: 34);\n      |                      ^^^^^^^^^^^^^^^^^\n  = note: `crypto` provides `blake2b256`, `commit_output`, `execution_summary`, `iroha_hash`, `keccak256`, `private_input`, `sha256`, `sha3`, `sm3`, `valcom`, `verify_proof`, `verify_signature`\n  = help: Use a builtin of that namespace; the diagnostic suggests the closest spelling, including the branded spelling of English concept words such as `entrypoint` (kotoage/言挙げ).",
+      "id": "koto_v1/kotodama/060",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/060.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/060.ko.txt",
+      "source_sha256": "57854702edeebb8ce9478486429951bce6c5101248570bfef1a6ea246156ecd5"
+    },
+    {
+      "compile_error": "error[E_UNBOUNDED_ITERATION] semantic: for iteration requires a bounded List; use StateMap.take(N) or StateMap.page(after: cursor, limit: N).items\n  --> <source>:4:45\n    4 |             view fn f() authorize(anyone) { for (key, value) in (values) { let seen = value; } }\n      |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: Iterate a List with capacity at most 64; use map.page(after: cursor, limit: N) or map.take(N) with a compile-time integer expression in 1..=64.",
+      "id": "koto_v1/kotodama/061",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/061.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/061.ko.txt",
+      "source_sha256": "2f3e5d31aa46481040e03f3e56f5833223fec6c9b2b256b927d8cba58afe15a6"
+    },
+    {
+      "compile_error": "error[E_UNBOUNDED_ITERATION] semantic: for iteration requires a bounded List; use StateMap.take(N) or StateMap.page(after: cursor, limit: N).items\n  --> <source>:4:47\n    4 |             view fn sum() authorize(anyone) { for (key, value) in (values) { let seen = key; } }\n      |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: Iterate a List with capacity at most 64; use map.page(after: cursor, limit: N) or map.take(N) with a compile-time integer expression in 1..=64.",
+      "id": "koto_v1/kotodama/062",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/062.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/062.ko.txt",
+      "source_sha256": "a30f0915d69a2657d2887fd51600dddce0a42f5dc9cbc137bef97ba67cc0af41"
+    },
+    {
+      "compile_error": "error[K4003] artifact: a reusable module cannot be emitted as a deployable .to artifact\n  --> <source>:1:1\n  = help: link the module into exactly one seiyaku root, then build that seiyaku",
+      "id": "koto_v1/kotodama/063",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/063.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/063.ko.txt",
+      "source_sha256": "e363a998a7d79ceecc369a013ca561f9a8eea11d317657af29ba36c5574098a3"
+    },
+    {
+      "compile_error": "error[K4003] artifact: a reusable module cannot be emitted as a deployable .to artifact\n  --> <source>:1:1\n  = help: link the module into exactly one seiyaku root, then build that seiyaku",
+      "id": "koto_v1/kotodama/064",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/064.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/064.ko.txt",
+      "source_sha256": "68471ee39ba68c3c1f54d80983d05fae2776f177e5eada95ccb50789660bae61"
+    },
+    {
+      "compile_error": "error[K2003] semantic: ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string, spec: NumericSpec::..., mintable: Mintable::..., owning_domain: DomainId)\n  --> <source>:4:31\n    4 |             asset_definition: \"x\",\n      |                               ^^^\n  = help: `asset_definition:` of `ledger::asset::register` expects `AssetDefinitionId`, but this argument is `string`.",
+      "id": "koto_v1/kotodama/065",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/065.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/065.ko.txt",
+      "source_sha256": "b88a4492a212647564cb4a7dd36082ef2fa64938405f9df5d1fdebcf7c03c280"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown type `Map`\n  --> <source>:3:18\n    3 |             fn f(Map<int, int> m) {\n      |                  ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/066",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/066.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/066.ko.txt",
+      "source_sha256": "b7502e08f74701346e0fe6c8c14162e8018de03140897beb487bab4db7af9e57"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/067.to.bin",
+      "artifact_sha256": "3739e909854a73e33cdfd609fa5735d5a04adf714591a3ce85502f01fbccd3a8",
+      "id": "koto_v1/kotodama/067",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/067.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/067.ko.txt",
+      "source_sha256": "64fc72761ecd3a6e8a6ca384048f8c46820e496734e517ae0661fa07e606e130"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown type `Map`\n  --> <source>:3:18\n    3 |             fn g(Map<int, int> m) -> int { return keys_take2(m, 0, 1); }\n      |                  ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.\nerror[K2002] resolve: unknown function or builtin `keys_take2`\n  --> <source>:3:51\n    3 |             fn g(Map<int, int> m) -> int { return keys_take2(m, 0, 1); }\n      |                                                   ^^^^^^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/068",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/068.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/068.ko.txt",
+      "source_sha256": "122282d8fcc8aeee504382b5837238705f115fa81ad2f0a67dda283be119b2d1"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown type `Map`\n  --> <source>:3:18\n    3 |             fn f(Map<int, int> m) {\n      |                  ^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.\nerror[K2002] resolve: unknown function or builtin `std::map::keys_values_take2`\n  --> <source>:4:25\n    4 |                 let t = std::map::keys_values_take2(m, 0, 1);\n      |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/069",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/069.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/069.ko.txt",
+      "source_sha256": "43cd5b1cf6fa169a64e8b5039143896677196e81543ec8c0e4197fde2e089f1a"
+    },
+    {
+      "compile_error": "error[K4003] artifact: a reusable module cannot be emitted as a deployable .to artifact\n  --> <source>:1:1\n  = help: link the module into exactly one seiyaku root, then build that seiyaku",
+      "id": "koto_v1/kotodama/070",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/070.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/070.ko.txt",
+      "source_sha256": "6bff2239f40672a2b33f9cd763ff19b365f5dc5fa7bb0f057fcbfd7149d520cb"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/kotodama/071.to.bin",
+      "artifact_sha256": "f6e1a2e10d7880fadf51195cb2d8d244a44c64dba3761c9fd4bdd7ef4f8a6b4b",
+      "id": "koto_v1/kotodama/071",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/071.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/071.ko.txt",
+      "source_sha256": "e777139f3d0da99b71be0d00db9ceb388ff13c08525c32f830b5f074aba1bd79"
+    },
+    {
+      "compile_error": "error[K2002] resolve: unknown function or builtin `pointer_to_norito`\n  --> <source>:4:32\n    4 |                 let _encoded = pointer_to_norito(value);\n      |                                ^^^^^^^^^^^^^^^^^\n  = help: Correct the spelling or add an explicit typed-module import/export.",
+      "id": "koto_v1/kotodama/072",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama/072.ko",
+      "source": "sources/kotodama/koto_v1/kotodama/072.ko.txt",
+      "source_sha256": "1bf42008e6fc9e2f8d9e869da2c2c6f8473bfdf8007210ab11c0ab6242df6eab"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/001.to.bin",
+      "artifact_sha256": "fb08230673c87129bce4dfe4702667b0ba8acb1fb4ed78ddb47f430d6b4ad46f",
+      "id": "koto_v1/lists/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/001.ko",
+      "source": "sources/kotodama/koto_v1/lists/001.ko.txt",
+      "source_sha256": "934a24cfadc1ed7ed7eaa6cde610401c845262fac7dd9aec653a6bb5324d5671"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/002.to.bin",
+      "artifact_sha256": "cd8ddf81e63efceb9adfc819ca6be836ff54bcb4f28dd8de154214dacee26962",
+      "id": "koto_v1/lists/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/002.ko",
+      "source": "sources/kotodama/koto_v1/lists/002.ko.txt",
+      "source_sha256": "9ed4d05675fc4624b7ae67f19640af6383f247f384c34c14c248920e6b22ad0b"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/003.to.bin",
+      "artifact_sha256": "f63b64b0dff23e498e6bb3b32ea14689a4078e2b4c8596f133ff737b49f42ec7",
+      "id": "koto_v1/lists/003",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/003.ko",
+      "source": "sources/kotodama/koto_v1/lists/003.ko.txt",
+      "source_sha256": "43e32374a8fbf7ded30c688b6ea341432b9142b4829a7cc853d92648dad6c57e"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/004.to.bin",
+      "artifact_sha256": "e289e6d1667ba189abb1bb6b3f674622b21ed35fdf7f0763552240e16860e0e1",
+      "id": "koto_v1/lists/004",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/004.ko",
+      "source": "sources/kotodama/koto_v1/lists/004.ko.txt",
+      "source_sha256": "826e1d11547816022993256789a11628da591e5f60e1b3ba4e8559a2ecb8a099"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/005.to.bin",
+      "artifact_sha256": "d3758680cc79059b380249b462dac3e1134245a2c3ebcb20b332893e86e70a11",
+      "id": "koto_v1/lists/005",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/005.ko",
+      "source": "sources/kotodama/koto_v1/lists/005.ko.txt",
+      "source_sha256": "e7814c27ee390341a12204c23e9f63c7f8c5aa8a94a9d18f6112bb109ab815f9"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/006.to.bin",
+      "artifact_sha256": "35625a635cefb898f396fabaa28530c9c8957411d8394beb83cc3515d5fb1070",
+      "id": "koto_v1/lists/006",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/006.ko",
+      "source": "sources/kotodama/koto_v1/lists/006.ko.txt",
+      "source_sha256": "23d1c0a60030decade2f8157b8a241e058b95ad4675e4ff41f37bba67f85f424"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/007.to.bin",
+      "artifact_sha256": "2cc0b5d7fef0c5006740db2d229db40c4ced4ca62bfbf9b71f0df6cf5fae739e",
+      "id": "koto_v1/lists/007",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/007.ko",
+      "source": "sources/kotodama/koto_v1/lists/007.ko.txt",
+      "source_sha256": "3b8b385f3dffe2822f89292ed116c5fbbb836e5874a7432901fb78bb5751d424"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/008.to.bin",
+      "artifact_sha256": "dcf9bc40655b74d6d033ed1a9b0a8dad4cefa5e44f54d5fe12d00b6c49ab9330",
+      "id": "koto_v1/lists/008",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/008.ko",
+      "source": "sources/kotodama/koto_v1/lists/008.ko.txt",
+      "source_sha256": "05bffa1a1327e1309678bd1c8ca005fbb323ac13731b2a8c2da615fe6a5c4fb1"
+    },
+    {
+      "compile_error": "error[E_LIST_RESOURCE_ELEMENT] semantic: List elements cannot contain resource handle type `Option<StateMap<int, int>>`\n  --> <source>:3:27\n    3 |                 fn reject(List<Option<StateMap<int, int>>, 2> values) {\n      |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  = help: Keep StateMap, Secret, and other resource handles outside List elements.",
+      "id": "koto_v1/lists/009",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/009.ko",
+      "source": "sources/kotodama/koto_v1/lists/009.ko.txt",
+      "source_sha256": "521f68bf69e30aaf33e8b341d7493f1d2dc9fa1c20050b1906964f830ce894a5"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/010.to.bin",
+      "artifact_sha256": "e036c03c0d7b4f9d6340406fdcc097f16496c6f546d6d9972a0fc73df3458a23",
+      "id": "koto_v1/lists/010",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/010.ko",
+      "source": "sources/kotodama/koto_v1/lists/010.ko.txt",
+      "source_sha256": "feb8f77295127cc203c23d67213e3803b4a0251f8caf6f9ab7fa7270e95264b1"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/lists/011.to.bin",
+      "artifact_sha256": "d7167fdf74f9ff561014ffc70e91c1ebbf097bf8b59ea261b5506cfd78161d1e",
+      "id": "koto_v1/lists/011",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_lists/011.ko",
+      "source": "sources/kotodama/koto_v1/lists/011.ko.txt",
+      "source_sha256": "ec5c446036eee24340f28588296b546fff4e27a35dab5777beda1e3832b4ba90"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_aggregate_literal_runtime/001.to.bin",
+      "artifact_sha256": "4635869134339c855d53ce9d4dc21d8dd4ec4f672671357c0d7de9ff3c248c67",
+      "id": "koto_v1/state_aggregate_literal_runtime/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/001.ko",
+      "source": "sources/kotodama/koto_v1/state_aggregate_literal_runtime/001.ko.txt",
+      "source_sha256": "f82999d7a8014e194e87fcd8ab6febf761f5c8223cadafaeede4927742511771"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_aggregate_literal_runtime/002.to.bin",
+      "artifact_sha256": "b3a68a0dccf970ee68ef3dfc0b23492b60ec4bba92e7c2ed2424732694b2a3a0",
+      "id": "koto_v1/state_aggregate_literal_runtime/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_aggregate_literal_runtime/002.ko",
+      "source": "sources/kotodama/koto_v1/state_aggregate_literal_runtime/002.ko.txt",
+      "source_sha256": "0a56b5e0c8ade106fd23d571f5da473af371905329b25d3b3bd2261fc18774f8"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/001.to.bin",
+      "artifact_sha256": "ae16aa65e8f91eeae67ca79a000950491d1a582e0c47ec8e248b3df1d0de54e5",
+      "id": "koto_v1/state_name_map_runtime/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/001.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/001.ko.txt",
+      "source_sha256": "f905ed79478ce0f518b050db5d7fd331f03a0a8f06a585f2186a603ce43d07c9"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/002.to.bin",
+      "artifact_sha256": "592d8a02a30190b88b64b1f8a615bb7b50fdf2d4bbc3437f321d1582b11eeae1",
+      "id": "koto_v1/state_name_map_runtime/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/002.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/002.ko.txt",
+      "source_sha256": "f5497cbb647bd1574ad3ddd36f6de3c02bd85514de1f69b3a7920fbf964b1f2a"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/003.to.bin",
+      "artifact_sha256": "000ea3aae137d2ffc9ba115a2926e3fdc556bfa0a4bcbd67ab07ab7ebd23a42e",
+      "id": "koto_v1/state_name_map_runtime/003",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/003.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/003.ko.txt",
+      "source_sha256": "8385058eecbadbd7e4b31beb743dbfe77438a8744e1437224766c6d507cbf0be"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/004.to.bin",
+      "artifact_sha256": "ae16aa65e8f91eeae67ca79a000950491d1a582e0c47ec8e248b3df1d0de54e5",
+      "id": "koto_v1/state_name_map_runtime/004",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/004.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/004.ko.txt",
+      "source_sha256": "a2c138e2209c5506ffffb46795dbb3de534f59ad4a22318278c306071cf88be9"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/005.to.bin",
+      "artifact_sha256": "23a9caedc8a830a107ff4eea7f4ade0307c1e52fbd81679c426f3cf47e382183",
+      "id": "koto_v1/state_name_map_runtime/005",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/005.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/005.ko.txt",
+      "source_sha256": "d6802a1e16e1311a385930bef3c095f3f7dfe906a537f748fc25ded3ede8a51d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/006.to.bin",
+      "artifact_sha256": "e0818f67e56c124b0000a0b706496d74220ff79c185cef931e638f35ba193965",
+      "id": "koto_v1/state_name_map_runtime/006",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/006.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/006.ko.txt",
+      "source_sha256": "f48dcbcbc907c121b753b3727587678119a2e134862c285c8cb9c5e011f08810"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/007.to.bin",
+      "artifact_sha256": "50d2bba659f1874f7e42d092e048ea99a304ad34d8b24e630eac2e0831f899fd",
+      "id": "koto_v1/state_name_map_runtime/007",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/007.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/007.ko.txt",
+      "source_sha256": "4987847af16483952c36324b22bf41b79b727bf99aaae5d68b01ed36ad25517d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/008.to.bin",
+      "artifact_sha256": "402d35919894b895e0cd6a6ca41eff93978b7ff9854c0296cca8a99c6277a5e9",
+      "id": "koto_v1/state_name_map_runtime/008",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/008.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/008.ko.txt",
+      "source_sha256": "6535f7129dea6ef26d873515b96d1d65b810fe75783822ef6e56e045be43ffb1"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/009.to.bin",
+      "artifact_sha256": "9fdfbb8457d8d0859e17bd3f2c951b25ccc387e5eb411addaf487d32ac30b061",
+      "id": "koto_v1/state_name_map_runtime/009",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/009.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/009.ko.txt",
+      "source_sha256": "10997f24aa9d632eb039d85d740faa4f9259ad87b90dbb0526c0810825906337"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/010.to.bin",
+      "artifact_sha256": "8c37c4cf288cdc0faf5c344536190bc5f568f991479a512419469f5323614da9",
+      "id": "koto_v1/state_name_map_runtime/010",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/010.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/010.ko.txt",
+      "source_sha256": "c19386f1eadd7f925c6c80b255afe917f121452a7c724edca2cf1a0b8e58dd0b"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/011.to.bin",
+      "artifact_sha256": "db510460a583aa0151bb8547ea72acc82c8a357c764f9aeeb9e9fc49f2736fbf",
+      "id": "koto_v1/state_name_map_runtime/011",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/011.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/011.ko.txt",
+      "source_sha256": "acfe33b6aa6b8b1d47589fdefe43941e9f109d4348b11f06065cffb87d1a00c3"
+    },
+    {
+      "compile_error": "error[E_TYPE_ANNOTATION_MISMATCH] semantic: expected `C::PolicyState`, found `C::WrongState`\n  --> <source>:8:30\n    8 |                 let policy = Policies.get(Name::parse(\"spend\")).unwrap_or(\n      |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    9 |                     WrongState { version: 0 },\n      |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^\n   10 |                 );\n      |                 ^\n  = help: Keep type-first annotations exact and use only explicit V1 conversions.",
+      "id": "koto_v1/state_name_map_runtime/012",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/012.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/012.ko.txt",
+      "source_sha256": "931891a1e4de24249c5cb9fa10e0969b71e8a5a0799cc07b2b6afe18022149ca"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/013.to.bin",
+      "artifact_sha256": "000ea3aae137d2ffc9ba115a2926e3fdc556bfa0a4bcbd67ab07ab7ebd23a42e",
+      "id": "koto_v1/state_name_map_runtime/013",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/013.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/013.ko.txt",
+      "source_sha256": "643d0d0e0aedd6a755fdfb1c0873227e89d67685e3a621c6114c000f9c57b37a"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/014.to.bin",
+      "artifact_sha256": "71ac17b204041b77f772994542767cdeddb02eb61498daa7d6a1e44b54e536e3",
+      "id": "koto_v1/state_name_map_runtime/014",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/014.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/014.ko.txt",
+      "source_sha256": "8203033b219f1694f675bd9a00872b89c8d12db6a4b185c4355e938c738bc4b8"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/015.to.bin",
+      "artifact_sha256": "7c0c405f235eb8122165de5abf011aa2c7b8507d01712ebbd019750ef14f85bb",
+      "id": "koto_v1/state_name_map_runtime/015",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/015.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/015.ko.txt",
+      "source_sha256": "e2fb6b203b83ce6152d602b97701ec2d977be2c8bc7566f0b36c96927135ed2b"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/016.to.bin",
+      "artifact_sha256": "f84bf1acd6eb840b07e79adf75acc6e228855de50ed49fe12ee7f069ce257770",
+      "id": "koto_v1/state_name_map_runtime/016",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/016.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/016.ko.txt",
+      "source_sha256": "d835205154e666c4a8ac45baa5c4d8df0518abebb6af6358b2f6d33f6ccdb01b"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/017.to.bin",
+      "artifact_sha256": "2b8dca94177e5786f9caf77abe54dc63cc5b0738706047fc2b5ea364c8169d9c",
+      "id": "koto_v1/state_name_map_runtime/017",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/017.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/017.ko.txt",
+      "source_sha256": "cd289114582bf6dca49070ad70bc54dba45c9ea328dfac60937c22e93be80dee"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/018.to.bin",
+      "artifact_sha256": "e0ff9e6a60cc430b27554c6db1fbaec98f94025dbffdf8145ce5f8ed9eea0084",
+      "id": "koto_v1/state_name_map_runtime/018",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/018.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/018.ko.txt",
+      "source_sha256": "2227a85037a64265bb572179ffebbcec10cbe1de7a9d720c6db94c43ff36d2c3"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/019.to.bin",
+      "artifact_sha256": "71ac17b204041b77f772994542767cdeddb02eb61498daa7d6a1e44b54e536e3",
+      "id": "koto_v1/state_name_map_runtime/019",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/019.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/019.ko.txt",
+      "source_sha256": "8203033b219f1694f675bd9a00872b89c8d12db6a4b185c4355e938c738bc4b8"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/020.to.bin",
+      "artifact_sha256": "dc518bb80e9a1397c315ff3286455ed3343f32d66a7aa6c829f32537096102d5",
+      "id": "koto_v1/state_name_map_runtime/020",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/020.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/020.ko.txt",
+      "source_sha256": "1bebc6eb1d2fc50da1a6f4c043a98e583c25140e5be4d3e553b37cd53ff03ad8"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/021.to.bin",
+      "artifact_sha256": "812cbe34675da7688f98a9f07ad0998a98f22b8344bfc7434d7e5e11acf93696",
+      "id": "koto_v1/state_name_map_runtime/021",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/021.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/021.ko.txt",
+      "source_sha256": "9926fe6b0a3e524bb3a8cfa705ef624ae1498a370ea19a3b017bc082edd85cda"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/022.to.bin",
+      "artifact_sha256": "dc19c88edde20469e6b3c406681fe067dc20ddf096193924d839a69620f6e1f9",
+      "id": "koto_v1/state_name_map_runtime/022",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/022.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/022.ko.txt",
+      "source_sha256": "de0087576610438f1a4976df7437a99305c3af42b8684c0f38b7afb9ac0300e8"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/023.to.bin",
+      "artifact_sha256": "8a5e75f00761854bb56211b0a36e4f59cc354d41c0c29fd82560501b9074c5ef",
+      "id": "koto_v1/state_name_map_runtime/023",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/023.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/023.ko.txt",
+      "source_sha256": "b096a4fba137cd1d8eb2c9180c6c47694b8eb50d0316b782119806a5dfada2f1"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/024.to.bin",
+      "artifact_sha256": "8f177376d97683a106b436a75d936f1bd2833b41ae92d3a957e9475ce62d726a",
+      "id": "koto_v1/state_name_map_runtime/024",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/024.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/024.ko.txt",
+      "source_sha256": "bd5d0cf7255064e0ae3b3e0eb31eb8343a5a37b48908ec7ef1feb874049cbcbd"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/025.to.bin",
+      "artifact_sha256": "6fce6674a489825c09988f4efe0809611a0e65d95c300a82f3d02746b7249c78",
+      "id": "koto_v1/state_name_map_runtime/025",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/025.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/025.ko.txt",
+      "source_sha256": "90b118168e5027d8a5ff70e8893f7a4f66d6095d935077c204ba90bc490fcb25"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/026.to.bin",
+      "artifact_sha256": "4d3cf6729c2378f28fd364741910db4023da8bce0480547ca1ba37c7391d24b5",
+      "id": "koto_v1/state_name_map_runtime/026",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/026.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/026.ko.txt",
+      "source_sha256": "3a2092be00fb9804e1ac432f80bcdabc17033d8443ce943b13c7e5a31982ab44"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/027.to.bin",
+      "artifact_sha256": "c629bb5e8ef05e6dbc719b94eee0169b3dd266241499b2b0f7bba73a8f25df75",
+      "id": "koto_v1/state_name_map_runtime/027",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/027.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/027.ko.txt",
+      "source_sha256": "c851d13f770a2a1d10afe3f97dd62380359cd6003eb6f40b7bbc85447cc5b2ab"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/028.to.bin",
+      "artifact_sha256": "cf2fd0edf3ba9091d97d9ed1f8824db8d3df67bf07e3074b5a58024f5ee6de24",
+      "id": "koto_v1/state_name_map_runtime/028",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/028.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/028.ko.txt",
+      "source_sha256": "0f582bb7dc7960c5c82712062e0b696a7b13f055ef7ee07170eab3ea962dd1a6"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_name_map_runtime/029.to.bin",
+      "artifact_sha256": "32f8b2d606f4224829aa7999e8927f2e27c715ad4b2ac55873c88199d9012843",
+      "id": "koto_v1/state_name_map_runtime/029",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_name_map_runtime/029.ko",
+      "source": "sources/kotodama/koto_v1/state_name_map_runtime/029.ko.txt",
+      "source_sha256": "d2231f4f218a14cfe1e1176ed30ae7029106e7be97a9a50a305953f09cbcbce9"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_scalar/001.to.bin",
+      "artifact_sha256": "df648f29441e78f887c7cecb1094401ac66986dbd0285d4cf02cd47941f6bc6f",
+      "id": "koto_v1/state_scalar/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_scalar/001.ko",
+      "source": "sources/kotodama/koto_v1/state_scalar/001.ko.txt",
+      "source_sha256": "9dd4b1e8e56e38990ac705f8b5a83d4d88ebbec3d558ac9f4d79e06c42a19a8c"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_scalar/002.to.bin",
+      "artifact_sha256": "51c8b6caeebc3ff7167b8d9ec4bbc3b27c310a1b949d605e6ae0c61359302712",
+      "id": "koto_v1/state_scalar/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_scalar/002.ko",
+      "source": "sources/kotodama/koto_v1/state_scalar/002.ko.txt",
+      "source_sha256": "7503dac35f1cba2853decc739d48ac9d5c92dba76126fd34459ca7ab746a7a7f"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_scalar/003.to.bin",
+      "artifact_sha256": "6ad2029c960431efa1c78229b92a59a3943f7f671e8adc77c41faae0e3c7b71e",
+      "id": "koto_v1/state_scalar/003",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_scalar/003.ko",
+      "source": "sources/kotodama/koto_v1/state_scalar/003.ko.txt",
+      "source_sha256": "7a1b76136a9c3298f8ff8fb8c921f937447735676c03c9ba60f69d7e419e4d01"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/state_scalar/004.to.bin",
+      "artifact_sha256": "6ad2029c960431efa1c78229b92a59a3943f7f671e8adc77c41faae0e3c7b71e",
+      "id": "koto_v1/state_scalar/004",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_state_scalar/004.ko",
+      "source": "sources/kotodama/koto_v1/state_scalar/004.ko.txt",
+      "source_sha256": "b20428a10b4887b5e54eeeca13663d0efb4c87f2758b7b8fcb4d8aa68f6e5e23"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/001.to.bin",
+      "artifact_sha256": "18cd93e53ed887cfc3de15e037e00c7a294a592958495dbbb04d7be56a0afe9a",
+      "id": "koto_v1/runtime_acceptance/001",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/001.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/001.ko.txt",
+      "source_sha256": "eee436d9ed6b4b79486bb5e30248989f101c1dab2f96489830bac8022af46c3f",
+      "zk_artifact": "artifacts/kotodama/zk/koto_v1/runtime_acceptance/001.to.bin",
+      "zk_artifact_sha256": "7a059772d6f7cbcbdea9deaf91a571c022eaf7d7523672954b200d77cac8c03d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/002.to.bin",
+      "artifact_sha256": "01c3ac09e5d725e8506a4f7e8d16ebb0ce3cfec7cd3d3cb86fa73d8308c1ae34",
+      "id": "koto_v1/runtime_acceptance/002",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/002.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/002.ko.txt",
+      "source_sha256": "c642ad27e57fbe485e00b1eb0e061c8dbfe3a32f572ec95dacfad4c35ce04936"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/003.to.bin",
+      "artifact_sha256": "b7591a71ef3fbe65d17fc90b28be5c93f9445af9d1365e04ecba7ef32dd647a2",
+      "id": "koto_v1/runtime_acceptance/003",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/003.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/003.ko.txt",
+      "source_sha256": "d5250edaecad90e81ad210db88fbba8a22abfc9ea2825f20e77e743711fc1164"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/004.to.bin",
+      "artifact_sha256": "16aec934d7b16ee879b49911538a5d8c46e6e9bd5ff7aaf2791a1df8f991d770",
+      "id": "koto_v1/runtime_acceptance/004",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/004.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/004.ko.txt",
+      "source_sha256": "405b0435bf258b7433e9f6bc7ab949296c4d5b881267a93c3cda5b04d8e82322"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/005.to.bin",
+      "artifact_sha256": "152abaf851616e1126c525a5daff62b61382f6076d4ad81a02f83a8c1f43e4ab",
+      "id": "koto_v1/runtime_acceptance/005",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/005.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/005.ko.txt",
+      "source_sha256": "29770f487a13433e26aba38fda4d13855a692893bdfaf9edb759b95e994d2e0d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/006.to.bin",
+      "artifact_sha256": "d862514bcc41a23a4e12355fe92bb40c5b6920b5a4a79ebe4d1f90b74cc57f97",
+      "id": "koto_v1/runtime_acceptance/006",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/006.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/006.ko.txt",
+      "source_sha256": "a1db1006d0daad6fd892cbb8db5eb0698f1c6cba1ca11e11b047d856529495e0"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/007.to.bin",
+      "artifact_sha256": "1ca093662b43485dee973e4e63db7bc987bb70cc9d75b5e010bf955e30865954",
+      "id": "koto_v1/runtime_acceptance/007",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/007.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/007.ko.txt",
+      "source_sha256": "92669ad1d37b056ea4533aacf116fdeebe59298ef862f3b06606fd787cc46258"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/008.to.bin",
+      "artifact_sha256": "d8ce2446e269098516276b2bfd198470b5ed99610e40005658d9b2033b83752a",
+      "id": "koto_v1/runtime_acceptance/008",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/008.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/008.ko.txt",
+      "source_sha256": "445d9b73fae92e0a396c5d4ba319967178045887309175299e0e8e5c029e7025"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/009.to.bin",
+      "artifact_sha256": "2f0bfb06fec8b0ee3bcbed9c2a9282e06833d4007c70164d9c6db8a479f64af1",
+      "id": "koto_v1/runtime_acceptance/009",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/009.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/009.ko.txt",
+      "source_sha256": "b3cccb12480ac587d5a7daebafbdff4feb45cf3f7bd8161251f9716e3e29e9b5"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/010.to.bin",
+      "artifact_sha256": "0d7ce3d57e81eb2d93d76fec4094d4a60a539ca05a5e2a9383ea48ee5eff11e5",
+      "id": "koto_v1/runtime_acceptance/010",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/010.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/010.ko.txt",
+      "source_sha256": "3649db07712c82818e5bad255d2bc7aae43a3a3a16a30bbd481f041c0df221ae"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/011.to.bin",
+      "artifact_sha256": "a38ae4622391eafa59fafd86e768c2f853cccc52b555859d6670af170303a337",
+      "id": "koto_v1/runtime_acceptance/011",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/011.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/011.ko.txt",
+      "source_sha256": "0f5d1d0762c7973a32fd66f8ad315987c688f87beb0a3982b84dc81dbb3e075d"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/012.to.bin",
+      "artifact_sha256": "b453c03552460eb2a23f524a6226c5a80dcbef4db436365839bff67914ad7567",
+      "id": "koto_v1/runtime_acceptance/012",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/012.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/012.ko.txt",
+      "source_sha256": "e61bddc1f5d3580212abb94017f966bdb34663411acfbe7ecdd5bb8f782ef28b"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/013.to.bin",
+      "artifact_sha256": "1b809ef54668e781782c2f5928e5894ed207c1de407ac49faadd03857098eec6",
+      "id": "koto_v1/runtime_acceptance/013",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/013.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/013.ko.txt",
+      "source_sha256": "575ede166da361ff00870ea28800295e8723b862d62764d0f1e19af56d0af5cc"
+    },
+    {
+      "compile_error": "error[K1001] parse: expected `}`, found end of file\n  --> <source>:11:50\n   11 |   kotoage fn run() authorize(WriteState) -> int {\n      |                                                  ^\n  = label: <source>:11:49: this `{` is not closed\n   11 |   kotoage fn run() authorize(WriteState) -> int {\n      |                                                 ^\n  = help: every `{` needs a matching `}`\n  = fix: insert `}`\nerror[K1001] parse: expected `}`, found end of file\n  --> <source>:12:1\n   12 | \n      | ^\n  = label: <source>:11:49: this `{` is not closed\n   11 |   kotoage fn run() authorize(WriteState) -> int {\n      |                                                 ^\n  = help: every `{` needs a matching `}`\n  = fix: insert `}`",
+      "id": "koto_v1/runtime_acceptance/014",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/014.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/014.ko.txt",
+      "source_sha256": "4d100ae9654827a5b09aa3fc5eb9e80d96c096cd836ce38bd7d8dbed67b5429f"
+    },
+    {
+      "artifact": "artifacts/kotodama/koto_v1/runtime_acceptance/015.to.bin",
+      "artifact_sha256": "2de9085031e23b6c962e22b9defa632bdd3a4655a64ea7fdc3bfb0deab3c352e",
+      "id": "koto_v1/runtime_acceptance/015",
+      "origin": "crates/ivm/fixtures/koto_v1/kotodama_v1_runtime_acceptance/015.ko",
+      "source": "sources/kotodama/koto_v1/runtime_acceptance/015.ko.txt",
+      "source_sha256": "a1f78a6876ad122b9158f73cb7f22488eaac07cfc7f5f65b6d48559edc82dc7b"
+    },
+    {
+      "artifact": "artifacts/kotodama/examples/hello.to.bin",
+      "artifact_sha256": "c2892168ed4b5463ccc0e8d2bc2706ced1e5d10e7ae1f22860a4e68bcb6aeadd",
+      "id": "examples/hello",
+      "origin": "examples/hello/hello.ko",
+      "source": "sources/kotodama/examples/hello.ko.txt",
+      "source_sha256": "8af08f859d01f3b327ca75f5e53d4ec2ab8ed0d56e4a7c569a12cb101170ed45"
+    },
+    {
+      "artifact": "artifacts/kotodama/examples/map.to.bin",
+      "artifact_sha256": "932adfc29bf5aa6e1e29e6082638e7dd3234660cba14a77e133edd1219cea724",
+      "id": "examples/map",
+      "origin": "examples/map/map.ko",
+      "source": "sources/kotodama/examples/map.ko.txt",
+      "source_sha256": "80e35d12d931f79fe135944f05b919b7a31d0207bcac16b2780550a39059559b"
+    },
+    {
+      "artifact": "artifacts/kotodama/examples/nft.to.bin",
+      "artifact_sha256": "aaf9304d01203fc9e0c5dc220b7c9b2b9607700296efa2c619b9bbe07ea688c0",
+      "id": "examples/nft",
+      "origin": "examples/nft/nft.ko",
+      "source": "sources/kotodama/examples/nft.ko.txt",
+      "source_sha256": "6788992b6ca0e070d8f5339988d7351840fcb1d93adce3a37dc6e613b7665af9"
+    },
+    {
+      "artifact": "artifacts/kotodama/examples/transfer.to.bin",
+      "artifact_sha256": "e773a8f43918c1529527650325828d44945b9307aa2e3c1343dda511b46393ec",
+      "id": "examples/transfer",
+      "origin": "examples/transfer/transfer.ko",
+      "source": "sources/kotodama/examples/transfer.ko.txt",
+      "source_sha256": "1bc9cb1774f3d95cd914caa8a99c4e2c84dd177ceb30eaa9bb6abe102401bd20"
+    },
+    {
+      "artifact": "artifacts/kotodama/examples/coffee-club.to.bin",
+      "artifact_sha256": "904e00df6042918732da2fb0c1d60818765bb0d40d1b4f906bfd568c7920f597",
+      "id": "examples/coffee-club",
+      "origin": "examples/coffee-club/contracts/coffee-club.ko",
+      "source": "sources/kotodama/examples/coffee-club.ko.txt",
+      "source_sha256": "8201a107d9aacb68d90cc2d28cf9290e460ee3ad7a882d441abb57a4ac8dd06a"
+    },
+    {
+      "artifact": "artifacts/kotodama/baseline/abort.to.bin",
+      "artifact_sha256": "dc5a92b2851ab9e0ef801120cbedc2ca517bc49aee8a04ca33e72a188c5919f6",
+      "id": "baseline/abort",
+      "origin": "capture:abort.ko.txt",
+      "source": "sources/kotodama/baseline/abort.ko.txt",
+      "source_sha256": "47f9bab3b5c16c37c07a077998ff05e36c958ca2898335054d33066132208aee"
+    },
+    {
+      "artifact": "artifacts/kotodama/baseline/events.to.bin",
+      "artifact_sha256": "dd088f2ea093f7169dc44502db41e7a55d5f55b1506e854c2937bbfef6587dc7",
+      "id": "baseline/events",
+      "origin": "capture:events.ko.txt",
+      "source": "sources/kotodama/baseline/events.ko.txt",
+      "source_sha256": "3f4193e3ac65f89c8887e64938072e627c06c89a63dfeb3696edd679e058634f"
+    },
+    {
+      "artifact": "artifacts/kotodama/baseline/numeric.to.bin",
+      "artifact_sha256": "dbaddfc63edce05e3b313c7ededb79a89fae6a3118a1a517c89aa003144e2b05",
+      "id": "baseline/numeric",
+      "origin": "capture:numeric.ko.txt",
+      "source": "sources/kotodama/baseline/numeric.ko.txt",
+      "source_sha256": "47d8cdb05fb53bca7808800225beb27f7701d28d001b69bb7ba330263abddb02",
+      "zk_artifact": "artifacts/kotodama/zk/baseline/numeric.to.bin",
+      "zk_artifact_sha256": "7cd9bbe0d0442f5fb346cf1eb1388796d540cda6b826e9ed257dfa3099ec8015"
+    }
+  ],
+  "problems": [],
+  "run_recipe": "build the VM; load_program(artifact) (wsv_contract: install_contract_fixture + load_prepared); for each prelude entrypoint: select_entrypoint, run_with_host, reset, set_gas_limit; apply setup.steps in order; run_with_host(recording host), or run_with_host_and_cycle_budget with one VmCycleBudget shared by the prelude and the run when setup.cycle_budget is set",
+  "run_results": {
+    "AssertionFailed": 15,
+    "ContractAbort": 8,
+    "DecodeError": 21,
+    "ExceededMaxCycles": 39,
+    "InvalidVectorLength": 2,
+    "MemoryAccessViolation": 9,
+    "MisalignedAccess": 2,
+    "MissingHalt": 3,
+    "NoritoInvalid": 5,
+    "NotImplemented": 25,
+    "NumericFault": 11,
+    "Ok": 272,
+    "OutOfGas": 8,
+    "OutOfMemory": 2,
+    "PermissionDenied": 12,
+    "PointerAbiFault": 1,
+    "PrivacyViolation": 9,
+    "RegisterOutOfBounds": 2,
+    "VectorExtensionDisabled": 12,
+    "ZkExtensionDisabled": 7,
+    "not run (load_program)": 34
+  },
+  "syscalls_dispatched": {
+    "ABORT": 1,
+    "ALLOC": 94,
+    "BLAKE2B256_HASH": 1,
+    "BUILD_PATH_KEY_NORITO": 76,
+    "COMMIT_OUTPUT": 1,
+    "CONTRACT_ABORT": 8,
+    "CORE_QUERY_GET": 1,
+    "CREATE_NFTS_FOR_ALL_USERS": 2,
+    "CURRENT_TIME_MS": 2,
+    "DEBUG_LOG": 6,
+    "DECIMAL_GE": 1,
+    "DECIMAL_SUB": 1,
+    "EMIT_CONTRACT_EVENT": 4,
+    "ESCROW_ACCEPT": 1,
+    "ESCROW_CANCEL": 1,
+    "ESCROW_MARK_PAYMENT_SENT": 1,
+    "ESCROW_OPEN_DISPUTE": 1,
+    "ESCROW_OPEN_OFFER": 1,
+    "ESCROW_RELEASE": 1,
+    "ESCROW_RESOLVE_DISPUTE": 1,
+    "EXECUTION_SUMMARY": 1,
+    "EXIT": 1,
+    "GET_AUTHORITY": 24,
+    "GET_PUBLIC_INPUT": 71,
+    "GROW_HEAP": 1,
+    "INPUT_PUBLISH_TLV": 153,
+    "INT_ADD": 41,
+    "INT_DIV": 8,
+    "INT_EQ": 14,
+    "INT_FROM_I64": 10,
+    "INT_FROM_U64": 11,
+    "INT_GE": 7,
+    "INT_GT": 8,
+    "INT_LE": 2,
+    "INT_LT": 13,
+    "INT_MUL": 19,
+    "INT_NE": 2,
+    "INT_REM": 4,
+    "INT_SUB": 6,
+    "INT_TO_I64": 4,
+    "INT_TO_U64": 1,
+    "IROHA_HASH": 2,
+    "JSON_BUILD": 2,
+    "JSON_GET_BLOB_HEX": 1,
+    "JSON_GET_INT": 1,
+    "KECCAK256_HASH": 1,
+    "MINT_ASSET": 4,
+    "NFT_MINT_ASSET": 2,
+    "NFT_TRANSFER_ASSET": 2,
+    "NORMALIZE_NORITO_BYTES": 2,
+    "QUANTITY_ADD": 4,
+    "QUANTITY_DIV_DECIMAL_EXACT": 4,
+    "QUANTITY_EQ": 3,
+    "QUANTITY_GT": 9,
+    "QUANTITY_MUL_DECIMAL": 8,
+    "QUANTITY_MUL_DIV_ROUND": 4,
+    "QUANTITY_RATIO_EXACT": 3,
+    "QUANTITY_TO_DECIMAL": 4,
+    "REGISTER_ASSET": 1,
+    "REGISTER_DOMAIN": 3,
+    "SET_ACCOUNT_DETAIL": 7,
+    "SHA256_HASH": 2,
+    "SMARTCONTRACT_EXECUTE_INSTRUCTION": 1,
+    "STATE_GET": 74,
+    "STATE_HAS": 1,
+    "STATE_SCAN": 4,
+    "STATE_SET": 51,
+    "STATE_VALUE_DECODE": 46,
+    "STATE_VALUE_ENCODE": 59,
+    "SUBSCRIPTION_BILL": 2,
+    "SUBSCRIPTION_RECORD_USAGE": 2,
+    "SYSVAR_BLOCK_HEIGHT": 1,
+    "SYSVAR_CHAIN_ID": 1,
+    "SYSVAR_CONTRACT_ADDRESS": 1,
+    "SYSVAR_ENTRYPOINT": 1,
+    "TLV_EQ": 4,
+    "TLV_LEN": 3,
+    "TRANSFER_ASSET_SCOPED": 7,
+    "TRANSFER_DOMAIN": 2,
+    "VRF_VERIFY": 1,
+    "VRF_VERIFY_BATCH": 1,
+    "ZK_ROOTS_GET": 1,
+    "ZK_VOTE_VERIFY_BALLOT": 3
+  },
+  "valid_opcodes_never_executed": [],
+  "vm_admission": {
+    "ArtifactAbiHashMismatch": 2,
+    "GenericSyscallNotAllowed": 1,
+    "InvalidMetadata": 7,
+    "InvalidOpcode": 4,
+    "MemoryAccessViolation": 1,
+    "Ok": 465,
+    "ProgramVectorLengthTooLarge": 4,
+    "UnknownSyscall": 5,
+    "UnsupportedProgramAbiVersion": 3,
+    "UnsupportedProgramFeatureBits": 3,
+    "UnsupportedProgramVersion": 4
+  },
+  "vm_construction": "IVM::deterministic_builder(gas_limit).suppress_startup_banner().build()"
+}

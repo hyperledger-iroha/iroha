@@ -1,4 +1,18 @@
 // Native event regressions use a real installed compiler artifact and exact invocation binding.
+/// Hold the cache configuration for a test that compares its State's pool bytes.
+///
+/// The prepared contract is retained in the State's evictable cache, so a cache-limit change
+/// made by a parallel test would release its pool credit between two readings. Writers of the
+/// configuration wait while this guard lives.
+fn exclusive_cache_configuration() -> ivm::ivm_cache::CacheLimitsGuard {
+    use iroha_config::parameters::defaults::pipeline;
+    ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: pipeline::CACHE_SIZE,
+        max_bytes: pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    })
+}
+
 fn native_event_runtime(source: &str, selector: &str) -> (State, ContractAddress, CoreHost, IVM) {
     let authority = ALICE_ID.clone();
     let state = contract_test_state(&authority);
@@ -124,6 +138,7 @@ seiyaku NativeEventOrder {
 
 #[test]
 fn native_event_result_error_destroys_emission_graph_and_original_credit() {
+    let _configuration = exclusive_cache_configuration();
     let source = r"
 seiyaku RejectedNativeEvent {
   error enum Reason { Refused = 1 }
@@ -151,6 +166,7 @@ seiyaku RejectedNativeEvent {
 
 #[test]
 fn native_event_rejects_invalid_ordinal_boolean_and_unauthenticated_context_before_capture() {
+    let _configuration = exclusive_cache_configuration();
     let source = r"
 seiyaku GuardedNativeEvent {
   event Changed { bool flag; }
@@ -210,6 +226,7 @@ seiyaku GuardedNativeEvent {
 
 #[test]
 fn native_event_private_operands_and_foreign_program_cannot_capture() {
+    let _configuration = exclusive_cache_configuration();
     let source = r"
 seiyaku PrivateEventOperands {
   event Changed { bool flag; }
@@ -259,6 +276,7 @@ seiyaku PrivateEventOperands {
 
 #[test]
 fn native_event_local_capacity_refusal_has_no_effect_and_retries_with_original_budget() {
+    let _configuration = exclusive_cache_configuration();
     let source = r"
 seiyaku EventCapacity {
   event Changed { bool flag; }

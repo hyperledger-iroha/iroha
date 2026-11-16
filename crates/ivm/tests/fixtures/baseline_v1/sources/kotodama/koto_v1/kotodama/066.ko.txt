@@ -1,0 +1,8 @@
+
+        module RemovedMapMethods {
+            fn f(Map<int, int> m) {
+                let a = m.contains(1);
+                let b = m.get_or_insert(2, 0);
+            }
+        }
+    

@@ -35,10 +35,14 @@ use std::{
 use tokio::runtime::Runtime;
 
 /// TODO: replace this fail-closed prerequisite with the real current Parliament
-/// approval, unanimous release support and committed effective height after E2/E3/B6.
+/// approval, unanimous release support and committed effective height after E2/E3/B6,
+/// driven through `support/governed_activation.rs`. That harness stops at Parliament
+/// approval on this release (`ParliamentApprovalUnavailable`), and the trigger-lifecycle
+/// successor (`iroha.trigger-lifecycle.v1`, `runtime::lifecycle_activation::
+/// prepare_lifecycle_change_set`) is not draftable through `POST /v1/runtime/upgrades/draft`.
 fn governed_activation_height() -> Result<u64> {
     Err(eyre!(
-        "governed lifecycle activation unavailable: anonymous-ballot E2 State/API integration, E3 four-validator qualification and B6 profile/security/resource qualification are incomplete; node-config and retired TLE activation are forbidden"
+        "governed lifecycle activation unavailable: anonymous-ballot E2 State/API integration, E3 four-validator qualification and B6 profile/security/resource qualification are incomplete; node-config and retired TLE activation are forbidden; the operator draft route offers no iroha.trigger-lifecycle.v1 successor"
     ))
 }
 const CONTRACT: &str = r#"

@@ -1,0 +1,56 @@
+// Minimal DEX helpers using supported syntax.
+seiyaku DexContract {
+    permission Admin;
+    // Asset precision is settlement policy; choose it explicitly for each pool.
+    const int INPUT_PRECISION = 18;
+    const int OUTPUT_PRECISION = 18;
+    error enum DexError {
+        EmptyReserve = 1,
+    }
+
+    fn quote_sell(quantity reserve_in, quantity reserve_out, quantity amount_in) -> quantity {
+        require(reserve_in > 0 && reserve_out > 0, DexError::EmptyReserve);
+        // Round toward the pool at the declared input and output precision boundaries.
+        let effective = amount_in.mul_div_round(
+            multiplier: 997,
+            divisor: 1000,
+            scale: INPUT_PRECISION,
+            mode: Rounding::floor,
+        );
+        return reserve_out.mul_div_round(
+            multiplier: decimal::from_quantity(effective),
+            divisor: decimal::from_quantity(reserve_in + effective),
+            scale: OUTPUT_PRECISION,
+            mode: Rounding::floor,
+        );
+    }
+
+    kotoage fn swap(
+        AccountId trader,
+        AccountId pool,
+        AssetDefinitionId input_asset,
+        AssetDefinitionId output_asset,
+        quantity amount_in,
+        quantity reserve_in,
+        quantity reserve_out,
+    ) authorize(Admin) -> quantity {
+        let out = quote_sell(
+            reserve_in: reserve_in,
+            reserve_out: reserve_out,
+            amount_in: amount_in,
+        );
+        ledger::asset::transfer(
+            source: trader,
+            destination: pool,
+            asset_definition: input_asset,
+            amount: amount_in,
+        );
+        ledger::asset::transfer(
+            source: pool,
+            destination: trader,
+            asset_definition: output_asset,
+            amount: out,
+        );
+        return out;
+    }
+}

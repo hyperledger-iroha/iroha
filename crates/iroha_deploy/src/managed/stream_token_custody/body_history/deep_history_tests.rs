@@ -73,7 +73,7 @@ fn refresh_old_anchor(fixture: &mut Fixture) {
 fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_substitution() {
     let _guard = crate::managed::native_test_guard();
     let complete_before = Instant::now() + CAMPAIGN_BUDGET;
-    let fixture = Fixture::enrolled_with_policy_lifetime(4_000, BODY_VALIDITY_MS, CAMPAIGN_BUDGET);
+    let fixture = Fixture::predecessor_with_policy_lifetime(BODY_VALIDITY_MS, CAMPAIGN_BUDGET);
     exercise_deep_history(fixture, complete_before);
 }
 
@@ -91,11 +91,8 @@ fn exercise_deep_history(mut fixture: Fixture, complete_before: Instant) {
 #[inline(never)]
 fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> CompletedDeepHistory {
     let original_policy = fixture.policy.clone();
-    let original_fees = Fees::from_options(&fixture.options).unwrap();
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let original_fees = Fees::from_options(&fixture.options()).unwrap();
+    fixture.wait_renewable();
     let (_, initial_current) = fixture.current();
     let original_native = initial_current.current().unwrap().record().clone();
     assert_eq!(original_native.execution_height, 4);
@@ -148,14 +145,15 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         assert!(now_ms().unwrap() < original_policy.active_until_unix_ms);
         // Each separate startup has its own finite I/O budget. No retained body, epoch or
         // wallet Terms are changed, and the originally configured policy remains the cap.
-        fixture.options.deadline = (Instant::now() + Duration::from_secs(120)).min(complete_before);
-        assert!(Fees::from_options(&fixture.options).unwrap() == original_fees);
+        fixture.set_deadline((Instant::now() + Duration::from_secs(120)).min(complete_before));
+        assert!(Fees::from_options(&fixture.options()).unwrap() == original_fees);
         refresh_old_anchor(fixture);
         // Observe the deepest startup and successor's original errors before fixed mapping.
         // Keep the guard through finish/unwind; successful output follows all timed work.
         let body_diagnostic = (ordinal == 64)
             .then(crate::managed::native_operation::deadline_diagnostics::Observer::begin);
-        let mut turn = fixture.renewal_turn();
+        // This startup's own 120-second budget was selected above.
+        let mut turn = fixture.renewal_turn_in_current_budget();
         if let Some(diagnostic) = &body_diagnostic {
             diagnostic.successor();
         }
@@ -172,10 +170,11 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                 .unwrap()
                 .expect("previous startup must retain its renewal body history");
             let authorization = turn
-                .authorize_retained(&fixture.owner, &previous, fixture.options.deadline)
+                .authorize_retained(&fixture.owner, &previous, fixture.deadline())
                 .unwrap();
             selection_started = Instant::now();
-            let terms = Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options).unwrap();
+            let terms =
+                Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options()).unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(
@@ -184,7 +183,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     &current,
                     &checkpoint,
                     &terms,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             selection_finished = Instant::now();
@@ -194,7 +193,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     unsigned,
                     &current,
                     authorization,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             finish_capture = finish_timing::Capture::start();
@@ -204,7 +203,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     &fixture.owner,
                     &current,
                     &SigningTurn::Generated(authorization),
-                    fixture.options.deadline,
+                    fixture.deadline(),
                     &NativeEnrollmentReads(&fixture.native),
                 )
                 .unwrap_or_else(|error| {
@@ -216,7 +215,8 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
             (history, authorization)
         } else {
             selection_started = Instant::now();
-            let terms = Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options).unwrap();
+            let terms =
+                Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options()).unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(
@@ -225,7 +225,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     &current,
                     &checkpoint,
                     &terms,
-                    fixture.options.deadline,
+                    fixture.deadline(),
                 )
                 .unwrap();
             selection_finished = Instant::now();
@@ -235,11 +235,11 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                 unsigned,
                 &original_fees,
                 &SigningTurn::RenewalSelection(&turn),
-                fixture.options.deadline,
+                fixture.deadline(),
             )
             .unwrap();
             let authorization = turn
-                .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+                .authorize_retained(&fixture.owner, &history, fixture.deadline())
                 .unwrap();
             finish_capture = finish_timing::Capture::start();
             finish_started = Instant::now();
@@ -248,7 +248,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     &fixture.owner,
                     &current,
                     &SigningTurn::Generated(authorization),
-                    fixture.options.deadline,
+                    fixture.deadline(),
                     &NativeEnrollmentReads(&fixture.native),
                 )
                 .unwrap_or_else(|error| {
@@ -299,8 +299,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     unsigned.statement.expires_at_unix_ms,
                     now_ms().unwrap(),
                     fixture
-                        .options
-                        .deadline
+                        .deadline()
                         .saturating_duration_since(Instant::now())
                         .as_millis(),
                     original_policy.active_until_unix_ms,
@@ -320,7 +319,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         let wallet = selected.directory().path().join("transaction");
         assert_eq!(
             selected
-                .request(fixture.options.deadline)
+                .request(fixture.deadline())
                 .unwrap()
                 .inspect(&fixture.owner.wallet().unwrap(), &wallet)
                 .unwrap()
@@ -518,7 +517,7 @@ fn verify_deep_history(fixture: &Fixture, completed: CompletedDeepHistory) {
     let selected = history.retained_selected(&fixture.owner).unwrap();
     assert_eq!(
         selected
-            .request(fixture.options.deadline)
+            .request(fixture.deadline())
             .unwrap()
             .inspect(&account, &selected.directory().path().join("transaction"))
             .unwrap()

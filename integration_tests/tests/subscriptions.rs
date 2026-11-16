@@ -14,7 +14,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
-use ivm::{ProgramMetadata, encoding, instruction, syscalls};
+use ivm::{ProgramMetadata, encoding, syscalls};
 use std::{
     collections::BTreeMap,
     time::{Duration, SystemTime},

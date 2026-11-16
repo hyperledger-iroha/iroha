@@ -4463,19 +4463,8 @@ pub(crate) fn parse_prepared_trigger_invocation_execution_context(
         argument_record,
     })
 }
-/// Validate trigger callback selection at registration without fabricating an
-/// event payload for a parameterized callback.
-pub(crate) fn validate_trigger_call_execution_context(
-    metadata: &Metadata,
-    bytecode: &[u8],
-) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-    validate_trigger_call_execution_context_for_policy(
-        metadata,
-        bytecode,
-        ivm::SyscallPolicy::AbiV1,
-    )
-}
-/// Validate a callback under the exact named profile selected by the registration root.
+/// Validate trigger callback selection at registration, under the exact named profile selected
+/// by the registration root, without fabricating an event payload for a parameterized callback.
 pub(crate) fn validate_trigger_call_execution_context_for_policy(
     metadata: &Metadata,
     bytecode: &[u8],

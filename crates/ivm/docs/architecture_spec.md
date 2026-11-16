@@ -71,6 +71,15 @@ stream the original set bits into fixed leaves and update cached paths in
 ascending order without copied index or digest vectors. Existing full-rebuild
 and hardware selection still apply for large updates.
 
+`CacheLimitsGuard`, the test-support owner of the cache configuration, also gives
+its holder a private budget. While it lives, allocations made on the holding
+thread are charged to a budget of their own with the installed limit, and
+`memory_stats()` on that thread reports that budget. Every allocation keeps the
+budget it was charged to, so what other threads retain cannot refuse the
+holder retention. A holder that runs cache work on threads it spawns enters
+`CacheLimitsGuard::budget_share()` on each of them. Production threads hold no
+guard and share the aggregate budget.
+
 `cache_memory::memory_stats()` exposes retained/active bytes, their measured
 resident total, the peak measured reservation, and the number of active owners
 with an unmeasured dynamic footprint. Metadata which cannot be

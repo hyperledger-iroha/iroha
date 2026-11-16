@@ -28,6 +28,19 @@ a proposal can be drafted. `release_stranded` uses the native account codec for
 its recipient. The node still authenticates live network identity, authority,
 committee/bootstrap evidence and committed state at admission and enactment.
 
+`AnonymousBallotToriiClientV1` (from `HttpClientTransport.newAnonymousBallotToriiClientV1()`)
+covers the three anonymous Parliament routes
+(`specs/parliament_private_ballot_design.md` sections 6 and 12.3).
+`submitAnonymousBallot` posts a wallet-produced canonical envelope frame
+(at most 262,144 bytes) to `/v1/gov/anonymous-ballots` over HTTPS with only
+`Content-Type: application/x-norito`: no configured header, canonical
+authentication, observer or telemetry. Its empty `202` means the node handled
+the ballot, not finalized acceptance. `getAnonymousBallotBoard` (64-byte scope,
+1 MiB bound) and `getAnonymousParliamentAttempt` (32-byte id, 16 MiB bound) are
+public reads returning raw canonical Norito bytes. Refusals are
+`AnonymousBallotToriiExceptionV1` with the status and stable code. The SDK does
+not prove, stamp or decode ballots.
+
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
 typed registration, bond, withdrawal and slash plans, bounded reward claims with

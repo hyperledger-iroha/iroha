@@ -1,0 +1,135 @@
+//! Core admission of the anchor commit, extracted verbatim by
+//! `scripts/ivm_baseline_v1/capture.py` (only `pub(crate)` became `pub`). Do not edit.
+use std::num::NonZeroU64;
+
+use iroha_crypto::Hash;
+use iroha_data_model::executor::{
+    ArtifactAbiHashMismatchInfo, IvmAdmissionError, MaxCyclesExceedsFuelInfo,
+    MaxCyclesExceedsUpperBoundInfo,
+};
+
+/// `pipeline::IVM_MAX_CYCLES_UPPER_BOUND` in `crates/iroha_config/src/parameters/defaults.rs`.
+pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
+
+/// From `crates/iroha_core/src/smartcontracts/ivm.rs`.
+pub fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissionError {
+    match error {
+        ivm::VMError::UnsupportedProgramVersion { major, minor } => {
+            IvmAdmissionError::UnsupportedVersion(
+                iroha_data_model::executor::UnsupportedVersionInfo { major, minor },
+            )
+        }
+        ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
+            IvmAdmissionError::UnsupportedFeatureBits(bits)
+        }
+        ivm::VMError::UnsupportedProgramAbiVersion { version } => {
+            IvmAdmissionError::UnsupportedAbiVersion(version)
+        }
+        ivm::VMError::ProgramVectorLengthTooLarge {
+            vector_length,
+            max_allowed,
+        } => IvmAdmissionError::VectorLengthTooLarge(
+            iroha_data_model::executor::VectorLengthTooLargeInfo {
+                vector_length,
+                max_allowed,
+            },
+        ),
+        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+            IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
+                expected: Hash::prehashed(expected),
+                actual: Hash::prehashed(actual),
+            })
+        }
+        ivm::VMError::GenericSyscallNotAllowed { syscall } => {
+            IvmAdmissionError::GenericSyscallNotAllowed(syscall)
+        }
+        other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
+    }
+}
+
+/// From `crates/iroha_core/src/pipeline/overlay.rs`.
+pub fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
+    // Version: every first-release execution profile uses the sole 1.1 header.
+    if meta.version_major != 1 || meta.version_minor != 1 {
+        return Err(IvmAdmissionError::UnsupportedVersion(
+            iroha_data_model::executor::UnsupportedVersionInfo {
+                major: meta.version_major,
+                minor: meta.version_minor,
+            },
+        ));
+    }
+    // Mode feature bits
+    let known = ivm::ivm_mode::ZK | ivm::ivm_mode::VECTOR;
+    if meta.mode & !known != 0 {
+        return Err(IvmAdmissionError::UnsupportedFeatureBits(
+            meta.mode & !known,
+        ));
+    }
+    // ABI version: first release supports only v1.
+    if meta.abi_version != 1 {
+        return Err(IvmAdmissionError::UnsupportedAbiVersion(meta.abi_version));
+    }
+    // Vector length sanity
+    if meta.vector_length != 0 && meta.vector_length > ivm::VECTOR_LENGTH_MAX {
+        return Err(IvmAdmissionError::VectorLengthTooLarge(
+            iroha_data_model::executor::VectorLengthTooLargeInfo {
+                vector_length: meta.vector_length,
+                max_allowed: ivm::VECTOR_LENGTH_MAX,
+            },
+        ));
+    }
+    if meta.max_cycles == 0 {
+        return Err(IvmAdmissionError::MissingMaxCycles);
+    }
+    Ok(())
+}
+
+/// From `crates/iroha_core/src/smartcontracts/ivm.rs`.
+pub fn validate_cycle_ceiling(
+    meta: &ivm::ProgramMetadata,
+    upper_bound: NonZeroU64,
+) -> Result<NonZeroU64, IvmAdmissionError> {
+    let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
+    if cycles > upper_bound {
+        return Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(
+            MaxCyclesExceedsUpperBoundInfo {
+                max_cycles: cycles.get(),
+                upper_bound: upper_bound.get(),
+            },
+        ));
+    }
+    Ok(cycles)
+}
+
+/// From `crates/iroha_core/src/smartcontracts/ivm.rs`.
+pub fn validate_cycle_limits(
+    meta: &ivm::ProgramMetadata,
+    upper_bound: NonZeroU64,
+    fuel: NonZeroU64,
+) -> Result<NonZeroU64, IvmAdmissionError> {
+    let cycles = NonZeroU64::new(meta.max_cycles).ok_or(IvmAdmissionError::MissingMaxCycles)?;
+    if cycles > fuel {
+        return Err(IvmAdmissionError::MaxCyclesExceedsFuel(
+            MaxCyclesExceedsFuelInfo {
+                max_cycles: cycles.get(),
+                fuel_limit: fuel.get(),
+            },
+        ));
+    }
+    if cycles > upper_bound {
+        return Err(IvmAdmissionError::MaxCyclesExceedsUpperBound(
+            MaxCyclesExceedsUpperBoundInfo {
+                max_cycles: cycles.get(),
+                upper_bound: upper_bound.get(),
+            },
+        ));
+    }
+    Ok(cycles)
+}
+
+/// From `crates/iroha_core/src/smartcontracts/ivm.rs`.
+pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
+    cycles
+        .get()
+        .saturating_mul(ivm::gas::max_instruction_cost())
+}

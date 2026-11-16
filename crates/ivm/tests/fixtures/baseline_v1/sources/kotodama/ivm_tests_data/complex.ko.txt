@@ -1,0 +1,11 @@
+// Demonstrates several checked arithmetic operations in sequence.
+seiyaku Example {
+    permission Entry;
+    kotoage fn complex(int a, int b) authorize(Entry) {
+        let c = a + b;
+        let d = c * b;
+        let e = d - a;
+        let f = e + c;
+        let g = f + d;
+    }
+}

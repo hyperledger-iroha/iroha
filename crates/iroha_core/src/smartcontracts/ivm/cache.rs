@@ -258,13 +258,6 @@ impl PreparedContractCache {
             Some(contract)
         })
     }
-    fn get_or_prepare_with_status(
-        &self,
-        code_hash: Hash,
-        bytecode: &[u8],
-    ) -> Result<(ivm::PreparedContract, bool), ivm::VMError> {
-        self.get_or_prepare_with_status_for_policy(code_hash, bytecode, ivm::SyscallPolicy::AbiV1)
-    }
     fn get_or_prepare_with_status_for_policy(
         &self,
         code_hash: Hash,
@@ -2469,7 +2462,7 @@ mod tests {
     fn concurrent_workers_singleflight_contract_preparation() {
         const WORKERS: usize = 8;
 
-        let _retention = default_retention();
+        let retention = default_retention();
         let program = Arc::new(minimal_program());
         let code_hash = ivm::contract_code_hash(program.as_slice());
         let cache = PreparedContractCache::with_capacity(4);
@@ -2479,7 +2472,10 @@ mod tests {
             let program = Arc::clone(&program);
             let cache = cache.clone();
             let barrier = Arc::clone(&barrier);
+            let budget = retention.budget_share();
             std::thread::spawn(move || {
+                // The worker's retention is charged with the guard holder's.
+                let _budget = budget.enter();
                 barrier.wait();
                 cache
                     .get_or_prepare(code_hash, program.as_slice())

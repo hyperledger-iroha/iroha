@@ -1,0 +1,22 @@
+[
+  {"source": "baseline/numeric", "entrypoint": "add", "host": "default", "id": "small", "covers": ["syscall:numeric", "arguments:record"], "arguments": {"a": "40", "b": "2"}},
+  {"source": "baseline/numeric", "entrypoint": "add", "host": "default", "id": "overflow", "covers": ["fault:Numeric"], "arguments": {"a": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047", "b": "1"}},
+  {"source": "baseline/numeric", "entrypoint": "sub", "host": "default", "id": "negative", "covers": ["syscall:numeric"], "arguments": {"a": "2", "b": "40"}},
+  {"source": "baseline/numeric", "entrypoint": "sub", "host": "default", "id": "underflow", "covers": ["fault:Numeric"], "arguments": {"a": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048", "b": "1"}},
+  {"source": "baseline/numeric", "entrypoint": "mul", "host": "default", "id": "small", "covers": ["syscall:numeric"], "arguments": {"a": "-6", "b": "7"}},
+  {"source": "baseline/numeric", "entrypoint": "mul", "host": "default", "id": "overflow", "covers": ["fault:Numeric"], "arguments": {"a": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047", "b": "2"}},
+  {"source": "baseline/numeric", "entrypoint": "div", "host": "default", "id": "exact", "covers": ["syscall:numeric"], "arguments": {"a": "84", "b": "2"}},
+  {"source": "baseline/numeric", "entrypoint": "div", "host": "default", "id": "by_zero", "covers": ["fault:Numeric"], "arguments": {"a": "1", "b": "0"}},
+  {"source": "baseline/numeric", "entrypoint": "rem", "host": "default", "id": "by_zero", "covers": ["fault:Numeric"], "arguments": {"a": "7", "b": "0"}},
+  {"source": "baseline/numeric", "entrypoint": "rem", "host": "wsv", "id": "negative", "covers": ["syscall:numeric"], "arguments": {"a": "-7", "b": "2"}},
+  {"source": "baseline/numeric", "entrypoint": "less", "host": "wsv", "id": "true", "covers": ["syscall:numeric"], "arguments": {"a": "-1", "b": "1"}},
+  {"source": "baseline/events", "entrypoint": "main", "host": "wsv_contract", "id": "emit", "covers": ["events", "host:contract-fixture"]},
+  {"source": "baseline/events", "entrypoint": "save", "host": "wsv_contract", "id": "root_call", "covers": ["events", "host:contract-fixture", "arguments:record"], "arguments": {"succeed": true}},
+  {"source": "baseline/abort", "entrypoint": "run", "host": "wsv_contract", "id": "contract", "covers": ["fault:ContractAbort", "host:contract-fixture"]},
+  {"source": "baseline/abort", "entrypoint": "run", "host": "default", "id": "default", "covers": ["fault:ContractAbort"]},
+  {"source": "zk/baseline/numeric", "entrypoint": "add", "host": "default", "id": "small", "covers": ["header:zk-mode", "gas:zk-padding", "syscall:numeric"], "arguments": {"a": "40", "b": "2"}},
+  {"source": "zk/baseline/numeric", "entrypoint": "div", "host": "default", "id": "by_zero", "covers": ["header:zk-mode", "fault:Numeric"], "arguments": {"a": "1", "b": "0"}},
+  {"source": "baseline/numeric", "entrypoint": "add", "host": "core", "id": "without_arguments", "covers": ["arguments:missing", "fault:UnsupportedSyscall"]},
+  {"source": "baseline/numeric", "entrypoint": "add", "host": "default", "id": "without_arguments", "covers": ["arguments:missing", "fault:PermissionDenied"]},
+  {"source": "baseline/numeric", "entrypoint": "add", "host": "wsv", "id": "without_arguments", "covers": ["arguments:missing", "fault:PermissionDenied"]}
+]

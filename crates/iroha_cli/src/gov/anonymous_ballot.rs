@@ -91,22 +91,22 @@ impl Run for BoardArgs {
             .wrap_err("the node returned bytes that are not one board record")?;
         std::fs::write(&self.output, &bytes)
             .wrap_err_with(|| format!("failed to write `{}`", self.output.display()))?;
-        let summary = format!(
-            "corpus_entries={} opened={} closed={} bytes={}",
-            board.entries.len(),
-            board.opening.is_some(),
-            board.closure.is_some(),
-            bytes.len()
-        );
+        let corpus_entries = board.entries.len();
+        let opened = board.opening.is_some();
+        let closed = board.closure.is_some();
+        let size = bytes.len();
+        let output = self.output.display().to_string();
         print_with_summary(
             context,
-            Some(summary),
+            Some(format!(
+                "corpus_entries={corpus_entries} opened={opened} closed={closed} bytes={size}"
+            )),
             &norito::json!({
-                "corpus_entries": board.entries.len(),
-                "opened": board.opening.is_some(),
-                "closed": board.closure.is_some(),
-                "bytes": bytes.len(),
-                "output": self.output.display().to_string(),
+                "corpus_entries": corpus_entries,
+                "opened": opened,
+                "closed": closed,
+                "bytes": size,
+                "output": output,
             }),
         )
     }
@@ -129,12 +129,14 @@ impl Run for AttemptArgs {
         let bytes = client.anonymous_parliament_attempt(&self.governance_attempt_id)?;
         std::fs::write(&self.output, &bytes)
             .wrap_err_with(|| format!("failed to write `{}`", self.output.display()))?;
+        let size = bytes.len();
+        let output = self.output.display().to_string();
         print_with_summary(
             context,
-            Some(format!("bytes={}", bytes.len())),
+            Some(format!("bytes={size}")),
             &norito::json!({
-                "bytes": bytes.len(),
-                "output": self.output.display().to_string(),
+                "bytes": size,
+                "output": output,
             }),
         )
     }

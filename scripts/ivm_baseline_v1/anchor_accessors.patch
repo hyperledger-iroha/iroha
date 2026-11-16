@@ -1,0 +1,34 @@
+--- a/crates/ivm_abi/src/syscalls.rs
++++ b/crates/ivm_abi/src/syscalls.rs
+@@ -3194,6 +3194,15 @@
+         Err(error) => invalid_abi_surface_hash(error),
+     }
+ }
++/// Baseline-capture accessor (anchor export only, `scripts/ivm_baseline_v1`): the exact
++/// canonical ABI surface descriptor bytes that [`compute_abi_hash`] hashes.
++#[doc(hidden)]
++pub fn baseline_capture_abi_surface_descriptor(policy: crate::SyscallPolicy) -> Vec<u8> {
++    match abi_surface_descriptor(policy) {
++        Ok(descriptor) => descriptor.to_vec(),
++        Err(_) => panic!("the anchor ABI surface must be canonical"),
++    }
++}
+ #[cfg(test)]
+ #[path = "syscalls/access_profile_tests.rs"]
+ mod access_profile_tests;
+--- a/crates/ivm/src/gas.rs
++++ b/crates/ivm/src/gas.rs
+@@ -1044,6 +1044,13 @@
+         &canonical_gas_schedule_descriptor(),
+     ))
+ }
++/// Baseline-capture accessor (anchor export only, `scripts/ivm_baseline_v1`): the exact
++/// canonical gas schedule descriptor bytes that [`schedule_hash`] hashes.
++#[doc(hidden)]
++#[must_use]
++pub fn baseline_capture_gas_schedule_descriptor() -> Vec<u8> {
++    encode_gas_schedule_descriptor(&canonical_gas_schedule_descriptor())
++}
+ #[cfg(test)]
+ mod tests {
+     use super::*;

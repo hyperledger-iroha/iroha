@@ -2,8 +2,7 @@
 
 use super::*;
 use crate::managed::stream_token_custody::{
-    renewal_tests::{Fixture, wait_until},
-    tests::count_wallet_constructions,
+    renewal_tests::Fixture, tests::count_wallet_constructions,
 };
 use std::{cell::Cell, path::PathBuf};
 
@@ -43,9 +42,9 @@ fn assert_same(actual: &RetainedCustodyEnrollment, expected: &RetainedCustodyEnr
 #[test]
 fn renewal_contexts_verify_configuration_and_read_initial_history_once() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_enrollment(&fixture.policy, fixture.initial, deadline)
@@ -60,13 +59,10 @@ fn renewal_contexts_verify_configuration_and_read_initial_history_once() {
     assert_eq!(prerequisite.policy, fixture.policy);
     assert_same(&prerequisite.enrollment, &expected);
 
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
     let utc = now_ms().unwrap() + 60_000;
-    let terms = Terms::new(utc, &fixture.options).unwrap();
+    let terms = Terms::new(utc, &fixture.options()).unwrap();
     let (unsigned, configurations, wallets) = counted(|| {
         fixture.owner.select_renewal_unsigned(
             2,
@@ -85,7 +81,7 @@ fn renewal_contexts_verify_configuration_and_read_initial_history_once() {
         CustodyPurpose::Renewal(2),
         unsigned,
         utc,
-        &fixture.options,
+        &fixture.options(),
     );
     let original = history.original().expect("actual signed renewal body");
     let (validated, configurations, wallets) =
@@ -164,9 +160,9 @@ fn retained_paths(fixture: &Fixture) -> Vec<(PathBuf, &'static str, usize)> {
 #[test]
 fn initial_prerequisite_refuses_changed_configure_and_initial_original_wallet_and_carrier() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_prerequisite(deadline)
@@ -202,9 +198,9 @@ fn initial_prerequisite_refuses_changed_configure_and_initial_original_wallet_an
 #[test]
 fn selected_initial_handoff_rechecks_current_original_wallet_and_carrier() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_prerequisite(deadline)
@@ -255,16 +251,13 @@ fn generated_authorization_verifies_configure_once_and_rechecks_each_call() {
     use crate::managed::native_operation::authorization::DispatchAuthorization;
 
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let deadline = fixture.deadline();
+    fixture.wait_renewable();
     let mut turn = fixture.renewal_turn();
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(2, &fixture.policy, &current, &checkpoint, &terms, deadline)
@@ -273,7 +266,7 @@ fn generated_authorization_verifies_configure_once_and_rechecks_each_call() {
         &fixture.owner,
         CustodyPurpose::Renewal(2),
         unsigned,
-        &Fees::from_options(&fixture.options).unwrap(),
+        &Fees::from_options(&fixture.options()).unwrap(),
         &SigningTurn::RenewalSelection(&turn),
         deadline,
     )
@@ -314,9 +307,9 @@ fn generated_authorization_verifies_configure_once_and_rechecks_each_call() {
 #[test]
 fn configure_handoff_rechecks_exact_original_wallet_carrier_and_deadline() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_prerequisite(deadline)
@@ -385,16 +378,13 @@ fn configure_handoff_rechecks_exact_original_wallet_carrier_and_deadline() {
 #[test]
 fn renewal_selection_reuses_exact_authenticated_checkpoint_and_rejects_substitution() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled(4_000);
+    let mut fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let deadline = fixture.deadline();
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
     let before = checkpoint_bytes(&checkpoint).unwrap();
-    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(2, &fixture.policy, &current, &checkpoint, &terms, deadline)
@@ -562,9 +552,9 @@ fn renewal_selection_reuses_exact_authenticated_checkpoint_and_rejects_substitut
 #[test]
 fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_file_custody() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_prerequisite(deadline)
@@ -730,9 +720,9 @@ fn retained_carriers_share_exact_checkpoint_imports_and_recheck_transaction_and_
 #[test]
 fn prerequisite_epoch_workspace_keeps_original_phase_source_refusal_and_same_source_retry() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let expected = fixture
         .owner
         .retained_initial_prerequisite(deadline)
@@ -868,9 +858,9 @@ fn prerequisite_epoch_workspace_preserves_finite_outer_admission_and_custody_ret
         owner.initial_prerequisite_after_configuration(policy, configured, deadline)
     }
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let warm = fixture
         .owner
         .retained_initial_prerequisite(deadline)

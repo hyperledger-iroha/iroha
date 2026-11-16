@@ -1,18 +1,15 @@
 //! Genuine generated Begin source refusal, lexical scope and original outer admission.
 
 use super::*;
-use crate::managed::stream_token_custody::renewal_tests::{Fixture, wait_until};
+use crate::managed::stream_token_custody::renewal_tests::Fixture;
 use std::path::PathBuf;
 
 fn fixture_with_renewal_body() -> Fixture {
-    let fixture = Fixture::enrolled(4_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor();
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
     let utc = now_ms().unwrap() + 60_000;
-    let terms = Terms::new(utc, &fixture.options).unwrap();
+    let terms = Terms::new(utc, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -21,7 +18,7 @@ fn fixture_with_renewal_body() -> Fixture {
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     let history = fixture.owner.bootstrap_native_body(
@@ -30,7 +27,7 @@ fn fixture_with_renewal_body() -> Fixture {
         CustodyPurpose::Renewal(2),
         unsigned,
         utc,
-        &fixture.options,
+        &fixture.options(),
     );
     assert_eq!(
         history.purpose(),
@@ -49,7 +46,7 @@ fn begin(
     scoped: bool,
     deadline: Instant,
 ) -> Result<GeneratedRenewalTurn> {
-    let fees = Fees::from_options(&fixture.options)?;
+    let fees = Fees::from_options(&fixture.options())?;
     let cancelled = Arc::new(AtomicBool::new(false));
     if scoped {
         GeneratedRenewalTurn::begin(
@@ -132,7 +129,7 @@ fn begin_epoch_workspace_preserves_paid_sources_inventory_error_order_and_retry(
     let _guard = crate::managed::native_test_guard();
     let fixture = fixture_with_renewal_body();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     // Capture the already authenticated initial floor before mutation or budget measurement.
     let floor = *fixture
         .owner
@@ -214,7 +211,7 @@ fn begin_epoch_workspace_preserves_late_finite_outer_charge_refusal_and_retry() 
     let _guard = crate::managed::native_test_guard();
     let fixture = fixture_with_renewal_body();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     // Capture the already authenticated initial floor before mutation or budget measurement.
     let floor = *fixture
         .owner
@@ -295,7 +292,7 @@ fn with_lease_root_selection_hook<T>(hook: impl FnOnce() + 'static, run: impl Fn
 fn renewal_lease_keeps_original_root_material_and_same_source_retry() {
     let _guard = crate::managed::native_test_guard();
     let fixture = fixture_with_renewal_body();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let floor = *fixture
         .owner
         .retained_initial_enrollment(&fixture.policy, fixture.initial, deadline)
@@ -363,7 +360,7 @@ fn renewal_lease_keeps_original_root_material_and_same_source_retry() {
 fn renewal_lease_refuses_same_byte_root_replacement_and_retries_original() {
     let _guard = crate::managed::native_test_guard();
     let fixture = fixture_with_renewal_body();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let floor = *fixture
         .owner
         .retained_initial_enrollment(&fixture.policy, fixture.initial, deadline)

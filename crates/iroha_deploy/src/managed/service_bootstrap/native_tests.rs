@@ -97,8 +97,26 @@ impl NativeFixture {
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
     ) -> VerifiedStreamTokenCustodyStateV1 {
-        self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
-            .unwrap()
+        let cut = checkpoint.verified_tip().unwrap().context_id();
+        let provider = authority.provider_id().unwrap();
+        let proved = |entry: &&crate::managed::native_operation::test_support::native_fixture::ProvedCustody| {
+            entry.cut == cut && entry.provider == provider && entry.binding == policy.binding
+        };
+        if let Some(entry) = self.proved_custody.lock().unwrap().iter().find(proved) {
+            return entry.state.clone();
+        }
+        let state = self
+            .bootstrap_custody_snapshot(authority, policy, checkpoint, None)
+            .unwrap();
+        self.proved_custody.lock().unwrap().push(
+            crate::managed::native_operation::test_support::native_fixture::ProvedCustody {
+                cut,
+                provider,
+                binding: policy.binding.clone(),
+                state: state.clone(),
+            },
+        );
+        state
     }
 
     // Three component workers share this one executed State. Unlike four HTTP peers, its
@@ -867,6 +885,8 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             view.nexus().fees.per_gas_unit_fee
         );
     }
+    // One generated startup's complete budget; each startup epoch takes its own.
+    const STARTUP_BUDGET: Duration = Duration::from_secs(600);
     let _guard = crate::managed::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
@@ -879,7 +899,21 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     )
     .unwrap();
     let mut owner = ManagedServiceBootstrap::open(&prepared).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(600);
+    // The executed native chain and its prerequisite are fixture setup, before any startup
+    // takes its budget.
+    let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+    native.retain_http_listeners(&prepared, &ports);
+    let log = quote_instructions(
+        &native,
+        &owner.authority.config,
+        [InstructionBox::from(Log::new(
+            iroha_data_model::Level::INFO,
+            "parent bootstrap prerequisites".into(),
+        ))],
+    );
+    native.bootstrap_commit(&owner.authority, &log);
+    drop(ports);
+    let deadline = Instant::now() + STARTUP_BUDGET;
     // Exercise the supported generated native-only intent. Exact quote charge maxima and the
     // immutable parent fee ceiling still apply; gateway's three ISIs meter 320 gas.
     let options = generated_fees(deadline).unwrap().options(deadline);
@@ -895,18 +929,6 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     let parent_bytes = encode(&original, MAX_ORIGINAL_BYTES).unwrap();
     let child_options = original.fees.options(options.deadline);
     let policies = &original.policies;
-    let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
-    native.retain_http_listeners(&prepared, &ports);
-    let log = quote_instructions(
-        &native,
-        &owner.authority.config,
-        [InstructionBox::from(Log::new(
-            iroha_data_model::Level::INFO,
-            "parent bootstrap prerequisites".into(),
-        ))],
-    );
-    native.bootstrap_commit(&owner.authority, &log);
-    drop(ports);
 
     let mut reserve = ManagedInitialReservePolicy::open(&prepared).unwrap();
     let reserve_result = reserve.bootstrap_native_generated(
@@ -919,8 +941,14 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     let mut expected = vec![reserve_result.finalized.unwrap()];
     drop(reserve);
     let previous_terms = authorization.test_terms().clone();
+    // Epoch 2 is a separate startup: it takes its own budget of the same length when it
+    // starts, and every remaining child signs under that epoch's authorization.
+    let deadline = Instant::now() + STARTUP_BUDGET;
+    let options = generated_fees(deadline).unwrap().options(deadline);
     authorization = owner.authorize_test_startup(&options).unwrap().unwrap();
     assert_eq!(authorization.test_ordinal(), 2);
+    let utc = authorization.test_terms().signing_deadline_unix_ms;
+    let child_options = original.fees.options(options.deadline);
     assert_eq!(
         directory
             .open_child("epochs")

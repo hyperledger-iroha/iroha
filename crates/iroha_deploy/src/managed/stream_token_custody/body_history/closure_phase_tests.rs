@@ -304,7 +304,7 @@ fn native_closure_phase_shares_only_prefix_work_and_preserves_actual_wallet_read
     let successor = history.successor(1).unwrap().unwrap();
     let account = fixture.owner.wallet().unwrap();
     let evidence = Evidence::capture(&history);
-    let mut inspect = NativeClosureInspector::new(original, &account, fixture.options.deadline);
+    let mut inspect = NativeClosureInspector::new(original, &account, fixture.deadline());
     let (expected, old_calls, old_work, old_graphs) = run(
         head.test_owned_predecessor_closure_history().unwrap(),
         &successor,
@@ -446,7 +446,7 @@ fn native_closure_phase_closes_callback_mutation_and_error_before_any_effect() {
     let successor = history.successor(1).unwrap().unwrap();
     let account = fixture.owner.wallet().unwrap();
     let evidence = Evidence::capture(&history);
-    let mut inspect = NativeClosureInspector::new(original, &account, fixture.options.deadline);
+    let mut inspect = NativeClosureInspector::new(original, &account, fixture.deadline());
     let (baseline, _, _, _) = run(
         head.test_owned_predecessor_closure_history().unwrap(),
         &successor,
@@ -660,7 +660,7 @@ fn native_closure_exit_keeps_original_entry_callbacks_and_decoder_recipe() {
     let original = history.bodies[1].original.as_ref().unwrap();
     let successor = history.successor(1).unwrap().unwrap();
     let account = fixture.owner.wallet().unwrap();
-    let mut inspector = NativeClosureInspector::new(original, &account, fixture.options.deadline);
+    let mut inspector = NativeClosureInspector::new(original, &account, fixture.deadline());
     let evidence = Evidence::capture(&history);
     let mut expected = None;
     let mut observations = Vec::new();
@@ -870,7 +870,7 @@ fn successor_binding_keeps_native_wallets_receipt_and_graph_closure() {
     let successor = history.successor(0).unwrap().unwrap();
     let account = fixture.owner.wallet().unwrap();
     let evidence = Evidence::capture(&history);
-    let mut inspect = NativeClosureInspector::new(original, &account, fixture.options.deadline);
+    let mut inspect = NativeClosureInspector::new(original, &account, fixture.deadline());
     let (single, single_work) = shared_snapshot_tests::snapshot_work(|| successor.revalidate());
     single.unwrap();
     let mut outcomes = Vec::new();
@@ -923,7 +923,7 @@ fn successor_binding_closes_changed_successor_before_binding_error_or_wallet_acc
     let head = history.current_history().unwrap();
     let original = history.bodies[0].original.as_ref().unwrap();
     let account = fixture.owner.wallet().unwrap();
-    let mut inspect = NativeClosureInspector::new(original, &account, fixture.options.deadline);
+    let mut inspect = NativeClosureInspector::new(original, &account, fixture.deadline());
     for (change_source, change_binding) in [(false, true), (true, false), (true, true)] {
         let mut errors = Vec::new();
         for original in [true, false] {

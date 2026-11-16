@@ -1,0 +1,7 @@
+
+        seiyaku BlobLiteral {
+            view fn get() authorize(anyone) -> bytes {
+                return b"hello";
+            }
+        }
+    

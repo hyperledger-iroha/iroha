@@ -1,13 +1,11 @@
 //! Genuine unsigned staging refuses authority escape and preserves cold recovery.
 use super::*;
 use crate::managed::stream_token_custody::{
-    bootstrap_test_support::NativeEnrollmentReads,
-    renewal_tests::{Fixture, wait_until},
+    bootstrap_test_support::NativeEnrollmentReads, renewal_tests::Fixture,
 };
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::Duration,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,11 +78,8 @@ pub(super) fn after_write(point: Point, history: &BodyHistory) -> Result<()> {
     hit(point, history, None)
 }
 fn fixture() -> Fixture {
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    fixture.wait_renewable();
     fixture
 }
 fn limits(allocation: usize) -> norito::DecodeLimits {

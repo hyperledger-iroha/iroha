@@ -1,0 +1,8 @@
+
+        module InvalidDecimalAnnotation {
+            fn main() -> int {
+                let int a = 1.5;
+                return a;
+            }
+        }
+        

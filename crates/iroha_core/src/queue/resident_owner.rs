@@ -10,11 +10,52 @@ use super::*;
 use iroha_allocation::shared::{Reserved, Shared};
 use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedShared};
 
-/// The original Queue pressure counters, retained by every original transaction owner.
-pub(super) struct QueueResidentLedger {
+/// The budget a queue resident counts against (`specs/parliament_private_ballot_design.md`
+/// §3.6): the ordinary queue's capacity and byte budget, or the anonymous-ballot partition's
+/// own (`[queue.anonymous_ballots]`). It is a function of the resident's entrypoint, so its
+/// admission and every exit name the same partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResidentPartition {
+    /// Every input but a signerless ballot.
+    Ordinary,
+    /// A signerless anonymous ballot.
+    Ballot,
+}
+
+impl ResidentPartition {
+    /// The partition of `tx`.
+    pub(super) fn of(tx: &crate::tx::AcceptedTransaction<'_>) -> Self {
+        if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
+            Self::Ballot
+        } else {
+            Self::Ordinary
+        }
+    }
+}
+
+/// The resident counters of one partition.
+#[derive(Debug, Default)]
+pub(super) struct ResidentCounters {
+    /// Retained-byte estimates of its original owners, including detached last readers.
     pub(super) retained_bytes: AtomicU64,
+    /// Its tracked residents.
     pub(super) active_count: AtomicUsize,
+    /// Its admission-FIFO entries.
     pub(super) queued_count: AtomicUsize,
+}
+
+/// The original Queue pressure counters, retained by every original transaction owner.
+///
+/// Each resident is counted in exactly one partition, from its reservation to its last
+/// refund. The coarse backpressure reads the ordinary counters only, so no claim, residence,
+/// release, removal or last-reader refund of a ballot moves ordinary pressure, whatever its
+/// interleaving with ordinary admission and publication.
+pub(super) struct QueueResidentLedger {
+    /// The ordinary queue's residents.
+    pub(super) ordinary: ResidentCounters,
+    /// The anonymous-ballot partition's residents. The partition's own admission budget is
+    /// its pending index (`queue::anonymous_ballots`).
+    pub(super) ballots: ResidentCounters,
     /// Latched original admission health, refreshed at the existing publication boundary.
     pub(super) faulted: AtomicBool,
     mutations: AtomicUsize,
@@ -25,13 +66,39 @@ pub(super) struct QueueResidentLedger {
 }
 
 impl QueueResidentLedger {
+    /// The counters of `partition`.
+    pub(super) fn counters(&self, partition: ResidentPartition) -> &ResidentCounters {
+        match partition {
+            ResidentPartition::Ordinary => &self.ordinary,
+            ResidentPartition::Ballot => &self.ballots,
+        }
+    }
+
+    /// Tracked residents of both partitions.
+    pub(super) fn active_count(&self) -> usize {
+        self.ordinary
+            .active_count
+            .load(Ordering::Relaxed)
+            .saturating_add(self.ballots.active_count.load(Ordering::Relaxed))
+    }
+
+    /// Retained-byte estimates of both partitions.
+    pub(super) fn retained_bytes(&self) -> u64 {
+        self.ordinary
+            .retained_bytes
+            .load(Ordering::Relaxed)
+            .saturating_add(self.ballots.retained_bytes.load(Ordering::Relaxed))
+    }
+
     fn backpressure_state(&self) -> BackpressureState {
-        let queued = self.queued_count.load(Ordering::Relaxed);
+        // The ballot partition has its own budget: only ordinary residents gate admission.
+        let ordinary = &self.ordinary;
+        let queued = ordinary.queued_count.load(Ordering::Relaxed);
         // Match QueuePressureSnapshot::into_backpressure: age remains in the
         // rich Queue snapshot/telemetry and does not gate coarse admission.
         let saturated = self.faulted.load(Ordering::Acquire)
-            || self.active_count.load(Ordering::Relaxed) >= self.capacity.get()
-            || self
+            || ordinary.active_count.load(Ordering::Relaxed) >= self.capacity.get()
+            || ordinary
                 .retained_bytes
                 .load(Ordering::Relaxed)
                 .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
@@ -69,10 +136,11 @@ impl QueueResidentLedger {
         ResidentMutation { ledger: self }
     }
 
-    fn refund_estimate(&self, cost: u64) {
-        let mut current = self.retained_bytes.load(Ordering::Relaxed);
+    fn refund_estimate(&self, partition: ResidentPartition, cost: u64) {
+        let retained_bytes = &self.counters(partition).retained_bytes;
+        let mut current = retained_bytes.load(Ordering::Relaxed);
         loop {
-            match self.retained_bytes.compare_exchange_weak(
+            match retained_bytes.compare_exchange_weak(
                 current,
                 current.saturating_sub(cost),
                 Ordering::Relaxed,
@@ -106,12 +174,15 @@ impl Drop for ResidentMutation<'_> {
 pub(super) struct QueueResidentCharge {
     _physical: AllocationCharge,
     ledger: ChargedShared<QueueResidentLedger>,
+    /// The partition charged with the estimate; the refund returns it to the same one.
+    partition: ResidentPartition,
     estimated_bytes: u64,
 }
 
 impl Drop for QueueResidentCharge {
     fn drop(&mut self) {
-        self.ledger.refund_estimate(self.estimated_bytes);
+        self.ledger
+            .refund_estimate(self.partition, self.estimated_bytes);
     }
 }
 
@@ -141,10 +212,12 @@ impl QueuedTransaction {
         self.original.incarnation
     }
 
-    /// Reserve the concrete shell before moving or publishing the checked transaction.
+    /// Reserve the concrete shell before moving or publishing the checked transaction, and
+    /// charge its residence estimate to `partition`.
     pub(super) fn reserve(
         ledger: &ChargedShared<QueueResidentLedger>,
         encoded_len: usize,
+        partition: ResidentPartition,
     ) -> Result<Reserved<QueueAdmission, QueueResidentCharge>, Error> {
         let layout = Self::allocation_layout();
         let mut reservation = ledger
@@ -155,10 +228,14 @@ impl QueuedTransaction {
             .try_split(layout)
             .expect("exact admitted original Queue shell");
         let cost = Queue::retained_byte_cost(encoded_len);
-        ledger.retained_bytes.fetch_add(cost, Ordering::Relaxed);
+        ledger
+            .counters(partition)
+            .retained_bytes
+            .fetch_add(cost, Ordering::Relaxed);
         let charge = QueueResidentCharge {
             _physical: physical,
             ledger: ledger.clone(),
+            partition,
             estimated_bytes: cost,
         };
         Reserved::try_new(charge).map_err(|(charge, _refusal)| {
@@ -267,9 +344,11 @@ impl Queue {
         #[cfg(not(test))]
         let retained_bytes = 0;
         let ledger = shell.initialize(QueueResidentLedger {
-            retained_bytes: AtomicU64::new(retained_bytes),
-            active_count: AtomicUsize::new(0),
-            queued_count: AtomicUsize::new(0),
+            ordinary: ResidentCounters {
+                retained_bytes: AtomicU64::new(retained_bytes),
+                ..ResidentCounters::default()
+            },
+            ballots: ResidentCounters::default(),
             faulted: AtomicBool::new(self.admission_faulted()),
             mutations: AtomicUsize::new(0),
             budget: budget.clone(),

@@ -94,7 +94,9 @@ fn await_held_pause(active: &mpsc::Receiver<()>, proved: &AtomicBool) {
         match active.recv_timeout(Duration::from_millis(10)) {
             Ok(()) => return,
             Err(mpsc::RecvTimeoutError::Timeout) if !finished => {}
-            Err(_) => panic!("the proof returned before its pause ran"),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the proof returned before its pause ran")
+            }
         }
     }
 }
@@ -498,10 +500,7 @@ fn prepared(wallet: &mut Wallet) -> FoldJobV1 {
 
 /// Hold the next proof (ordinal 1) until `finish` or a cancelling signal; the receiver
 /// reports that it started.
-fn hold(
-    wallet: &mut Wallet,
-    finish: Arc<AtomicBool>,
-) -> (mpsc::Receiver<()>, Arc<OnceLock<Instant>>) {
+fn hold(wallet: &mut Wallet, finish: Arc<AtomicBool>) -> mpsc::Receiver<()> {
     let retained = wallet
         .archive
         .get(
@@ -515,16 +514,17 @@ fn hold(
         .unwrap();
     let original: Checkpoint = archive::decode(&retained).unwrap();
     let (entered, active) = mpsc::channel();
-    let stop_requested = Arc::new(OnceLock::new());
+    // A held proof is released by `finish` or by a cancelling call whose own work before it
+    // takes priority is not preemption latency, so no stop request is timed here.
     wallet.proofs.fold_pause = Some(Arc::new(Pause {
         armed: AtomicBool::new(true),
         entered,
         released: Arc::new(AtomicUsize::new(0)),
         expected_checkpoint: original.proof,
         finish,
-        stop_requested: stop_requested.clone(),
+        stop_requested: Arc::default(),
     }));
-    (active, stop_requested)
+    active
 }
 
 fn receive(previous: &FrozenTransition) -> FrozenTransition {
@@ -555,7 +555,7 @@ fn checkpoint_at(wallet: &mut Wallet, ordinal: u32) -> Option<PrivateArchiveByte
 fn ingests_during_an_unlocked_proof_never_cancel_it_and_its_publication_rebases() {
     let (mut wallet, _, observed) = folding_wallet();
     let finish = Arc::new(AtomicBool::new(false));
-    let (active, _) = hold(&mut wallet, finish.clone());
+    let active = hold(&mut wallet, finish.clone());
     let scheduler = wallet.scheduler();
     let job = prepared(&mut wallet);
     let returned = Arc::new(AtomicBool::new(false));
@@ -626,7 +626,7 @@ fn ingests_during_an_unlocked_proof_never_cancel_it_and_its_publication_rebases(
 #[test]
 fn an_advance_during_the_unlocked_proof_cancels_it_and_nothing_is_published() {
     let (mut wallet, boot, observed) = folding_wallet();
-    let (active, stop_requested) = hold(&mut wallet, Arc::default());
+    let active = hold(&mut wallet, Arc::default());
     let job = prepared(&mut wallet);
     let returned = Arc::new(AtomicBool::new(false));
     let advancing = {
@@ -634,7 +634,6 @@ fn an_advance_during_the_unlocked_proof_cancels_it_and_nothing_is_published() {
         std::thread::spawn(move || {
             await_held_pause(&active, &returned);
             // The Advance takes payment priority: it cancels and joins the proof first.
-            stop_requested.set(Instant::now()).unwrap();
             wallet.commit(receive(&boot)).expect("Advance");
             wallet
         })

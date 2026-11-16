@@ -1,0 +1,9 @@
+
+        module RemovedMapEntries {
+            fn f(Map<int, int> m) {
+                let t = std::map::keys_values_take2(m, 0, 1);
+                let a = t.0;
+                let b = t.1;
+            }
+        }
+    

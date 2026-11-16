@@ -38,7 +38,7 @@ use super::{
         jury_invitations, register, registration,
     },
     is_binding,
-    test_driver::{Driver, network},
+    test_driver::{Driver, deployment, network},
 };
 use crate::{
     runtime::catalog::additions::PARLIAMENT_ANONYMOUS,
@@ -436,6 +436,25 @@ fn restore_accepts_exactly_the_tables_the_reducer_produces() {
             Err(AnonymousTablesRestoreError::Invalid(_))
         ),
         "an attempt stored under another identifier is refused"
+    );
+    // The attempt's row with another proposal in it: the identifiers, the digest and the
+    // effect hash it keeps are not that proposal's.
+    let mut substituted = Driver {
+        state: driver.state.clone(),
+        height: driver.height,
+        now_ms: driver.now_ms,
+        citizens: driver.citizens.clone(),
+    };
+    substituted.state.proposal = deployment(0xd1);
+    let world = activated_world();
+    fill(&world, &substituted, &records, &[(scope, board.clone())]);
+    assert!(
+        matches!(
+            validate_cut(&world.view(), &network(), driver.height),
+            Err(AnonymousTablesRestoreError::Invalid(message))
+                if message.contains("proposal_content_id")
+        ),
+        "an attempt whose stored proposal is another one is refused"
     );
     let mut moved = board.clone();
     moved.sealed_timestamp_ms += 1;

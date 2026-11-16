@@ -6471,7 +6471,8 @@ def test_json_scoped_attempt_delegates_original_error_to_existing_hc32_owner():
     assert len(rule.tests) == 31
     assert negative not in rule.tests
     source = (ROOT / 'crates/iroha_core/src/execution_attempt.rs').read_text()
-    start = source.index('pub(crate) fn json_decode_attempt_error<E>(')
+    # Public since the node's runtime-checkpoint receiver classifies its transport JSON with it.
+    start = source.index('pub fn json_decode_attempt_error<E>(')
     stop = source.index('pub(crate) fn genesis_read_attempt_error<E>(', start)
     decoder = source[start:stop]
     assert 'norito::json::Error::ScopedDecodeResource(original)' in decoder
@@ -8741,7 +8742,9 @@ def test_native_append_physical_state_refusal_keeps_actual_driver_release_owner(
     assert owners == {"sumeragi/driver/mod.rs"}
     authority = (root / "sumeragi/runtime_availability.rs").read_text()
     compact = re.sub(r"\s+", "", authority)
-    assert compact.count("try_view_once().map_err(state_view_error)?") == 2
+    # Construction, schedule resolution and the portable-startup checkpoint headers each
+    # take one non-blocking State view; none waits on a blocking `view()`.
+    assert compact.count("try_view_once().map_err(state_view_error)?") == 3
     assert "letview=state.view();" not in compact and "letview=self.state.view();" not in compact
     assert "io::Error::new(kind,error).into()" in compact
     driver = (root / "sumeragi/driver/mod.rs").read_text()

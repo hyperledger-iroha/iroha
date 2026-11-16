@@ -1,0 +1,7 @@
+
+        seiyaku PermissionDemo {
+            kotoage fn add() {
+                ledger::account::register(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
+            }
+        }
+    

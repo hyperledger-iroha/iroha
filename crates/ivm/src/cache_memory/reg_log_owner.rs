@@ -5,7 +5,7 @@
 //! Existing standalone construction without a State allocation budget remains
 //! explicitly untracked by that pool; it never manufactures a replacement pool.
 
-use super::{MemoryBudget, MemoryReservation, global_budget};
+use super::{MemoryBudget, MemoryReservation, current_budget};
 use crate::{VMError, error::ExecutionDeferral, zk::RegLog};
 use iroha_allocation::{AllocationBudget, AllocationCharge, shared::Shared};
 use parking_lot::{Mutex, MutexGuard};
@@ -62,7 +62,7 @@ impl SharedRegLog {
     }
 
     fn try_with_value(log: RegLog, budget: Option<&AllocationBudget>) -> Result<Self, VMError> {
-        Self::try_with_budgets(log, budget, global_budget())
+        Self::try_with_budgets(log, budget, &current_budget())
     }
 
     fn try_with_budgets(

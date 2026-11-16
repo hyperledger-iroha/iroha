@@ -147,12 +147,12 @@ fn raw_selector_preparation_refusal_retries_the_same_state_owner() {
     let baseline = budget.reserved_bytes();
     budget.set_limit_bytes(0);
     assert!(matches!(
-        prepare(&cache, &bytes),
+        prepare_in_world(&cache, view.world(), &bytes),
         Err(ExecutionAttemptError::Deferred(_))
     ));
     assert_eq!(budget.reserved_bytes(), baseline);
     budget.set_limit_bytes(original_limit);
-    let prepared = prepare(&cache, &bytes).unwrap();
+    let prepared = prepare_in_world(&cache, view.world(), &bytes).unwrap();
     assert_eq!(prepared.code_hash(), ivm::contract_code_hash(&bytes));
     assert!(budget.reserved_bytes() > baseline);
 }

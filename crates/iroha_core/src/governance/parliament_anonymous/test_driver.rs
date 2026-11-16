@@ -17,13 +17,16 @@ use iroha_data_model::{
             FrozenLifecyclePolicyV1, FrozenParliamentAttemptPolicyV1, ParliamentBallotParametersV1,
             ParliamentBallotPurposeV1, ParliamentCandidateTestingPolicyV1,
             ParliamentDecisionRuleV1, ParliamentLifecycleParametersV1, ProofProfileIdV1,
+            digests::proposal_digest_v1,
         },
         types::{
-            BeaconPulseId, BeaconSessionId, DeliberationPhaseV1, GovernanceExpectedHeadAbsentV1,
+            AbiVersion, BeaconPulseId, BeaconSessionId, ContractAbiHash, ContractCodeHash,
+            DeliberationPhaseV1, DeployContractProposal, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
-            RiskTierV1,
+            ProposalKind, RiskTierV1,
         },
     },
+    smart_contract::ContractAddress,
 };
 
 use super::{
@@ -32,10 +35,55 @@ use super::{
     AnonymousSortitionPulseV1, BodyDecisionModeV1, stage_for_body,
 };
 
-/// The proposal every test attempt is about.
-pub(super) const CONTENT: ProposalContentId = ProposalContentId::new([0x01; 32]);
-/// The compare-and-set subject of every test attempt.
-pub(super) const SUBJECT: [u8; 32] = [0xe0; 32];
+/// The operator the test proposal names: a fixed account, so every derivation of the proposal
+/// is reproducible.
+pub(super) fn operator() -> AccountId {
+    AccountId::new(
+        KeyPair::try_from_seed(vec![0x0b; 32], Algorithm::Ed25519)
+            .expect("derive the operator key")
+            .public_key()
+            .clone(),
+    )
+}
+
+/// The contract the test proposal deploys. The tests hold no lifecycle record of it, so its
+/// compare-and-set head is absent.
+pub(super) fn contract() -> ContractAddress {
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        .parse()
+        .expect("contract address")
+}
+
+/// A deployment of [`contract`] with the code hash `[code; 32]`. Its pipeline is the
+/// contract-lifecycle one ([`pipeline`]) and its subject is the contract, whatever the code.
+pub(super) fn deployment(code: u8) -> ProposalKind {
+    ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: operator(),
+        contract_address: contract(),
+        code_hash: ContractCodeHash::new([code; 32]),
+        abi_hash: ContractAbiHash::new([0x41; 32]),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    })
+}
+
+/// The proposal every test attempt is about. Its content identifier, digest, effect hash and
+/// subject are derived from it and never chosen.
+pub(super) fn proposal() -> ProposalKind {
+    deployment(0xd0)
+}
+
+/// The content identifier of [`proposal`].
+pub(super) fn content() -> ProposalContentId {
+    ProposalContentId::derive_v1(&proposal())
+}
+
+/// The compare-and-set subject of [`proposal`]: its contract.
+pub(super) fn subject() -> [u8; 32] {
+    proposal()
+        .governed_subject_id_v1()
+        .expect("a contract subject")
+}
 /// Height of the creating block.
 pub(super) const CREATED_HEIGHT: u64 = 100;
 /// Time of the creating block.
@@ -53,8 +101,11 @@ pub(super) const JURY_SEATS: u16 = 25;
 pub(super) const ALTERNATES: u16 = 2;
 /// The finding root every public body endorses.
 pub(super) const FINDING_ROOT: [u8; 32] = [0xc0; 32];
-/// The `proposal_digest` every attempt of the driver fixes at creation.
-pub(super) const PROPOSAL_DIGEST: Digest512 = Digest512::new([0x02; 64]);
+/// The `proposal_digest` of [`proposal`], which every board and closure record of a test
+/// attempt carries.
+pub(super) fn proposal_digest() -> Digest512 {
+    proposal_digest_v1(&proposal()).expect("a canonical proposal")
+}
 
 /// The network of every test attempt.
 pub(super) fn network() -> NetworkId {
@@ -68,7 +119,7 @@ pub(super) fn candidate() -> ParliamentBallotPurposeV1 {
     ParliamentBallotPurposeV1::CandidateTesting(ParliamentCandidateTestingPolicyV1::CANDIDATE_V1)
 }
 
-/// The contract-lifecycle pipeline with its conditional Confirmation Jury.
+/// The contract-lifecycle pipeline of [`proposal`] with its conditional Confirmation Jury.
 pub(super) fn pipeline() -> Vec<ParliamentBody> {
     vec![
         ParliamentBody::RulesCommittee,
@@ -136,13 +187,14 @@ pub(super) fn policy() -> FrozenParliamentAttemptPolicyV1 {
 
 /// The initial snapshot of attempt `sequence`.
 pub(super) fn attempt(sequence: u32, risk_tier: RiskTierV1) -> AnonymousGovernanceAttemptV1 {
-    AnonymousGovernanceAttemptV1::new_v1(CONTENT, sequence, risk_tier)
+    AnonymousGovernanceAttemptV1::new_v1(content(), sequence, risk_tier)
 }
 
-/// The compare-and-set head of every test attempt.
+/// The compare-and-set head of every test attempt: the contract of [`proposal`] has no
+/// lifecycle record yet.
 pub(super) fn head() -> GovernanceExpectedHeadV1 {
     GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
-        subject_id: SUBJECT,
+        subject_id: subject(),
     })
 }
 
@@ -245,7 +297,8 @@ impl Driver {
         )
     }
 
-    /// An attempt of the given purpose, snapshot, policy and inherited redraw count.
+    /// An attempt about [`proposal`] of the given purpose, snapshot, policy and inherited
+    /// redraw count.
     pub(super) fn with(
         purpose: ParliamentBallotPurposeV1,
         attempt: AnonymousGovernanceAttemptV1,
@@ -257,8 +310,7 @@ impl Driver {
             purpose,
             attempt,
             policy,
-            PROPOSAL_DIGEST,
-            [0xd0; 32],
+            proposal(),
             head(),
             AnonymousAttemptOriginV1 {
                 created_at_ms: CREATED_MS,
@@ -574,8 +626,8 @@ impl Driver {
         self.block(closing_ms - self.now_ms);
         BallotClosureRecordV1 {
             network_id: network(),
-            proposal_content_id: CONTENT,
-            proposal_digest: PROPOSAL_DIGEST,
+            proposal_content_id: content(),
+            proposal_digest: proposal_digest(),
             governance_attempt_id: self.id(),
             election_attempt_id: sealed.election_attempt_id,
             body_instance_id: sealed.body_instance_id,

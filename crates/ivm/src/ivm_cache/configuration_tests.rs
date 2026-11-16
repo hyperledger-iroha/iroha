@@ -21,6 +21,57 @@ const REENTRANT: CacheLimits = CacheLimits {
     max_decoded_ops: 0,
 };
 
+#[test]
+fn guard_holder_retention_is_private_to_its_thread() {
+    use crate::cache_memory::{MemoryReservation, memory_stats};
+    // Reservations are accounting entries, so the private budget is exercised at the default
+    // byte limit with the published capacity: a lower process limit here would refuse retention
+    // to every unguarded test that runs beside this one.
+    const LIMIT: usize = DEFAULT_CACHE_MAX_BYTES;
+    const OWN: usize = LIMIT / 4 * 3;
+    const SECOND: usize = LIMIT / 2;
+    let _guard = {
+        let _configuration = lock_cache_configuration();
+        CacheLimitsGuard::new(CacheLimits {
+            max_bytes: LIMIT,
+            ..cache_limits()
+        })
+    };
+    let stats = memory_stats();
+    assert_eq!(
+        (stats.limit_bytes, stats.active_bytes, stats.retained_bytes),
+        (LIMIT, 0, 0)
+    );
+    // Whatever another thread holds or retains is charged to the process budget.
+    let foreign = std::thread::spawn(|| {
+        let reservation = MemoryReservation::active(48);
+        let _ = reservation.try_retain();
+        reservation
+    })
+    .join()
+    .expect("foreign reservation");
+    let own = MemoryReservation::active(OWN);
+    assert!(
+        own.try_retain(),
+        "the holder's budget counts its own thread"
+    );
+    assert_eq!(memory_stats().retained_bytes, OWN);
+    let second = MemoryReservation::active(SECOND);
+    assert!(
+        !second.try_retain(),
+        "three quarters plus one half exceeds the installed limit"
+    );
+    assert_eq!(memory_stats().active_bytes, SECOND);
+    drop(foreign);
+    // A limit written while the guard is held reaches the holder's budget too.
+    configure_limits(CacheLimits {
+        max_bytes: LIMIT * 2,
+        ..cache_limits()
+    });
+    assert_eq!(memory_stats().limit_bytes, LIMIT * 2);
+    assert!(second.try_retain());
+}
+
 fn assert_published(expected: CacheLimits) {
     assert_eq!(cache_limits(), expected);
     assert_eq!(configured_max_bytes(), expected.max_bytes);

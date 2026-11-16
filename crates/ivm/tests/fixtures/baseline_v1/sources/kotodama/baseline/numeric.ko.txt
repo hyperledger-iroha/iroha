@@ -1,0 +1,22 @@
+// Baseline capture: exact `int` arithmetic through the numeric V1 syscalls, with entrypoint
+// arguments so nothing is folded at compile time.
+seiyaku BaselineNumeric {
+  view fn add(int a, int b) authorize(anyone) -> int {
+    return a + b;
+  }
+  view fn sub(int a, int b) authorize(anyone) -> int {
+    return a - b;
+  }
+  view fn mul(int a, int b) authorize(anyone) -> int {
+    return a * b;
+  }
+  view fn div(int a, int b) authorize(anyone) -> int {
+    return a / b;
+  }
+  view fn rem(int a, int b) authorize(anyone) -> int {
+    return a % b;
+  }
+  view fn less(int a, int b) authorize(anyone) -> bool {
+    return a < b;
+  }
+}

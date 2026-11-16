@@ -1,0 +1,8 @@
+
+        seiyaku DecimalQuantity {
+            view fn main() authorize(anyone) -> bool {
+                let quantity a = 1.50;
+                return a == a;
+            }
+        }
+    

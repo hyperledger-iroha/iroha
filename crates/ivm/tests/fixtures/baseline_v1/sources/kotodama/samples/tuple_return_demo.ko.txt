@@ -1,0 +1,13 @@
+// Tuple return and destructuring demo.
+seiyaku TupleReturnDemo {
+    fn pair(int a, int b) -> (int, int) {
+        let t = (a, b);
+        return t;
+    }
+
+    view fn compute() authorize(anyone) -> (int, int) {
+        let p = pair(a: 3, b: 5);
+        // Destructure using numeric field access
+        return (p.0, p.1);
+    }
+}

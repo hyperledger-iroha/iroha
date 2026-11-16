@@ -3,7 +3,7 @@
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_model_base::name::Name;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
 use norito::to_bytes;
 fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT

@@ -553,9 +553,24 @@ passes.
 - **Parliament:** binding juries move to [anonymous on-chain ballots](specs/parliament_private_ballot_design.md):
   public votes and tally, voter-to-ballot linkage hidden by a PQ membership and
   nullifier proof, and no ballot custodian. No proof profile is selected,
-  nothing is qualified and authenticated ballot execution is not implemented in
-  Core. Canonical signerless transaction inputs and restricted ballot results are
-  implemented; unfinished node paths return local unavailability. The node
+  nothing is qualified. Signerless, proof-authorized ballot execution (design
+  section 12.3, slice 4) is implemented in Core: a ballot routes only to lane zero
+  of a global root whose selection installs the family; the queue admits it
+  through its own partition (ordered checks, then the proof, then an atomic
+  `(scope, nullifier)` claim) with isolated count, byte and verification-rate
+  bounds; block validation and the proposer share the committed per-block budget;
+  and the Network output owner decides each input against the board recomputed
+  from World, recording only `OutsideCastingWindow` and `DuplicateNullifier`. The
+  unconditional unavailable boundary is deleted. Slice 5 adds the account- and
+  session-free `POST /v1/gov/anonymous-ballots` with its own `iroha_config`
+  ingress bounds, public board and attempt reads, and Rust SDK and CLI paths.
+  Evidence is component tests with genuine fixture ballots, including the output
+  owner inside a component block, and mutation controls HC812–HC815 killed in a
+  test-profile check; no real-peer run exists, because no harness yet drives a
+  governed activation of a release addition on real peers. The stored proposal,
+  draft routes, the non-Rust SDK paths and the anonymous-evidence verifier are
+  open; production enactment is not implemented and binding use stays disabled.
+  The node
   ballot board (`iroha_parliament_ballot::board`: registration ledger, seal,
   casting clock, block execution, closure and the admission and block-execution
   state adapters) is implemented in the typed protocol crate; Core drives its
@@ -586,7 +601,7 @@ passes.
   World rows: no real-peer run exists (see the design's slice 3 "Open"
   list). Listing reads a due index of at most `K` attempts. A keepalive that
   Parliament work alone makes due is fee-exempt, and the keeper wakes at
-  Parliament's next due time. Signerless execution does not exist yet. The real
+  Parliament's next due time. The real
   typed protocol is available for local testing with
   `scripts/test_parliament_ballot_local.sh` (or `--full`); its fixture board
   covers registration, voting, admission/execution, closure, replay and canonical

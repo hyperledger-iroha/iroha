@@ -1,0 +1,16 @@
+// Baseline capture: contract events, durable state and a permission-guarded entrypoint.
+seiyaku BaselineEvents {
+  permission Writer;
+  state StateMap<int,bool> Values;
+  event Saved { bool value; }
+  kotoage fn main() authorize(anyone) -> bool {
+    emit Saved { value: true };
+    return true;
+  }
+  kotoage fn save(bool succeed) authorize(Writer) -> Result<bool,int> {
+    Values[1] = true;
+    emit Saved { value: succeed };
+    if succeed { return Result::ok(true); }
+    return Result::err(7);
+  }
+}

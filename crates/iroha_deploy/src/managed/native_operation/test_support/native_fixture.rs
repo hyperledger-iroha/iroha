@@ -82,6 +82,19 @@ pub(in crate::managed) struct NativeFixture {
     pub(in crate::managed) chain: CertifiedTestChain,
     validators: Vec<(KeyPair, Hash)>,
     http_listeners: Option<super::owned_listeners::ReservedHttpListeners>,
+    // Custody states this executed chain already proved, each by its certified cut.
+    pub(in crate::managed) proved_custody: std::sync::Mutex<Vec<ProvedCustody>>,
+}
+
+/// One custody state the executed chain proved for a certified cut and the canonical verifier
+/// accepted. A committed cut never changes, so the simulated validators prove it once: a later
+/// read of the same cut must not spend a client operation's window re-snapshotting World.
+pub(in crate::managed) struct ProvedCustody {
+    pub(in crate::managed) cut: Hash,
+    pub(in crate::managed) provider: iroha_data_model::sorafs::capacity::ProviderId,
+    pub(in crate::managed) binding: sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+    pub(in crate::managed) state:
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
 }
 // Exact prepared inputs cross the phase boundary; parsed configuration temporaries do not.
 struct PreparedNativeFixture {
@@ -119,6 +132,7 @@ impl NativeFixture {
             chain,
             validators: prepared.validators,
             http_listeners: None,
+            proved_custody: std::sync::Mutex::new(Vec::new()),
         }
     }
 

@@ -1,0 +1,8 @@
+// Simple program showing basic arithmetic.
+// Returns the sum of two input values.
+seiyaku Example {
+    permission Entry;
+    kotoage fn add(int a, int b) authorize(Entry) {
+        let c = a + b;
+    }
+}

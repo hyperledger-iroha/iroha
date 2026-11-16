@@ -292,7 +292,7 @@ fn removed_hw_probe_syscalls_reject() {
         let mut vm = IVM::new(u64::MAX);
         let program = assemble_syscall(number);
         assert!(
-            matches!(vm.load_program(&program), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (u32::from(number)))
+            matches!(vm.load_program(&program), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == number)
         );
     }
 }

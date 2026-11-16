@@ -986,8 +986,14 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         (
             crate::runtime::catalog::additions::NATIVE_GAME_CAPTURE.module,
             std::collections::BTreeMap::from([
-                ("iroha.game_partition.export.v1", native_game_export),
-                ("iroha.game_partition.import.v1", native_game_import),
+                (
+                    iroha_data_model::isi::game_partition::ExportGameUnitV1::WIRE_ID,
+                    native_game_export,
+                ),
+                (
+                    iroha_data_model::isi::game_partition::ImportGameUnitV1::WIRE_ID,
+                    native_game_import,
+                ),
             ]),
         ),
         (

@@ -19,6 +19,8 @@ mod domain_links;
 mod fraud_monitoring;
 #[path = "genesis_json.rs"]
 mod genesis_json;
+#[path = "governed_activation.rs"]
+mod governed_activation;
 #[path = "iroha_cli.rs"]
 mod iroha_cli;
 #[path = "iroha_cli_storage.rs"]

@@ -22,7 +22,7 @@ fn assert_generic_bridge_rejected(instruction: &InstructionBox) {
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(
         &encoding::wide::encode_scall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-        .to_le_bytes(),
+            .to_le_bytes(),
     );
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut vm = IVM::new(10_000_000);

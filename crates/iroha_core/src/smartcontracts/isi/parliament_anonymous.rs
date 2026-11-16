@@ -24,10 +24,12 @@
 //! verifier or local read, or stored credentials that are not the election's, which is
 //! World's corruption and never the signer's fault.
 //!
-//! TODO(design §12.3, slice 5): production enactment needs the exact proposal, and only its
-//! digest is kept. A qualified release must store the admitted proposal with its attempt (or
-//! resolve it from an owner the family selects) before it can certify a production attempt;
-//! this release creates candidate-testing attempts only.
+//! The attempt stores the admitted proposal itself. Its reducer derives the proposal digest
+//! and the effect hash from it and checks the attempt's identifiers and the head's subject
+//! against it, at creation and at every restore.
+//!
+//! TODO(design §12.3, slice 5): production enactment (G3) of a certified production attempt.
+//! This release creates candidate-testing attempts only.
 
 use iroha_data_model::{
     account::AccountId,
@@ -38,7 +40,6 @@ use iroha_data_model::{
             ParliamentBallotPurposeV1, ParliamentCandidateTestingPolicyV1,
             ParliamentLifecycleParametersV1, RegisterParliamentCredentialV1,
             SubmitAnonymousParliamentTransitionV1, anonymous_governance_attempt_id_v1,
-            digests::proposal_digest_v1,
         },
         types::{GovernanceAttemptStatusV1, ParliamentBody, ProposalKind, RiskTierV1},
     },
@@ -247,18 +248,17 @@ impl Execute for CreateAnonymousParliamentAttemptV1 {
         }
         let (risk_tier, pipeline) = anonymous_pipeline_v1(&self.proposal);
         let policy = frozen_policy(&pipeline, state)?;
-        let proposal_digest = proposal_digest_v1(&self.proposal)
-            .map_err(|error| refused(format!("proposal digest: {error}")))?;
-        let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
         let expected_head = parliament_expected_head_v1(&self.proposal, state)
             .map_err(|error| attempt_refusal(state, error))?;
         let created_at_ms = block_time_ms(state)?;
+        // The attempt stores the proposal; its reducer derives the digest and the effect hash
+        // and checks the snapshot and the head against it.
+        let snapshot = self.canonical_attempt(risk_tier);
         let attempt = AnonymousParliamentAttemptStateV1::try_new(
             purpose,
-            self.canonical_attempt(risk_tier),
+            snapshot,
             policy,
-            proposal_digest,
-            effect_preimage_hash,
+            self.proposal,
             expected_head,
             AnonymousAttemptOriginV1 {
                 created_at_ms,

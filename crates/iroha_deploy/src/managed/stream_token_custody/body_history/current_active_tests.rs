@@ -102,7 +102,7 @@ fn current_active_all_three_production_call_sites_close_before_publication() {
         calls, 0,
         "closure-only path must not require active enrollment"
     );
-    let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options()).unwrap();
     let (result, calls) = observe(false, None, || native.test_current_active_transition(terms));
     result.unwrap();
     assert_eq!(

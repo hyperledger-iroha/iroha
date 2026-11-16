@@ -1,0 +1,2411 @@
+{
+  "anchor_commit": "77600a4840bd5f37f167c46b11b9f5ab73c97ae2",
+  "anchor_is_parent_of": "c5511ebfc4",
+  "files": [
+    {
+      "bytes": 5630,
+      "path": "README.md",
+      "sha256": "4de4a74c8d38aa66cc1df3d68876bd6146163b877f5e65ee7065e40be716b641"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_abi_hash_mismatch.to.bin",
+      "sha256": "bcf4a3a471dd3a719c230776c993d6043b6b298a1f6f280def7657151ba2bc5e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_abi_hash_zero.to.bin",
+      "sha256": "bba1bd769fd51cb60cdb1bf35a3de2a7ecd441fb1c96c919b12f278c0b0ce8e9"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_abi_version_0.to.bin",
+      "sha256": "1eb64b0a4f0e84e1def5faf884c107fe9932f23845d142cdd56dd3c6adf1b819"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_abi_version_2.to.bin",
+      "sha256": "737f9edc3b961a449e9d9c46d38b648b91bd6d80ec5672df67215efecffe1a55"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_bad_magic.to.bin",
+      "sha256": "672f3139e0282c90dcf7cd1ebb727d922411b6f798632b0f8d834813059fefbf"
+    },
+    {
+      "bytes": 60,
+      "path": "artifacts/asm/admission_code_not_word_aligned.to.bin",
+      "sha256": "ad19db1a4b22ca074280833918592ed7bfe60b662091ffa772da9aedb8911ea2"
+    },
+    {
+      "bytes": 0,
+      "path": "artifacts/asm/admission_empty.to.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_invalid_opcode_00.to.bin",
+      "sha256": "f1056fb9b0d332c83f0d14b6c247cb4211e8a0d4f443ccc0cc4286b5f2d0977d"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_invalid_opcode_after_halt.to.bin",
+      "sha256": "0b848fdca4ed5b34f44ac2b1fe7bc8b2bcdcb7fbc19bd18b66532c5a207a02ea"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_invalid_opcode_ff.to.bin",
+      "sha256": "4edc9007f81e80572a3e742c3bdc3e86629ab1603e655a62346dd03006c23b85"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_low_ceiling_max_cycles_500.to.bin",
+      "sha256": "47260975d5e2139380baac93064706abe344e785cf89689b4abf6b78750e6977"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_low_ceiling_max_cycles_501.to.bin",
+      "sha256": "95ca752fa7bda264b4fc44cc5694aa6f38f5f45c3637fad9ccd4731c600adaf8"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_low_fuel_max_cycles_1000.to.bin",
+      "sha256": "e681b232f324f01b49eb968e624f80062bee4c95ed067e4bf43bef072db669a3"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_low_fuel_max_cycles_1001.to.bin",
+      "sha256": "93fe1167ff21ead073ce16b5940c1f36b92bcb5430d59cad1beb1a1c6d331e8e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_low_fuel_max_cycles_5000.to.bin",
+      "sha256": "4df1bc226f543e399a1bee070c91ae71b9df186b62f084f4d0cdb382a017b54c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_above_fuel.to.bin",
+      "sha256": "f90d60067bd0469d4b2e40179b9b8f1b2736367a842dfa89da521f259503ffcc"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_above_upper_bound.to.bin",
+      "sha256": "c75e39788f956d2cd473ab46e4f3bfa080c1e08502bbaca2f753f6f5b9975eb0"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_at_fuel.to.bin",
+      "sha256": "9822fc82460b085325fc11419604eccdbe9165e59dbe43dfc1a45f0ceafe30b7"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_at_upper_bound.to.bin",
+      "sha256": "4e726780792fa6bf8abfa5619daf2c39b2c5a669a47f82deb506046f7ea4fb39"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_u64_max.to.bin",
+      "sha256": "fb3bdf32b6135d6755b1a91d6b679d317de36917320c74d0264cdd4e5990617c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_max_cycles_zero.to.bin",
+      "sha256": "6b8fa338a3d07edf854219f867cd2cbbdfd12c63051d7f5767cb21e037cb8775"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_mode_unknown_bit.to.bin",
+      "sha256": "3dd6c5fa8bbe0e26bf4c3efa8f7a8fed7a9d21bb956c3f9f663c9142ea91e3d3"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_mode_unknown_with_known.to.bin",
+      "sha256": "01f440900c770249a1b91d561a31db8fdca325077439a53847b93602862e2001"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_ok.to.bin",
+      "sha256": "b56694e906133d835e034046077db1b61a1e431ddb1ff3458bb46f67d71c8910"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_precedence_abi_before_vector.to.bin",
+      "sha256": "5212ca2b5a50fefc83ea80332d03657d6caba6d5dae3cd59b112df849878dda4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_precedence_mode_before_abi.to.bin",
+      "sha256": "4030939f8c4c5e55b10c1af0ddb65d7465dca86e9dcae3f94ae9f23d05fb2822"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_precedence_vector_before_hash.to.bin",
+      "sha256": "5a57cd73ecd9b7acf1c762e05cd06c821dac5232f8a01e8b771dc480f72c63a8"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_precedence_version_first.to.bin",
+      "sha256": "48c5baeed88babc87c6358c4e80fed6cf7712421d39160ab58d5b9563a0ed49e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_reserved_iso20022_opcode.to.bin",
+      "sha256": "905c6a5130ede1b08e094ce1f60673df71d7196edacb8697ac6b9b4141e961e3"
+    },
+    {
+      "bytes": 48,
+      "path": "artifacts/asm/admission_truncated_header.to.bin",
+      "sha256": "f20ffe68e9df89a1f44360c25a491db927df616093f27b75320bb791a2a2fbb3"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_vector_length_255.to.bin",
+      "sha256": "5bf67c0e368205da17fbc57cf741121a8fa91f9bbcd8679dbec68a1d485e3f66"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_vector_length_64.to.bin",
+      "sha256": "4f92bf4657c372f7bdc1f35c4cc4d11a3e3ccff3bb142628817dc15b2eddd689"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_vector_length_65.to.bin",
+      "sha256": "a1ac26160a6e96fc39f54ac9c008c33425476ee5d867fe4a98a1f7dc4b11b6b7"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_vector_length_65_with_mode.to.bin",
+      "sha256": "49f70794fed04435d59e3e952a0c63084f56bc3f9b302c10ef9ef700f18a0d22"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_version_major_2.to.bin",
+      "sha256": "07ca4cb105efa26d40f1fa30f84f24be4ec99c49f048636c8c014e916a1eb59c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_version_minor_0.to.bin",
+      "sha256": "cb1f980c2c30b47579a3077a25984d81736038668adbb4db1667f59de96ebb9c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_version_minor_2.to.bin",
+      "sha256": "4cf020e99cc990583ce65f93355c50fd7c962d241cc1050052939757fb65bb84"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_zk_and_vector_modes.to.bin",
+      "sha256": "166085a8e66a775dd906097bd7c271eb35fa1a37d33713278b3d93fd055c5e3e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/admission_zk_mode_generic.to.bin",
+      "sha256": "f1fab116f4517652d0ffec8f8b432d9ecd479a3af8080cee0c36ee59a445c543"
+    },
+    {
+      "bytes": 197,
+      "path": "artifacts/asm/arith_all.to.bin",
+      "sha256": "910646a692ae08b7675077ec4e02b7f6b7eaf6525e07e9cf7ddc06ff6b68a455"
+    },
+    {
+      "bytes": 117,
+      "path": "artifacts/asm/arith_imm8.to.bin",
+      "sha256": "31c83fe1dc21ed7e5618dfa8aa20bae7e6b4ac1b0f79727ac0982674d5d1ce20"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_abs.to.bin",
+      "sha256": "4c40f4e1bffa134cd9563d2d1bc19bf8c3cbc77499fa7880fe2b1ad58f4fa694"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_div.to.bin",
+      "sha256": "70f53ae7f4c66b5a9ff9d298f8ac042a7e97958a202147d5f85e81d914ed0ab2"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_div_ceil.to.bin",
+      "sha256": "b59364cc1dc803691a095856d205e21a1c5407b78f8339bd0731b07432b7b4c3"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_divu.to.bin",
+      "sha256": "1fab03c193d82165472cb0479137843e78708029c20a8c6a1b90a5dfd09763d4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_rem.to.bin",
+      "sha256": "b3b4fab79a0f2fe63188d05acb34a5a4301f25af603469dcf07b726984756707"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/arith_trap_remu.to.bin",
+      "sha256": "dc92b0baf1e97f5494f720113cdf97c34c7503c1d35f0597eee8dce9efa3bc8b"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_aes_register_out_of_bounds.to.bin",
+      "sha256": "3754831d0f363c318b38269a8b9b77e0bc4c7b82e889c74d11ab88072da49841"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/crypto_aes_round.to.bin",
+      "sha256": "26621025115f047b972803edc5823a9c06d68f145a0153880e885c2e05e98211"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/crypto_aes_round_no_vector_mode.to.bin",
+      "sha256": "ca5687a22009aa18a4f7aa7aa0ca0556aa95751838f9a4d5e8ca6a5f6784202c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_blake2s.to.bin",
+      "sha256": "f1db7223a9ea5ccccf48b807331e115ad8b939e1be222469243a407efd84451f"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/crypto_dilithiumverify.to.bin",
+      "sha256": "3e084b08c97422f2eb1312aedfaebabccf00d3cf6cdf6bed18153f21ba3bd51b"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/crypto_ecdsaverify.to.bin",
+      "sha256": "213aeff60a3a1d536507168bb3d338023f12ba26a3d3d30546dd2551a970ad1b"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_ed25519batchverify.to.bin",
+      "sha256": "a5c9427f8d06048636095916df68d8f0720458cfd7873e3e45059898621c3016"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/crypto_ed25519verify.to.bin",
+      "sha256": "5dcd72a1deb5fcb61180dfd666ec7e81a6ccc0b402c22dd4d09a8e2b0cac8b20"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/crypto_poseidon.to.bin",
+      "sha256": "92d1a9afd053de8b3be1e0bfca4c6aa45703c2ed875d9c1bdac671a61b278bd2"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_poseidon6_input_overflow.to.bin",
+      "sha256": "0a1c28fb1ee5a868e78fd6891a6ff9b5d197db02941f0f39b479cdfe7cb7667c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_poseidon6_reserved_operand.to.bin",
+      "sha256": "5a58517163762c51170f28645a52361cf77927a99217be725da933ea8f150b8c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_sha256block.to.bin",
+      "sha256": "e8021dac8ef46b0007c465ee436b641aaee6307d2ed706d4ee8eaaaa8cd7449f"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_sha256block_no_vector_mode.to.bin",
+      "sha256": "1802f5aa240aa130ff4be39f0ab9e38fc3bc0e918966908af4c2a3e937b2bc63"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/crypto_sha3block.to.bin",
+      "sha256": "dfd71290a2b4fcdf386983e2c2e4982558d028ce69ab22e653bf335d75533f2a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/ctl_branch_out_of_code.to.bin",
+      "sha256": "d8bd896d603dba47326b86c895822b8ab6710887ee460fee7c7f5e12ec755f3b"
+    },
+    {
+      "bytes": 569,
+      "path": "artifacts/asm/ctl_branch_reach.to.bin",
+      "sha256": "5ba5e501b23689a177b91f4e94f304d1adda79c7fe6365e99cb0065a6ac8ddca"
+    },
+    {
+      "bytes": 101,
+      "path": "artifacts/asm/ctl_branches.to.bin",
+      "sha256": "2f23ca9b5268af3b794b23a64a64663c99ba29ec94223e3064d5cad434010c94"
+    },
+    {
+      "bytes": 49,
+      "path": "artifacts/asm/ctl_empty_code.to.bin",
+      "sha256": "24f9c62f5927819044fc01befcf5747289aa9f6cf8a415954d1c61dd2c799b2b"
+    },
+    {
+      "bytes": 53,
+      "path": "artifacts/asm/ctl_halt_only.to.bin",
+      "sha256": "cf732fade4a76a95ae6a56614477b720937cda04da22038021fb024447093a61"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/ctl_jalr_alignment.to.bin",
+      "sha256": "437cdb1ef458559f6e1bba12c28255f207506300982ffb4d6c74926a830edbfc"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/ctl_jals.to.bin",
+      "sha256": "798be08358861a4d5e510e7a02d249da7f47e5d2ece6636ee07bb1eac03fc2b8"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/ctl_jmp_backward.to.bin",
+      "sha256": "fce2df19f40d10b8ecef292203362ffce7613b762fcbb3e5405065ba80a53094"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/ctl_jr_target.to.bin",
+      "sha256": "884410ae972b183d3e1ef84a6236433ce622a2a0c8e7c88b52766b04eaf890f4"
+    },
+    {
+      "bytes": 1273,
+      "path": "artifacts/asm/ctl_jumps.to.bin",
+      "sha256": "290bf0b7ec0bdfae2d1550ca3bcfb6ee912d0ba1542989d9a46942ebfaf13965"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/ctl_loop_sum.to.bin",
+      "sha256": "060b85ed55c8577e47b72b6d0c9993b132fdcd8c22a315c81554bbca4c4cca60"
+    },
+    {
+      "bytes": 53,
+      "path": "artifacts/asm/ctl_missing_halt.to.bin",
+      "sha256": "8155a722854db103bf7ff5209099dbd15f1948a2a62be5c8f5fc738f772240dd"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_12.to.bin",
+      "sha256": "3422cfee1295d2af95f47ddf14c0261e45142f8b154ece8f79242b62cc2e1132"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_13.to.bin",
+      "sha256": "0838b44365de18d70e2b00825029a31d29f72aa797eed0ec1d0c2a238d700744"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_2.to.bin",
+      "sha256": "f042098c48b5be9f9b359ae253cc1d0da1517381292210d8004369be9084fc98"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_3.to.bin",
+      "sha256": "44bcf357c7532991e208c8e00ff0c1789cb87ec063b6dbaf12deb2556930039b"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_4.to.bin",
+      "sha256": "f9e05359c43ec684d30b277a3905b7fb4ae1ea437339fcf42c1a185d6e428d0f"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_6.to.bin",
+      "sha256": "1ac718dfb872ba8babf3635ea85b27d7d41a32b7a5fc6fbfd56e4326f04cbda7"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_div_ceil_max_7.to.bin",
+      "sha256": "03995697b6a6a6bc1f30cccc4fe91a6d21e17ba56dbec68fee3d78b097abe865"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd.to.bin",
+      "sha256": "86133a37a73b599cc1c809a8567aac4da50cd145ac0dcaa7dbb5eb038d7b439b"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_12.to.bin",
+      "sha256": "3e9e49315e35dd427deea8e0e89cffbedfc6246b22cd343ca2698746fce817fd"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_13.to.bin",
+      "sha256": "17baabd175f06827818812aa9d5c44b6d46f5af4265a92729fb932afff9b3039"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_2.to.bin",
+      "sha256": "b1366d7ab2e3648bbd80206286e1583285c5f48ee8c8a0ba0ad4874b53c536fa"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_3.to.bin",
+      "sha256": "6742b4acda2f83d8d2fe019c7b66c63711c0d0c56ccacd23a0a5b539c07a1577"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_4.to.bin",
+      "sha256": "602484ee6261c53688a9cb2413c442d1abed676caee830fb6c61947e29ee5a74"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_6.to.bin",
+      "sha256": "105c2dca6da0cc6a7166626a6938d0ff36b09a5b958f1db2d8626d00fd3b156d"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_gcd_max_7.to.bin",
+      "sha256": "686dc5b2a1de935c889b6b3e3b9ef1658cd9ab46d918d81f364685fffac7e068"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt.to.bin",
+      "sha256": "dbc57fe52ba1df5e253aeec97aba86fbcaa377a1351cd1bb0c9fd14c3bf960ef"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_12.to.bin",
+      "sha256": "ca386c75026f5a4442460b7f2a5bd982cabf446c61ad59c5c3dff376ccff520b"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_13.to.bin",
+      "sha256": "e3762c8625ccdfb17ed031b6f55c45c7d74160feb6d9a8d09aef7c612dae0a94"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_2.to.bin",
+      "sha256": "59c5cb51887866bda4c60b389b6c45e7adeb1af1df80188bb8bfb2f4a3586a4a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_3.to.bin",
+      "sha256": "8b4066f01a1be784486cf0972254986e9013d5416b1c19a2f1136639102818a4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_4.to.bin",
+      "sha256": "b2771e8030b9408b0a83c9bbbe5e9ae918bbef844a6f4054f8254dc8e261e02d"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_6.to.bin",
+      "sha256": "17f20840d203b6bd4ffea4aa3827de4a1260b8424704cf711feccc5119051e9f"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_isqrt_max_7.to.bin",
+      "sha256": "acb0df48d506e21722a3459fc24442979acea35b2a385759a69cbca759ec16c0"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_0.to.bin",
+      "sha256": "e86588c581e0e6ee1dee89ea4a599f7a4b678e03cf08bf42b313bf9a1298e3de"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_1.to.bin",
+      "sha256": "08b8bbfd8ce244aa6dc889a13c2217114c30e11c3c4ab49ed2ad4d2561940b2b"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_3.to.bin",
+      "sha256": "5fa44cedd5a27e4b205d97af737ceb95e89f0bb6a9a005dc269f27de849642aa"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_30.to.bin",
+      "sha256": "8d020cea17bd6a9f1bafab0c21816a3d3059a6aa64f58dfa8b814f4f1fd92c54"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_31.to.bin",
+      "sha256": "3e4d1277d2540f465fe5e644353436fc33dcfcc9e8ceaafb2c48a3e4fa7d8657"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/cycles_loop_max_32.to.bin",
+      "sha256": "14042db14143799b0743a7bda3849fa50974128aba8acabfda96c2534994623d"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean.to.bin",
+      "sha256": "cc3675243780ee97a4956bd93fc9dcdd7ad1c50ddc08b2b829fd147551f2bab1"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_12.to.bin",
+      "sha256": "7635d3a57434431c855033181e1b86a51f31164e056e546d17efcdc7d01d815a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_13.to.bin",
+      "sha256": "020a60ad9f9c7083b639bbb3671b6ddce16e8546fb3f8f9b0e6a3770a9a8b94e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_2.to.bin",
+      "sha256": "309dbe8b8938355fa4efe06364d923e94a30046ba4a065f000960f5b6e910dae"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_3.to.bin",
+      "sha256": "a93011f69d26b2a6599dcdd8c68446cbe938471dae314b54d288b3613d1454c3"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_4.to.bin",
+      "sha256": "9e2c3e08e4323fab8a941f067cbf08d9ffd89dfea964e9157d091650abc8c45d"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_6.to.bin",
+      "sha256": "0b46bc82585b44754a1a3ba8c784419db4920f230236356a76d38eb5317ce648"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/cycles_mean_max_7.to.bin",
+      "sha256": "8863c24b861781f6b6a7381251d5c3501912b306c7977064289e071a83a20ff9"
+    },
+    {
+      "bytes": 169,
+      "path": "artifacts/asm/lit_index_out_of_range.to.bin",
+      "sha256": "c36911f10e18603eaa0c7b470d5e080051a87eff458fe6a82532f9a4ce414477"
+    },
+    {
+      "bytes": 177,
+      "path": "artifacts/asm/lit_indexed.to.bin",
+      "sha256": "19de237fb0f86314f7af00882bc59ef2bec115b18d6a98bc23b20c8d583679d9"
+    },
+    {
+      "bytes": 169,
+      "path": "artifacts/asm/lit_kind_mismatch.to.bin",
+      "sha256": "559becf23fa2295b8c2c6f843b66bd41a15ae4400bf435d45aa9be7ef224bf69"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/lit_truncated_table.to.bin",
+      "sha256": "7888a3345dd4e468816ab4c40fd86312e9efeab9c860f64da6463891ccca8ba4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/lit_without_table.to.bin",
+      "sha256": "fd25d35b9e5c6a8520f75961279904df304c82ec5b02bc2f60bc34ef035eca40"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/mem_128.to.bin",
+      "sha256": "4d62fb48dc422650b9d1b2c1de08e76be871e1b3a6bad9961bd4e5c21e675e7a"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/mem_128_no_vector_mode.to.bin",
+      "sha256": "7a3201f5c9e493821f622b217a4c7315620828c8f591d0a45c39f18fff5fa628"
+    },
+    {
+      "bytes": 89,
+      "path": "artifacts/asm/mem_displacement.to.bin",
+      "sha256": "e3b4c18372eb66f0cd2ffe9e57420e41a2eef0ce3bd14928d3c0cdc815416de8"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/mem_load128_no_vector_mode.to.bin",
+      "sha256": "e3b99d9ab6356da076607c43302f4f7ab651b5206ecb06527bf805ae074e445e"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/mem_store_load64.to.bin",
+      "sha256": "ae042e5fe2d1bc74f4a6633acb6fa43ca9bea05c0a1f376d2fe4b627a75ed1e8"
+    },
+    {
+      "bytes": 73,
+      "path": "artifacts/asm/par_markers.to.bin",
+      "sha256": "d7eab81387ff0a94d2a0c648c8cd76df0e7dd74768ca2e8f43e86ae257deb44a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_generic_denied.to.bin",
+      "sha256": "72f616caa24a46616035cd8cfa7d5183c8b5567a1f0719874bb1b373fd62d41c"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/sys_getgas.to.bin",
+      "sha256": "40cbed803c58c639d0d749bddd72ad306a2fa4504f06a4a1dd92f6b28b76eab4"
+    },
+    {
+      "bytes": 97,
+      "path": "artifacts/asm/sys_numeric_int_add.to.bin",
+      "sha256": "53a8158d879cc84cb3527607fec03aa3c64dc8ad3b3a2cc4a50a03c67b6bcd02"
+    },
+    {
+      "bytes": 97,
+      "path": "artifacts/asm/sys_numeric_int_div.to.bin",
+      "sha256": "0b59fc3048e5b4035cf9b224025addc946732b1c04b805689401699bc182620f"
+    },
+    {
+      "bytes": 97,
+      "path": "artifacts/asm/sys_numeric_int_mul.to.bin",
+      "sha256": "77dc0d0ec673c7f0eed216bb4663d4d9f1ed3d11284ef19a04908345aed31138"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_numeric_null_pointers.to.bin",
+      "sha256": "35b644eddc324d03e04da15e0d5210f43a96a48594ea0baa29ab71c7e1708e35"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_scall_abort.to.bin",
+      "sha256": "a5d4ef5f5cf0c1a7879d31164e60d2255ea8ab418a01ab8e49e501106b7e6396"
+    },
+    {
+      "bytes": 69,
+      "path": "artifacts/asm/sys_scall_alloc.to.bin",
+      "sha256": "f42e4c6ba68037b02682b0160dbe8ab0802b54e259d0f56f0925f26c5fb66ec6"
+    },
+    {
+      "bytes": 69,
+      "path": "artifacts/asm/sys_scall_execution_summary.to.bin",
+      "sha256": "9cec43f35f87ed2488735b528d164d3c5288a303f45fa4638e4732c4cb1c0430"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/sys_scall_exit.to.bin",
+      "sha256": "8ec0fc47a527b3125293d6735e6c5cfdf64ab720596e7accd069d2aec77cbd5c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_scall_grow_heap.to.bin",
+      "sha256": "0d993f49891da31feb16be79f184be8b7f1e8342c6f014eb076da77a04550dec"
+    },
+    {
+      "bytes": 69,
+      "path": "artifacts/asm/sys_scall_misc.to.bin",
+      "sha256": "a519092a97a13c3644d94a187e7cb86965033af8e6e984e26c3addc16e49e086"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/sys_scall_public_input.to.bin",
+      "sha256": "873a0224f3f95da6db9422f4939fef2f8d49ef2b101f55a7e468c043de132201"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/sys_scall_sha256.to.bin",
+      "sha256": "432121467cab65a1f5b0698960b7eefc44b07c325d9ec2d0bcef609608b72371"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_unknown_scall_f2.to.bin",
+      "sha256": "74e6c44874a6b7c8314305d50301352a7bb1832cf66073d1147c36bddf88379e"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_unknown_scall_f3.to.bin",
+      "sha256": "1fc56b36c2fe735e1a209928cde08515668691f37bab0f9ac4348592d84df7bb"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_unknown_scall_unassigned_54.to.bin",
+      "sha256": "0b7e41b6797f1b3c75f65f4e65b8fb3426071ad8a00ec65da96057c8b52a8624"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_unknown_system_max.to.bin",
+      "sha256": "c29976345cd0811e34543584facb433027a64cd9a4b85f9224673b8ba74edb08"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/sys_unknown_system_unassigned.to.bin",
+      "sha256": "1f41d5dcb455176f44b3d76f87104a5948d3dd0e279b9cb7340b6ee88bab2435"
+    },
+    {
+      "bytes": 81,
+      "path": "artifacts/asm/vec_all_default_length.to.bin",
+      "sha256": "188b7f00c88a2f4001302a3053aecf2ddccbff4b265cb38c3059d81975b95507"
+    },
+    {
+      "bytes": 81,
+      "path": "artifacts/asm/vec_all_length_4.to.bin",
+      "sha256": "49c455fbe2d1f07ba1673be30b58ceb556e92974901ea8641d87da2263670e3d"
+    },
+    {
+      "bytes": 81,
+      "path": "artifacts/asm/vec_all_length_8.to.bin",
+      "sha256": "4db6335ee7f2efc8321c0e20858fb9d6a06b760b2d270c9802e1ce534806258a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_setvl.to.bin",
+      "sha256": "642346de3617543690501a9e735c50232de5fb4f086ed95e1d5820e45cb7c0f5"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vadd32.to.bin",
+      "sha256": "c202806f3cfb52e79825d81ce260e70f973ef5a474d253a5323334181ce988bc"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vadd64.to.bin",
+      "sha256": "5ff2ef2b09fa0ac8cd2648f246c0ad53e9c352865748a3e2064394ace4d8b98c"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vand.to.bin",
+      "sha256": "48b8fd019b2d4f759fa7f1ee192c26fafc3c29a571c2e56d4b9e9ba57b7d608f"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vor.to.bin",
+      "sha256": "56adab81439211dd37ad7309cbfadd5444656e77a955f5980e31024d940e14ab"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vrot32.to.bin",
+      "sha256": "1fc2f96193671f072ce23cdb1d3a67f867a65fbd95ed97786070423dfdef1c14"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_disabled_vxor.to.bin",
+      "sha256": "17d59b493d37a6e85cc0e3c7f4ba1b0781f1364fc8c54f49d03fd39c2a2913b0"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_length_without_mode.to.bin",
+      "sha256": "d7e1d0db7448a115995a5426f5125e87a847f8ec210328aa07933e79d6097404"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_max_header_length.to.bin",
+      "sha256": "4658fd3fa81da62a122c6b81633f187ec8041ae6298b6384001f7d6a95163115"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_register_out_of_bounds.to.bin",
+      "sha256": "6ce48d9226cb5d106e63dc44261e484d7a887389a68e88578bde292756030b9f"
+    },
+    {
+      "bytes": 77,
+      "path": "artifacts/asm/vec_setvl.to.bin",
+      "sha256": "e3523eaab0097210f0e0cad4e52748682f930aea294fa7f8dd982161a55ad8d1"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/vec_setvl_too_large.to.bin",
+      "sha256": "79a329199fbeee63fdb190506e8410fa6e3711c36572aa9f98a89524dbddc5e3"
+    },
+    {
+      "bytes": 69,
+      "path": "artifacts/asm/vec_tail_length_6.to.bin",
+      "sha256": "5f893cb0cdf3035995b329e86aab58080a81dcfca1419f24dfd237e4440629ec"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/vec_vadd64_odd_length.to.bin",
+      "sha256": "75537920beb2eae5d8de8a953f0124edd2e703d03c5524599238d16da3b84d8d"
+    },
+    {
+      "bytes": 65,
+      "path": "artifacts/asm/zk_assert_range_bits.to.bin",
+      "sha256": "aec8f3ca912728eac45f6270f26f3a9a1d86c8c50382b569823d3432c1c0b76d"
+    },
+    {
+      "bytes": 69,
+      "path": "artifacts/asm/zk_asserts.to.bin",
+      "sha256": "f7a05d2d587151da506f0baf5ec03dbbf3e0a3fd6f0f060c068dd353f787e0b4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_assert.to.bin",
+      "sha256": "8468b920c7533aaaa0290f976eedb3aa6eeade9fe52036480d252b8afaf80ea4"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_assert_eq.to.bin",
+      "sha256": "7e93655ccf500ad5ad48917110d8bf4c0df2a414f9bd9afdc1053c3cfbe42468"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_assert_range.to.bin",
+      "sha256": "e009b9a1848436a9ebe3dc7ec061ed3ab1b7df382c415526a9161567ceea2882"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_fadd.to.bin",
+      "sha256": "a0a4c6df3778b9d2cf44d14c7944c127e1ac5e93b43d7f28969a71dad8afa2e2"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_finv.to.bin",
+      "sha256": "7c3b43fec045a3bf1bf9b00e4f6477949f49e52708051a1f58925457d13c6078"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_fmul.to.bin",
+      "sha256": "a64f03a94def990c57c96cdf44615404380e1131de6c7db78b5966014bf37745"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_disabled_fsub.to.bin",
+      "sha256": "d13ed534f60439e78f3073524677b912d14ccd16ce36a7b7f42b22516a5b15cf"
+    },
+    {
+      "bytes": 73,
+      "path": "artifacts/asm/zk_field.to.bin",
+      "sha256": "9eea2179b4d21b7af481676800496318c0b2fdf9ec87c8902cfcfd3ebd448d7a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_padding_16.to.bin",
+      "sha256": "06f31473a285be9a28123b009b03ccd23c9034222fc7275fc7533ea830c04ec9"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_padding_default_cycles.to.bin",
+      "sha256": "307e8d86164492525338161e029aa3199774a39e78d2e997c82430cf9731ac2a"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_add_mixed_tags.to.bin",
+      "sha256": "372f07f872511552807cc9ef3d88a013aea49ecf8c9302207d29cab98a892ecf"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/zk_privacy_add_private_operands.to.bin",
+      "sha256": "79a3eb33b45aa0f10a62b1df683d4751516320e365db901f111964627079a41f"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_assert_private.to.bin",
+      "sha256": "6d4068685b6dc494cf8ac9dfb4d2d0046421da7485485a4a3fbb87d8e909c2bf"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_branch_on_private.to.bin",
+      "sha256": "8c1d17c77d6ceaf935da134b183e566ef86bb8d0b2f785215df2340c55dd4996"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_cmov_private_condition.to.bin",
+      "sha256": "ea427bca31b00faaafdf3ecbb8f251eb5ab6c9959f3d2f90c9c1ddf6a2254c85"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_div_private_operands.to.bin",
+      "sha256": "d24808de0defd1a1b09906294b0034789af44f8bfc2594dbd17b7067670b38a1"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_fadd_mixed_tags.to.bin",
+      "sha256": "3900ea9afb78b66ffbd59cd301d21d92323587b08ade478b138c4b055bfcec84"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_poseidon_private.to.bin",
+      "sha256": "cc33dae516a600e691436eb8c41ea1b814ab5b61c9acff237f0bc539ece1a199"
+    },
+    {
+      "bytes": 57,
+      "path": "artifacts/asm/zk_privacy_store_private_to_heap.to.bin",
+      "sha256": "c6f2a72c291efb759089575b1bba65107cf8be6aa10419de98d6a41e8e841811"
+    },
+    {
+      "bytes": 61,
+      "path": "artifacts/asm/zk_vector_mode.to.bin",
+      "sha256": "a9ec4543bd1b6416ec2f6710a479b6e82fa2960472701391db2492cef692deba"
+    },
+    {
+      "bytes": 1157,
+      "path": "artifacts/kotodama/baseline/abort.to.bin",
+      "sha256": "dc5a92b2851ab9e0ef801120cbedc2ca517bc49aee8a04ca33e72a188c5919f6"
+    },
+    {
+      "bytes": 3537,
+      "path": "artifacts/kotodama/baseline/events.to.bin",
+      "sha256": "dd088f2ea093f7169dc44502db41e7a55d5f55b1506e854c2937bbfef6587dc7"
+    },
+    {
+      "bytes": 2429,
+      "path": "artifacts/kotodama/baseline/numeric.to.bin",
+      "sha256": "dbaddfc63edce05e3b313c7ededb79a89fae6a3118a1a517c89aa003144e2b05"
+    },
+    {
+      "bytes": 1153,
+      "path": "artifacts/kotodama/examples/coffee-club.to.bin",
+      "sha256": "904e00df6042918732da2fb0c1d60818765bb0d40d1b4f906bfd568c7920f597"
+    },
+    {
+      "bytes": 2009,
+      "path": "artifacts/kotodama/examples/hello.to.bin",
+      "sha256": "c2892168ed4b5463ccc0e8d2bc2706ced1e5d10e7ae1f22860a4e68bcb6aeadd"
+    },
+    {
+      "bytes": 1941,
+      "path": "artifacts/kotodama/examples/map.to.bin",
+      "sha256": "932adfc29bf5aa6e1e29e6082638e7dd3234660cba14a77e133edd1219cea724"
+    },
+    {
+      "bytes": 2697,
+      "path": "artifacts/kotodama/examples/nft.to.bin",
+      "sha256": "aaf9304d01203fc9e0c5dc220b7c9b2b9607700296efa2c619b9bbe07ea688c0"
+    },
+    {
+      "bytes": 3145,
+      "path": "artifacts/kotodama/examples/transfer.to.bin",
+      "sha256": "e773a8f43918c1529527650325828d44945b9307aa2e3c1343dda511b46393ec"
+    },
+    {
+      "bytes": 973,
+      "path": "artifacts/kotodama/ivm_tests_data/add.to.bin",
+      "sha256": "140b37a238705c5ab1475255fc06c5161b23f4a2e6abccbbfce3fc7daabae9d5"
+    },
+    {
+      "bytes": 1121,
+      "path": "artifacts/kotodama/ivm_tests_data/amm.to.bin",
+      "sha256": "dd5030b7de7a872123be99db5f990f2ddc9e83294511a6ccb6bbecc662ad87f0"
+    },
+    {
+      "bytes": 1057,
+      "path": "artifacts/kotodama/ivm_tests_data/complex.to.bin",
+      "sha256": "0d3da63553153e3ee83fbb25aa780bc766316dfff116cce7938d21a4ee7a90fb"
+    },
+    {
+      "bytes": 1441,
+      "path": "artifacts/kotodama/ivm_tests_data/control.to.bin",
+      "sha256": "8558b41380d3b9f8774f61da4618477daf6e68da6ff24bcf6d3c270b7d75fddd"
+    },
+    {
+      "bytes": 2813,
+      "path": "artifacts/kotodama/ivm_tests_data/mfc.to.bin",
+      "sha256": "27b8ba4433946c774339ddd530eda88faa48d8eacbe0cdb3ecffc25ad7145c4f"
+    },
+    {
+      "bytes": 1237,
+      "path": "artifacts/kotodama/koto_v1/kotodama/001.to.bin",
+      "sha256": "183bdef5bb55f66dbe54da031b1ae9b46f6feb89ce6f468c9645d9e460a439c6"
+    },
+    {
+      "bytes": 1073,
+      "path": "artifacts/kotodama/koto_v1/kotodama/002.to.bin",
+      "sha256": "4ccdf5af66a635b43b9fb05697affe5dd09961a195da0153294762b2034f4da4"
+    },
+    {
+      "bytes": 949,
+      "path": "artifacts/kotodama/koto_v1/kotodama/004.to.bin",
+      "sha256": "e0a0db8dd3dd5cc217d95a6363dbb6bd4915f980140d58239806ba468c2d0411"
+    },
+    {
+      "bytes": 3577,
+      "path": "artifacts/kotodama/koto_v1/kotodama/007.to.bin",
+      "sha256": "d56b4629e647c128911dfc9590438c1f7e88ef3995cfa4c003e1b1888f1fee8e"
+    },
+    {
+      "bytes": 3117,
+      "path": "artifacts/kotodama/koto_v1/kotodama/012.to.bin",
+      "sha256": "9cc63e73d806228461a1d935f674899cf786b5a7edcf4a459f1c9831268e80b4"
+    },
+    {
+      "bytes": 961,
+      "path": "artifacts/kotodama/koto_v1/kotodama/018.to.bin",
+      "sha256": "c3e87f35ee86e4e73f63fec17edd5167461e08d8605d3eff11a7541c0c249209"
+    },
+    {
+      "bytes": 1153,
+      "path": "artifacts/kotodama/koto_v1/kotodama/019.to.bin",
+      "sha256": "907a7697c66ae477556cb5ff728ed56fdb4c7b316bf4b69b5ef4e2fca53cadd9"
+    },
+    {
+      "bytes": 1037,
+      "path": "artifacts/kotodama/koto_v1/kotodama/020.to.bin",
+      "sha256": "e4465908c286f471025ff801ac8aa3b29fc24e83100fa3eeed51f032453c1dcb"
+    },
+    {
+      "bytes": 897,
+      "path": "artifacts/kotodama/koto_v1/kotodama/021.to.bin",
+      "sha256": "b707d9a357a67971fb5eae4ab8b32f2543608df399a38fa6472f27099261a26c"
+    },
+    {
+      "bytes": 1317,
+      "path": "artifacts/kotodama/koto_v1/kotodama/022.to.bin",
+      "sha256": "a7608d207e88bc595adfca924e207ad8dd98f808528a24ce7e0e41c550c5d87b"
+    },
+    {
+      "bytes": 989,
+      "path": "artifacts/kotodama/koto_v1/kotodama/023.to.bin",
+      "sha256": "efb7bdeb27fb0ae59ca1dde2910e6359e83f21b0bc29322b3802a02b2e2a6183"
+    },
+    {
+      "bytes": 1977,
+      "path": "artifacts/kotodama/koto_v1/kotodama/025.to.bin",
+      "sha256": "fc623e2255b6af56fb5120768310b9d1eb33b44b1efc70eaa89355eb68e37db0"
+    },
+    {
+      "bytes": 1293,
+      "path": "artifacts/kotodama/koto_v1/kotodama/026.to.bin",
+      "sha256": "66f9caf6108712d7846f055f64579ce23fdd640d52727b34242733f811b4621b"
+    },
+    {
+      "bytes": 2393,
+      "path": "artifacts/kotodama/koto_v1/kotodama/027.to.bin",
+      "sha256": "3ebf7d2d010b7eff59d244b920270e0e0a85886e95bf639077f51930157fec55"
+    },
+    {
+      "bytes": 1257,
+      "path": "artifacts/kotodama/koto_v1/kotodama/028.to.bin",
+      "sha256": "3fc264b6869a440fc3fddac1e4cdf522bde79d02780847cecad9c26b213b0283"
+    },
+    {
+      "bytes": 3013,
+      "path": "artifacts/kotodama/koto_v1/kotodama/030.to.bin",
+      "sha256": "2dd1b3e62ea8403eb10984b84795cedbfefc8d11959d4935bce6373f3e24f48f"
+    },
+    {
+      "bytes": 981,
+      "path": "artifacts/kotodama/koto_v1/kotodama/031.to.bin",
+      "sha256": "8d576187ed1e83cb625816f67cb8b6d803535d4f2841d25ee17f2b4a3e8be74c"
+    },
+    {
+      "bytes": 2553,
+      "path": "artifacts/kotodama/koto_v1/kotodama/032.to.bin",
+      "sha256": "cb40cbb49d2642e5d9df3d8ce85e6e4df21a6cc7fa63dfe7fdf5dcc82f4470a8"
+    },
+    {
+      "bytes": 941,
+      "path": "artifacts/kotodama/koto_v1/kotodama/033.to.bin",
+      "sha256": "0b7c5d83126276a3907a6b73240a2ac09ad70f950d958d2284e2f16c02dc4a5c"
+    },
+    {
+      "bytes": 945,
+      "path": "artifacts/kotodama/koto_v1/kotodama/034.to.bin",
+      "sha256": "4735f0cb42ced585ec920a976e15563a91fc040329a3f58de7a48afcde5d7085"
+    },
+    {
+      "bytes": 1057,
+      "path": "artifacts/kotodama/koto_v1/kotodama/043.to.bin",
+      "sha256": "2814cc9e7199103fff183ceba889591219c2fb4fa15a90ec294ea81914be0857"
+    },
+    {
+      "bytes": 1813,
+      "path": "artifacts/kotodama/koto_v1/kotodama/048.to.bin",
+      "sha256": "ee86964eca86d23910160d3e6210530d9132dfa25512b23b204e2227641794e1"
+    },
+    {
+      "bytes": 921,
+      "path": "artifacts/kotodama/koto_v1/kotodama/049.to.bin",
+      "sha256": "f7ac40bffd43e21a8fd6bb2da6bb0e6f2d64907cec191274bc0bf9069c935927"
+    },
+    {
+      "bytes": 2349,
+      "path": "artifacts/kotodama/koto_v1/kotodama/050.to.bin",
+      "sha256": "06441b5237953edd6be29f14cd1dd7fed9b6b41b3f085620fac76f7180dfdddb"
+    },
+    {
+      "bytes": 1253,
+      "path": "artifacts/kotodama/koto_v1/kotodama/051.to.bin",
+      "sha256": "f6246a78511fea41c4194686f49a975d0f4d3bdc287482b0d4068c76c5863fd1"
+    },
+    {
+      "bytes": 1409,
+      "path": "artifacts/kotodama/koto_v1/kotodama/052.to.bin",
+      "sha256": "fae604bbf15d51e299a4175b73285676de29b3393c0f9ce0069d54cd4543aced"
+    },
+    {
+      "bytes": 3109,
+      "path": "artifacts/kotodama/koto_v1/kotodama/054.to.bin",
+      "sha256": "5142f616511cd2c9a7405eb7c40ef1dc8a086039ed7e6cddcc8cd08789b19e98"
+    },
+    {
+      "bytes": 917,
+      "path": "artifacts/kotodama/koto_v1/kotodama/057.to.bin",
+      "sha256": "c6d0cc352a9e94aad1e69bf6571f8bdc26a814347b07709e00d54de7580d5cb1"
+    },
+    {
+      "bytes": 1121,
+      "path": "artifacts/kotodama/koto_v1/kotodama/058.to.bin",
+      "sha256": "f10955c660a7f9376d61af2950ea9e38ab7b01da4ec1986e7647a1f900269aad"
+    },
+    {
+      "bytes": 1297,
+      "path": "artifacts/kotodama/koto_v1/kotodama/067.to.bin",
+      "sha256": "3739e909854a73e33cdfd609fa5735d5a04adf714591a3ce85502f01fbccd3a8"
+    },
+    {
+      "bytes": 1113,
+      "path": "artifacts/kotodama/koto_v1/kotodama/071.to.bin",
+      "sha256": "f6e1a2e10d7880fadf51195cb2d8d244a44c64dba3761c9fd4bdd7ef4f8a6b4b"
+    },
+    {
+      "bytes": 3453,
+      "path": "artifacts/kotodama/koto_v1/lists/001.to.bin",
+      "sha256": "fb08230673c87129bce4dfe4702667b0ba8acb1fb4ed78ddb47f430d6b4ad46f"
+    },
+    {
+      "bytes": 2041,
+      "path": "artifacts/kotodama/koto_v1/lists/002.to.bin",
+      "sha256": "cd8ddf81e63efceb9adfc819ca6be836ff54bcb4f28dd8de154214dacee26962"
+    },
+    {
+      "bytes": 1821,
+      "path": "artifacts/kotodama/koto_v1/lists/003.to.bin",
+      "sha256": "f63b64b0dff23e498e6bb3b32ea14689a4078e2b4c8596f133ff737b49f42ec7"
+    },
+    {
+      "bytes": 997,
+      "path": "artifacts/kotodama/koto_v1/lists/004.to.bin",
+      "sha256": "e289e6d1667ba189abb1bb6b3f674622b21ed35fdf7f0763552240e16860e0e1"
+    },
+    {
+      "bytes": 3993,
+      "path": "artifacts/kotodama/koto_v1/lists/005.to.bin",
+      "sha256": "d3758680cc79059b380249b462dac3e1134245a2c3ebcb20b332893e86e70a11"
+    },
+    {
+      "bytes": 1841,
+      "path": "artifacts/kotodama/koto_v1/lists/006.to.bin",
+      "sha256": "35625a635cefb898f396fabaa28530c9c8957411d8394beb83cc3515d5fb1070"
+    },
+    {
+      "bytes": 1121,
+      "path": "artifacts/kotodama/koto_v1/lists/007.to.bin",
+      "sha256": "2cc0b5d7fef0c5006740db2d229db40c4ced4ca62bfbf9b71f0df6cf5fae739e"
+    },
+    {
+      "bytes": 11681,
+      "path": "artifacts/kotodama/koto_v1/lists/008.to.bin",
+      "sha256": "dcf9bc40655b74d6d033ed1a9b0a8dad4cefa5e44f54d5fe12d00b6c49ab9330"
+    },
+    {
+      "bytes": 925,
+      "path": "artifacts/kotodama/koto_v1/lists/010.to.bin",
+      "sha256": "e036c03c0d7b4f9d6340406fdcc097f16496c6f546d6d9972a0fc73df3458a23"
+    },
+    {
+      "bytes": 905,
+      "path": "artifacts/kotodama/koto_v1/lists/011.to.bin",
+      "sha256": "d7167fdf74f9ff561014ffc70e91c1ebbf097bf8b59ea261b5506cfd78161d1e"
+    },
+    {
+      "bytes": 1045,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/001.to.bin",
+      "sha256": "18cd93e53ed887cfc3de15e037e00c7a294a592958495dbbb04d7be56a0afe9a"
+    },
+    {
+      "bytes": 2145,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/002.to.bin",
+      "sha256": "01c3ac09e5d725e8506a4f7e8d16ebb0ce3cfec7cd3d3cb86fa73d8308c1ae34"
+    },
+    {
+      "bytes": 2333,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/003.to.bin",
+      "sha256": "b7591a71ef3fbe65d17fc90b28be5c93f9445af9d1365e04ecba7ef32dd647a2"
+    },
+    {
+      "bytes": 4705,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/004.to.bin",
+      "sha256": "16aec934d7b16ee879b49911538a5d8c46e6e9bd5ff7aaf2791a1df8f991d770"
+    },
+    {
+      "bytes": 4589,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/005.to.bin",
+      "sha256": "152abaf851616e1126c525a5daff62b61382f6076d4ad81a02f83a8c1f43e4ab"
+    },
+    {
+      "bytes": 2849,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/006.to.bin",
+      "sha256": "d862514bcc41a23a4e12355fe92bb40c5b6920b5a4a79ebe4d1f90b74cc57f97"
+    },
+    {
+      "bytes": 1221,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/007.to.bin",
+      "sha256": "1ca093662b43485dee973e4e63db7bc987bb70cc9d75b5e010bf955e30865954"
+    },
+    {
+      "bytes": 1177,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/008.to.bin",
+      "sha256": "d8ce2446e269098516276b2bfd198470b5ed99610e40005658d9b2033b83752a"
+    },
+    {
+      "bytes": 2157,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/009.to.bin",
+      "sha256": "2f0bfb06fec8b0ee3bcbed9c2a9282e06833d4007c70164d9c6db8a479f64af1"
+    },
+    {
+      "bytes": 1417,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/010.to.bin",
+      "sha256": "0d7ce3d57e81eb2d93d76fec4094d4a60a539ca05a5e2a9383ea48ee5eff11e5"
+    },
+    {
+      "bytes": 4597,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/011.to.bin",
+      "sha256": "a38ae4622391eafa59fafd86e768c2f853cccc52b555859d6670af170303a337"
+    },
+    {
+      "bytes": 1909,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/012.to.bin",
+      "sha256": "b453c03552460eb2a23f524a6226c5a80dcbef4db436365839bff67914ad7567"
+    },
+    {
+      "bytes": 4333,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/013.to.bin",
+      "sha256": "1b809ef54668e781782c2f5928e5894ed207c1de407ac49faadd03857098eec6"
+    },
+    {
+      "bytes": 1825,
+      "path": "artifacts/kotodama/koto_v1/runtime_acceptance/015.to.bin",
+      "sha256": "2de9085031e23b6c962e22b9defa632bdd3a4655a64ea7fdc3bfb0deab3c352e"
+    },
+    {
+      "bytes": 5829,
+      "path": "artifacts/kotodama/koto_v1/state_aggregate_literal_runtime/001.to.bin",
+      "sha256": "4635869134339c855d53ce9d4dc21d8dd4ec4f672671357c0d7de9ff3c248c67"
+    },
+    {
+      "bytes": 4965,
+      "path": "artifacts/kotodama/koto_v1/state_aggregate_literal_runtime/002.to.bin",
+      "sha256": "b3a68a0dccf970ee68ef3dfc0b23492b60ec4bba92e7c2ed2424732694b2a3a0"
+    },
+    {
+      "bytes": 3433,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/001.to.bin",
+      "sha256": "ae16aa65e8f91eeae67ca79a000950491d1a582e0c47ec8e248b3df1d0de54e5"
+    },
+    {
+      "bytes": 3669,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/002.to.bin",
+      "sha256": "592d8a02a30190b88b64b1f8a615bb7b50fdf2d4bbc3437f321d1582b11eeae1"
+    },
+    {
+      "bytes": 3485,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/003.to.bin",
+      "sha256": "000ea3aae137d2ffc9ba115a2926e3fdc556bfa0a4bcbd67ab07ab7ebd23a42e"
+    },
+    {
+      "bytes": 3433,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/004.to.bin",
+      "sha256": "ae16aa65e8f91eeae67ca79a000950491d1a582e0c47ec8e248b3df1d0de54e5"
+    },
+    {
+      "bytes": 3409,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/005.to.bin",
+      "sha256": "23a9caedc8a830a107ff4eea7f4ade0307c1e52fbd81679c426f3cf47e382183"
+    },
+    {
+      "bytes": 3737,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/006.to.bin",
+      "sha256": "e0818f67e56c124b0000a0b706496d74220ff79c185cef931e638f35ba193965"
+    },
+    {
+      "bytes": 3877,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/007.to.bin",
+      "sha256": "50d2bba659f1874f7e42d092e048ea99a304ad34d8b24e630eac2e0831f899fd"
+    },
+    {
+      "bytes": 5129,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/008.to.bin",
+      "sha256": "402d35919894b895e0cd6a6ca41eff93978b7ff9854c0296cca8a99c6277a5e9"
+    },
+    {
+      "bytes": 7125,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/009.to.bin",
+      "sha256": "9fdfbb8457d8d0859e17bd3f2c951b25ccc387e5eb411addaf487d32ac30b061"
+    },
+    {
+      "bytes": 6077,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/010.to.bin",
+      "sha256": "8c37c4cf288cdc0faf5c344536190bc5f568f991479a512419469f5323614da9"
+    },
+    {
+      "bytes": 4197,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/011.to.bin",
+      "sha256": "db510460a583aa0151bb8547ea72acc82c8a357c764f9aeeb9e9fc49f2736fbf"
+    },
+    {
+      "bytes": 3485,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/013.to.bin",
+      "sha256": "000ea3aae137d2ffc9ba115a2926e3fdc556bfa0a4bcbd67ab07ab7ebd23a42e"
+    },
+    {
+      "bytes": 2833,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/014.to.bin",
+      "sha256": "71ac17b204041b77f772994542767cdeddb02eb61498daa7d6a1e44b54e536e3"
+    },
+    {
+      "bytes": 2521,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/015.to.bin",
+      "sha256": "7c0c405f235eb8122165de5abf011aa2c7b8507d01712ebbd019750ef14f85bb"
+    },
+    {
+      "bytes": 3393,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/016.to.bin",
+      "sha256": "f84bf1acd6eb840b07e79adf75acc6e228855de50ed49fe12ee7f069ce257770"
+    },
+    {
+      "bytes": 5805,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/017.to.bin",
+      "sha256": "2b8dca94177e5786f9caf77abe54dc63cc5b0738706047fc2b5ea364c8169d9c"
+    },
+    {
+      "bytes": 3797,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/018.to.bin",
+      "sha256": "e0ff9e6a60cc430b27554c6db1fbaec98f94025dbffdf8145ce5f8ed9eea0084"
+    },
+    {
+      "bytes": 2833,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/019.to.bin",
+      "sha256": "71ac17b204041b77f772994542767cdeddb02eb61498daa7d6a1e44b54e536e3"
+    },
+    {
+      "bytes": 2573,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/020.to.bin",
+      "sha256": "dc518bb80e9a1397c315ff3286455ed3343f32d66a7aa6c829f32537096102d5"
+    },
+    {
+      "bytes": 3361,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/021.to.bin",
+      "sha256": "812cbe34675da7688f98a9f07ad0998a98f22b8344bfc7434d7e5e11acf93696"
+    },
+    {
+      "bytes": 2753,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/022.to.bin",
+      "sha256": "dc19c88edde20469e6b3c406681fe067dc20ddf096193924d839a69620f6e1f9"
+    },
+    {
+      "bytes": 2529,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/023.to.bin",
+      "sha256": "8a5e75f00761854bb56211b0a36e4f59cc354d41c0c29fd82560501b9074c5ef"
+    },
+    {
+      "bytes": 3729,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/024.to.bin",
+      "sha256": "8f177376d97683a106b436a75d936f1bd2833b41ae92d3a957e9475ce62d726a"
+    },
+    {
+      "bytes": 3525,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/025.to.bin",
+      "sha256": "6fce6674a489825c09988f4efe0809611a0e65d95c300a82f3d02746b7249c78"
+    },
+    {
+      "bytes": 5541,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/026.to.bin",
+      "sha256": "4d3cf6729c2378f28fd364741910db4023da8bce0480547ca1ba37c7391d24b5"
+    },
+    {
+      "bytes": 3509,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/027.to.bin",
+      "sha256": "c629bb5e8ef05e6dbc719b94eee0169b3dd266241499b2b0f7bba73a8f25df75"
+    },
+    {
+      "bytes": 2409,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/028.to.bin",
+      "sha256": "cf2fd0edf3ba9091d97d9ed1f8824db8d3df67bf07e3074b5a58024f5ee6de24"
+    },
+    {
+      "bytes": 3649,
+      "path": "artifacts/kotodama/koto_v1/state_name_map_runtime/029.to.bin",
+      "sha256": "32f8b2d606f4224829aa7999e8927f2e27c715ad4b2ac55873c88199d9012843"
+    },
+    {
+      "bytes": 1517,
+      "path": "artifacts/kotodama/koto_v1/state_scalar/001.to.bin",
+      "sha256": "df648f29441e78f887c7cecb1094401ac66986dbd0285d4cf02cd47941f6bc6f"
+    },
+    {
+      "bytes": 2321,
+      "path": "artifacts/kotodama/koto_v1/state_scalar/002.to.bin",
+      "sha256": "51c8b6caeebc3ff7167b8d9ec4bbc3b27c310a1b949d605e6ae0c61359302712"
+    },
+    {
+      "bytes": 2261,
+      "path": "artifacts/kotodama/koto_v1/state_scalar/003.to.bin",
+      "sha256": "6ad2029c960431efa1c78229b92a59a3943f7f671e8adc77c41faae0e3c7b71e"
+    },
+    {
+      "bytes": 2261,
+      "path": "artifacts/kotodama/koto_v1/state_scalar/004.to.bin",
+      "sha256": "6ad2029c960431efa1c78229b92a59a3943f7f671e8adc77c41faae0e3c7b71e"
+    },
+    {
+      "bytes": 2025,
+      "path": "artifacts/kotodama/samples/asset_ops.to.bin",
+      "sha256": "5a627ffe68eb8b32fbb2b9605c94db3604c7200314c8a730225c23943da62970"
+    },
+    {
+      "bytes": 969,
+      "path": "artifacts/kotodama/samples/create_nft_for_every_user_trigger.to.bin",
+      "sha256": "6599691f2c558ad2138dd9caf8a533142600c2f269f426428c314b8ce51b3edc"
+    },
+    {
+      "bytes": 2553,
+      "path": "artifacts/kotodama/samples/dex_contract.to.bin",
+      "sha256": "f3d41e340cb23e4401ec210745f6428313bdbb726f1701d18dac478d1762c665"
+    },
+    {
+      "bytes": 2565,
+      "path": "artifacts/kotodama/samples/dex_simple.to.bin",
+      "sha256": "5894281946e5f9df321621938b96dab76303d6813a3a5ff0119c42b58cb4ca08"
+    },
+    {
+      "bytes": 1233,
+      "path": "artifacts/kotodama/samples/domain_ops.to.bin",
+      "sha256": "8516da0dde05fbc5e19a7a4990f013dd754fdd3b191dd2c8a6d12a6aded3ec64"
+    },
+    {
+      "bytes": 15181,
+      "path": "artifacts/kotodama/samples/irohaswap.to.bin",
+      "sha256": "52e86f0287838caf6fe72055a272fa4c6b9cc9b14f950779eaf1dbeb2cb2d068"
+    },
+    {
+      "bytes": 2241,
+      "path": "artifacts/kotodama/samples/kotodama_swap.to.bin",
+      "sha256": "6becdcfd5e948f6ee18c8afa700dcdd1c06a2809f288abc809a6a53b58fc7485"
+    },
+    {
+      "bytes": 2957,
+      "path": "artifacts/kotodama/samples/lending_simple.to.bin",
+      "sha256": "83f286191e2c1cccfb5ca4a53bbefa6f0110e0183cfb5f42287fa1061133e0a4"
+    },
+    {
+      "bytes": 1645,
+      "path": "artifacts/kotodama/samples/mint_rose_trigger.to.bin",
+      "sha256": "c4a2a9eb5eb6e2ff12159ee0505301dba51eaf702bc1cf5d1eca41c35ac5d5f6"
+    },
+    {
+      "bytes": 3781,
+      "path": "artifacts/kotodama/samples/native_escrow.to.bin",
+      "sha256": "42ce5b23a18089532ca5e8e3996072ba593849bbb3215084b0414eaea4e3b737"
+    },
+    {
+      "bytes": 2793,
+      "path": "artifacts/kotodama/samples/perp_funding.to.bin",
+      "sha256": "95372f8fa8a4c3284c0887f901409568a0b34c4f7e3be6af1dab7eaf0db66d4c"
+    },
+    {
+      "bytes": 1385,
+      "path": "artifacts/kotodama/samples/query_assets_and_save_cursor.to.bin",
+      "sha256": "c14d7f1cfb4f5828f3842867e60eac1a879fedbf819fc1fb3dfb150445d732c5"
+    },
+    {
+      "bytes": 1341,
+      "path": "artifacts/kotodama/samples/smart_contract_can_filter_queries.to.bin",
+      "sha256": "e7e7d3544c17fec18599ba90dcd77405f6501bf079b6789602f509de5498dcc6"
+    },
+    {
+      "bytes": 2681,
+      "path": "artifacts/kotodama/samples/stablecoin_simple.to.bin",
+      "sha256": "85e79a01ddc82d6103c1749e68c0f236cab744cade4ce4db063fbed7709cc601"
+    },
+    {
+      "bytes": 1049,
+      "path": "artifacts/kotodama/samples/subscription_billing_trigger.to.bin",
+      "sha256": "316dc2b1e537a9f6ab895090554b10b46189bbb1cf6238f75b8561fa60a7ed19"
+    },
+    {
+      "bytes": 1061,
+      "path": "artifacts/kotodama/samples/subscription_usage_recorder.to.bin",
+      "sha256": "6d7efaaba7b6564e9ae7c3a954f73f603ed7aa19957b3918b41bf4958e56b94a"
+    },
+    {
+      "bytes": 11093,
+      "path": "artifacts/kotodama/samples/threshold_escrow.to.bin",
+      "sha256": "2a6da43e76321762af312f7e5e07c1d3aa97384b3d176a96e57c622313c3b8d8"
+    },
+    {
+      "bytes": 1233,
+      "path": "artifacts/kotodama/samples/tuple_return_demo.to.bin",
+      "sha256": "f750430fdd5b692da4202f2aa621d468039f215d7c0005f83c9375a9d525ff22"
+    },
+    {
+      "bytes": 2709,
+      "path": "artifacts/kotodama/samples/zk_vote_ballot.to.bin",
+      "sha256": "e371b60d04f1859327cf64a00f0802c8a8ae83acf3920ce921a00de181119c99"
+    },
+    {
+      "bytes": 2429,
+      "path": "artifacts/kotodama/zk/baseline/numeric.to.bin",
+      "sha256": "7cd9bbe0d0442f5fb346cf1eb1388796d540cda6b826e9ed257dfa3099ec8015"
+    },
+    {
+      "bytes": 1045,
+      "path": "artifacts/kotodama/zk/koto_v1/runtime_acceptance/001.to.bin",
+      "sha256": "7a059772d6f7cbcbdea9deaf91a571c022eaf7d7523672954b200d77cac8c03d"
+    },
+    {
+      "bytes": 1233,
+      "path": "artifacts/kotodama/zk/samples/tuple_return_demo.to.bin",
+      "sha256": "83c7befe9b8ca10d3cb848c2a93d1d4e418bbe59dd80724b694d5e1e6f3a85a3"
+    },
+    {
+      "bytes": 2709,
+      "path": "artifacts/kotodama/zk/samples/zk_vote_ballot.to.bin",
+      "sha256": "e371b60d04f1859327cf64a00f0802c8a8ae83acf3920ce921a00de181119c99"
+    },
+    {
+      "bytes": 131466,
+      "path": "descriptors/abi_v1.descriptor.bin",
+      "sha256": "266dfb01f910f94b620cc405ec6c52ae019bb5165a0d8bdae5e38898b56e5360"
+    },
+    {
+      "bytes": 4996,
+      "path": "descriptors/core_admission_anchor.rs.txt",
+      "sha256": "6772127c71dba8602db24584be16730c41c0034fa13eca7ebc78f688b0fff1c5"
+    },
+    {
+      "bytes": 75612,
+      "path": "descriptors/frozen_values.json",
+      "sha256": "4a965401ab1bb99c3372ad8dc79ad3158ca5f235a4f37a5af0772f54b2f54a8c"
+    },
+    {
+      "bytes": 9255,
+      "path": "descriptors/gas_schedule_v1.descriptor.bin",
+      "sha256": "49b2a59e4c43e05bd1bfddbaeb7e555e7bfba4af81eb36ddd3ab105fd2fd2e89"
+    },
+    {
+      "bytes": 114,
+      "path": "descriptors/host_profile_abi_v1.descriptor.bin",
+      "sha256": "96c90617ae8a86cf5a26d202ea269fff78c31cd7d3147ef2ab26c9fc02805f26"
+    },
+    {
+      "bytes": 114888,
+      "path": "descriptors/runtime_baseline_catalog.json",
+      "sha256": "2c260a07557ef41968d27cdd9015ce8a88c421ccbe97a31743a6e469dbd45061"
+    },
+    {
+      "bytes": 103039,
+      "path": "oracle/corpus.json",
+      "sha256": "05ab4307761ab7eedf29d9b53da7b61a8743ae6e56b6e17f8cfbc1cbf8efb615"
+    },
+    {
+      "bytes": 2015491,
+      "path": "oracle/oracle.jsonl",
+      "sha256": "17d4afca52a6742d8caccb21b60fc907ca2b82338da089f0e07d814a92bdddd8"
+    },
+    {
+      "bytes": 269,
+      "path": "sources/kotodama/baseline/abort.ko.txt",
+      "sha256": "47f9bab3b5c16c37c07a077998ff05e36c958ca2898335054d33066132208aee"
+    },
+    {
+      "bytes": 507,
+      "path": "sources/kotodama/baseline/events.ko.txt",
+      "sha256": "3f4193e3ac65f89c8887e64938072e627c06c89a63dfeb3696edd679e058634f"
+    },
+    {
+      "bytes": 636,
+      "path": "sources/kotodama/baseline/numeric.ko.txt",
+      "sha256": "47d8cdb05fb53bca7808800225beb27f7701d28d001b69bb7ba330263abddb02"
+    },
+    {
+      "bytes": 323,
+      "path": "sources/kotodama/examples/coffee-club.ko.txt",
+      "sha256": "8201a107d9aacb68d90cc2d28cf9290e460ee3ad7a882d441abb57a4ac8dd06a"
+    },
+    {
+      "bytes": 690,
+      "path": "sources/kotodama/examples/hello.ko.txt",
+      "sha256": "8af08f859d01f3b327ca75f5e53d4ec2ab8ed0d56e4a7c569a12cb101170ed45"
+    },
+    {
+      "bytes": 365,
+      "path": "sources/kotodama/examples/map.ko.txt",
+      "sha256": "80e35d12d931f79fe135944f05b919b7a31d0207bcac16b2780550a39059559b"
+    },
+    {
+      "bytes": 1015,
+      "path": "sources/kotodama/examples/nft.ko.txt",
+      "sha256": "6788992b6ca0e070d8f5339988d7351840fcb1d93adce3a37dc6e613b7665af9"
+    },
+    {
+      "bytes": 754,
+      "path": "sources/kotodama/examples/transfer.ko.txt",
+      "sha256": "1bc9cb1774f3d95cd914caa8a99c4e2c84dd177ceb30eaa9bb6abe102401bd20"
+    },
+    {
+      "bytes": 207,
+      "path": "sources/kotodama/ivm_tests_data/add.ko.txt",
+      "sha256": "a3dbbc8a103b7531934a4e13747610198f408c3fcc2f1c79c2f2f25e9f7c028f"
+    },
+    {
+      "bytes": 583,
+      "path": "sources/kotodama/ivm_tests_data/amm.ko.txt",
+      "sha256": "adb85835f51a1abf9fb09caf55cf2fea7b426b274449621e3979d9d374866cbb"
+    },
+    {
+      "bytes": 286,
+      "path": "sources/kotodama/ivm_tests_data/complex.ko.txt",
+      "sha256": "65e1622325428cb020daf06d09c5d1731d82f4113775b775a1661f8d5e90f533"
+    },
+    {
+      "bytes": 533,
+      "path": "sources/kotodama/ivm_tests_data/control.ko.txt",
+      "sha256": "78998cf9e855fcc1ad0f81c541e9d2b34426157302fd398223e5400838a4138d"
+    },
+    {
+      "bytes": 2585,
+      "path": "sources/kotodama/ivm_tests_data/dai.ko.txt",
+      "sha256": "94f097b1b0572853c342f43613063cea3284a23bc15c7ef359633cfd59cce0c1"
+    },
+    {
+      "bytes": 2041,
+      "path": "sources/kotodama/ivm_tests_data/mfc.ko.txt",
+      "sha256": "71111dc873dec2a3977044e765a33003f41cc9980c0281a7708875cfe955267d"
+    },
+    {
+      "bytes": 247,
+      "path": "sources/kotodama/koto_v1/kotodama/001.ko.txt",
+      "sha256": "07141b75744ea9ac3373cb382947983f68acbd4856f7aeaf8d751dcdc817c591"
+    },
+    {
+      "bytes": 330,
+      "path": "sources/kotodama/koto_v1/kotodama/002.ko.txt",
+      "sha256": "6180e45937157fb5ce92dca836c317e3c7506dcd1511de5c889735e25f4eebd4"
+    },
+    {
+      "bytes": 164,
+      "path": "sources/kotodama/koto_v1/kotodama/003.ko.txt",
+      "sha256": "5f5cd528ab5386aadb7336fb8647bc68b0fe183948f0186e38b8340dff6d2476"
+    },
+    {
+      "bytes": 189,
+      "path": "sources/kotodama/koto_v1/kotodama/004.ko.txt",
+      "sha256": "ece8ae5ce94235e7d5ab1f8e8704403ca88ef38f4e96fdc0e6cacf79945d5a1b"
+    },
+    {
+      "bytes": 166,
+      "path": "sources/kotodama/koto_v1/kotodama/005.ko.txt",
+      "sha256": "225f4cd8f25de64de067fb8adf1ba213da4169905e4c08faf8327be7f897b499"
+    },
+    {
+      "bytes": 207,
+      "path": "sources/kotodama/koto_v1/kotodama/006.ko.txt",
+      "sha256": "ae01c94eb2a92140b4f80ea7d7131deebf097f90902ccb920f6e23017536344c"
+    },
+    {
+      "bytes": 767,
+      "path": "sources/kotodama/koto_v1/kotodama/007.ko.txt",
+      "sha256": "abaeeb0f6a59f981e6f812019ef527be580dcf1762c0d20d2a0587432b27df91"
+    },
+    {
+      "bytes": 463,
+      "path": "sources/kotodama/koto_v1/kotodama/008.ko.txt",
+      "sha256": "c578f1e78b23fd1ec6413da2a55f1bdffd8bafd96c7d85a6fb2c75c12e05c320"
+    },
+    {
+      "bytes": 189,
+      "path": "sources/kotodama/koto_v1/kotodama/009.ko.txt",
+      "sha256": "dac90f6666b54f616f59087d68f913fe77afca610b518b7abed44b4a8f2bd702"
+    },
+    {
+      "bytes": 252,
+      "path": "sources/kotodama/koto_v1/kotodama/010.ko.txt",
+      "sha256": "654bba7dd379dac1b11ef487518a0dba0e931141a94d048d438b78f0cdee0b5f"
+    },
+    {
+      "bytes": 272,
+      "path": "sources/kotodama/koto_v1/kotodama/011.ko.txt",
+      "sha256": "0c790a76e46137bbb54938deccb7d4b4468fe944e6a55a9bda20b842bed64061"
+    },
+    {
+      "bytes": 498,
+      "path": "sources/kotodama/koto_v1/kotodama/012.ko.txt",
+      "sha256": "1f117272c0d33df8dd6262d3dc31b7be12e013521fb8ed6418e5acf3506303d9"
+    },
+    {
+      "bytes": 131,
+      "path": "sources/kotodama/koto_v1/kotodama/013.ko.txt",
+      "sha256": "16ea2b39e8e5937b5783434aec57d4a357a97ac2b5b1b2425e88ade9979e6aa2"
+    },
+    {
+      "bytes": 181,
+      "path": "sources/kotodama/koto_v1/kotodama/014.ko.txt",
+      "sha256": "d08205ec5218439fae924729d26b1843ff6549ad376ae043cc48553494439835"
+    },
+    {
+      "bytes": 161,
+      "path": "sources/kotodama/koto_v1/kotodama/015.ko.txt",
+      "sha256": "0b9575a592e847bcb82799963ace7cfb21c10b7b49fd82fb24a9d6e8529cbb23"
+    },
+    {
+      "bytes": 167,
+      "path": "sources/kotodama/koto_v1/kotodama/016.ko.txt",
+      "sha256": "787da095c8502d1925a7da4fe6e2a388dbbefbf21ff865a22d359eb53d47f9e6"
+    },
+    {
+      "bytes": 161,
+      "path": "sources/kotodama/koto_v1/kotodama/017.ko.txt",
+      "sha256": "21450031be3cea6c45863306a9bdd5524f2f512772b55f75172a4c3f565e0160"
+    },
+    {
+      "bytes": 184,
+      "path": "sources/kotodama/koto_v1/kotodama/018.ko.txt",
+      "sha256": "62be658af5fc7bcffe53b2673f483f518f491621ba6a022f18a0c345086c14c5"
+    },
+    {
+      "bytes": 225,
+      "path": "sources/kotodama/koto_v1/kotodama/019.ko.txt",
+      "sha256": "dd9ed88e255a479e20a54db50a5e0472df200072260faeca5794e7711e287d1c"
+    },
+    {
+      "bytes": 200,
+      "path": "sources/kotodama/koto_v1/kotodama/020.ko.txt",
+      "sha256": "3e09b73b7b8db30bbf91595da0a11a5bf9413a1980f3a4244166b76ee439e1d1"
+    },
+    {
+      "bytes": 148,
+      "path": "sources/kotodama/koto_v1/kotodama/021.ko.txt",
+      "sha256": "23c50c8243f3f269b5c66ab2406d59e78d5c535a5b221d05aac8d94755a2107d"
+    },
+    {
+      "bytes": 252,
+      "path": "sources/kotodama/koto_v1/kotodama/022.ko.txt",
+      "sha256": "37ebc1bc7f9cc2f0b647526991100f9e1edfb6169354eccd52561dbaf56ae924"
+    },
+    {
+      "bytes": 387,
+      "path": "sources/kotodama/koto_v1/kotodama/023.ko.txt",
+      "sha256": "ae466f8dfd9932ef278586d6b369e0be01aeb7a3081ef8470264d0a6e01daf42"
+    },
+    {
+      "bytes": 173,
+      "path": "sources/kotodama/koto_v1/kotodama/024.ko.txt",
+      "sha256": "1c8945eaa777d069ba1bc54c6925290e130a3b8a5918f1e8c8b6a9f7b850f538"
+    },
+    {
+      "bytes": 749,
+      "path": "sources/kotodama/koto_v1/kotodama/025.ko.txt",
+      "sha256": "4ace683e58260946a785f299ff9ff56b6d8c8b687f5012de9d8cd94c9375e291"
+    },
+    {
+      "bytes": 331,
+      "path": "sources/kotodama/koto_v1/kotodama/026.ko.txt",
+      "sha256": "1e2b122c3cb2308945f5abefb4b2021db590c665c0357fc953278f0cea29f61c"
+    },
+    {
+      "bytes": 471,
+      "path": "sources/kotodama/koto_v1/kotodama/027.ko.txt",
+      "sha256": "4e327de2005b0d2e9eb4a029c67fc0b94cf1637780235a6dcdc784de5ee74e93"
+    },
+    {
+      "bytes": 326,
+      "path": "sources/kotodama/koto_v1/kotodama/028.ko.txt",
+      "sha256": "82b550cfc907e062571e40f30f909e33db0066529e93bbece03acc502e187d34"
+    },
+    {
+      "bytes": 179,
+      "path": "sources/kotodama/koto_v1/kotodama/029.ko.txt",
+      "sha256": "c1aa27d585975c6bade9ba92851d148606e8be7c8b592bbf2324bb03bc573bfd"
+    },
+    {
+      "bytes": 232,
+      "path": "sources/kotodama/koto_v1/kotodama/030.ko.txt",
+      "sha256": "6ca668c7d5f635ce08b213a06f48ff77db4291293642ff7342d049539b7d45fa"
+    },
+    {
+      "bytes": 215,
+      "path": "sources/kotodama/koto_v1/kotodama/031.ko.txt",
+      "sha256": "e60c2b9f595a1bf5e7dbfb6b2b92d8311f8eda5b2fba53d28bc0387afd7d439a"
+    },
+    {
+      "bytes": 628,
+      "path": "sources/kotodama/koto_v1/kotodama/032.ko.txt",
+      "sha256": "a03b5c471c25d7e1d65fd9f71cff66e341583f6aece9312807c451553252d4b3"
+    },
+    {
+      "bytes": 361,
+      "path": "sources/kotodama/koto_v1/kotodama/033.ko.txt",
+      "sha256": "6786bcb04ea1439fb1f02cf92d6e1fe7dbf963ecbf9f4c210d13c26a625ec8ad"
+    },
+    {
+      "bytes": 327,
+      "path": "sources/kotodama/koto_v1/kotodama/034.ko.txt",
+      "sha256": "90ba5cb34f4bfda0326a5dd08a284ffc0de75f172be31a18c3f279b9e8ed2a28"
+    },
+    {
+      "bytes": 131,
+      "path": "sources/kotodama/koto_v1/kotodama/035.ko.txt",
+      "sha256": "f9840f99980fdada17f47ef481701d4c68cc52408d6277104718102c96f9b936"
+    },
+    {
+      "bytes": 98,
+      "path": "sources/kotodama/koto_v1/kotodama/036.ko.txt",
+      "sha256": "492705bb31a33f1d6e16009dc864216bd1c230488ee302d9e87c7c1684e28b31"
+    },
+    {
+      "bytes": 98,
+      "path": "sources/kotodama/koto_v1/kotodama/037.ko.txt",
+      "sha256": "a219e87a0123e9b19ae4f0e7921a16461932e178d369ce653297d222a7776a67"
+    },
+    {
+      "bytes": 136,
+      "path": "sources/kotodama/koto_v1/kotodama/038.ko.txt",
+      "sha256": "1b78194a3c569ceb283fd1e655e533d38e5d596f4bf8640ef4f254562ccf5c53"
+    },
+    {
+      "bytes": 100,
+      "path": "sources/kotodama/koto_v1/kotodama/039.ko.txt",
+      "sha256": "62677f7d11b9d27496ba3fa6586d20ddf19ed6a70aeb954d29da0aec78588926"
+    },
+    {
+      "bytes": 144,
+      "path": "sources/kotodama/koto_v1/kotodama/040.ko.txt",
+      "sha256": "7be35a2b121be4cb8b36a18c5c4d2278cc4248d825b382d1febfee6e0e12cc28"
+    },
+    {
+      "bytes": 97,
+      "path": "sources/kotodama/koto_v1/kotodama/041.ko.txt",
+      "sha256": "2133d3189363e67cf38f7acb78748735fe9813c26c343ddf32ce0bfaaf9d4458"
+    },
+    {
+      "bytes": 135,
+      "path": "sources/kotodama/koto_v1/kotodama/042.ko.txt",
+      "sha256": "f7f03cc27a660b57559fbfb56fb6e03a833cd2d6da7201a62b2251d77fbc8a7e"
+    },
+    {
+      "bytes": 178,
+      "path": "sources/kotodama/koto_v1/kotodama/043.ko.txt",
+      "sha256": "1766ce5f997652f0387b5f69428cd619fd82989db34e7c0eae7cf4431806fcea"
+    },
+    {
+      "bytes": 181,
+      "path": "sources/kotodama/koto_v1/kotodama/044.ko.txt",
+      "sha256": "26bba21ca30f9ebe549cdeb8280d64708e391831d1762f4e73a21237c00a28e5"
+    },
+    {
+      "bytes": 190,
+      "path": "sources/kotodama/koto_v1/kotodama/045.ko.txt",
+      "sha256": "b685291a3a24348c050a4d33bc9c0d42dc80bcc28f61d52c5f3222c6f2a85a1d"
+    },
+    {
+      "bytes": 260,
+      "path": "sources/kotodama/koto_v1/kotodama/046.ko.txt",
+      "sha256": "871613baec58a3e4074f3322e465c2995c31cbb44704cbb0c55f71a748d7a5cf"
+    },
+    {
+      "bytes": 285,
+      "path": "sources/kotodama/koto_v1/kotodama/047.ko.txt",
+      "sha256": "9d536b5d46339c4f30afd31687f32fb4949d31f9482d6254a131988f4e931402"
+    },
+    {
+      "bytes": 474,
+      "path": "sources/kotodama/koto_v1/kotodama/048.ko.txt",
+      "sha256": "ac3d36c7a38781ab73c108ef52e22cfbfe2b8012b5d75639d753a2546093790a"
+    },
+    {
+      "bytes": 265,
+      "path": "sources/kotodama/koto_v1/kotodama/049.ko.txt",
+      "sha256": "0de20c5a5a02a4fd970574811c92b7bbe366c916e36380097a9d179cc7ea4a76"
+    },
+    {
+      "bytes": 513,
+      "path": "sources/kotodama/koto_v1/kotodama/050.ko.txt",
+      "sha256": "3985b09f25448e6e187d1619b45179c567b3a5e5b3c5881e0ddbec47f9c297a2"
+    },
+    {
+      "bytes": 448,
+      "path": "sources/kotodama/koto_v1/kotodama/051.ko.txt",
+      "sha256": "854a8a83ce9f1af833b904e71b7ef0b2745129c97c78913b5fbe4ddb61443f28"
+    },
+    {
+      "bytes": 340,
+      "path": "sources/kotodama/koto_v1/kotodama/052.ko.txt",
+      "sha256": "f27670ae5e6816fd403a13140d1f302e7b35964ebb26b3695a0149491977797b"
+    },
+    {
+      "bytes": 181,
+      "path": "sources/kotodama/koto_v1/kotodama/053.ko.txt",
+      "sha256": "3508225dacec27b2a2e7c456efffe141d954d7294596e61dc055eefd6c003610"
+    },
+    {
+      "bytes": 482,
+      "path": "sources/kotodama/koto_v1/kotodama/054.ko.txt",
+      "sha256": "ccda6098ccccf30bc9595eb8fe7802cbe0a386bd8a3731900a42537f8225f3fd"
+    },
+    {
+      "bytes": 513,
+      "path": "sources/kotodama/koto_v1/kotodama/055.ko.txt",
+      "sha256": "0767f28060857fd752c4bb32f810ac15f6f4ec22d37ab5bb565016b90711a3ab"
+    },
+    {
+      "bytes": 386,
+      "path": "sources/kotodama/koto_v1/kotodama/056.ko.txt",
+      "sha256": "d1a1ae1f89b2ccf57af40a9fddbc36ae0a5dc52c53e616703370c0d929457d74"
+    },
+    {
+      "bytes": 107,
+      "path": "sources/kotodama/koto_v1/kotodama/057.ko.txt",
+      "sha256": "c67d51b9cd457287966ca3c9a350a998de9fddc7be88de09ea9afb1f049c9c47"
+    },
+    {
+      "bytes": 168,
+      "path": "sources/kotodama/koto_v1/kotodama/058.ko.txt",
+      "sha256": "1549b393aa5c26932e8b8b646fbf436de55287fec7c7ac32890967cd15da4b37"
+    },
+    {
+      "bytes": 181,
+      "path": "sources/kotodama/koto_v1/kotodama/059.ko.txt",
+      "sha256": "c7ba3c7f7a81c0801a9d263d2d70f6397f7a22ddeeb5320a4e99de7a913632a8"
+    },
+    {
+      "bytes": 269,
+      "path": "sources/kotodama/koto_v1/kotodama/060.ko.txt",
+      "sha256": "57854702edeebb8ce9478486429951bce6c5101248570bfef1a6ea246156ecd5"
+    },
+    {
+      "bytes": 200,
+      "path": "sources/kotodama/koto_v1/kotodama/061.ko.txt",
+      "sha256": "2f3e5d31aa46481040e03f3e56f5833223fec6c9b2b256b927d8cba58afe15a6"
+    },
+    {
+      "bytes": 203,
+      "path": "sources/kotodama/koto_v1/kotodama/062.ko.txt",
+      "sha256": "a30f0915d69a2657d2887fd51600dddce0a42f5dc9cbc137bef97ba67cc0af41"
+    },
+    {
+      "bytes": 361,
+      "path": "sources/kotodama/koto_v1/kotodama/063.ko.txt",
+      "sha256": "e363a998a7d79ceecc369a013ca561f9a8eea11d317657af29ba36c5574098a3"
+    },
+    {
+      "bytes": 618,
+      "path": "sources/kotodama/koto_v1/kotodama/064.ko.txt",
+      "sha256": "68471ee39ba68c3c1f54d80983d05fae2776f177e5eada95ccb50789660bae61"
+    },
+    {
+      "bytes": 301,
+      "path": "sources/kotodama/koto_v1/kotodama/065.ko.txt",
+      "sha256": "b88a4492a212647564cb4a7dd36082ef2fa64938405f9df5d1fdebcf7c03c280"
+    },
+    {
+      "bytes": 187,
+      "path": "sources/kotodama/koto_v1/kotodama/066.ko.txt",
+      "sha256": "b7502e08f74701346e0fe6c8c14162e8018de03140897beb487bab4db7af9e57"
+    },
+    {
+      "bytes": 169,
+      "path": "sources/kotodama/koto_v1/kotodama/067.ko.txt",
+      "sha256": "64fc72761ecd3a6e8a6ca384048f8c46820e496734e517ae0661fa07e606e130"
+    },
+    {
+      "bytes": 126,
+      "path": "sources/kotodama/koto_v1/kotodama/068.ko.txt",
+      "sha256": "122282d8fcc8aeee504382b5837238705f115fa81ad2f0a67dda283be119b2d1"
+    },
+    {
+      "bytes": 221,
+      "path": "sources/kotodama/koto_v1/kotodama/069.ko.txt",
+      "sha256": "43cd5b1cf6fa169a64e8b5039143896677196e81543ec8c0e4197fde2e089f1a"
+    },
+    {
+      "bytes": 177,
+      "path": "sources/kotodama/koto_v1/kotodama/070.ko.txt",
+      "sha256": "6bff2239f40672a2b33f9cd763ff19b365f5dc5fa7bb0f057fcbfd7149d520cb"
+    },
+    {
+      "bytes": 302,
+      "path": "sources/kotodama/koto_v1/kotodama/071.ko.txt",
+      "sha256": "e777139f3d0da99b71be0d00db9ceb388ff13c08525c32f830b5f074aba1bd79"
+    },
+    {
+      "bytes": 183,
+      "path": "sources/kotodama/koto_v1/kotodama/072.ko.txt",
+      "sha256": "1bf42008e6fc9e2f8d9e869da2c2c6f8473bfdf8007210ab11c0ab6242df6eab"
+    },
+    {
+      "bytes": 594,
+      "path": "sources/kotodama/koto_v1/lists/001.ko.txt",
+      "sha256": "934a24cfadc1ed7ed7eaa6cde610401c845262fac7dd9aec653a6bb5324d5671"
+    },
+    {
+      "bytes": 431,
+      "path": "sources/kotodama/koto_v1/lists/002.ko.txt",
+      "sha256": "9ed4d05675fc4624b7ae67f19640af6383f247f384c34c14c248920e6b22ad0b"
+    },
+    {
+      "bytes": 270,
+      "path": "sources/kotodama/koto_v1/lists/003.ko.txt",
+      "sha256": "43e32374a8fbf7ded30c688b6ea341432b9142b4829a7cc853d92648dad6c57e"
+    },
+    {
+      "bytes": 183,
+      "path": "sources/kotodama/koto_v1/lists/004.ko.txt",
+      "sha256": "826e1d11547816022993256789a11628da591e5f60e1b3ba4e8559a2ecb8a099"
+    },
+    {
+      "bytes": 2851,
+      "path": "sources/kotodama/koto_v1/lists/005.ko.txt",
+      "sha256": "e7814c27ee390341a12204c23e9f63c7f8c5aa8a94a9d18f6112bb109ab815f9"
+    },
+    {
+      "bytes": 318,
+      "path": "sources/kotodama/koto_v1/lists/006.ko.txt",
+      "sha256": "23d1c0a60030decade2f8157b8a241e058b95ad4675e4ff41f37bba67f85f424"
+    },
+    {
+      "bytes": 185,
+      "path": "sources/kotodama/koto_v1/lists/007.ko.txt",
+      "sha256": "3b8b385f3dffe2822f89292ed116c5fbbb836e5874a7432901fb78bb5751d424"
+    },
+    {
+      "bytes": 2612,
+      "path": "sources/kotodama/koto_v1/lists/008.ko.txt",
+      "sha256": "05bffa1a1327e1309678bd1c8ca005fbb323ac13731b2a8c2da615fe6a5c4fb1"
+    },
+    {
+      "bytes": 262,
+      "path": "sources/kotodama/koto_v1/lists/009.ko.txt",
+      "sha256": "521f68bf69e30aaf33e8b341d7493f1d2dc9fa1c20050b1906964f830ce894a5"
+    },
+    {
+      "bytes": 270,
+      "path": "sources/kotodama/koto_v1/lists/010.ko.txt",
+      "sha256": "feb8f77295127cc203c23d67213e3803b4a0251f8caf6f9ab7fa7270e95264b1"
+    },
+    {
+      "bytes": 229,
+      "path": "sources/kotodama/koto_v1/lists/011.ko.txt",
+      "sha256": "ec5c446036eee24340f28588296b546fff4e27a35dab5777beda1e3832b4ba90"
+    },
+    {
+      "bytes": 334,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/001.ko.txt",
+      "sha256": "eee436d9ed6b4b79486bb5e30248989f101c1dab2f96489830bac8022af46c3f"
+    },
+    {
+      "bytes": 624,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/002.ko.txt",
+      "sha256": "c642ad27e57fbe485e00b1eb0e061c8dbfe3a32f572ec95dacfad4c35ce04936"
+    },
+    {
+      "bytes": 513,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/003.ko.txt",
+      "sha256": "d5250edaecad90e81ad210db88fbba8a22abfc9ea2825f20e77e743711fc1164"
+    },
+    {
+      "bytes": 1045,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/004.ko.txt",
+      "sha256": "405b0435bf258b7433e9f6bc7ab949296c4d5b881267a93c3cda5b04d8e82322"
+    },
+    {
+      "bytes": 920,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/005.ko.txt",
+      "sha256": "29770f487a13433e26aba38fda4d13855a692893bdfaf9edb759b95e994d2e0d"
+    },
+    {
+      "bytes": 1429,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/006.ko.txt",
+      "sha256": "a1db1006d0daad6fd892cbb8db5eb0698f1c6cba1ca11e11b047d856529495e0"
+    },
+    {
+      "bytes": 237,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/007.ko.txt",
+      "sha256": "92669ad1d37b056ea4533aacf116fdeebe59298ef862f3b06606fd787cc46258"
+    },
+    {
+      "bytes": 222,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/008.ko.txt",
+      "sha256": "445d9b73fae92e0a396c5d4ba319967178045887309175299e0e8e5c029e7025"
+    },
+    {
+      "bytes": 437,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/009.ko.txt",
+      "sha256": "b3cccb12480ac587d5a7daebafbdff4feb45cf3f7bd8161251f9716e3e29e9b5"
+    },
+    {
+      "bytes": 251,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/010.ko.txt",
+      "sha256": "3649db07712c82818e5bad255d2bc7aae43a3a3a16a30bbd481f041c0df221ae"
+    },
+    {
+      "bytes": 1087,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/011.ko.txt",
+      "sha256": "0f5d1d0762c7973a32fd66f8ad315987c688f87beb0a3982b84dc81dbb3e075d"
+    },
+    {
+      "bytes": 277,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/012.ko.txt",
+      "sha256": "e61bddc1f5d3580212abb94017f966bdb34663411acfbe7ecdd5bb8f782ef28b"
+    },
+    {
+      "bytes": 997,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/013.ko.txt",
+      "sha256": "575ede166da361ff00870ea28800295e8723b862d62764d0f1e19af56d0af5cc"
+    },
+    {
+      "bytes": 246,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/014.ko.txt",
+      "sha256": "4d100ae9654827a5b09aa3fc5eb9e80d96c096cd836ce38bd7d8dbed67b5429f"
+    },
+    {
+      "bytes": 830,
+      "path": "sources/kotodama/koto_v1/runtime_acceptance/015.ko.txt",
+      "sha256": "a1f78a6876ad122b9158f73cb7f22488eaac07cfc7f5f65b6d48559edc82dc7b"
+    },
+    {
+      "bytes": 3004,
+      "path": "sources/kotodama/koto_v1/state_aggregate_literal_runtime/001.ko.txt",
+      "sha256": "f82999d7a8014e194e87fcd8ab6febf761f5c8223cadafaeede4927742511771"
+    },
+    {
+      "bytes": 1476,
+      "path": "sources/kotodama/koto_v1/state_aggregate_literal_runtime/002.ko.txt",
+      "sha256": "0a56b5e0c8ade106fd23d571f5da473af371905329b25d3b3bd2261fc18774f8"
+    },
+    {
+      "bytes": 291,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/001.ko.txt",
+      "sha256": "f905ed79478ce0f518b050db5d7fd331f03a0a8f06a585f2186a603ce43d07c9"
+    },
+    {
+      "bytes": 418,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/002.ko.txt",
+      "sha256": "f5497cbb647bd1574ad3ddd36f6de3c02bd85514de1f69b3a7920fbf964b1f2a"
+    },
+    {
+      "bytes": 433,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/003.ko.txt",
+      "sha256": "8385058eecbadbd7e4b31beb743dbfe77438a8744e1437224766c6d507cbf0be"
+    },
+    {
+      "bytes": 397,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/004.ko.txt",
+      "sha256": "a2c138e2209c5506ffffb46795dbb3de534f59ad4a22318278c306071cf88be9"
+    },
+    {
+      "bytes": 397,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/005.ko.txt",
+      "sha256": "d6802a1e16e1311a385930bef3c095f3f7dfe906a537f748fc25ded3ede8a51d"
+    },
+    {
+      "bytes": 700,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/006.ko.txt",
+      "sha256": "f48dcbcbc907c121b753b3727587678119a2e134862c285c8cb9c5e011f08810"
+    },
+    {
+      "bytes": 1250,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/007.ko.txt",
+      "sha256": "4987847af16483952c36324b22bf41b79b727bf99aaae5d68b01ed36ad25517d"
+    },
+    {
+      "bytes": 1638,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/008.ko.txt",
+      "sha256": "6535f7129dea6ef26d873515b96d1d65b810fe75783822ef6e56e045be43ffb1"
+    },
+    {
+      "bytes": 1501,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/009.ko.txt",
+      "sha256": "10997f24aa9d632eb039d85d740faa4f9259ad87b90dbb0526c0810825906337"
+    },
+    {
+      "bytes": 1181,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/010.ko.txt",
+      "sha256": "c19386f1eadd7f925c6c80b255afe917f121452a7c724edca2cf1a0b8e58dd0b"
+    },
+    {
+      "bytes": 1572,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/011.ko.txt",
+      "sha256": "acfe33b6aa6b8b1d47589fdefe43941e9f109d4348b11f06065cffb87d1a00c3"
+    },
+    {
+      "bytes": 450,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/012.ko.txt",
+      "sha256": "931891a1e4de24249c5cb9fa10e0969b71e8a5a0799cc07b2b6afe18022149ca"
+    },
+    {
+      "bytes": 522,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/013.ko.txt",
+      "sha256": "643d0d0e0aedd6a755fdfb1c0873227e89d67685e3a621c6114c000f9c57b37a"
+    },
+    {
+      "bytes": 217,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/014.ko.txt",
+      "sha256": "8203033b219f1694f675bd9a00872b89c8d12db6a4b185c4355e938c738bc4b8"
+    },
+    {
+      "bytes": 214,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/015.ko.txt",
+      "sha256": "e2fb6b203b83ce6152d602b97701ec2d977be2c8bc7566f0b36c96927135ed2b"
+    },
+    {
+      "bytes": 766,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/016.ko.txt",
+      "sha256": "d835205154e666c4a8ac45baa5c4d8df0518abebb6af6358b2f6d33f6ccdb01b"
+    },
+    {
+      "bytes": 1501,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/017.ko.txt",
+      "sha256": "cd289114582bf6dca49070ad70bc54dba45c9ea328dfac60937c22e93be80dee"
+    },
+    {
+      "bytes": 617,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/018.ko.txt",
+      "sha256": "2227a85037a64265bb572179ffebbcec10cbe1de7a9d720c6db94c43ff36d2c3"
+    },
+    {
+      "bytes": 217,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/019.ko.txt",
+      "sha256": "8203033b219f1694f675bd9a00872b89c8d12db6a4b185c4355e938c738bc4b8"
+    },
+    {
+      "bytes": 356,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/020.ko.txt",
+      "sha256": "1bebc6eb1d2fc50da1a6f4c043a98e583c25140e5be4d3e553b37cd53ff03ad8"
+    },
+    {
+      "bytes": 416,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/021.ko.txt",
+      "sha256": "9926fe6b0a3e524bb3a8cfa705ef624ae1498a370ea19a3b017bc082edd85cda"
+    },
+    {
+      "bytes": 243,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/022.ko.txt",
+      "sha256": "de0087576610438f1a4976df7437a99305c3af42b8684c0f38b7afb9ac0300e8"
+    },
+    {
+      "bytes": 337,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/023.ko.txt",
+      "sha256": "b096a4fba137cd1d8eb2c9180c6c47694b8eb50d0316b782119806a5dfada2f1"
+    },
+    {
+      "bytes": 593,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/024.ko.txt",
+      "sha256": "bd5d0cf7255064e0ae3b3e0eb31eb8343a5a37b48908ec7ef1feb874049cbcbd"
+    },
+    {
+      "bytes": 418,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/025.ko.txt",
+      "sha256": "90b118168e5027d8a5ff70e8893f7a4f66d6095d935077c204ba90bc490fcb25"
+    },
+    {
+      "bytes": 541,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/026.ko.txt",
+      "sha256": "3a2092be00fb9804e1ac432f80bcdabc17033d8443ce943b13c7e5a31982ab44"
+    },
+    {
+      "bytes": 437,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/027.ko.txt",
+      "sha256": "c851d13f770a2a1d10afe3f97dd62380359cd6003eb6f40b7bbc85447cc5b2ab"
+    },
+    {
+      "bytes": 531,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/028.ko.txt",
+      "sha256": "0f582bb7dc7960c5c82712062e0b696a7b13f055ef7ee07170eab3ea962dd1a6"
+    },
+    {
+      "bytes": 1252,
+      "path": "sources/kotodama/koto_v1/state_name_map_runtime/029.ko.txt",
+      "sha256": "d2231f4f218a14cfe1e1176ed30ae7029106e7be97a9a50a305953f09cbcbce9"
+    },
+    {
+      "bytes": 217,
+      "path": "sources/kotodama/koto_v1/state_scalar/001.ko.txt",
+      "sha256": "9dd4b1e8e56e38990ac705f8b5a83d4d88ebbec3d558ac9f4d79e06c42a19a8c"
+    },
+    {
+      "bytes": 777,
+      "path": "sources/kotodama/koto_v1/state_scalar/002.ko.txt",
+      "sha256": "7503dac35f1cba2853decc739d48ac9d5c92dba76126fd34459ca7ab746a7a7f"
+    },
+    {
+      "bytes": 590,
+      "path": "sources/kotodama/koto_v1/state_scalar/003.ko.txt",
+      "sha256": "7a1b76136a9c3298f8ff8fb8c921f937447735676c03c9ba60f69d7e419e4d01"
+    },
+    {
+      "bytes": 694,
+      "path": "sources/kotodama/koto_v1/state_scalar/004.ko.txt",
+      "sha256": "b20428a10b4887b5e54eeeca13663d0efb4c87f2758b7b8fcb4d8aa68f6e5e23"
+    },
+    {
+      "bytes": 635,
+      "path": "sources/kotodama/samples/asset_ops.ko.txt",
+      "sha256": "53343ae93a873e18baba037792e0ff0a31a59c1b0db1a14e37a126002e8b3626"
+    },
+    {
+      "bytes": 213,
+      "path": "sources/kotodama/samples/create_nft_for_every_user_trigger.ko.txt",
+      "sha256": "7adf7524ff7b245aea817f26fdf52cbc1ff42f9b5ed55217a37abd831c1cac4e"
+    },
+    {
+      "bytes": 1810,
+      "path": "sources/kotodama/samples/dex_contract.ko.txt",
+      "sha256": "763e72937fc1fd23df8cac1714002c38836b9bf27924b3c730bd9c30e5d5939f"
+    },
+    {
+      "bytes": 2231,
+      "path": "sources/kotodama/samples/dex_simple.ko.txt",
+      "sha256": "14cee419c4a7b5065847e4217b0d9cc4cd06cb2208cbc68241ee0332f07c9fab"
+    },
+    {
+      "bytes": 749,
+      "path": "sources/kotodama/samples/domain_ops.ko.txt",
+      "sha256": "968c4b10136ee937116a5609d2663a42c9bc5a966c4553eb73dc60eea60ff58c"
+    },
+    {
+      "bytes": 10183,
+      "path": "sources/kotodama/samples/irohaswap.ko.txt",
+      "sha256": "eaa97327acf129265a6656565321f53b468e2049f364bafe17e0b900155305be"
+    },
+    {
+      "bytes": 1052,
+      "path": "sources/kotodama/samples/kotodama_swap.ko.txt",
+      "sha256": "ea87fbe170720bb6fc3a02e23b12ee0425bfbdc19aeb6ab365f51baad422ee45"
+    },
+    {
+      "bytes": 1920,
+      "path": "sources/kotodama/samples/lending_simple.ko.txt",
+      "sha256": "304ec0161fe1bf3b0918ae80c0f8d919a032dead81a5689ab32b50a5ada82ed3"
+    },
+    {
+      "bytes": 491,
+      "path": "sources/kotodama/samples/mint_rose_trigger.ko.txt",
+      "sha256": "1fa8db90e33016f4067fcb254e4ec9b024ed11debc6fea271a0541fbb8d8cc82"
+    },
+    {
+      "bytes": 1491,
+      "path": "sources/kotodama/samples/native_escrow.ko.txt",
+      "sha256": "4ba32a631fd4201fed367bf002125c7570a15d5ad20897cd0a749b05821b65da"
+    },
+    {
+      "bytes": 2631,
+      "path": "sources/kotodama/samples/perp_funding.ko.txt",
+      "sha256": "c886395a8bd98f493c1ecb0b299724e9e76e71f1b8d7a744a04c362627762bb5"
+    },
+    {
+      "bytes": 499,
+      "path": "sources/kotodama/samples/query_assets_and_save_cursor.ko.txt",
+      "sha256": "c08804ba292ba16b5c6d2ae4d7bd6331c09b140294ebde7ad317ce2c6e291e2a"
+    },
+    {
+      "bytes": 342,
+      "path": "sources/kotodama/samples/smart_contract_can_filter_queries.ko.txt",
+      "sha256": "097666e238102814aceb36071ff42eedcc2a1041afeeea1d4b6acd559ac6a96c"
+    },
+    {
+      "bytes": 1846,
+      "path": "sources/kotodama/samples/stablecoin_simple.ko.txt",
+      "sha256": "b004cc876bafbc5d8c13c2e285c5e8d54af3b1123078fea1de52dad2cf68d0ac"
+    },
+    {
+      "bytes": 212,
+      "path": "sources/kotodama/samples/subscription_billing_trigger.ko.txt",
+      "sha256": "d02dd3887a3fbed960bda97db020e2a43e955939c26fb6fda623ef1605ff0221"
+    },
+    {
+      "bytes": 233,
+      "path": "sources/kotodama/samples/subscription_usage_recorder.ko.txt",
+      "sha256": "ba169dd177b19528c3644c04f1949a7707f13ccb79313563d34088c87a74575e"
+    },
+    {
+      "bytes": 4837,
+      "path": "sources/kotodama/samples/threshold_escrow.ko.txt",
+      "sha256": "e6eb4b7b9fc7a25e3b822e3d2324b6dc52175b3934a03bbcd2400259073b7415"
+    },
+    {
+      "bytes": 332,
+      "path": "sources/kotodama/samples/tuple_return_demo.ko.txt",
+      "sha256": "ee9914aca5b7b99cfa2ecf2fe404109448166af4224ffeb7d27b255ff4cc7087"
+    },
+    {
+      "bytes": 2117,
+      "path": "sources/kotodama/samples/zk_vote_ballot.ko.txt",
+      "sha256": "5a4b0979cd58815f1d9a287b66be482cd71dc148c1a35530fa5b7424447ae044"
+    }
+  ],
+  "format": 1,
+  "frozen": {
+    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+    "gas_schedule_hash": "af5a27f5fc57ebfb9eae3c4f8a25091ce78d97ff7797dbc3b304a0091069731f",
+    "header_size": 49,
+    "host_profile_id": "d50c38a8d0d0a229f54a43f9f7568fd45561774cb58f40668eb703ae79611b99",
+    "selection": "56c2328657d63a48e18c7d1bac5ae8f2406e6e71249a630ece7b504d0f9cd491"
+  },
+  "generated_by": "scripts/ivm_baseline_v1/capture.py",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+}

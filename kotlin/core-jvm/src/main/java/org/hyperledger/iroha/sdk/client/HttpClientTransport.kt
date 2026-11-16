@@ -640,6 +640,24 @@ class HttpClientTransport private constructor(
             .timeout(config.requestTimeout())
             .defaultHeaders(config.defaultHeaders())
             .build()
+
+    /**
+     * Create the anonymous SORA Parliament family client
+     * (`specs/parliament_private_ballot_design.md` sections 6 and 12.3).
+     *
+     * It borrows this client's executor, base URI, timeout and local-HTTP opt-in. The configured
+     * default headers apply to its two public reads only: a ballot submission carries none of
+     * them, no canonical authentication and no observer or telemetry callback.
+     */
+    fun newAnonymousBallotToriiClientV1(): AnonymousBallotToriiClientV1 =
+        AnonymousBallotToriiClientV1.builder()
+            .executor(executor)
+            .baseUri(config.baseUri())
+            .setAllowLocalDevelopmentHttp(config.allowLocalDevelopmentHttp())
+            .timeout(config.requestTimeout())
+            .defaultHeaders(config.defaultHeaders())
+            .build()
+
     fun sorafsGatewayClient(): SorafsGatewayClient = sorafsGatewayClient
     fun sorafsGatewayFetch(request: GatewayFetchRequest): CompletableFuture<ClientResponse> = sorafsGatewayClient.fetch(request)
     fun sorafsGatewayFetchSummary(request: GatewayFetchRequest): CompletableFuture<GatewayFetchSummary> = sorafsGatewayClient.fetchSummary(request)

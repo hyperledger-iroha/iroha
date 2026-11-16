@@ -571,11 +571,11 @@ fn receive_and_successors(
             ));
         }
         let successor = post_burn_send(
-            &loaded_witness,
             &witness,
             burned.head().profile(),
             &chain.receiver_key,
             &chain.send.credential,
+            &chain.sender_key,
         )?;
         let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
         let after = step.after_core;
@@ -611,44 +611,37 @@ fn receive_and_successors(
     Ok(())
 }
 
+/// The Send10 that follows a Burn. The fixture builds it from the exact
+/// post-Burn state under the Burn Receive's head, so the head's adjusted burned
+/// total reaches the statement and the successor Core through the builder. It
+/// pays another wallet, whose key signs the Request: the completed-Request
+/// relation refuses payer == receiver.
 fn post_burn_send(
-    loaded_witness: &ExactOperationWitness,
-    witness: &crate::receive::Witness,
-    profile: &[Fp; 64],
+    received: &crate::receive::Witness,
+    head: &[Fp; 64],
     key: &full::WalletKey,
     payee: &crate::credential::Credential,
+    payee_key: &full::WalletKey,
 ) -> Result<ExactOperationWitness> {
-    // Reuse the witness builder only; this synthetic Load-shaped input is
-    // never submitted as a Load or accepted as authority. The resulting Send
-    // must verify against the actual completed Receive head below. It pays
-    // another wallet: the completed-Request relation refuses payer == receiver.
-    let mut builder = loaded_witness.clone();
-    let ExactOperationWitness::Load { step, .. } = &mut builder else {
-        unreachable!()
-    };
-    step.after_core = witness.after_core;
-    step.after_rest = witness.after_rest;
-    step.statement = witness.statement;
+    use super::super::device_fixture::{SendOrigin, request_from, send10_from};
+    let origin = SendOrigin::after_received(received, head)?;
     let request = CompletedRequest {
-        body: super::super::device_fixture::request_to(&builder, payee)?
-            .try_into()
-            .unwrap(),
+        body: request_from(&origin, payee).try_into().unwrap(),
         signature: [0; 64],
     };
     let signature = bootstrap::sign(
         crate::request::commitments(&request)
             .map_err(Error::Malformed)?
             .message,
-        &key.d,
-        "post-Burn receiver Request fixture",
+        &payee_key.d,
+        "post-Burn payee Request fixture",
     );
-    let mut successor = super::super::device_fixture::send10_to(&builder, payee, signature)?;
+    let mut successor = send10_from(&origin, payee, signature)?;
     let ExactOperationWitness::Send(step) = &mut successor else {
         unreachable!()
     };
-    step.after_core[10] = profile[35];
-    step.statement[12] = profile[35];
-    step.statement[15] = crate::monetary_state::commitment(&step.after_core, &step.after_rest);
+    // Software stand-in for the payer's hardware boundary. It signs the body
+    // of the statement the fixture built and changes no monetary field.
     step.receipt = crate::chain_fixture::own_receipt(
         key,
         &step.credential,
@@ -656,6 +649,43 @@ fn post_burn_send(
         Fp::ZERO,
     );
     Ok(successor)
+}
+
+/// Every violated pre-instantiation row as (array, name, row, instance), so a
+/// local witness mistake is named before the expensive full circuit check.
+fn violated_rows(w: &full::Wiring<Fp>) -> Vec<(usize, &'static str, usize, usize)> {
+    let mut violated = Vec::new();
+    for (a, array) in w.arrays.iter().enumerate() {
+        let evaluate = |lin: &crate::uniform::Lin<Fp>, i: usize| {
+            let (p, r) = (i >> array.rho, i & ((1 << array.rho) - 1));
+            lin.iter().map(|term| {
+                use crate::uniform::Src;
+                let value = match &term.src {
+                    Src::One => Fp::ONE,
+                    Src::Own(cell) => array.values[*cell][i],
+                    Src::Link { array: target, cell, map } => match map[r] {
+                        Some(rr) => { let target = &w.arrays[*target]; let pp = if w.pi[target.family] == 0 { 0 } else { p }; target.values[*cell][(pp << target.rho) | rr] },
+                        None => Fp::ZERO,
+                    },
+                    Src::All { .. } => panic!("no pre-instantiation sum rows"),
+                };
+                term.coef[r] * value
+            }).sum::<Fp>()
+        };
+        for (row, relation) in array.rows.iter().enumerate() {
+            for p in 0..w.counts[array.family] {
+                for r in 0..array.r_count {
+                    let i = (p << array.rho) | r;
+                    if evaluate(&relation[0], i) * evaluate(&relation[1], i)
+                        != evaluate(&relation[2], i)
+                    {
+                        violated.push((a, array.name, row, i));
+                    }
+                }
+            }
+        }
+    }
+    violated
 }
 
 /// Relation-only regression; these explicit fixture ports never confer native
@@ -687,41 +717,52 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
     profile[35] = Fp::from(10);
     let (_, credit_root) = crate::indexed_map::empty_insert::<32>(received.maps.credit_insert.key, received.maps.credit_insert.value);
     profile[37] = credit_root;
-    let successor =
-        post_burn_send(&loaded, &received, &profile, &chain.receiver_key, &chain.send.credential).unwrap();
-    let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
-    let mut w = full::Wiring::default();
-    let family = w.family(0, 1);
-    let predecessor = full::VerifiedPredecessor::fixture(&mut w, family, profile);
-    crate::send::append_preparation(&mut w, family, step, &predecessor).unwrap();
-    // Identify local witness mistakes before the expensive full circuit check.
-    for (a, array) in w.arrays.iter().enumerate() {
-        let evaluate = |lin: &crate::uniform::Lin<Fp>, i: usize| {
-            let (p, r) = (i >> array.rho, i & ((1 << array.rho) - 1));
-            lin.iter().map(|term| {
-                use crate::uniform::Src;
-                let value = match &term.src {
-                    Src::One => Fp::ONE,
-                    Src::Own(cell) => array.values[*cell][i],
-                    Src::Link { array: target, cell, map } => match map[r] {
-                        Some(rr) => { let target = &w.arrays[*target]; let pp = if w.pi[target.family] == 0 { 0 } else { p }; target.values[*cell][(pp << target.rho) | rr] },
-                        None => Fp::ZERO,
-                    },
-                    Src::All { .. } => panic!("no pre-instantiation sum rows"),
-                };
-                term.coef[r] * value
-            }).sum::<Fp>()
-        };
-        for (row, relation) in array.rows.iter().enumerate() {
-            for p in 0..w.counts[array.family] {
-                for r in 0..array.r_count {
-                    let i = (p << array.rho) | r;
-                    assert_eq!(evaluate(&relation[0], i) * evaluate(&relation[1], i), evaluate(&relation[2], i), "array {a} {} row {row} instance {i}", array.name);
-                }
-            }
-        }
-    }
+    // The relation always reads the actual verified predecessor `profile`.
+    // `fixture_head` is the head the successor's builder is given.
+    let prepare = |fixture_head: &[Fp; 64]| {
+        let successor = post_burn_send(
+            &received,
+            fixture_head,
+            &chain.receiver_key,
+            &chain.send.credential,
+            &chain.sender_key,
+        )
+        .unwrap();
+        let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
+        let mut w = full::Wiring::default();
+        let family = w.family(0, 1);
+        let predecessor = full::VerifiedPredecessor::fixture(&mut w, family, profile);
+        let prepared = crate::send::append_preparation(&mut w, family, step, &predecessor).map(|_| ());
+        ((**step).clone(), prepared, w)
+    };
+    let (step, prepared, w) = prepare(&profile);
+    prepared.unwrap();
+    let violated = violated_rows(&w);
+    assert!(violated.is_empty(), "violated rows (array, name, row, instance): {violated:?}");
     check_constraints(w, 18, None).unwrap();
+    // The Burn credited 10 into the Core balance and the lineage alone records
+    // it as burned: the Core's own burn field is still the stale zero.
+    assert_eq!(step.before_core[9], Fp::from(110));
+    assert_eq!(step.before_core[10], Fp::ZERO);
+    assert_eq!(profile[35], Fp::from(10));
+    // The successor carries the adjusted burn forward and spends around it.
+    assert_eq!(step.statement[12], profile[35]);
     assert_eq!(step.after_core[9] - profile[35], Fp::from(90));
     assert_eq!(step.after_core[10], profile[35]);
+    // It pays the other wallet, and that wallet is what its send chain names.
+    assert_eq!(step.statement[18..20], chain.sender_bootstrap.core[5..7]);
+    assert_ne!(step.statement[18..20], step.before_core[5..7]);
+    // A successor built as if nothing had been burned is refused under the
+    // same verified predecessor.
+    let mut unburned = profile;
+    unburned[35] = Fp::ZERO;
+    let (dropped, prepared, w) = prepare(&unburned);
+    assert_eq!(dropped.after_core[10], Fp::ZERO);
+    assert!(
+        prepared.is_err()
+            || violated_rows(&w)
+                .iter()
+                .any(|v| v.1 == "Send checked arithmetic and state preservation"),
+        "a successor that drops the adjusted burn must violate the Send relation"
+    );
 }

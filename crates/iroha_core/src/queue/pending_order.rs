@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
 
-use super::EntrypointHash;
+use super::{EntrypointHash, ResidentPartition};
 
 /// One queue-resident input in admission order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,8 @@ pub(super) struct PendingOrderEntry {
     pub(super) expires_at: Option<Duration>,
     /// Digest of the exact canonical entrypoint frame the queue retains and gossips.
     pub(super) frame: Hash,
+    /// The budget the input counts against: the ordinary queue's or the ballot partition's.
+    pub(super) partition: ResidentPartition,
 }
 
 /// FIFO keyed by admission incarnation, with a deadline-ordered expiry set and frame digests.
@@ -84,20 +86,16 @@ impl PendingOrderIndex {
         self.fifo.is_empty()
     }
 
-    /// Oldest admitted resident input.
-    pub(super) fn front(&self) -> Option<&PendingOrderEntry> {
-        self.fifo.first_key_value().map(|(_, entry)| entry)
+    /// The oldest admitted resident input that `counts`, in admission order. The queue's age
+    /// pressure counts ordinary residents only: the ballot partition has its own budget.
+    pub(super) fn front_where(
+        &self,
+        counts: impl Fn(&PendingOrderEntry) -> bool,
+    ) -> Option<&PendingOrderEntry> {
+        self.fifo.values().find(|entry| counts(entry))
     }
 
     /// Whether a resident input retains exactly this canonical frame digest.
-    /// The oldest resident input that `counts`, in admission order.
-    pub(super) fn front_where(
-        &self,
-        counts: impl Fn(&EntrypointHash) -> bool,
-    ) -> Option<&PendingOrderEntry> {
-        self.fifo.values().find(|entry| counts(&entry.hash))
-    }
-
     pub(super) fn holds_frame(&self, frame: &Hash) -> bool {
         self.frames.contains_key(frame)
     }
@@ -207,7 +205,25 @@ mod tests {
             enqueued_at_ms: u64::from(seed),
             expires_at: expires_at_ms.map(Duration::from_millis),
             frame: Hash::new([seed]),
+            partition: ResidentPartition::Ordinary,
         }
+    }
+
+    #[test]
+    fn the_age_front_is_the_oldest_entry_its_caller_counts() {
+        let mut index = PendingOrderIndex::default();
+        let ballot = PendingOrderEntry {
+            partition: ResidentPartition::Ballot,
+            ..entry(1, None)
+        };
+        assert!(index.insert(1, ballot));
+        assert!(index.insert(2, entry(2, None)));
+        let ordinary = |entry: &PendingOrderEntry| entry.partition == ResidentPartition::Ordinary;
+        assert_eq!(index.front_where(ordinary), Some(&entry(2, None)));
+        assert_eq!(index.front_where(|_| true), Some(&ballot));
+        assert!(index.remove(2).is_some());
+        assert_eq!(index.front_where(ordinary), None);
+        assert_eq!(index.front_where(|_| true), Some(&ballot));
     }
 
     fn hashes(window: &[(u64, EntrypointHash)]) -> Vec<u64> {
@@ -254,12 +270,17 @@ mod tests {
         assert_eq!(index.expiry_len(), 3);
         assert_eq!(index.frame_len(), 3);
         assert!(!index.holds_frame(&Hash::new([2])));
-        assert_eq!(index.front(), Some(&entry(1, Some(10))));
+        assert_eq!(index.front_where(|_| true), Some(&entry(1, Some(10))));
         assert_eq!(
             index.remove(1).map(|removed| removed.hash),
             Some(entry(1, None).hash)
         );
-        assert_eq!(index.front().map(|front| front.enqueued_at_ms), Some(3));
+        assert_eq!(
+            index
+                .front_where(|_| true)
+                .map(|front| front.enqueued_at_ms),
+            Some(3)
+        );
         for incarnation in [3, 4] {
             assert!(index.remove(incarnation).is_some());
         }
@@ -348,7 +369,12 @@ mod tests {
         assert!(index.insert(1, entry(1, Some(50))));
         assert!(index.insert(2, entry(2, None)));
         index.rebase(|current| (current.enqueued_at_ms + 100, Some(Duration::from_millis(5))));
-        assert_eq!(index.front().map(|front| front.enqueued_at_ms), Some(101));
+        assert_eq!(
+            index
+                .front_where(|_| true)
+                .map(|front| front.enqueued_at_ms),
+            Some(101)
+        );
         assert_eq!(index.expiry_len(), 2);
         assert_eq!(
             hashes(&index.expired(Duration::from_millis(5), 8)),

@@ -1409,8 +1409,8 @@ fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
         .expect("compile Bool-key StateMap fixture");
     let metadata = ProgramMetadata::parse(&artifact).expect("V1 metadata");
     let retired_bool_codec_words = [
-        encoding::wide::encode_scall(0x53_),
-        encoding::wide::encode_scall(0x55_),
+        encoding::wide::encode_scall(0x53),
+        encoding::wide::encode_scall(0x55),
     ];
     let executable = &artifact[metadata.code_offset..];
     assert!(executable.as_chunks::<4>().0.iter().all(|chunk| {

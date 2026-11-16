@@ -18,7 +18,7 @@
 //! 4. only then the proof, under the partition's verifier bound;
 //! 5. the state checks again, atomically with claiming `(scope, nullifier)` for the ballot;
 //! 6. residence, through the same resident ledger, FIFO, lease and gossip backlog as every
-//!    other input.
+//!    other input, counted in the ledger's ballot partition.
 //!
 //! A nullifier is therefore never reserved for a ballot that has not verified, a verified
 //! pending ballot blocks rerandomized copies before their verification, and gossip forwards
@@ -41,8 +41,11 @@
 //! `[queue.anonymous_ballots]` (`iroha_config`): the verified ballots it keeps resident and
 //! their retained bytes, the proofs it verifies at once and the verifications it starts per
 //! second. Its residents never count against the ordinary queue's capacity, byte budget or
-//! age pressure, and ordinary transactions never consume its own. The bounds refuse or delay
-//! a submission (`Error::Full`); they never decide whether a ballot is valid.
+//! age pressure, and ordinary transactions never consume its own: the resident ledger counts
+//! a ballot only in its ballot partition, from the reservation of its shell to the refund of
+//! its last reader, so the coarse backpressure, the pressure snapshot and the ordinary
+//! admission checks never see one. The bounds refuse or delay a submission (`Error::Full`);
+//! they never decide whether a ballot is valid.
 //!
 //! TODO(design §3.6 "Resource bounds", §3.10): priority by stamp work when the partition is
 //! full and the bounded exact-payload verification cache are not implemented; the working
@@ -159,6 +162,7 @@ impl PendingBallotIndexV1 {
     }
 
     /// Whether `carrier` is a resident ballot of the partition.
+    #[cfg(test)]
     pub(super) fn is_resident(&self, carrier: &EntrypointHash) -> bool {
         self.by_carrier.contains_key(carrier)
     }
@@ -176,7 +180,7 @@ impl PendingBallotIndexV1 {
     /// Claim `identity` for the verified ballot `carrier`, whose residence costs
     /// `retained_bytes`. Returns `false`, claiming nothing, when another ballot holds the
     /// identity or the carrier is already indexed.
-    fn claim(
+    pub(super) fn claim(
         &mut self,
         identity: (BallotScopeV1, NullifierV1),
         carrier: EntrypointHash,
@@ -274,26 +278,11 @@ fn unavailable() -> Error {
 }
 
 impl Queue {
-    /// The partition's residents and their retained bytes: outside the ordinary budgets.
+    /// The partition index's residents and their retained bytes, its own admission budget.
+    #[cfg(test)]
     pub(super) fn ballot_residents(&self) -> (usize, u64) {
         let pending = self.pending_ballots.lock();
         (pending.len(), pending.retained_bytes())
-    }
-
-    /// Whether `carrier` is a resident ballot of the partition.
-    pub(super) fn is_resident_ballot(&self, carrier: &EntrypointHash) -> bool {
-        self.pending_ballots.lock().is_resident(carrier)
-    }
-
-    /// The residents that count against the ordinary capacity: every one but a ballot.
-    pub(super) fn ordinary_active_len(&self) -> usize {
-        self.active_len().saturating_sub(self.ballot_residents().0)
-    }
-
-    /// The retained bytes that count against the ordinary byte budget.
-    pub(super) fn ordinary_retained_bytes(&self) -> u64 {
-        self.retained_bytes()
-            .saturating_sub(self.ballot_residents().1)
     }
 
     /// Whether the partition can keep one more ballot whose residence costs `retained_cost`,

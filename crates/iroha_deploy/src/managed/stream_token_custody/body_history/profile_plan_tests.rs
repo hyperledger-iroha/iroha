@@ -4,22 +4,16 @@ use super::*;
 use crate::managed::native_operation::attempts::metadata;
 use crate::managed::{
     service_authority::profile_validation_test_support::count,
-    stream_token_custody::{
-        bootstrap_test_support::NativeEnrollmentReads,
-        renewal_tests::{Fixture, wait_until},
-    },
+    stream_token_custody::{bootstrap_test_support::NativeEnrollmentReads, renewal_tests::Fixture},
 };
-use std::{cell::Cell, time::Duration};
+use std::cell::Cell;
 
 fn pending(fixture: &Fixture) -> (BodyHistory, VerifiedStreamTokenCustodyStateV1, Terms) {
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
     // This is the existing explicit requested-deadline pattern. The generated policy and
     // selected body validity are unchanged; no fixture clock is advanced or rewritten.
-    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -28,7 +22,7 @@ fn pending(fixture: &Fixture) -> (BodyHistory, VerifiedStreamTokenCustodyStateV1
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     let (selection, validations) = count(|| {
@@ -47,7 +41,7 @@ fn pending(fixture: &Fixture) -> (BodyHistory, VerifiedStreamTokenCustodyStateV1
         unsigned,
         &terms.fees,
         &SigningTurn::Explicit(&terms),
-        fixture.options.deadline,
+        fixture.deadline(),
     )
     .unwrap();
     assert_eq!(
@@ -62,7 +56,7 @@ fn pending(fixture: &Fixture) -> (BodyHistory, VerifiedStreamTokenCustodyStateV1
 #[test]
 fn unsigned_body_reads_share_one_plan_and_recheck_complete_profile_on_every_call() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let peers = fixture.unavailable_peers();
     let (history, current, _) = pending(&fixture);
     let expected = history.selection.digest().unwrap();
@@ -196,7 +190,7 @@ impl EnrollmentReads for ChangeProfileDuringHistorical<'_> {
 #[test]
 fn changed_profile_during_actual_historical_read_refuses_attester_and_original_publication() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let peers = fixture.unavailable_peers();
     let (history, current, terms) = pending(&fixture);
     let unsigned = encode(
@@ -221,7 +215,7 @@ fn changed_profile_during_actual_historical_read_refuses_attester_and_original_p
         &fixture.owner,
         &current,
         &SigningTurn::Explicit(&terms),
-        fixture.options.deadline,
+        fixture.deadline(),
         &reads,
     ) {
         Ok(_) => panic!("profile substitution must refuse at the actual attester boundary"),
@@ -261,7 +255,7 @@ fn changed_profile_during_actual_historical_read_refuses_attester_and_original_p
             &fixture.owner,
             &current,
             &SigningTurn::Explicit(&terms),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();

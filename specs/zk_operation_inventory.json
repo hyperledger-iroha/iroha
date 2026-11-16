@@ -8896,7 +8896,9 @@
      "rust": [
       {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
      ],
-     "kotlin_java_android": [],
+     "kotlin_java_android": [
+      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "via": ["route_path"]}
+     ],
      "swift": [],
      "javascript": [],
      "python": [],
@@ -8922,7 +8924,9 @@
      "rust": [
       {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
      ],
-     "kotlin_java_android": [],
+     "kotlin_java_android": [
+      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "via": ["route_path"]}
+     ],
      "swift": [],
      "javascript": [],
      "python": [],
@@ -8948,7 +8952,9 @@
      "rust": [
       {"path": "crates/iroha/src/client/anonymous_ballot.rs", "via": ["route_path"]}
      ],
-     "kotlin_java_android": [],
+     "kotlin_java_android": [
+      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "via": ["route_path"]}
+     ],
      "swift": [],
      "javascript": [],
      "python": [],
@@ -13381,6 +13387,12 @@
    },
    {
     "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
+   },
+   {
+    "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ClientConfig.kt",
     "product": "confidential_assets",
     "symbols": ["toConfidentialAssetToriiClient"]
@@ -13448,7 +13460,7 @@
     "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt",
     "product": "voting",
-    "symbols": ["draftParliamentAttemptV1", "draftParliamentTransitionV1", "getElectionTally", "getParliamentAttemptV1"]
+    "symbols": ["draftParliamentAttemptV1", "draftParliamentTransitionV1", "getElectionTally", "getParliamentAttemptV1", "newAnonymousBallotToriiClientV1"]
    },
    {
     "family": "kotlin_java_android",

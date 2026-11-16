@@ -5870,10 +5870,11 @@
    "gates": "Kotlin/Java/Android SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record. The anonymous-ballot client documentation says network-origin hiding needs a qualified anonymity transport that the client does not provide (design §6): it names an absent capability, not a gate or a qualification record.",
    "sites": [
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt", "sdk_availability", "qualification", 2],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentProposalValidatorV1.kt", "sdk_availability", "qualification", 2]
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentProposalValidatorV1.kt", "sdk_availability", "qualification", 2],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "sdk_availability", "qualification", 1]
    ]
   },
   {
@@ -7440,7 +7441,7 @@
  },
  "summary": {
   "entries": 245,
-  "sites": 1544,
+  "sites": 1545,
   "by_status": {"done": 18, "local_resource": 25, "not_a_gate": 126, "open": 37, "out_of_plan": 21, "unsupported": 18},
   "by_owner": {"-": 147, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 8, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

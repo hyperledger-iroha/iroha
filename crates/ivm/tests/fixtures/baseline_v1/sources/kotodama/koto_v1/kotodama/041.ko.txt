@@ -1,0 +1,5 @@
+
+        module InvalidScalarField {
+        fn f() { let n = 1; let v = n.foo; }
+        }
+    

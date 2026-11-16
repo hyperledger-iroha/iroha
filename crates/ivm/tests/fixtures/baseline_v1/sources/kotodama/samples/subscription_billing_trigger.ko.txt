@@ -1,0 +1,7 @@
+// Subscription billing trigger wrapper (uses subscription_ref metadata).
+seiyaku SubscriptionBilling {
+    permission Entry;
+    kotoage fn run() authorize(Entry) {
+        ledger::subscription::bill();
+    }
+}

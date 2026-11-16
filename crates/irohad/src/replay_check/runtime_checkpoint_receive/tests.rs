@@ -301,7 +301,9 @@ fn checkpoint_http_receiver_preserves_deadline_and_original_memory_refusal() {
         &budget,
     )
     .unwrap();
-    source.deadline = Instant::now() - Duration::from_secs(1);
+    source.deadline = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("the monotonic clock is past one second");
     assert!(
         matches!(source.descriptor(), Err(ExecutionAttemptError::Rejected(transport::Error::Io(ref error))) if error.kind() == std::io::ErrorKind::TimedOut)
     );

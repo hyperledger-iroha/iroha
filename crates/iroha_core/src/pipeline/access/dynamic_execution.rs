@@ -26,18 +26,9 @@ pub(super) fn new_vm(
         .map_err(|error| vm_error("ivm.new", error))
 }
 
-/// Raw selector preparation uses the same funded canonical artifact path as
-/// later execution; no private untracked artifact copy or second cache exists.
-pub(super) fn prepare(
-    cache: &PreparedContractCache,
-    bytecode: &[u8],
-) -> Result<ivm::PreparedContract, ExecutionAttemptError<String>> {
-    cache
-        .get_or_prepare(ivm::contract_code_hash(bytecode), bytecode)
-        .map_err(|error| vm_error("failed to prepare raw contract artifact", error))
-}
-
-/// Root-bound form used by execution planning for a named contract host profile.
+/// Raw selector preparation, bound to the root's named contract host profile, uses the same
+/// funded canonical artifact path as later execution; no private untracked artifact copy or
+/// second cache exists.
 pub(super) fn prepare_in_world(
     cache: &PreparedContractCache,
     world: &impl crate::state::WorldReadOnly,

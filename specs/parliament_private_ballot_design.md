@@ -1989,7 +1989,8 @@ activatable only after the fourth.
 **Slice 2: registration, seal and restore.**
 
 - **Proposal digest.** Creation fixes `proposal_digest` of the full canonical
-  proposal in the attempt State. Every board of the attempt is sealed with it.
+  proposal in the attempt State, beside the proposal itself (slice 3,
+  "Attempt creation"). Every board of the attempt is sealed with it.
   A closure record is refused unless it names the attempt's network, proposal
   digest, and the list digest and profile its jury's seal bound.
 - **Stored credentials.** World keeps exactly one credential per accepted
@@ -2201,9 +2202,17 @@ still open (last bullet).
     without that cadence creates no attempt. Core derives the proposal digest,
     the effect hash and the compare-and-set head. `StartQualification` is due
     at the creating block's time.
-  - Only the proposal's digest is kept. Production enactment (slice 5) needs
-    the proposal itself, so a qualified release must store it with its
-    attempt before it certifies a production attempt.
+  - The attempt State stores the admitted proposal itself, in the attempt's
+    own row. The reducer derives the proposal digest and the effect hash from
+    it. At creation and at every restore it recomputes the content
+    identifier, the family's attempt identifier for the stored sequence, the
+    proposal digest and the effect hash from the stored proposal, and refuses
+    a State in which one differs, whose expected head names another subject
+    than the proposal governs, or whose proposal the first release cannot
+    represent exactly. The head's presence, version and root stay as Core
+    read them at creation: a restore does not compare them with the subject's
+    current head, which G3 compares and sets when the effect executes.
+    Production enactment (slice 5) will execute this stored proposal.
 - **Transitions.** Each transition passes its static rules first. Risk
   escalation and the two early-close intents need `CanManageParliament`. The
   two sortition registrations are permissionless; their snapshot is every
@@ -2340,7 +2349,12 @@ network has activated the family, and binding production use stays disabled
     configured in `[queue.anonymous_ballots]` (resident ballots and their
     retained bytes, verifier concurrency, verification rate and burst over
     every local source) and is separate from the ordinary queue's capacity,
-    bytes and age pressure. The defaults are unqualified working values.
+    bytes and age pressure: the resident ledger counts a ballot only in the
+    partition, from the reservation of its shell to the refund of its last
+    reader, so the ordinary back-pressure, Torii's ingress check and the
+    queue telemetry never count one, and the gossip backlog keeps a slot for
+    every possible resident of either. The defaults are unqualified working
+    values.
     Priority by stamp work and the exact-payload verification cache are not
     implemented. Ballot ingress is isolated (slice 5 below).
   - Capacity rule (section 3.6): the reserved ballot slots and wire bytes are
@@ -2377,9 +2391,10 @@ implemented and stays disabled.
   canonical Norito bytes of the scope's board record: the sealed context,
   the casting window and the whole corpus. `GET
   /v1/gov/anonymous-ballots/attempts/{governance_attempt_id}` returns the
-  attempt's reducer state: elections, assignments, bodies and the committed
-  schedule. Both are ordinary public reads of whole records; neither takes a
-  credential, an assignment or a nullifier as a selector.
+  attempt's reducer state: the stored proposal, elections, assignments,
+  bodies and the committed schedule. Both are ordinary public reads of whole
+  records; neither takes a credential, an assignment or a nullifier as a
+  selector.
 - **Clients.** The Rust SDK submits a ballot with none of the client's
   configured headers (`Client::submit_anonymous_ballot`) and reads both
   records (`Client::anonymous_ballot_board`,
@@ -2400,7 +2415,8 @@ implemented and stays disabled.
     cover refusals, absence and isolation only.
   - Verification of anonymous evidence in the selective
     committed-transaction verifier, which accepts signed inputs only.
-  - The stored proposal (slice 3 note) and production enactment in G3.
+  - Production enactment in G3, which executes the proposal the attempt
+    stores (slice 3, "Attempt creation").
   - A qualified anonymity transport (section 6).
 
 ## 13. Required validation

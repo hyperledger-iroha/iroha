@@ -1,0 +1,13 @@
+// Quote 10 reward points per coffee; negative counts quote zero.
+seiyaku CoffeeClub {
+    fn points(int coffees) -> int {
+        if coffees < 0 {
+            return 0;
+        }
+        return coffees * 10;
+    }
+
+    view fn quote(int coffees) authorize(anyone) -> int {
+        return points(coffees: coffees);
+    }
+}

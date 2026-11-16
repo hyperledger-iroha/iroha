@@ -10487,13 +10487,18 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
         ballot_fields, TABLES,
         "ballot State outside the anonymous family's tables: classify its corpus, roster and result commitments"
     );
+    // The node depends on the ballot crate without features; its tests add the fixed-tape
+    // fixtures, whose only tags are the `PARL/TEST/*` test uses classified above.
     let manifest = source("crates/iroha_core/Cargo.toml");
     assert_eq!(
         manifest
             .lines()
             .filter(|line| line.contains("iroha_parliament_ballot"))
             .collect::<Vec<_>>(),
-        ["iroha_parliament_ballot = { workspace = true }"],
+        [
+            "iroha_parliament_ballot = { workspace = true }",
+            "iroha_parliament_ballot = { workspace = true, features = [\"test-fixtures\"] }",
+        ],
         "the node's ballot-crate dependency changed: {REVIEW}"
     );
     let node_sources: Vec<(String, String)> = rust_sources(&["crates/iroha_core/src"])
@@ -10515,13 +10520,20 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     // The anonymous family's reducer drives the board's registration ledger and seal
     // (design §12.3, slice 2); the node verifies registrations only through it. Its
     // lifecycle adapters and its World pass (slice 3) advance a stored board with the
-    // attempt that owns it, and write it back to the boards table alone.
+    // attempt that owns it, and write it back to the boards table alone. The Network output
+    // owner (slice 4) decides each signerless ballot of a block against the board recomputed
+    // from World, through the board's own block execution, and the queue's ballot partition
+    // admits a ballot through the board's own admission checks before claiming its nullifier.
     assert_eq!(
         node_uses,
         [
             (
                 "crates/iroha_core/src/governance/parliament_anonymous.rs",
                 "use iroha_parliament_ballot::board::{BoardErrorV1, RegistrationLedgerErrorV1, SealErrorV1};"
+            ),
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous/ballot_input.rs",
+                "use iroha_parliament_ballot::{"
             ),
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/ballot_lifecycle.rs",
@@ -10534,6 +10546,10 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
             (
                 "crates/iroha_core/src/governance/parliament_anonymous/world_pass.rs",
                 "use iroha_parliament_ballot::board::BallotBoardV1;"
+            ),
+            (
+                "crates/iroha_core/src/queue/anonymous_ballots.rs",
+                "use iroha_parliament_ballot::{"
             ),
         ],
         "the node uses a ballot crate differently: {REVIEW}"

@@ -11,16 +11,13 @@ use iroha_wallet::operations::NativePreparationPhase;
 use std::time::Duration;
 
 fn ready() -> Fixture {
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    fixture.wait_renewable();
     fixture
 }
 fn fresh_unsigned(fixture: &Fixture) -> (UnsignedEnrollment, VerifiedStreamTokenCustodyStateV1) {
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -29,20 +26,23 @@ fn fresh_unsigned(fixture: &Fixture) -> (UnsignedEnrollment, VerifiedStreamToken
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     (unsigned, current)
 }
 fn retain_body(fixture: &Fixture) -> BodyHistory {
     let (unsigned, current) = fresh_unsigned(fixture);
+    // The live signing turn lasts as long as the body it signs. Requests select their own
+    // short intervals afterwards.
+    let body_expiry = unsigned.statement.expires_at_unix_ms;
     fixture.owner.bootstrap_native_body(
         &fixture.native,
         &current,
         CustodyPurpose::Renewal(2),
         unsigned,
-        now_ms().unwrap() + 2_000,
-        &fixture.options,
+        body_expiry,
+        &fixture.options(),
     )
 }
 fn retain_request(
@@ -54,8 +54,9 @@ fn retain_request(
     journal::explicit(
         directory,
         original,
-        now_ms().unwrap() + lifetime_ms,
-        &fixture.options,
+        // A request authorization never outlives the body it dispatches.
+        (now_ms().unwrap() + lifetime_ms).min(expiry(history)),
+        &fixture.options(),
         &fixture.owner.wallet().unwrap(),
         scope,
     )
@@ -188,11 +189,8 @@ fn completed_body_and_high_water_loss_refuse_and_scope_rechecks_outer_names() {
 #[test]
 fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_closed_record() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled_with_renewal_validity(4_000, 20_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let mut fixture = Fixture::predecessor_with_renewal_validity(20_000);
+    fixture.wait_renewable();
     let history = retain_body(&fixture);
     let old = retain_request(&fixture, &history, 3_000);
     let account = fixture.owner.wallet().unwrap();
@@ -208,7 +206,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
     let mut turn = fixture.renewal_turn();
     let history = reopen(&fixture);
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     let mut reserved = history
@@ -217,7 +215,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
             fresh_unsigned(&fixture).0,
             &current,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     assert!(reserved.has_pending());
@@ -230,23 +228,15 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
         .prepare_unsigned_closure(
             &successor,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
             |attempt| {
                 original
-                    .request(
-                        attempt.terms(),
-                        attempt.observation()?,
-                        fixture.options.deadline,
-                    )?
+                    .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
                     .inspect(&account, &attempt.wallet_path())
             },
             |attempt| {
                 original
-                    .request(
-                        attempt.terms(),
-                        attempt.observation()?,
-                        fixture.options.deadline,
-                    )?
+                    .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
                     .retire(&account, attempt.directory())
             },
         )
@@ -254,23 +244,15 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
     let failed = pending.finish(
         &successor,
         authorization,
-        fixture.options.deadline,
+        fixture.deadline(),
         |attempt| {
             original
-                .request(
-                    attempt.terms(),
-                    attempt.observation()?,
-                    fixture.options.deadline,
-                )?
+                .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
                 .inspect(&account, &attempt.wallet_path())
         },
         |attempt| {
             original
-                .request(
-                    attempt.terms(),
-                    attempt.observation()?,
-                    fixture.options.deadline,
-                )?
+                .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
                 .retire(&account, attempt.directory())?;
             Err(invalid(
                 "stop after real wallet retirement before closure publication",
@@ -279,7 +261,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
     );
     assert!(failed.is_err());
     assert_eq!(
-        old.request(fixture.options.deadline)
+        old.request(fixture.deadline())
             .unwrap()
             .inspect(&account, &request_path)
             .unwrap()
@@ -296,7 +278,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -338,8 +320,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
     // original predecessor CAS; no synthetic completion or relaxed expiry is needed.
     let replacement = retain_request(&fixture, &resumed, 15_000);
     let mut http = fixture.native.read_http(&fixture.owner.authority.config);
-    let journal::Request::Enroll(request) = replacement.request(fixture.options.deadline).unwrap()
-    else {
+    let journal::Request::Enroll(request) = replacement.request(fixture.deadline()).unwrap() else {
         unreachable!()
     };
     account
@@ -350,11 +331,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
         .unwrap();
     let signed = fixture
         .owner
-        .verify_wallet(
-            replacement.directory(),
-            &replacement,
-            fixture.options.deadline,
-        )
+        .verify_wallet(replacement.directory(), &replacement, fixture.deadline())
         .unwrap();
     http.finish();
     let carrier = fixture
@@ -372,7 +349,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
         .unwrap();
     let retained = fixture
         .owner
-        .retained_renewed_enrollment(2, &fixture.policy, fixture.options.deadline)
+        .retained_renewed_enrollment(2, &fixture.policy, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     assert_eq!(
@@ -403,7 +380,7 @@ fn expired_request_retirement_recovers_after_actual_wallet_retirement_before_clo
         2
     );
     assert_eq!(
-        old.request(fixture.options.deadline)
+        old.request(fixture.deadline())
             .unwrap()
             .inspect(&account, &request_path)
             .unwrap()
@@ -418,14 +395,15 @@ fn unused_expired_reservation_retires_without_inventing_a_wallet_or_dispatch_his
     let fixture = ready();
     let unsigned = fresh_unsigned(&fixture).0;
     let end = unsigned.statement.expires_at_unix_ms;
-    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options).unwrap();
+    // The live selection turn lasts as long as the body it reserves.
+    let terms = Terms::new(end, &fixture.options()).unwrap();
     let history = BodyHistory::initialize(
         &fixture.owner,
         CustodyPurpose::Renewal(2),
         unsigned,
         &terms.fees,
         &SigningTurn::Explicit(&terms),
-        fixture.options.deadline,
+        fixture.deadline(),
     )
     .unwrap();
     assert!(history.has_pending());
@@ -433,7 +411,7 @@ fn unused_expired_reservation_retires_without_inventing_a_wallet_or_dispatch_his
     wait_until(end, Duration::from_secs(10));
     let mut turn = fixture.renewal_turn();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     let activated = history
@@ -441,7 +419,7 @@ fn unused_expired_reservation_retires_without_inventing_a_wallet_or_dispatch_his
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -460,14 +438,14 @@ fn unused_expired_reservation_retires_without_inventing_a_wallet_or_dispatch_his
             fresh_unsigned(&fixture).0,
             &current,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap()
         .finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -500,20 +478,17 @@ fn signed_applied_expired_body_preserves_wire_and_recovers_missing_carrier_befor
  {
     use crate::managed::stream_token_custody::renewal_tests::FixtureReads;
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled_with_renewal_validity(4_000, 30_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let mut fixture = Fixture::predecessor_with_renewal_validity(30_000);
+    fixture.wait_renewable();
     let history = retain_body(&fixture);
     let old = retain_request(&fixture, &history, 15_000);
     let mut turn = fixture.renewal_turn();
-    turn.authorize_retained(&fixture.owner, &reopen(&fixture), fixture.options.deadline)
+    turn.authorize_retained(&fixture.owner, &reopen(&fixture), fixture.deadline())
         .unwrap();
     let account = fixture.owner.wallet().unwrap();
     let wallet_path = old.directory().path().join("transaction");
     let mut http = fixture.native.read_http(&fixture.owner.authority.config);
-    let journal::Request::Enroll(request) = old.request(fixture.options.deadline).unwrap() else {
+    let journal::Request::Enroll(request) = old.request(fixture.deadline()).unwrap() else {
         unreachable!()
     };
     account
@@ -521,7 +496,7 @@ fn signed_applied_expired_body_preserves_wire_and_recovers_missing_carrier_befor
         .unwrap();
     let transaction = fixture
         .owner
-        .verify_wallet(old.directory(), &old, fixture.options.deadline)
+        .verify_wallet(old.directory(), &old, fixture.deadline())
         .unwrap();
     http.finish();
     let wire = transaction.encode_wire_v1().unwrap();
@@ -537,7 +512,7 @@ fn signed_applied_expired_body_preserves_wire_and_recovers_missing_carrier_befor
     assert!(reopen(&fixture).preserve_paid_body(&fixture.owner).unwrap());
     let result = fixture.owner.reconcile_generated_with_reads(
         &mut turn,
-        fixture.options.deadline,
+        fixture.deadline(),
         &FixtureReads {
             native: &fixture.native,
         },
@@ -551,13 +526,13 @@ fn signed_applied_expired_body_preserves_wire_and_recovers_missing_carrier_befor
     assert!(old.directory().path().join("carrier.nrt").exists());
     let retained = fixture
         .owner
-        .retained_renewed_enrollment(2, &fixture.policy, fixture.options.deadline)
+        .retained_renewed_enrollment(2, &fixture.policy, fixture.deadline())
         .unwrap();
     assert_eq!(retained.finalized().height, 5);
     assert_eq!(
         fixture
             .owner
-            .verify_wallet(old.directory(), &old, fixture.options.deadline)
+            .verify_wallet(old.directory(), &old, fixture.deadline())
             .unwrap()
             .encode_wire_v1()
             .unwrap(),
@@ -593,7 +568,7 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
     let mut turn = fixture.renewal_turn();
     let history = reopen(&fixture);
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let second = history
         .reserve_successor(
@@ -601,14 +576,14 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
             fresh_unsigned(&fixture).0,
             &current,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap()
         .finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -624,7 +599,7 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
     // effects. These exact finite Terms remain historical reservations even if the body expires
     // during this local stress control; no callback may turn them into a paid dispatch.
     let terms = authorization
-        .terms(fixture.options.deadline, Some(expiry(&second)))
+        .terms(fixture.deadline(), Some(expiry(&second)))
         .unwrap_or_else(|error| {
             panic!(
                 "cumulative reservation Terms refusal: {error:?}; after_failure_now={:?}; body_expiry={}; epoch_requested_deadline={}; epoch_signing_deadline={}",
@@ -648,7 +623,7 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
         let history = reopen(&fixture);
         let mut next_turn = fixture.renewal_turn();
         let live = next_turn
-            .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+            .authorize_retained(&fixture.owner, &history, fixture.deadline())
             .unwrap();
         let (directory, _, _) = history.dispatch().unwrap();
         let next = history
@@ -681,7 +656,7 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
         .unwrap();
     let mut final_turn = fixture.renewal_turn();
     let live = final_turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     assert!(matches!(
         history.current_history().unwrap().reserve(
@@ -709,7 +684,7 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
     assert!(!second_body.join("attempts/0064").exists());
     assert_eq!(
         selected
-            .request(fixture.options.deadline)
+            .request(fixture.deadline())
             .unwrap()
             .inspect(
                 &fixture.owner.wallet().unwrap(),
@@ -725,18 +700,14 @@ fn closed_body_count_carries_into_next_body_and_never_refunds_sixty_four_origina
 #[test]
 fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_originals() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 20_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(20_000);
+    fixture.wait_renewable();
     let history = retain_body(&fixture);
     let selected = retain_request(&fixture, &history, 15_000);
     let account = fixture.owner.wallet().unwrap();
     let path = selected.directory().path().join("transaction");
     let mut http = fixture.native.read_http(&fixture.owner.authority.config);
-    let journal::Request::Enroll(request) = selected.request(fixture.options.deadline).unwrap()
-    else {
+    let journal::Request::Enroll(request) = selected.request(fixture.deadline()).unwrap() else {
         unreachable!()
     };
     account
@@ -754,7 +725,7 @@ fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_ori
     let mut turn = fixture.renewal_turn();
     let retained = reopen(&fixture);
     let authorization = turn
-        .authorize_retained(&fixture.owner, &retained, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &retained, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     assert!(retained.preserve_paid_body(&fixture.owner).unwrap());
@@ -765,7 +736,7 @@ fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_ori
                 fresh_unsigned(&fixture).0,
                 &current,
                 authorization,
-                fixture.options.deadline
+                fixture.deadline()
             )
             .is_err()
     );
@@ -775,7 +746,7 @@ fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_ori
     std::fs::rename(path.join("operation.json"), &held).unwrap();
     assert_eq!(
         selected
-            .request(fixture.options.deadline)
+            .request(fixture.deadline())
             .unwrap()
             .inspect(&account, &path)
             .unwrap()
@@ -791,7 +762,7 @@ fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_ori
                 fresh_unsigned(&fixture).0,
                 &current,
                 authorization,
-                fixture.options.deadline
+                fixture.deadline()
             )
             .is_err()
     );
@@ -823,11 +794,11 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
     let history = retain_body(&fixture);
     let first = retain_request(&fixture, &history, 3_000);
     let account = fixture.owner.wallet().unwrap();
-    let request = first.request(fixture.options.deadline).unwrap();
+    let request = first.request(fixture.deadline()).unwrap();
     let mut attempt_turn = fixture.renewal_turn();
     let retained = reopen(&fixture);
     let live = attempt_turn
-        .authorize_retained(&fixture.owner, &retained, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &retained, fixture.deadline())
         .unwrap();
     let second = retained
         .current_history()
@@ -835,7 +806,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
         .reserve(
             retained.dispatch().unwrap().0,
             live.origin().unwrap(),
-            live.terms(fixture.options.deadline, Some(expiry(&retained)))
+            live.terms(fixture.deadline(), Some(expiry(&retained)))
                 .unwrap(),
         )
         .unwrap();
@@ -852,7 +823,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
     let mut body_turn = fixture.renewal_turn();
     let retained = reopen(&fixture);
     let live = body_turn
-        .authorize_retained(&fixture.owner, &retained, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &retained, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     let reserved = retained
@@ -861,7 +832,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
             fresh_unsigned(&fixture).0,
             &current,
             live,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     let successor = reserved.successor(0).unwrap().unwrap();
@@ -872,11 +843,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
             .unwrap()
             .verify_unsigned_closure(&successor, |attempt| {
                 original
-                    .request(
-                        attempt.terms(),
-                        attempt.observation()?,
-                        fixture.options.deadline,
-                    )?
+                    .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
                     .inspect(&account, &attempt.wallet_path())
             })
             .unwrap()
@@ -892,7 +859,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
             &fixture.owner,
             &current,
             &SigningTurn::Generated(live),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -960,7 +927,7 @@ fn original_before_completion_anchor_finishes_same_bytes_and_foreign_scope_refus
     assert!(pending.dispatch().is_err());
     let mut turn = fixture.renewal_turn();
     let live = turn
-        .authorize_retained(&fixture.owner, &pending, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &pending, fixture.deadline())
         .unwrap();
     let (_, current) = fixture.current();
     let resumed = pending
@@ -968,7 +935,7 @@ fn original_before_completion_anchor_finishes_same_bytes_and_foreign_scope_refus
             &fixture.owner,
             &current,
             &SigningTurn::Generated(live),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -1031,7 +998,7 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
     let (_, current) = fixture.current();
     let mut original_turn = fixture.renewal_turn();
     let live = original_turn
-        .authorize_retained(&fixture.owner, &first, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &first, fixture.deadline())
         .unwrap();
     let reserved = first
         .reserve_successor(
@@ -1039,7 +1006,7 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
             fresh_unsigned(&fixture).0,
             &current,
             live,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     assert_eq!(reserved.anchor.highest, 2);
@@ -1063,14 +1030,14 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
     let retained = reopen(&fixture);
     let mut completing_turn = fixture.renewal_turn();
     let live = completing_turn
-        .authorize_retained(&fixture.owner, &retained, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &retained, fixture.deadline())
         .unwrap();
     let completed = retained
         .finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(live),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -1093,7 +1060,7 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
             fresh_unsigned(&fixture).0,
             &current,
             live,
-            fixture.options.deadline
+            fixture.deadline()
         ),
         Err(crate::managed::Error::Bootstrap(
             ManagedBootstrapFailure::ReplacementLimit
@@ -1118,7 +1085,7 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
     let retained = reopen(&fixture);
     let mut later_turn = fixture.renewal_turn();
     let live = later_turn
-        .authorize_retained(&fixture.owner, &retained, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &retained, fixture.deadline())
         .unwrap();
     let third = retained
         .reserve_successor(
@@ -1126,14 +1093,14 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
             fresh_unsigned(&fixture).0,
             &current,
             live,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap()
         .finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(live),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -1151,11 +1118,8 @@ fn expired_reserved_successor_keeps_one_claim_per_turn_and_later_fresh_turn_prog
 #[test]
 fn first_reservation_refuses_changed_original_before_activation_and_preserves_exact_prefix() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor();
+    fixture.wait_renewable();
     let peers = fixture.unavailable_peers();
     let mut turn = fixture.renewal_turn();
     let unsigned = fresh_unsigned(&fixture).0;
@@ -1165,9 +1129,9 @@ fn first_reservation_refuses_changed_original_before_activation_and_preserves_ex
         &fixture.owner,
         CustodyPurpose::Renewal(2),
         unsigned,
-        &Fees::from_options(&fixture.options).unwrap(),
+        &Fees::from_options(&fixture.options()).unwrap(),
         &SigningTurn::RenewalSelection(&turn),
-        fixture.options.deadline,
+        fixture.deadline(),
     )
     .unwrap();
     assert_eq!(history.anchor.highest, 1);
@@ -1175,7 +1139,7 @@ fn first_reservation_refuses_changed_original_before_activation_and_preserves_ex
     assert!(history.anchor.completed.is_none());
     assert!(history.bodies.is_empty());
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let anchor = history.root.read("anchor.nrt", MAX_BODY_BYTES).unwrap();
     let reservation = encode(history.anchor.pending.as_ref().unwrap(), MAX_BODY_BYTES).unwrap();
@@ -1208,7 +1172,7 @@ fn first_reservation_refuses_changed_original_before_activation_and_preserves_ex
         &fixture.owner,
         &current,
         &SigningTurn::Generated(authorization),
-        fixture.options.deadline,
+        fixture.deadline(),
         &reads,
     ) {
         Ok(_) => panic!("changed original reservation must refuse before activation"),
@@ -1242,7 +1206,7 @@ fn first_reservation_refuses_changed_original_before_activation_and_preserves_ex
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &reads,
         )
         .unwrap();
@@ -1303,11 +1267,8 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
     use crate::managed::stream_token_custody::tests::count_wallet_constructions;
 
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 20_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(20_000);
+    fixture.wait_renewable();
     // Production starts the turn before selecting a body; its original inventory is preflight.
     // Actual authorization is still issued below against the retained body and fresh checks.
     let mut turn = fixture.renewal_turn();
@@ -1316,14 +1277,16 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
     let ((unsigned, current), prerequisite_constructions) =
         count_wallet_constructions(|| fresh_unsigned(&fixture));
     assert_eq!(prerequisite_constructions, 1);
+    // The live signing turn lasts as long as the body it signs.
+    let body_expiry = unsigned.statement.expires_at_unix_ms;
     let (history, constructions) = count_wallet_constructions(|| {
         fixture.owner.bootstrap_native_body(
             &fixture.native,
             &current,
             CustodyPurpose::Renewal(2),
             unsigned,
-            now_ms().unwrap() + 2_000,
-            &fixture.options,
+            body_expiry,
+            &fixture.options(),
         )
     });
     assert_eq!(constructions, 0);
@@ -1338,7 +1301,7 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
     // independently verifies a fresh current proof before retaining the successor request.
     wait_until(first.terms.signing_deadline_unix_ms, Duration::from_secs(4));
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let second = fixture
         .retain_generated_attempt(authorization, &history, &current)
@@ -1349,8 +1312,7 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
                 expiry(&history),
                 first.terms.signing_deadline_unix_ms,
                 fixture
-                    .options
-                    .deadline
+                    .deadline()
                     .saturating_duration_since(Instant::now())
                     .as_millis(),
                 fixture.policy.active_until_unix_ms,

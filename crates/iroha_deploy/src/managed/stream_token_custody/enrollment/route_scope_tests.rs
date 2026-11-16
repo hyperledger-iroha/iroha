@@ -71,9 +71,9 @@ fn independent_retained_enrollment(
 #[test]
 fn retained_enrollment_epoch_workspace_keeps_original_source_refusal_and_retry() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let independent = || {
         independent_retained_enrollment(&fixture.owner, &fixture.policy, fixture.initial, deadline)
     };
@@ -144,9 +144,9 @@ fn retained_enrollment_epoch_workspace_keeps_original_source_refusal_and_retry()
 #[test]
 fn configuration_handoff_epoch_workspace_keeps_initial_source_refusal_and_retry() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     // Retain only the same policy/finality tuple that survives the original Configure drop.
     let (policy, configured) = fixture.owner.retained_configuration(deadline).unwrap();
     let independent = || {
@@ -226,9 +226,9 @@ fn enrollment_epoch_workspaces_preserve_independent_finite_outer_admission() {
         )
     }
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(4_000);
+    let fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let (policy, configured) = fixture.owner.retained_configuration(deadline).unwrap();
     // Each branch borrows the same canonical source bodies; only its ownership entry differs.
     let read = |handoff: bool, scoped: bool| -> Result<RetainedCustodyEnrollment> {

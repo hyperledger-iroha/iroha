@@ -259,7 +259,10 @@ fn selected_amx_funded_settlement_uses_captured_executor_context_after_compiled_
         .complete(&budget)
         .unwrap();
     let mut block = chain.state().block(header(chain, 6_000));
-    let mut tx = block.transaction();
+    // An ordinary signed settlement: the invocation owns its FASTPQ source through its call
+    // hash, exactly as the Network producer binds the carrier's call (no protocol purpose).
+    let mut tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::new(b"captured-amx-settlement"));
     tx.current_dataspace_id = Some(FIRST);
     tx.world.current_dataspace_id = Some(FIRST);
     assert_eq!(amount(&tx, account(&payer())), 900_u32.into());

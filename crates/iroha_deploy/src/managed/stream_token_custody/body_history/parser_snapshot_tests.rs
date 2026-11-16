@@ -157,12 +157,9 @@ impl Drop for MissingRecord {
 }
 
 fn pending(fixture: &Fixture) -> BodyHistory {
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 10_000,
-        Duration::from_secs(20),
-    );
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -171,7 +168,7 @@ fn pending(fixture: &Fixture) -> BodyHistory {
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     BodyHistory::initialize(
@@ -180,7 +177,7 @@ fn pending(fixture: &Fixture) -> BodyHistory {
         unsigned,
         &terms.fees,
         &SigningTurn::Explicit(&terms),
-        fixture.options.deadline,
+        fixture.deadline(),
     )
     .unwrap()
 }
@@ -227,8 +224,8 @@ fn refuses(
 #[test]
 fn decoded_original_anchor_and_reference_cannot_bind_later_replacement_bytes() {
     let _guard = crate::managed::native_test_guard();
-    // This separate native fixture isolates parser races from the unchanged original 4s test.
-    let fixture = Fixture::enrolled(20_000);
+    // This separate native fixture isolates parser races from the short-bodied callback test.
+    let fixture = Fixture::predecessor();
     let peers = fixture.unavailable_peers();
     let history = pending(&fixture);
     let mut selection = history.selection.clone();
@@ -286,7 +283,7 @@ fn decoded_original_anchor_and_reference_cannot_bind_later_replacement_bytes() {
 #[test]
 fn parsed_container_inventory_cannot_bind_a_later_unexpected_name() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(20_000);
+    let fixture = Fixture::predecessor();
     let peers = fixture.unavailable_peers();
     let history = pending(&fixture);
     // With no parsed body or container, a late new allowed root name must still refuse.
@@ -319,7 +316,7 @@ fn parsed_container_inventory_cannot_bind_a_later_unexpected_name() {
 #[test]
 fn unsigned_body_records_and_absences_are_rechecked_before_parser_return() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled(20_000);
+    let fixture = Fixture::predecessor();
     let peers = fixture.unavailable_peers();
     let history = pending(&fixture);
     publish_unsigned(&history);
@@ -379,13 +376,10 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
     let _guard = crate::managed::native_test_guard();
     // Follow the same genuine H4 predecessor and original finite intervals as closed64.
     // Only the unsigned local body/retired wallet and issuer census are exercised here.
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    fixture.wait_renewable();
     let (checkpoint, current) = fixture.current();
-    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -394,23 +388,26 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
+    // The live signing turn lasts as long as the body it signs; the request below selects
+    // its own short interval inside that validity.
+    let body_expiry = unsigned.statement.expires_at_unix_ms;
     let history = fixture.owner.bootstrap_native_body(
         &fixture.native,
         &current,
         CustodyPurpose::Renewal(2),
         unsigned,
-        now_ms().unwrap() + 2_000,
-        &fixture.options,
+        body_expiry,
+        &fixture.options(),
     );
     let (directory, original, scope) = history.dispatch().unwrap();
     journal::explicit(
         directory,
         original,
-        now_ms().unwrap() + 3_000,
-        &fixture.options,
+        (now_ms().unwrap() + 3_000).min(body_expiry),
+        &fixture.options(),
         &fixture.owner.wallet().unwrap(),
         scope,
     )
@@ -428,9 +425,9 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
     let mut turn = fixture.renewal_turn();
     let history = open(&fixture).unwrap();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
-    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options).unwrap();
+    let terms = Terms::new(now_ms().unwrap() + 2_000, &fixture.options()).unwrap();
     let unsigned = fixture
         .owner
         .select_renewal_unsigned(
@@ -439,7 +436,7 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
             &current,
             &checkpoint,
             &terms,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap();
     let history = history
@@ -448,14 +445,14 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
             unsigned,
             &current,
             authorization,
-            fixture.options.deadline,
+            fixture.deadline(),
         )
         .unwrap()
         .finish_pending_with_reads(
             &fixture.owner,
             &current,
             &SigningTurn::Generated(authorization),
-            fixture.options.deadline,
+            fixture.deadline(),
             &NativeEnrollmentReads(&fixture.native),
         )
         .unwrap();
@@ -469,7 +466,7 @@ fn wallet_callback_cannot_reuse_an_earlier_epoch_or_claim_source_image() {
     );
     let wallet = old.directory().path().join("transaction");
     assert_eq!(
-        old.request(fixture.options.deadline)
+        old.request(fixture.deadline())
             .unwrap()
             .inspect(&fixture.owner.wallet().unwrap(), &wallet)
             .unwrap()

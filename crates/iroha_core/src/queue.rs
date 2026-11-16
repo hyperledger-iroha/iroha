@@ -16,8 +16,8 @@ mod forgery_ingress;
 pub use forgery_ingress::ForgeryIngressError;
 use forgery_ingress::SubmissionOrigin;
 mod resident_owner;
-use resident_owner::QueueResidentLedger;
 pub(crate) use resident_owner::QueuedTransaction;
+use resident_owner::{QueueResidentLedger, ResidentCounters, ResidentPartition};
 mod router;
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
@@ -577,16 +577,20 @@ const TX_RETAINED_OVERHEAD_BYTES: u64 = 2 * 1024;
 /// bytes kept across queue indexes.
 const TX_RETAINED_DECODE_EXPANSION_FACTOR: u64 = 8;
 /// Snapshot of queue pressure used by Torii admission and status reporting.
+///
+/// It describes the ordinary queue's budgets. The residents of the anonymous-ballot partition
+/// (`specs/parliament_private_ballot_design.md` §3.6) have a count and byte budget of their
+/// own and are in none of its counts, bytes, age or saturation signals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueuePressureSnapshot {
-    /// Number of transactions tracked by the queue (queued, in-flight, or durably owned while
-    /// awaiting exact payload replay).
+    /// Number of ordinary transactions tracked by the queue (queued, in-flight, or durably
+    /// owned while awaiting exact payload replay).
     pub tracked_tx_count: usize,
-    /// Number of transactions still waiting in the queue.
+    /// Number of ordinary transactions still waiting in the queue.
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
-    /// Estimated retained bytes for all pending transactions.
+    /// Estimated retained bytes for all pending ordinary transactions.
     pub retained_bytes: u64,
     /// Configured maximum estimated retained bytes for the queue.
     pub max_retained_bytes: NonZeroU64,
@@ -626,19 +630,21 @@ impl QueuePressureSnapshot {
     }
 }
 /// Snapshot of queue occupancy used to coordinate backpressure across Torii,
-/// the gossiper, and consensus.
+/// the gossiper, and consensus. Like [`QueuePressureSnapshot`], it describes the ordinary
+/// queue: anonymous ballots are counted against their partition's own budget only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackpressureState {
     /// Queue has room for new transactions.
     Healthy {
-        /// Number of transactions still waiting in the queue.
+        /// Number of ordinary transactions still waiting in the queue.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
     /// Queue reached capacity; callers should defer submissions.
     Saturated {
-        /// Number of transactions still waiting in the queue when saturation triggered.
+        /// Number of ordinary transactions still waiting in the queue when saturation
+        /// triggered.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
@@ -651,7 +657,7 @@ impl BackpressureState {
         matches!(self, Self::Saturated { .. })
     }
     #[must_use]
-    /// Number of transactions still waiting in the queue in the snapshot.
+    /// Number of ordinary transactions still waiting in the queue in the snapshot.
     pub const fn queued(self) -> usize {
         match self {
             Self::Healthy { queued, .. } | Self::Saturated { queued, .. } => queued,
@@ -1587,16 +1593,19 @@ impl Queue {
     ///
     /// Returns `false`, indexing nothing, when the incarnation or exact frame is already indexed.
     fn insert_pending_order_locked(&self, incarnation: u64, entry: PendingOrderEntry) -> bool {
+        let partition = entry.partition;
         if !self.pending_order.lock().insert(incarnation, entry) {
             return false;
         }
-        self.track_queued_hash();
+        self.track_queued_hash(partition);
         true
     }
     /// Remove one admission's FIFO, expiry and frame entries while holding `push_remove_lock`.
+    /// The entry names the partition its admission counted it in.
     fn remove_pending_order_locked(&self, incarnation: u64) {
-        if self.pending_order.lock().remove(incarnation).is_some() {
-            self.untrack_queued_hash();
+        let removed = self.pending_order.lock().remove(incarnation);
+        if let Some(entry) = removed {
+            self.untrack_queued_hash(entry.partition);
         }
     }
     fn remove_pending_hash_locked(
@@ -1614,12 +1623,10 @@ impl Queue {
         self.fee_admission_reservations.lock().release(&hash);
         self.routing_plans.remove(&hash);
         #[cfg(all(test, sumeragi_core_mutation = "HC137"))]
-        if removed.is_some()
+        if let Some(tx) = removed.as_ref()
             && let Some(len) = self.tx_encoded_len.get(&hash)
         {
-            self.resident_accounting
-                .get()
-                .expect("original resident owner")
+            self.resident_counters(ResidentPartition::of(tx.as_accepted()))
                 .retained_bytes
                 .fetch_sub(Self::retained_byte_cost(*len), Ordering::Relaxed);
         }
@@ -1627,7 +1634,7 @@ impl Queue {
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
         if let Some(tx) = removed.as_ref() {
-            self.untrack_active_transaction();
+            self.untrack_active_transaction(ResidentPartition::of(tx.as_accepted()));
             if let Some(authority) = tx.as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
@@ -1679,7 +1686,7 @@ impl Queue {
                 removed
             },
             |removed| {
-                self.publish_backpressure_state(self.active_len(), telemetry);
+                self.publish_backpressure_state(telemetry);
                 removed
             },
         )
@@ -1694,7 +1701,7 @@ impl Queue {
                 }
                 while self.tx_gossip.pop().is_some() {}
             },
-            |()| self.publish_backpressure_state(self.active_len(), None),
+            |()| self.publish_backpressure_state(None),
         )
     }
 
@@ -1777,11 +1784,11 @@ impl Queue {
                 Ok(accepted)
             })
     }
-    /// Number of locally pending signed inputs.
+    /// Number of locally pending inputs, anonymous ballots included.
     pub fn active_len(&self) -> usize {
         self.resident_accounting
             .get()
-            .map_or(0, |ledger| ledger.active_count.load(Ordering::Relaxed))
+            .map_or(0, |ledger| ledger.active_count())
     }
     /// Whether local admission must wait for recovery of its original index owner.
     pub fn admission_faulted(&self) -> bool {
@@ -1802,7 +1809,7 @@ impl Queue {
         self.accepted_work_validation_fault
             .store(true, Ordering::Release);
         iroha_logger::error!(tx = %hash, stage, reason = %reason, "queue admission identity is inconsistent");
-        self.publish_backpressure_state(self.active_len(), telemetry);
+        self.publish_backpressure_state(telemetry);
     }
     fn pending_status(&self, tx: &CheckedTransaction<'static>, state_view: &StateView<'_>) -> bool {
         !tx.is_in_blockchain(state_view)
@@ -2999,7 +3006,13 @@ impl Queue {
                 expired_cull_interval,
                 expired_cull_batch,
                 last_expired_cull_ms: AtomicU64::new(0),
-                tx_gossip: ArrayQueue::new(capacity.get()),
+                // One gossip slot per possible resident: the ordinary capacity and the
+                // ballot partition's own limit, so neither partition takes the other's.
+                tx_gossip: ArrayQueue::new(
+                    capacity
+                        .get()
+                        .saturating_add(anonymous_ballots.pending_limit.get()),
+                ),
                 backpressure_tx,
                 pressure_age_budget_ms: AtomicU64::new(Self::default_pressure_age_budget_ms()),
                 sumeragi_wake: parking_lot::Mutex::new(None),
@@ -3042,7 +3055,7 @@ impl Queue {
             let _ = lane_catalog;
             let _ = dataspace_catalog;
         }
-        queue.publish_backpressure_state(0, None);
+        queue.publish_backpressure_state(None);
         queue
     }
     /// Reserve one native startup before any executor attachment or driver launch.
@@ -4880,7 +4893,8 @@ impl Queue {
                     return Err((notifications, Self::refused(Error::Expired, checked)));
                 }
                 // A signerless ballot was admitted against its partition's own budget.
-                if !checked.as_accepted().is_anonymous_ballot()
+                let partition = ResidentPartition::of(checked.as_accepted());
+                if partition == ResidentPartition::Ordinary
                     && (self.ordinary_active_len() >= self.capacity.get()
                         || self
                             .ordinary_retained_bytes()
@@ -4906,10 +4920,11 @@ impl Queue {
                         Self::refused(Self::sccp_pending_claim_error(error), checked),
                     ));
                 }
-                let original_shell = match QueuedTransaction::reserve(ledger, encoded_len) {
-                    Ok(shell) => shell,
-                    Err(err) => return Err((notifications, Self::refused(err, checked))),
-                };
+                let original_shell =
+                    match QueuedTransaction::reserve(ledger, encoded_len, partition) {
+                        Ok(shell) => shell,
+                        Err(err) => return Err((notifications, Self::refused(err, checked))),
+                    };
                 let Some(incarnation) = self.advance_pending_ownership_generation(hash) else {
                     return Err((
                         notifications,
@@ -4934,6 +4949,7 @@ impl Queue {
                         enqueued_at_ms,
                         expires_at,
                         frame: frame_digest,
+                        partition,
                     },
                 ) {
                     self.fee_admission_reservations.lock().release(&hash);
@@ -4960,7 +4976,7 @@ impl Queue {
                     hash,
                     QueuedTransaction::initialize(original_shell, checked, incarnation),
                 );
-                self.track_active_transaction();
+                self.track_active_transaction(partition);
                 self.routing_plans.insert(hash, routing_plan.clone());
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
                 self.insert_tx_encoded_len(hash, encoded_len);
@@ -4989,7 +5005,7 @@ impl Queue {
                 drop(guard);
             }
             // The admitting caller republishes the TEU backlog gauges after this enqueue.
-            self.publish_backpressure_state(self.active_len(), telemetry);
+            self.publish_backpressure_state(telemetry);
             Ok(notifications)
         })
     }
@@ -5144,22 +5160,48 @@ impl Queue {
     pub fn queued_len(&self) -> usize {
         self.pending_order.lock().len()
     }
-    /// Estimated residence of original accepted owners, including detached last readers.
+    /// Estimated residence of original accepted owners, including detached last readers, of
+    /// the ordinary queue and the anonymous-ballot partition together.
     /// Nested decoded graph allocations remain a separate physical-funding boundary.
     pub fn retained_bytes(&self) -> u64 {
         if let Some(ledger) = self.resident_accounting.get() {
-            return ledger.retained_bytes.load(Ordering::Relaxed);
+            return ledger.retained_bytes();
         }
         #[cfg(test)]
         return self.retained_bytes_before_admission.load(Ordering::Relaxed);
         #[cfg(not(test))]
         0
     }
-    /// Override retained-byte accounting in tests and return the resulting pressure snapshot.
+    /// The residents that count against the ordinary capacity: every one but a ballot.
+    fn ordinary_active_len(&self) -> usize {
+        self.resident_accounting.get().map_or(0, |ledger| {
+            ledger.ordinary.active_count.load(Ordering::Relaxed)
+        })
+    }
+    /// The admission-FIFO entries of ordinary residents.
+    fn ordinary_queued_len(&self) -> usize {
+        self.resident_accounting.get().map_or(0, |ledger| {
+            ledger.ordinary.queued_count.load(Ordering::Relaxed)
+        })
+    }
+    /// The retained bytes that count against the ordinary byte budget: every resident's but
+    /// a ballot's, including detached last readers.
+    fn ordinary_retained_bytes(&self) -> u64 {
+        if let Some(ledger) = self.resident_accounting.get() {
+            return ledger.ordinary.retained_bytes.load(Ordering::Relaxed);
+        }
+        #[cfg(test)]
+        return self.retained_bytes_before_admission.load(Ordering::Relaxed);
+        #[cfg(not(test))]
+        0
+    }
+    /// Override the ordinary retained-byte accounting in tests and return the resulting
+    /// pressure snapshot.
     #[cfg(test)]
     pub fn set_retained_bytes_for_tests(&self, retained_bytes: u64) -> QueuePressureSnapshot {
         if let Some(ledger) = self.resident_accounting.get() {
             ledger
+                .ordinary
                 .retained_bytes
                 .store(retained_bytes, Ordering::Relaxed);
         } else {
@@ -5168,37 +5210,32 @@ impl Queue {
         }
         self.pressure_snapshot()
     }
-    fn track_active_transaction(&self) {
+    /// The resident counters of `partition`, once admission initialized the ledger.
+    fn resident_counters(&self, partition: ResidentPartition) -> &ResidentCounters {
         self.resident_accounting
             .get()
             .expect("admitted original resident ledger")
+            .counters(partition)
+    }
+    fn track_active_transaction(&self, partition: ResidentPartition) {
+        self.resident_counters(partition)
             .active_count
             .fetch_add(1, Ordering::Relaxed);
     }
-    fn untrack_active_transaction(&self) {
+    fn untrack_active_transaction(&self, partition: ResidentPartition) {
         Self::decrement_atomic_count(
-            &self
-                .resident_accounting
-                .get()
-                .expect("admitted original resident ledger")
-                .active_count,
+            &self.resident_counters(partition).active_count,
             "active transaction",
         );
     }
-    fn track_queued_hash(&self) {
-        self.resident_accounting
-            .get()
-            .expect("admitted original resident ledger")
+    fn track_queued_hash(&self, partition: ResidentPartition) {
+        self.resident_counters(partition)
             .queued_count
             .fetch_add(1, Ordering::Relaxed);
     }
-    fn untrack_queued_hash(&self) {
+    fn untrack_queued_hash(&self, partition: ResidentPartition) {
         Self::decrement_atomic_count(
-            &self
-                .resident_accounting
-                .get()
-                .expect("admitted original resident ledger")
-                .queued_count,
+            &self.resident_counters(partition).queued_count,
             "queued transaction",
         );
     }
@@ -5209,13 +5246,46 @@ impl Queue {
             self.txs.len(),
             "active transaction counter must match tracked transactions"
         );
+        let counts = |partition| {
+            self.resident_accounting.get().map_or((0, 0), |ledger| {
+                let counters: &ResidentCounters = ledger.counters(partition);
+                (
+                    counters.active_count.load(Ordering::Relaxed),
+                    counters.queued_count.load(Ordering::Relaxed),
+                )
+            })
+        };
+        let (ballots, ballots_queued) = counts(ResidentPartition::Ballot);
+        let (_, ordinary_queued) = counts(ResidentPartition::Ordinary);
+        assert_eq!(
+            ballots,
+            self.txs
+                .iter()
+                .filter(|entry| {
+                    ResidentPartition::of(entry.value().as_accepted()) == ResidentPartition::Ballot
+                })
+                .count(),
+            "the ballot partition's counter must match its tracked residents"
+        );
+        assert_eq!(
+            ballots,
+            self.pending_ballots.lock().len(),
+            "every resident ballot holds its identity in the partition index"
+        );
         let index = self.pending_order.lock();
         assert_eq!(
-            self.resident_accounting
-                .get()
-                .map_or(0, |ledger| ledger.queued_count.load(Ordering::Relaxed)),
+            ordinary_queued + ballots_queued,
             index.len(),
-            "queued transaction counter must match the admission FIFO"
+            "queued transaction counters must match the admission FIFO"
+        );
+        assert_eq!(
+            ballots_queued,
+            index
+                .entries()
+                .iter()
+                .filter(|(_, entry)| entry.partition == ResidentPartition::Ballot)
+                .count(),
+            "the ballot partition's queued counter must match its FIFO entries"
         );
         assert_eq!(
             index.len(),
@@ -5233,6 +5303,11 @@ impl Queue {
                 .get(&entry.hash)
                 .expect("admission FIFO entry belongs to a tracked transaction");
             assert_eq!(tracked.incarnation(), incarnation);
+            assert_eq!(
+                entry.partition,
+                ResidentPartition::of(tracked.as_accepted()),
+                "the FIFO entry records its resident's partition"
+            );
             assert_eq!(
                 entry.frame,
                 Self::entrypoint_frame_digest(tracked.as_accepted()),
@@ -5300,35 +5375,30 @@ impl Queue {
     }
     fn oldest_queued_tx_age_ms(&self) -> u64 {
         // A resident ballot waits for its window and its block budget, not for ordinary
-        // capacity: its age never saturates ordinary admission. Lock order: the pending
-        // order, then the ballot partition.
+        // capacity: its age never saturates ordinary admission.
         let Some(enqueued_at_ms) = self
             .pending_order
             .lock()
-            .front_where(|hash| !self.is_resident_ballot(hash))
+            .front_where(|entry| entry.partition == ResidentPartition::Ordinary)
             .map(|entry| entry.enqueued_at_ms)
         else {
             return 0;
         };
         Self::duration_to_millis(self.time_source.get_unix_time()).saturating_sub(enqueued_at_ms)
     }
-    fn pressure_snapshot_with_tracked_count(
-        &self,
-        tracked_tx_count: usize,
-    ) -> QueuePressureSnapshot {
-        let queued_tx_count = self.queued_len();
-        let retained_bytes = self.retained_bytes();
+    /// The ordinary queue's pressure, from the resident ledger's ordinary counters. The
+    /// ballot partition has its own count and byte budget: no ballot is in these counts.
+    fn ordinary_pressure_snapshot(&self) -> QueuePressureSnapshot {
+        let tracked_tx_count = self.ordinary_active_len();
+        let queued_tx_count = self.ordinary_queued_len();
+        let retained_bytes = self.ordinary_retained_bytes();
         let max_retained_bytes = self.max_retained_bytes;
         let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         // An inconsistent original admission index remains unavailable until recovery.
-        // The ballot partition has its own count and byte budget.
-        let (ballots, ballot_bytes) = self.ballot_residents();
-        let saturated_by_count = self.admission_faulted()
-            || tracked_tx_count.saturating_sub(ballots) >= self.capacity.get();
-        let saturated_by_bytes = retained_bytes
-            .saturating_sub(ballot_bytes)
-            .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
-            > max_retained_bytes.get();
+        let saturated_by_count =
+            self.admission_faulted() || tracked_tx_count >= self.capacity.get();
+        let saturated_by_bytes =
+            retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
         let saturated_by_age =
             queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
@@ -5344,12 +5414,8 @@ impl Queue {
             saturated_by_age,
         }
     }
-    fn refresh_backpressure_state(
-        &self,
-        tracked_tx_count: usize,
-        telemetry: Option<&StateTelemetry>,
-    ) -> BackpressureState {
-        let snapshot = self.pressure_snapshot_with_tracked_count(tracked_tx_count);
+    fn refresh_backpressure_state(&self, telemetry: Option<&StateTelemetry>) -> BackpressureState {
+        let snapshot = self.ordinary_pressure_snapshot();
         let state = self.resident_accounting.get().map_or_else(
             || {
                 let state = snapshot.into_backpressure();
@@ -5446,7 +5512,7 @@ impl Queue {
                     let _ = self.events_sender.send(event.into());
                 }
                 if removed > 0 {
-                    self.publish_backpressure_state(self.active_len(), None);
+                    self.publish_backpressure_state(None);
                 }
                 removed
             },
@@ -5479,8 +5545,8 @@ impl Queue {
             .or_insert(1);
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    fn publish_backpressure_state(&self, queued: usize, telemetry: Option<&StateTelemetry>) {
-        let _ = self.refresh_backpressure_state(queued, telemetry);
+    fn publish_backpressure_state(&self, telemetry: Option<&StateTelemetry>) {
+        let _ = self.refresh_backpressure_state(telemetry);
     }
     /// Preserve the admitted quote across route refresh. Missing metadata is an accepted-work
     /// invariant, never a zero-cost input or permission to decode/reprice for telemetry.
@@ -5780,13 +5846,13 @@ impl Queue {
     /// Snapshot current load without subscribing to updates.
     #[must_use]
     pub fn current_backpressure(&self) -> BackpressureState {
-        self.refresh_backpressure_state(self.active_len(), None)
+        self.refresh_backpressure_state(None)
     }
-    /// Compute the richer queue pressure snapshot without subscribing to the
-    /// watch channel.
+    /// Compute the richer queue pressure snapshot of the ordinary queue without subscribing
+    /// to the watch channel.
     #[must_use]
     pub fn pressure_snapshot(&self) -> QueuePressureSnapshot {
-        self.pressure_snapshot_with_tracked_count(self.active_len())
+        self.ordinary_pressure_snapshot()
     }
     /// Refresh the queue age budget from the effective block time and return
     /// the latest pressure snapshot.
@@ -5798,7 +5864,7 @@ impl Queue {
         let budget_ms = Self::pressure_age_budget_ms_from_block_time(block_time);
         self.pressure_age_budget_ms
             .store(budget_ms, Ordering::Relaxed);
-        self.refresh_backpressure_state(self.active_len(), None);
+        self.refresh_backpressure_state(None);
         self.pressure_snapshot()
     }
     /// Set the age budget used by queue pressure snapshots in tests.
@@ -5806,7 +5872,7 @@ impl Queue {
     pub fn set_pressure_age_budget_for_tests(&self, budget: Duration) -> QueuePressureSnapshot {
         self.pressure_age_budget_ms
             .store(Self::duration_to_millis(budget), Ordering::Relaxed);
-        self.refresh_backpressure_state(self.active_len(), None);
+        self.refresh_backpressure_state(None);
         self.pressure_snapshot()
     }
     /// Backdate queued transaction residence timestamps in tests.
@@ -5830,7 +5896,7 @@ impl Queue {
                 (enqueued_at_ms, expires_at)
             });
         }
-        self.refresh_backpressure_state(self.active_len(), None);
+        self.refresh_backpressure_state(None);
         self.pressure_snapshot()
     }
     fn router_for_nexus(
@@ -9897,6 +9963,10 @@ pub mod tests {
     mod resident_owner_tests {
         use super::*;
         include!("queue/resident_owner_tests.rs");
+    }
+    mod anonymous_ballot_pressure_tests {
+        use super::*;
+        include!("queue/anonymous_ballot_pressure_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
     include!("queue/runtime_envelope_admission_tests.rs");

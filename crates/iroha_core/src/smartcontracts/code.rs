@@ -2679,14 +2679,12 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
                 &mut stx,
             )
             .expect_err("an inconsistent trace bound must fail closed");
+            // The trace bound is part of header admission: the artifact is refused as code
+            // before any registration rule runs.
             assert!(
                 matches!(
                     &error,
-                    RegistryError::Instruction(
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(message)
-                        )
-                    ) if message.contains(expected)
+                    RegistryError::InvalidCode(message) if message.contains(expected)
                 ),
                 "unexpected registration error: {error:?}"
             );

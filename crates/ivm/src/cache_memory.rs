@@ -176,13 +176,96 @@ fn global_budget() -> &'static MemoryBudget {
     BUDGET.get_or_init(|| MemoryBudget::new(DEFAULT_RETENTION_BYTES))
 }
 
-/// Snapshot of the aggregate cache-allocation budget.
+std::thread_local! {
+    /// Budget private to the cache-limit guard held on this thread.
+    static GUARD_BUDGET: std::cell::RefCell<Option<MemoryBudget>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The budget this thread's new allocations are charged to: the private budget of a cache-limit
+/// guard held on this thread, otherwise the aggregate process budget.
+fn current_budget() -> MemoryBudget {
+    GUARD_BUDGET
+        .try_with(|budget| budget.borrow().clone())
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| global_budget().clone())
+}
+
+/// Private accounting for the thread that holds a cache-limit guard.
+///
+/// The guard owns the cache configuration, but the aggregate budget also counts what every
+/// other thread retains, so unrelated work could refuse its holder retention. While this scope
+/// lives, allocations made on its thread are charged to a budget of their own, with the limit
+/// the guard installed. An allocation keeps the budget it was charged to for its whole life.
+pub struct GuardBudgetScope(std::marker::PhantomData<*const ()>);
+
+impl GuardBudgetScope {
+    /// Start charging this thread's allocations to a private budget with the installed limit.
+    pub(crate) fn enter() -> Self {
+        Self::install(MemoryBudget::new(global_budget().stats().limit_bytes))
+    }
+
+    fn install(budget: MemoryBudget) -> Self {
+        let previous = GUARD_BUDGET.with(|slot| slot.borrow_mut().replace(budget));
+        assert!(
+            previous.is_none(),
+            "a thread is charged to at most one cache-limit guard budget"
+        );
+        Self(std::marker::PhantomData)
+    }
+
+    /// A handle that lets helper threads charge this scope's budget.
+    pub(crate) fn share(&self) -> GuardBudgetShare {
+        GUARD_BUDGET.with(|slot| {
+            GuardBudgetShare(
+                slot.borrow()
+                    .clone()
+                    .expect("a live scope keeps its thread's budget installed"),
+            )
+        })
+    }
+}
+
+/// Handle to the private budget of a cache-limit guard, for the holder's helper threads.
+///
+/// A test that holds a guard and runs cache work on threads it spawns enters the share on each
+/// of them, so their retention is charged with the holder's and not to the aggregate budget.
+#[derive(Clone, Debug)]
+pub struct GuardBudgetShare(MemoryBudget);
+
+impl GuardBudgetShare {
+    /// Charge the calling thread's allocations to the guard's budget while the scope lives.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the calling thread is already charged to a guard budget.
+    pub fn enter(&self) -> GuardBudgetScope {
+        GuardBudgetScope::install(self.0.clone())
+    }
+}
+
+impl Drop for GuardBudgetScope {
+    fn drop(&mut self) {
+        let _ = GUARD_BUDGET.try_with(|slot| slot.borrow_mut().take());
+    }
+}
+
+/// Snapshot of the cache-allocation budget the calling thread is charged to.
+///
+/// That is the aggregate process budget, or the private budget of a cache-limit guard held on
+/// the calling thread.
 pub fn memory_stats() -> MemoryStats {
-    global_budget().stats()
+    current_budget().stats()
 }
 
 pub(crate) fn set_retention_limit(bytes: usize) {
     global_budget().set_limit(bytes);
+    let _ = GUARD_BUDGET.try_with(|slot| {
+        if let Some(budget) = slot.borrow().as_ref() {
+            budget.set_limit(bytes);
+        }
+    });
 }
 
 type EvictionCallback = dyn Fn() + Send + Sync;
@@ -386,7 +469,7 @@ impl MemoryReservation {
 
     /// Account for a new active allocation without waiting for retention space.
     pub fn active(bytes: usize) -> Self {
-        global_budget().reserve(bytes)
+        current_budget().reserve(bytes)
     }
 
     pub(crate) fn active_unmeasured(bytes: usize) -> Self {
@@ -548,7 +631,7 @@ impl<T> SharedValue<T> {
     /// excluding its inline size, which is added here. Use `None` for an unknown
     /// footprint; unknown values remain usable but cannot enter retention.
     pub fn new(value: T, heap_bytes: Option<usize>) -> Self {
-        Self::with_budget(value, heap_bytes, global_budget())
+        Self::with_budget(value, heap_bytes, &current_budget())
     }
 
     fn with_budget(value: T, heap_bytes: Option<usize>, budget: &MemoryBudget) -> Self {
@@ -709,7 +792,7 @@ impl<T> OwnedAllocation<T> {
 
 impl<T: Copy> OwnedAllocation<T> {
     pub(crate) fn try_filled_copy(len: usize, value: T) -> Result<Self, crate::error::VMError> {
-        Self::try_filled_copy_with_budget(len, value, global_budget())
+        Self::try_filled_copy_with_budget(len, value, &current_budget())
     }
 
     fn try_filled_copy_with_budget(
@@ -774,7 +857,7 @@ impl<T: Copy> OwnedAllocation<T> {
 
 impl OwnedAllocation<u8> {
     pub(crate) fn try_zeroed(len: usize) -> Result<Self, std::collections::TryReserveError> {
-        Self::try_zeroed_with_budget(len, global_budget())
+        Self::try_zeroed_with_budget(len, &current_budget())
     }
 
     fn try_zeroed_with_budget(
@@ -1116,6 +1199,47 @@ impl TestMemoryBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guard_budget_scope_charges_only_its_own_thread_to_a_private_budget() {
+        let before = MemoryReservation::active(8);
+        assert!(Arc::ptr_eq(&before.budget.0, &global_budget().0));
+        let scope = GuardBudgetScope::enter();
+        let private = current_budget();
+        assert!(!Arc::ptr_eq(&private.0, &global_budget().0));
+        assert_eq!(memory_stats().active_bytes, 0);
+        assert_eq!(memory_stats().retained_bytes, 0);
+        let inside = MemoryReservation::active(16);
+        assert!(Arc::ptr_eq(&inside.budget.0, &private.0));
+        assert_eq!(memory_stats().active_bytes, 16);
+        // Another thread stays on the process budget and leaves the private one untouched.
+        let foreign = std::thread::spawn(|| MemoryReservation::active(4))
+            .join()
+            .expect("foreign reservation");
+        assert!(Arc::ptr_eq(&foreign.budget.0, &global_budget().0));
+        assert_eq!(memory_stats().active_bytes, 16);
+        drop(scope);
+        let after = MemoryReservation::active(2);
+        assert!(Arc::ptr_eq(&after.budget.0, &global_budget().0));
+        // A helper thread that enters the share is charged to the same private budget.
+        let scope = GuardBudgetScope::enter();
+        let share = scope.share();
+        let holder_budget = current_budget();
+        let helper = std::thread::spawn(move || {
+            let _helper = share.enter();
+            MemoryReservation::active(8)
+        })
+        .join()
+        .expect("helper reservation");
+        assert!(Arc::ptr_eq(&helper.budget.0, &holder_budget.0));
+        assert_eq!(memory_stats().active_bytes, 8);
+        drop((helper, scope));
+        // An allocation keeps the budget it was charged to after the scope ends.
+        assert!(Arc::ptr_eq(&inside.budget.0, &private.0));
+        assert_eq!(private.stats().active_bytes, 16);
+        drop(inside);
+        assert_eq!(private.stats().active_bytes, 0);
+    }
 
     #[test]
     fn fixed_owner_reuses_preallocation_charge_and_releases_unused_capacity() {

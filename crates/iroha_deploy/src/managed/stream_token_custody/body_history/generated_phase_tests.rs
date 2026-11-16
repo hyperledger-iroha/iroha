@@ -205,16 +205,13 @@ fn native_generated_empty_prefix_shares_reads_and_preserves_inherited_decoders()
     let (fixture, history) = shared_snapshot_tests::history_with_bodies(3);
     let mut turn = fixture.renewal_turn();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let head = history.current_history().unwrap();
     assert_eq!(head.reserved_attempt_count(), 0);
     let account = fixture.owner.wallet().unwrap();
-    let inspector = NativeClosureInspector::new(
-        history.original().unwrap(),
-        &account,
-        fixture.options.deadline,
-    );
+    let inspector =
+        NativeClosureInspector::new(history.original().unwrap(), &account, fixture.deadline());
     let evidence = Evidence::capture(history.root.path());
     let mut outcomes = Vec::new();
     for shared in [false, true] {
@@ -308,15 +305,12 @@ fn native_generated_empty_prefix_closes_source_errors_before_any_effect() {
     let (fixture, history) = shared_snapshot_tests::history_with_bodies(3);
     let mut turn = fixture.renewal_turn();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let head = history.current_history().unwrap();
     let account = fixture.owner.wallet().unwrap();
-    let inspector = NativeClosureInspector::new(
-        history.original().unwrap(),
-        &account,
-        fixture.options.deadline,
-    );
+    let inspector =
+        NativeClosureInspector::new(history.original().unwrap(), &account, fixture.deadline());
     let evidence = Evidence::capture(history.root.path());
     for name in ["original.nrt", "dispatch.nrt", "closing.nrt", "closed.nrt"] {
         for ordinary_error in [false, true] {
@@ -447,7 +441,7 @@ fn native_generated_reread_discovery_closes_before_first_wallet_callback() {
                 2,
                 |fixture, history, authorization, current| {
                     let (directory, original, scope) = history.dispatch().unwrap();
-                    let deadline = fixture.options.deadline;
+                    let deadline = fixture.deadline();
                     let Action::Enroll { validity, .. } = &original.action else {
                         unreachable!()
                     };
@@ -577,15 +571,12 @@ fn native_generated_exit_keeps_refresh_custody_and_original_error_closure() {
     let (fixture, history) = shared_snapshot_tests::history_with_bodies(3);
     let mut turn = fixture.renewal_turn();
     let authorization = turn
-        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .authorize_retained(&fixture.owner, &history, fixture.deadline())
         .unwrap();
     let head = history.current_history().unwrap();
     let account = fixture.owner.wallet().unwrap();
-    let inspector = NativeClosureInspector::new(
-        history.original().unwrap(),
-        &account,
-        fixture.options.deadline,
-    );
+    let inspector =
+        NativeClosureInspector::new(history.original().unwrap(), &account, fixture.deadline());
     let evidence = Evidence::capture(history.root.path());
     let mut observations = Vec::new();
     for original_exit in [true, false] {

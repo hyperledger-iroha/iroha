@@ -14,10 +14,18 @@ pub(crate) use producer::{
     record_governed_exclusions, validate_persistence, validate_root,
 };
 mod code_coverage;
-pub(crate) use code_coverage::{NativeCodeCoverage, verify_native_code_coverage};
+#[cfg(test)]
+pub(crate) use code_coverage::verify_native_code_coverage;
 
 /// Discover the latest local receipt and authenticate its original archived ordinary write.
 /// Current World values locate evidence; they cannot replace its certified source bytes.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 pub(crate) fn receipt_proof(
     view: &impl StateReadOnly,
     definition: DefinitionId,
@@ -72,16 +80,37 @@ use crate::{
 
 /// A completed evidence rejection, distinct from the original local resource refusal.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 pub(crate) enum Error {
     /// Membership, source identity, finality, carrier, or write inclusion differs.
     #[error("runtime retirement evidence: {0}")]
     Invalid(String),
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn invalid(error: impl std::fmt::Display) -> Error {
     Error::Invalid(error.to_string())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn proof_error(error: AmxError) -> Attempt<Error> {
     match error {
         AmxError::Resource(original) => canonical_decode_attempt_error(original, invalid),
@@ -89,6 +118,13 @@ fn proof_error(error: AmxError) -> Attempt<Error> {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn registry_error(error: PrivateDataspaceAnchorError) -> Attempt<Error> {
     match error {
         PrivateDataspaceAnchorError::Resource(original) => {
@@ -99,12 +135,26 @@ fn registry_error(error: PrivateDataspaceAnchorError) -> Attempt<Error> {
 }
 
 /// Exact statement coverage of one authenticated parent registry cut, not deletion eligibility.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 pub(crate) struct RetirementCoverage {
     definition: DefinitionId,
     roots: usize,
     evidence: Hash,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 impl RetirementCoverage {
     /// Immutable definition covered on every registered root and the parent itself.
     pub(crate) fn definition(&self) -> DefinitionId {
@@ -120,6 +170,13 @@ impl RetirementCoverage {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn append_evidence(
     previous: Hash,
     proof: &RuntimeRetirementProofV1,
@@ -129,6 +186,13 @@ fn append_evidence(
     Ok(Hash::new_from_chunks(&[previous.as_ref(), &bytes]))
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn child_root(record: &PrivateDataspaceRecord) -> RuntimeRetirementRootV1 {
     let registration = record.anchor.registration();
     RuntimeRetirementRootV1 {
@@ -139,6 +203,13 @@ fn child_root(record: &PrivateDataspaceRecord) -> RuntimeRetirementRootV1 {
 }
 
 /// Authenticate one exact current child decision from its parent-owned registration.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn verify_child(
     record: &PrivateDataspaceRecord,
     definition: DefinitionId,
@@ -179,6 +250,13 @@ fn verify_child(
         .map_err(proof_error)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn verify_children(
     parent_network: iroha_data_model::NetworkId,
     registry: &PrivateDataspaceRegistry,
@@ -209,6 +287,13 @@ fn verify_children(
 /// The original State cut supplies membership, child authority, and the parent's native tip.
 /// # Errors
 /// Missing roots, substituted identity, invalid finality/path, or original resource refusal.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 pub(crate) fn verify_coverage(
     view: &impl StateReadOnly,
     definition: DefinitionId,

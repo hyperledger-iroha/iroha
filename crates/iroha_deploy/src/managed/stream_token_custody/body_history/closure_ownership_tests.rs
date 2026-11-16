@@ -84,11 +84,7 @@ fn owned_closed_history_moves_after_fresh_wallet_and_source_checks_with_active_r
     let inspect = |attempt: &attempts::Attempt| {
         calls.set(calls.get() + 1);
         original
-            .request(
-                attempt.terms(),
-                attempt.observation()?,
-                fixture.options.deadline,
-            )?
+            .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
             .inspect_in_parent(&account, attempt.directory())
     };
     let borrowed = oldest.test_owned_closure_history().unwrap();
@@ -291,11 +287,7 @@ fn consumed_receipt_closes_one_native_census_and_refuses_oldest_post_callback_su
     let inspect = |attempt: &attempts::Attempt| {
         calls.set(calls.get() + 1);
         original
-            .request(
-                attempt.terms(),
-                attempt.observation()?,
-                fixture.options.deadline,
-            )?
+            .request(attempt.terms(), attempt.observation()?, fixture.deadline())?
             .inspect_in_parent(&account, attempt.directory())
     };
     let evidence = ["original.nrt", metadata::FILE].map(|name| {

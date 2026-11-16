@@ -2,7 +2,6 @@
 use super::*;
 use iroha_core::snapshot::transfer::{CheckpointTransferV1, transport::TransferLimits};
 use std::num::{NonZeroU64, NonZeroUsize};
-use tower::ServiceExt as _;
 
 fn fixture() -> (tempfile::TempDir, SharedAppState) {
     let directory = tempfile::tempdir().unwrap();

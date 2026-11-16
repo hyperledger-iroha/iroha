@@ -14,8 +14,8 @@ use iroha_data_model::{
             SubmitAnonymousParliamentTransitionV1, digests::proposal_digest_v1,
         },
         types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
-            RiskTierV1,
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, ProposalKind, RiskTierV1,
         },
     },
     isi::governance::{
@@ -151,6 +151,8 @@ fn creation_records_what_core_derives_and_nothing_the_caller_chose() {
         Some(&Vec::new())
     );
     assert_eq!(stored.purpose(), &candidate());
+    // The attempt stores the admitted proposal itself.
+    assert_eq!(stored.proposal(), &instruction.proposal);
     assert_eq!(
         stored.attempt(),
         &instruction.canonical_attempt(RiskTierV1::Standard)
@@ -162,6 +164,16 @@ fn creation_records_what_core_derives_and_nothing_the_caller_chose() {
     assert_eq!(
         stored.effect_preimage_hash(),
         instruction.proposal.effect_preimage_hash_v1()
+    );
+    // The head Core read governs the proposal's subject: a contract nothing deployed yet.
+    assert_eq!(
+        stored.expected_head(),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: instruction
+                .proposal
+                .governed_subject_id_v1()
+                .expect("a contract subject"),
+        })
     );
     assert_eq!(stored.randomness_redraws_before_attempt(), 0);
     // The binding pipeline ends in the conditional Confirmation Jury.

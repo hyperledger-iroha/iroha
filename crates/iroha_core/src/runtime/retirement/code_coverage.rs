@@ -11,6 +11,10 @@ use mv::storage::StorageReadOnly as _;
 ///
 /// This seal does not authorize deleting source. In particular, descriptor identities cannot
 /// prove that shared Rust source is unused by retained codecs, readers or proof verification.
+#[expect(
+    dead_code,
+    reason = "TODO(N14): no code-deletion verdict reads native code coverage yet; tests reach only its refusal"
+)]
 pub(crate) struct NativeCodeCoverage {
     identity: Hash,
     aliases: usize,
@@ -18,6 +22,10 @@ pub(crate) struct NativeCodeCoverage {
     evidence: Hash,
 }
 
+#[expect(
+    dead_code,
+    reason = "TODO(N14): no code-deletion verdict reads native code coverage yet; tests reach only its refusal"
+)]
 impl NativeCodeCoverage {
     /// Canonical native module plus archived reference-closure identity.
     pub(crate) fn identity(&self) -> Hash {
@@ -37,6 +45,13 @@ impl NativeCodeCoverage {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 fn implementation_code(descriptor: &DefinitionDescriptorV1) -> Option<&ImplementationCodeV1> {
     match descriptor {
         DefinitionDescriptorV1::Implementation(implementation) => Some(&implementation.code),
@@ -54,6 +69,13 @@ fn implementation_code(descriptor: &DefinitionDescriptorV1) -> Option<&Implement
 /// # Errors
 /// An absent alias/root receipt, mismatched code, retained migration, invalid finality, or an
 /// original resource refusal. Source ownership and physical source removal are not assessed.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO(N14): no code-deletion verdict consumes retirement coverage yet; only its tests call this verifier"
+    )
+)]
 pub(crate) fn verify_native_code_coverage(
     view: &impl StateReadOnly,
     definition: DefinitionId,

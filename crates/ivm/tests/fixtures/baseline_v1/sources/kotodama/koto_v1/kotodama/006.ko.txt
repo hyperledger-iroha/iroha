@@ -1,0 +1,9 @@
+
+        seiyaku NoImplicitQuantityCast {
+            fn main() -> int {
+                let quantity a = 9_000_000_000;
+                let int c = a;
+                return c;
+            }
+        }
+    

@@ -1,0 +1,3347 @@
+{
+  "abi_v1": {
+    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+    "descriptor_file": "descriptors/abi_v1.descriptor.bin",
+    "descriptor_len": 131466,
+    "descriptor_sha256": "266dfb01f910f94b620cc405ec6c52ae019bb5165a0d8bdae5e38898b56e5360",
+    "policy": "SyscallPolicy::AbiV1"
+  },
+  "abi_v1_runtime_lifecycle": {
+    "exists_at_anchor": false,
+    "note": "the anchor's ivm_abi::SyscallPolicy has the single variant AbiV1"
+  },
+  "anchor_commit": "77600a4840bd5f37f167c46b11b9f5ab73c97ae2",
+  "gas_schedule_v1": {
+    "descriptor_file": "descriptors/gas_schedule_v1.descriptor.bin",
+    "descriptor_len": 9255,
+    "descriptor_sha256": "49b2a59e4c43e05bd1bfddbaeb7e555e7bfba4af81eb36ddd3ab105fd2fd2e89",
+    "max_instruction_cost": 5000,
+    "schedule_hash": "af5a27f5fc57ebfb9eae3c4f8a25091ce78d97ff7797dbc3b304a0091069731f",
+    "zk_gas_schedule_hash": "97be6ce3dab8a1038a47c956a0ef51511cc69ce55a448ff09f95f534daf76261"
+  },
+  "hash_algorithm": "iroha_crypto::Hash::new: Blake2b-256 (Blake2bVar, 32-byte output) with the least significant bit of the final byte set to 1",
+  "header": {
+    "default_header_hex": "49564d00010100000000000000000000017531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+    "layout": "magic[0..4]; version_major[4]; version_minor[5]; mode[6]; vector_length[7]; max_cycles u64 le [8..16]; abi_version[16]; abi_hash[17..49]",
+    "magic_hex": "49564d00",
+    "mode_vector": 2,
+    "mode_zk": 1,
+    "size": 49,
+    "vector_length_max": 64,
+    "version_major": 1,
+    "version_minor": 1
+  },
+  "host_profile_abi_v1": {
+    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+    "abi_version": 1,
+    "catalog_kind": "HostProfile",
+    "catalog_name": "abi.v1",
+    "definition_id": "d50c38a8d0d0a229f54a43f9f7568fd45561774cb58f40668eb703ae79611b99",
+    "definition_id_preimage": {
+      "domain_hex": "69726f68613a72756e74696d653a646566696e6974696f6e3a763100",
+      "domain_text": "iroha:runtime:definition:v1\u0000",
+      "format_version": 1,
+      "formula": "Hash::new(domain || [format_version, kind_tag] || le64(len(descriptor)) || descriptor)",
+      "kind_tag": 6,
+      "length_le64_hex": "7200000000000000"
+    },
+    "descriptor_file": "descriptors/host_profile_abi_v1.descriptor.bin",
+    "descriptor_hex": "4e52543000009f48f926c457b5f40478025333b7a953004a000000000000000d185d3b7f7414b0020600000045020100207531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a720af5a27f5fc57ebfb9eae3c4f8a25091ce78d97ff7797dbc3b304a0091069731f",
+    "descriptor_json": {
+      "content": {
+        "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
+        "abi_version": 1,
+        "metering": "af5a27f5fc57ebfb9eae3c4f8a25091ce78d97ff7797dbc3b304a0091069731f"
+      },
+      "kind": "HostProfile"
+    },
+    "metering": "af5a27f5fc57ebfb9eae3c4f8a25091ce78d97ff7797dbc3b304a0091069731f"
+  },
+  "memory_layout": {
+    "heap_size": 1048576,
+    "heap_start": 1048576,
+    "input_size": 65536,
+    "input_start": 2097152,
+    "output_size": 32768,
+    "output_start": 2162688,
+    "stack_size": 4194304,
+    "stack_start": 3145728
+  },
+  "opcodes": [
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x01",
+      "in_gas_schedule": true,
+      "name": "ADD",
+      "opcode": 1,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x02",
+      "in_gas_schedule": true,
+      "name": "SUB",
+      "opcode": 2,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x03",
+      "in_gas_schedule": true,
+      "name": "AND",
+      "opcode": 3,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x04",
+      "in_gas_schedule": true,
+      "name": "OR",
+      "opcode": 4,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x05",
+      "in_gas_schedule": true,
+      "name": "XOR",
+      "opcode": 5,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x06",
+      "in_gas_schedule": true,
+      "name": "SLL",
+      "opcode": 6,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x07",
+      "in_gas_schedule": true,
+      "name": "SRL",
+      "opcode": 7,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x08",
+      "in_gas_schedule": true,
+      "name": "SRA",
+      "opcode": 8,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x09",
+      "in_gas_schedule": true,
+      "name": "SLT",
+      "opcode": 9,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x0a",
+      "in_gas_schedule": true,
+      "name": "SLTU",
+      "opcode": 10,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 3,
+      "hex": "0x0b",
+      "in_gas_schedule": true,
+      "name": "CMOV",
+      "opcode": 11,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x0c",
+      "in_gas_schedule": true,
+      "name": "NOT",
+      "opcode": 12,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x0d",
+      "in_gas_schedule": true,
+      "name": "NEG",
+      "opcode": 13,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x0e",
+      "in_gas_schedule": true,
+      "name": "SEQ",
+      "opcode": 14,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x0f",
+      "in_gas_schedule": true,
+      "name": "SNE",
+      "opcode": 15,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 3,
+      "hex": "0x10",
+      "in_gas_schedule": true,
+      "name": "MUL",
+      "opcode": 16,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 3,
+      "hex": "0x11",
+      "in_gas_schedule": true,
+      "name": "MULH",
+      "opcode": 17,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 3,
+      "hex": "0x12",
+      "in_gas_schedule": true,
+      "name": "MULHU",
+      "opcode": 18,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 3,
+      "hex": "0x13",
+      "in_gas_schedule": true,
+      "name": "MULHSU",
+      "opcode": 19,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 10,
+      "hex": "0x14",
+      "in_gas_schedule": true,
+      "name": "DIV",
+      "opcode": 20,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 10,
+      "hex": "0x15",
+      "in_gas_schedule": true,
+      "name": "DIVU",
+      "opcode": 21,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 10,
+      "hex": "0x16",
+      "in_gas_schedule": true,
+      "name": "REM",
+      "opcode": 22,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 10,
+      "hex": "0x17",
+      "in_gas_schedule": true,
+      "name": "REMU",
+      "opcode": 23,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x18",
+      "in_gas_schedule": true,
+      "name": "ROTL",
+      "opcode": 24,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x19",
+      "in_gas_schedule": true,
+      "name": "ROTR",
+      "opcode": 25,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 6,
+      "hex": "0x1a",
+      "in_gas_schedule": true,
+      "name": "POPCNT",
+      "opcode": 26,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 6,
+      "hex": "0x1b",
+      "in_gas_schedule": true,
+      "name": "CLZ",
+      "opcode": 27,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 6,
+      "hex": "0x1c",
+      "in_gas_schedule": true,
+      "name": "CTZ",
+      "opcode": 28,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 6,
+      "hex": "0x1d",
+      "in_gas_schedule": true,
+      "name": "ISQRT",
+      "opcode": 29,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x1e",
+      "in_gas_schedule": true,
+      "name": "MIN",
+      "opcode": 30,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x1f",
+      "in_gas_schedule": true,
+      "name": "MAX",
+      "opcode": 31,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 1,
+      "hex": "0x20",
+      "in_gas_schedule": true,
+      "name": "ADDI",
+      "opcode": 32,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 1,
+      "hex": "0x21",
+      "in_gas_schedule": true,
+      "name": "ANDI",
+      "opcode": 33,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 1,
+      "hex": "0x22",
+      "in_gas_schedule": true,
+      "name": "ORI",
+      "opcode": 34,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 1,
+      "hex": "0x23",
+      "in_gas_schedule": true,
+      "name": "XORI",
+      "opcode": 35,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 3,
+      "hex": "0x24",
+      "in_gas_schedule": true,
+      "name": "CMOVI",
+      "opcode": 36,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 2,
+      "hex": "0x25",
+      "in_gas_schedule": true,
+      "name": "ROTL_IMM",
+      "opcode": 37,
+      "valid": true
+    },
+    {
+      "family": "arithmetic-immediate",
+      "gas": 2,
+      "hex": "0x26",
+      "in_gas_schedule": true,
+      "name": "ROTR_IMM",
+      "opcode": 38,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 1,
+      "hex": "0x27",
+      "in_gas_schedule": true,
+      "name": "ABS",
+      "opcode": 39,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 12,
+      "hex": "0x28",
+      "in_gas_schedule": true,
+      "name": "DIV_CEIL",
+      "opcode": 40,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 12,
+      "hex": "0x29",
+      "in_gas_schedule": true,
+      "name": "GCD",
+      "opcode": 41,
+      "valid": true
+    },
+    {
+      "family": "arithmetic",
+      "gas": 2,
+      "hex": "0x2a",
+      "in_gas_schedule": true,
+      "name": "MEAN",
+      "opcode": 42,
+      "valid": true
+    },
+    {
+      "family": "memory",
+      "gas": 3,
+      "hex": "0x30",
+      "in_gas_schedule": true,
+      "name": "LOAD64",
+      "opcode": 48,
+      "valid": true
+    },
+    {
+      "family": "memory",
+      "gas": 3,
+      "hex": "0x31",
+      "in_gas_schedule": true,
+      "name": "STORE64",
+      "opcode": 49,
+      "valid": true
+    },
+    {
+      "family": "memory-128",
+      "gas": 5,
+      "hex": "0x32",
+      "in_gas_schedule": true,
+      "name": "LOAD128",
+      "opcode": 50,
+      "valid": true
+    },
+    {
+      "family": "memory-128",
+      "gas": 5,
+      "hex": "0x33",
+      "in_gas_schedule": true,
+      "name": "STORE128",
+      "opcode": 51,
+      "valid": true
+    },
+    {
+      "family": "memory-literal",
+      "gas": 1,
+      "hex": "0x34",
+      "in_gas_schedule": true,
+      "name": "LDLIT",
+      "opcode": 52,
+      "valid": true
+    },
+    {
+      "family": "memory-literal",
+      "gas": 1,
+      "hex": "0x35",
+      "in_gas_schedule": true,
+      "name": "LDI64",
+      "opcode": 53,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x40",
+      "in_gas_schedule": true,
+      "name": "BEQ",
+      "opcode": 64,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x41",
+      "in_gas_schedule": true,
+      "name": "BNE",
+      "opcode": 65,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x42",
+      "in_gas_schedule": true,
+      "name": "BLT",
+      "opcode": 66,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x43",
+      "in_gas_schedule": true,
+      "name": "BGE",
+      "opcode": 67,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x44",
+      "in_gas_schedule": true,
+      "name": "BLTU",
+      "opcode": 68,
+      "valid": true
+    },
+    {
+      "family": "control-branch",
+      "gas": 1,
+      "hex": "0x45",
+      "in_gas_schedule": true,
+      "name": "BGEU",
+      "opcode": 69,
+      "valid": true
+    },
+    {
+      "family": "control-jump",
+      "gas": 2,
+      "hex": "0x46",
+      "in_gas_schedule": true,
+      "name": "JAL",
+      "opcode": 70,
+      "valid": true
+    },
+    {
+      "family": "control-jump",
+      "gas": 2,
+      "hex": "0x47",
+      "in_gas_schedule": true,
+      "name": "JR",
+      "opcode": 71,
+      "valid": true
+    },
+    {
+      "family": "control-jump",
+      "gas": 2,
+      "hex": "0x48",
+      "in_gas_schedule": true,
+      "name": "JALR",
+      "opcode": 72,
+      "valid": true
+    },
+    {
+      "family": "control",
+      "gas": 0,
+      "hex": "0x49",
+      "in_gas_schedule": true,
+      "name": "HALT",
+      "opcode": 73,
+      "valid": true
+    },
+    {
+      "family": "control-jump",
+      "gas": 2,
+      "hex": "0x4a",
+      "in_gas_schedule": true,
+      "name": "JMP",
+      "opcode": 74,
+      "valid": true
+    },
+    {
+      "family": "control-jump",
+      "gas": 2,
+      "hex": "0x4b",
+      "in_gas_schedule": true,
+      "name": "JALS",
+      "opcode": 75,
+      "valid": true
+    },
+    {
+      "family": "system",
+      "gas": 5,
+      "hex": "0x60",
+      "in_gas_schedule": true,
+      "name": "SCALL",
+      "opcode": 96,
+      "valid": true
+    },
+    {
+      "family": "system",
+      "gas": 0,
+      "hex": "0x61",
+      "in_gas_schedule": true,
+      "name": "GETGAS",
+      "opcode": 97,
+      "valid": true
+    },
+    {
+      "family": "system",
+      "gas": 5,
+      "hex": "0x62",
+      "in_gas_schedule": true,
+      "name": "SYSTEM",
+      "opcode": 98,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 2,
+      "hex": "0x70",
+      "in_gas_schedule": true,
+      "name": "VADD32",
+      "opcode": 112,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 2,
+      "hex": "0x71",
+      "in_gas_schedule": true,
+      "name": "VADD64",
+      "opcode": 113,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 1,
+      "hex": "0x72",
+      "in_gas_schedule": true,
+      "name": "VAND",
+      "opcode": 114,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 1,
+      "hex": "0x73",
+      "in_gas_schedule": true,
+      "name": "VXOR",
+      "opcode": 115,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 1,
+      "hex": "0x74",
+      "in_gas_schedule": true,
+      "name": "VOR",
+      "opcode": 116,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 1,
+      "hex": "0x75",
+      "in_gas_schedule": true,
+      "name": "VROT32",
+      "opcode": 117,
+      "valid": true
+    },
+    {
+      "family": "vector",
+      "gas": 1,
+      "hex": "0x76",
+      "in_gas_schedule": true,
+      "name": "SETVL",
+      "opcode": 118,
+      "valid": true
+    },
+    {
+      "family": "parallel",
+      "gas": 0,
+      "hex": "0x77",
+      "in_gas_schedule": true,
+      "name": "PARBEGIN",
+      "opcode": 119,
+      "valid": true
+    },
+    {
+      "family": "parallel",
+      "gas": 0,
+      "hex": "0x78",
+      "in_gas_schedule": true,
+      "name": "PAREND",
+      "opcode": 120,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 50,
+      "hex": "0x80",
+      "in_gas_schedule": true,
+      "name": "SHA256BLOCK",
+      "opcode": 128,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 50,
+      "hex": "0x81",
+      "in_gas_schedule": true,
+      "name": "SHA3BLOCK",
+      "opcode": 129,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 10,
+      "hex": "0x82",
+      "in_gas_schedule": true,
+      "name": "POSEIDON2",
+      "opcode": 130,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 10,
+      "hex": "0x83",
+      "in_gas_schedule": true,
+      "name": "POSEIDON6",
+      "opcode": 131,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 30,
+      "hex": "0x84",
+      "in_gas_schedule": true,
+      "name": "AESENC",
+      "opcode": 132,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 30,
+      "hex": "0x85",
+      "in_gas_schedule": true,
+      "name": "AESDEC",
+      "opcode": 133,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 40,
+      "hex": "0x86",
+      "in_gas_schedule": true,
+      "name": "BLAKE2S",
+      "opcode": 134,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 1000,
+      "hex": "0x87",
+      "in_gas_schedule": true,
+      "name": "ED25519VERIFY",
+      "opcode": 135,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 500,
+      "hex": "0x88",
+      "in_gas_schedule": true,
+      "name": "ED25519BATCHVERIFY",
+      "opcode": 136,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 1500,
+      "hex": "0x89",
+      "in_gas_schedule": true,
+      "name": "ECDSAVERIFY",
+      "opcode": 137,
+      "valid": true
+    },
+    {
+      "family": "direct-crypto",
+      "gas": 5000,
+      "hex": "0x8a",
+      "in_gas_schedule": true,
+      "name": "DILITHIUMVERIFY",
+      "opcode": 138,
+      "valid": true
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x90",
+      "in_gas_schedule": false,
+      "name": "MSG_CREATE",
+      "opcode": 144,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x91",
+      "in_gas_schedule": false,
+      "name": "MSG_CLONE",
+      "opcode": 145,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x92",
+      "in_gas_schedule": false,
+      "name": "MSG_SET",
+      "opcode": 146,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x93",
+      "in_gas_schedule": false,
+      "name": "MSG_GET",
+      "opcode": 147,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x94",
+      "in_gas_schedule": false,
+      "name": "MSG_ADD",
+      "opcode": 148,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x95",
+      "in_gas_schedule": false,
+      "name": "MSG_REMOVE",
+      "opcode": 149,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x96",
+      "in_gas_schedule": false,
+      "name": "MSG_CLEAR",
+      "opcode": 150,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x97",
+      "in_gas_schedule": false,
+      "name": "MSG_PARSE",
+      "opcode": 151,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x98",
+      "in_gas_schedule": false,
+      "name": "MSG_SERIALIZE",
+      "opcode": 152,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x99",
+      "in_gas_schedule": false,
+      "name": "MSG_VALIDATE",
+      "opcode": 153,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9a",
+      "in_gas_schedule": false,
+      "name": "MSG_SIGN",
+      "opcode": 154,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9b",
+      "in_gas_schedule": false,
+      "name": "MSG_VERIFY_SIG",
+      "opcode": 155,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9c",
+      "in_gas_schedule": false,
+      "name": "MSG_SEND",
+      "opcode": 156,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9d",
+      "in_gas_schedule": false,
+      "name": "ENCODE_STR",
+      "opcode": 157,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9e",
+      "in_gas_schedule": false,
+      "name": "DECODE_STR",
+      "opcode": 158,
+      "valid": false
+    },
+    {
+      "family": "iso20022-reserved",
+      "gas": null,
+      "hex": "0x9f",
+      "in_gas_schedule": false,
+      "name": "VALIDATE_FORMAT",
+      "opcode": 159,
+      "valid": false
+    },
+    {
+      "family": "zk-helper",
+      "gas": 1,
+      "hex": "0xa0",
+      "in_gas_schedule": true,
+      "name": "ASSERT",
+      "opcode": 160,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 1,
+      "hex": "0xa1",
+      "in_gas_schedule": true,
+      "name": "ASSERT_EQ",
+      "opcode": 161,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 1,
+      "hex": "0xa2",
+      "in_gas_schedule": true,
+      "name": "FADD",
+      "opcode": 162,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 1,
+      "hex": "0xa3",
+      "in_gas_schedule": true,
+      "name": "FSUB",
+      "opcode": 163,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 3,
+      "hex": "0xa4",
+      "in_gas_schedule": true,
+      "name": "FMUL",
+      "opcode": 164,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 5,
+      "hex": "0xa5",
+      "in_gas_schedule": true,
+      "name": "FINV",
+      "opcode": 165,
+      "valid": true
+    },
+    {
+      "family": "zk-helper",
+      "gas": 1,
+      "hex": "0xa6",
+      "in_gas_schedule": true,
+      "name": "ASSERT_RANGE",
+      "opcode": 166,
+      "valid": true
+    }
+  ],
+  "pointer_types": [
+    {
+      "allowed": true,
+      "id": 1,
+      "name": "AccountId"
+    },
+    {
+      "allowed": true,
+      "id": 2,
+      "name": "AssetDefinitionId"
+    },
+    {
+      "allowed": true,
+      "id": 3,
+      "name": "Name"
+    },
+    {
+      "allowed": true,
+      "id": 4,
+      "name": "Json"
+    },
+    {
+      "allowed": true,
+      "id": 5,
+      "name": "NftId"
+    },
+    {
+      "allowed": true,
+      "id": 6,
+      "name": "Blob"
+    },
+    {
+      "allowed": true,
+      "id": 7,
+      "name": "AssetId"
+    },
+    {
+      "allowed": true,
+      "id": 8,
+      "name": "DomainId"
+    },
+    {
+      "allowed": true,
+      "id": 9,
+      "name": "NoritoBytes"
+    },
+    {
+      "allowed": true,
+      "id": 10,
+      "name": "DataSpaceId"
+    },
+    {
+      "allowed": true,
+      "id": 11,
+      "name": "AxtDescriptor"
+    },
+    {
+      "allowed": true,
+      "id": 13,
+      "name": "ProofBlob"
+    },
+    {
+      "allowed": true,
+      "id": 14,
+      "name": "SoracloudRequest"
+    },
+    {
+      "allowed": true,
+      "id": 15,
+      "name": "SoracloudResponse"
+    },
+    {
+      "allowed": true,
+      "id": 16,
+      "name": "Quantity"
+    },
+    {
+      "allowed": true,
+      "id": 17,
+      "name": "Int"
+    },
+    {
+      "allowed": true,
+      "id": 18,
+      "name": "Decimal"
+    },
+    {
+      "allowed": true,
+      "id": 19,
+      "name": "AxtAnchoredSpendV1"
+    }
+  ],
+  "runtime_baseline_catalog": {
+    "definitions": 771,
+    "file": "descriptors/runtime_baseline_catalog.json",
+    "selection": "56c2328657d63a48e18c7d1bac5ae8f2406e6e71249a630ece7b504d0f9cd491"
+  },
+  "syscalls": [
+    {
+      "generic_program_allowed": true,
+      "hex": "0x0",
+      "name": "DEBUG_PRINT",
+      "number": 0
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1",
+      "name": "EXIT",
+      "number": 1
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x2",
+      "name": "ABORT",
+      "number": 2
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x3",
+      "name": "DEBUG_LOG",
+      "number": 3
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x4",
+      "name": "CONTRACT_ABORT",
+      "number": 4
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10",
+      "name": "REGISTER_DOMAIN",
+      "number": 16
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x11",
+      "name": "UNREGISTER_DOMAIN",
+      "number": 17
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x12",
+      "name": "TRANSFER_DOMAIN",
+      "number": 18
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x13",
+      "name": "REGISTER_ACCOUNT",
+      "number": 19
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x14",
+      "name": "UNREGISTER_ACCOUNT",
+      "number": 20
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x15",
+      "name": "REGISTER_PEER",
+      "number": 21
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x16",
+      "name": "UNREGISTER_PEER",
+      "number": 22
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x17",
+      "name": "ADD_SIGNATORY",
+      "number": 23
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x18",
+      "name": "REMOVE_SIGNATORY",
+      "number": 24
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x19",
+      "name": "SET_ACCOUNT_QUORUM",
+      "number": 25
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1A",
+      "name": "SET_ACCOUNT_DETAIL",
+      "number": 26
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x20",
+      "name": "REGISTER_ASSET",
+      "number": 32
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x21",
+      "name": "UNREGISTER_ASSET",
+      "number": 33
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x22",
+      "name": "MINT_ASSET",
+      "number": 34
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x23",
+      "name": "BURN_ASSET",
+      "number": 35
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x24",
+      "name": "TRANSFER_V1",
+      "number": 36
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x25",
+      "name": "NFT_MINT_ASSET",
+      "number": 37
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x26",
+      "name": "NFT_TRANSFER_ASSET",
+      "number": 38
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x27",
+      "name": "NFT_SET_METADATA",
+      "number": 39
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x28",
+      "name": "NFT_BURN_ASSET",
+      "number": 40
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x29",
+      "name": "TRANSFER_V1_BATCH_BEGIN",
+      "number": 41
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x2A",
+      "name": "TRANSFER_V1_BATCH_END",
+      "number": 42
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x2B",
+      "name": "TRANSFER_V1_BATCH_APPLY",
+      "number": 43
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x2C",
+      "name": "TRANSFER_ASSET_SCOPED",
+      "number": 44
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x30",
+      "name": "CREATE_ROLE",
+      "number": 48
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x31",
+      "name": "DELETE_ROLE",
+      "number": 49
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x32",
+      "name": "GRANT_ROLE",
+      "number": 50
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x33",
+      "name": "REVOKE_ROLE",
+      "number": 51
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x34",
+      "name": "GRANT_PERMISSION",
+      "number": 52
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x35",
+      "name": "REVOKE_PERMISSION",
+      "number": 53
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x36",
+      "name": "GRANT_CONTRACT_PERMISSION",
+      "number": 54
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x37",
+      "name": "REVOKE_CONTRACT_PERMISSION",
+      "number": 55
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x40",
+      "name": "CREATE_TRIGGER",
+      "number": 64
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x41",
+      "name": "REMOVE_TRIGGER",
+      "number": 65
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x42",
+      "name": "SET_TRIGGER_ENABLED",
+      "number": 66
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x43",
+      "name": "DEACTIVATE_CONTRACT_INSTANCE",
+      "number": 67
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x44",
+      "name": "REMOVE_SMART_CONTRACT_BYTES",
+      "number": 68
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x45",
+      "name": "REGISTER_SMART_CONTRACT_CODE",
+      "number": 69
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x46",
+      "name": "REGISTER_SMART_CONTRACT_BYTES",
+      "number": 70
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x47",
+      "name": "ACTIVATE_CONTRACT_INSTANCE",
+      "number": 71
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x50",
+      "name": "STATE_GET",
+      "number": 80
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x51",
+      "name": "STATE_SET",
+      "number": 81
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x52",
+      "name": "STATE_DEL",
+      "number": 82
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x56",
+      "name": "BUILD_PATH_KEY_NORITO",
+      "number": 86
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x57",
+      "name": "JSON_ENCODE",
+      "number": 87
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x58",
+      "name": "JSON_DECODE",
+      "number": 88
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x59",
+      "name": "SCHEMA_ENCODE",
+      "number": 89
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5A",
+      "name": "SCHEMA_DECODE",
+      "number": 90
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5B",
+      "name": "SCHEMA_INFO",
+      "number": 91
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5C",
+      "name": "NAME_DECODE",
+      "number": 92
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5D",
+      "name": "POINTER_TO_NORITO",
+      "number": 93
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5E",
+      "name": "POINTER_FROM_NORITO",
+      "number": 94
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x5F",
+      "name": "TLV_EQ",
+      "number": 95
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x60",
+      "name": "ZK_VOTE_VERIFY_BALLOT",
+      "number": 96
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x61",
+      "name": "ZK_VOTE_VERIFY_TALLY",
+      "number": 97
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x62",
+      "name": "ZK_ROOTS_GET",
+      "number": 98
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x63",
+      "name": "ZK_VOTE_GET_TALLY",
+      "number": 99
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x64",
+      "name": "ZK_VERIFY_BATCH",
+      "number": 100
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x66",
+      "name": "VRF_VERIFY",
+      "number": 102
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x67",
+      "name": "VRF_VERIFY_BATCH",
+      "number": 103
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x77",
+      "name": "TLV_LEN",
+      "number": 119
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x79",
+      "name": "JSON_GET_JSON",
+      "number": 121
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x7A",
+      "name": "JSON_GET_NAME",
+      "number": 122
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x7B",
+      "name": "JSON_GET_ACCOUNT_ID",
+      "number": 123
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x7C",
+      "name": "JSON_GET_NFT_ID",
+      "number": 124
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x7D",
+      "name": "JSON_GET_BLOB_HEX",
+      "number": 125
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x7E",
+      "name": "VRF_EPOCH_SEED",
+      "number": 126
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x80",
+      "name": "JSON_GET_ASSET_DEFINITION_ID",
+      "number": 128
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x81",
+      "name": "JSON_OBJECT",
+      "number": 129
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x82",
+      "name": "JSON_SET_I64",
+      "number": 130
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x83",
+      "name": "JSON_SET_ACCOUNT_ID",
+      "number": 131
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x90",
+      "name": "SM3_HASH",
+      "number": 144
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x91",
+      "name": "SM2_VERIFY",
+      "number": 145
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x92",
+      "name": "SM4_GCM_SEAL",
+      "number": 146
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x93",
+      "name": "SM4_GCM_OPEN",
+      "number": 147
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x94",
+      "name": "SM4_CCM_SEAL",
+      "number": 148
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x95",
+      "name": "SM4_CCM_OPEN",
+      "number": 149
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x96",
+      "name": "SHA256_HASH",
+      "number": 150
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x97",
+      "name": "SHA3_HASH",
+      "number": 151
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x98",
+      "name": "BLAKE2B256_HASH",
+      "number": 152
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x99",
+      "name": "KECCAK256_HASH",
+      "number": 153
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x9A",
+      "name": "IROHA_HASH",
+      "number": 154
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0xA0",
+      "name": "SMARTCONTRACT_EXECUTE_INSTRUCTION",
+      "number": 160
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA1",
+      "name": "SMARTCONTRACT_EXECUTE_QUERY",
+      "number": 161
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA2",
+      "name": "CREATE_NFTS_FOR_ALL_USERS",
+      "number": 162
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA3",
+      "name": "SET_SMARTCONTRACT_EXECUTION_DEPTH",
+      "number": 163
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA4",
+      "name": "GET_AUTHORITY",
+      "number": 164
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA5",
+      "name": "SUBSCRIPTION_BILL",
+      "number": 165
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA6",
+      "name": "SUBSCRIPTION_RECORD_USAGE",
+      "number": 166
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA7",
+      "name": "RESOLVE_ACCOUNT_ALIAS",
+      "number": 167
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xA8",
+      "name": "CURRENT_TIME_MS",
+      "number": 168
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0xA9",
+      "name": "CALL_CONTRACT",
+      "number": 169
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0xAA",
+      "name": "EMIT_CONTRACT_EVENT",
+      "number": 170
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB0",
+      "name": "AXT_BEGIN",
+      "number": 176
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB1",
+      "name": "AXT_TOUCH",
+      "number": 177
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB2",
+      "name": "AXT_COMMIT",
+      "number": 178
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB3",
+      "name": "VERIFY_DS_PROOF",
+      "number": 179
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB5",
+      "name": "AXT_STAGE_ANCHORED_SPEND",
+      "number": 181
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB8",
+      "name": "ESCROW_OPEN_OFFER",
+      "number": 184
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xB9",
+      "name": "ESCROW_ACCEPT",
+      "number": 185
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xBA",
+      "name": "ESCROW_MARK_PAYMENT_SENT",
+      "number": 186
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xBB",
+      "name": "ESCROW_RELEASE",
+      "number": 187
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xBC",
+      "name": "ESCROW_CANCEL",
+      "number": 188
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xBD",
+      "name": "ESCROW_OPEN_DISPUTE",
+      "number": 189
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xBE",
+      "name": "ESCROW_RESOLVE_DISPUTE",
+      "number": 190
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC0",
+      "name": "SORACLOUD_READ_COMMITTED_STATE",
+      "number": 192
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC1",
+      "name": "SORACLOUD_EMIT_STATE_MUTATION",
+      "number": 193
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC2",
+      "name": "SORACLOUD_EMIT_MAILBOX_MESSAGE",
+      "number": 194
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC3",
+      "name": "SORACLOUD_APPEND_JOURNAL",
+      "number": 195
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC4",
+      "name": "SORACLOUD_PUBLISH_CHECKPOINT",
+      "number": 196
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC8",
+      "name": "SORACLOUD_READ_CONFIG",
+      "number": 200
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xC9",
+      "name": "SORACLOUD_READ_SECRET_ENVELOPE",
+      "number": 201
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xE0",
+      "name": "INPUT_PUBLISH_TLV",
+      "number": 224
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF0",
+      "name": "ALLOC",
+      "number": 240
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF1",
+      "name": "GET_PUBLIC_INPUT",
+      "number": 241
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF4",
+      "name": "EXECUTION_SUMMARY",
+      "number": 244
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF5",
+      "name": "GROW_HEAP",
+      "number": 245
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF6",
+      "name": "VERIFY_PROOF",
+      "number": 246
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF7",
+      "name": "GET_MERKLE_PATH",
+      "number": 247
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF8",
+      "name": "PRIVATE_NUMERIC_VALCOM",
+      "number": 248
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xF9",
+      "name": "GET_ACCOUNT_BALANCE",
+      "number": 249
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xFA",
+      "name": "GET_MERKLE_COMPACT",
+      "number": 250
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xFC",
+      "name": "VERIFY_SIGNATURE",
+      "number": 252
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xFD",
+      "name": "GET_PRIVATE_INPUT",
+      "number": 253
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xFE",
+      "name": "COMMIT_OUTPUT",
+      "number": 254
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0xFF",
+      "name": "GET_REGISTER_MERKLE_COMPACT",
+      "number": 255
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10000",
+      "name": "QUERY_EXECUTE_NORITO",
+      "number": 65536
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10001",
+      "name": "CORE_QUERY_GET",
+      "number": 65537
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10002",
+      "name": "CORE_QUERY_PAGE",
+      "number": 65538
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10006",
+      "name": "QUERY_GET_PARAMETER",
+      "number": 65542
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10007",
+      "name": "QUERY_GET_CONTRACT_MANIFEST",
+      "number": 65543
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10008",
+      "name": "QUERY_GET_CONTRACT_INSTANCE",
+      "number": 65544
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10020",
+      "name": "SYSVAR_CHAIN_ID",
+      "number": 65568
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10021",
+      "name": "SYSVAR_BLOCK_HEIGHT",
+      "number": 65569
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10022",
+      "name": "SYSVAR_BLOCK_TIME_MS",
+      "number": 65570
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10023",
+      "name": "SYSVAR_AUTHORITY",
+      "number": 65571
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10024",
+      "name": "SYSVAR_CONTRACT_ADDRESS",
+      "number": 65572
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10025",
+      "name": "SYSVAR_ENTRYPOINT",
+      "number": 65573
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10026",
+      "name": "DECODE_ARGUMENT_RECORD",
+      "number": 65574
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10027",
+      "name": "SYSVAR_CONTRACT_SUBJECT",
+      "number": 65575
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10028",
+      "name": "NORMALIZE_NORITO_BYTES",
+      "number": 65576
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10031",
+      "name": "STATE_HAS",
+      "number": 65585
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10032",
+      "name": "STATE_LEN",
+      "number": 65586
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10033",
+      "name": "STATE_COUNT",
+      "number": 65587
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10034",
+      "name": "STATE_MAP_KEY_AT",
+      "number": 65588
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10035",
+      "name": "STATE_VALUE_ENCODE",
+      "number": 65589
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10036",
+      "name": "STATE_VALUE_DECODE",
+      "number": 65590
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10037",
+      "name": "STATE_PATH_FROM_NAME",
+      "number": 65591
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10038",
+      "name": "STATE_SCAN",
+      "number": 65592
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1004E",
+      "name": "JSON_BUILD",
+      "number": 65614
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10050",
+      "name": "VALUE_ENCODE",
+      "number": 65616
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10051",
+      "name": "BLOB_CONCAT",
+      "number": 65617
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10052",
+      "name": "UTF8_VALIDATE",
+      "number": 65618
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10053",
+      "name": "VALUE_TO_STRING",
+      "number": 65619
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10100",
+      "name": "INT_FROM_I64",
+      "number": 65792
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10101",
+      "name": "INT_FROM_U64",
+      "number": 65793
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10102",
+      "name": "INT_TO_I64",
+      "number": 65794
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10103",
+      "name": "INT_TO_U64",
+      "number": 65795
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10104",
+      "name": "INT_NEG",
+      "number": 65796
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10105",
+      "name": "INT_ADD",
+      "number": 65797
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10106",
+      "name": "INT_SUB",
+      "number": 65798
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10107",
+      "name": "INT_MUL",
+      "number": 65799
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10108",
+      "name": "INT_DIV",
+      "number": 65800
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10109",
+      "name": "INT_REM",
+      "number": 65801
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010A",
+      "name": "INT_EQ",
+      "number": 65802
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010B",
+      "name": "INT_NE",
+      "number": 65803
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010C",
+      "name": "INT_LT",
+      "number": 65804
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010D",
+      "name": "INT_LE",
+      "number": 65805
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010E",
+      "name": "INT_GT",
+      "number": 65806
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1010F",
+      "name": "INT_GE",
+      "number": 65807
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10110",
+      "name": "INT_WRAP_NEG",
+      "number": 65808
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10111",
+      "name": "INT_WRAP_ADD",
+      "number": 65809
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10112",
+      "name": "INT_WRAP_SUB",
+      "number": 65810
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10113",
+      "name": "INT_WRAP_MUL",
+      "number": 65811
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10114",
+      "name": "INT_ISQRT",
+      "number": 65812
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10115",
+      "name": "INT_ABS",
+      "number": 65813
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10116",
+      "name": "INT_MIN",
+      "number": 65814
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10117",
+      "name": "INT_MAX",
+      "number": 65815
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10118",
+      "name": "INT_DIV_CEIL",
+      "number": 65816
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10119",
+      "name": "INT_GCD",
+      "number": 65817
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1011A",
+      "name": "INT_MEAN",
+      "number": 65818
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10120",
+      "name": "DECIMAL_FROM_INT",
+      "number": 65824
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10121",
+      "name": "DECIMAL_NEG",
+      "number": 65825
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10122",
+      "name": "DECIMAL_ADD",
+      "number": 65826
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10123",
+      "name": "DECIMAL_SUB",
+      "number": 65827
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10124",
+      "name": "DECIMAL_MUL",
+      "number": 65828
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10125",
+      "name": "DECIMAL_DIV_EXACT",
+      "number": 65829
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10126",
+      "name": "DECIMAL_DIV_ROUND",
+      "number": 65830
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10127",
+      "name": "DECIMAL_EQ",
+      "number": 65831
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10128",
+      "name": "DECIMAL_NE",
+      "number": 65832
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10129",
+      "name": "DECIMAL_LT",
+      "number": 65833
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012A",
+      "name": "DECIMAL_LE",
+      "number": 65834
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012B",
+      "name": "DECIMAL_GT",
+      "number": 65835
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012C",
+      "name": "DECIMAL_GE",
+      "number": 65836
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012D",
+      "name": "DECIMAL_TO_INT_EXACT",
+      "number": 65837
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012E",
+      "name": "DECIMAL_TO_INT_TRUNC",
+      "number": 65838
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1012F",
+      "name": "DECIMAL_TO_INT_ROUND",
+      "number": 65839
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10130",
+      "name": "DECIMAL_MUL_DIV_ROUND",
+      "number": 65840
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10140",
+      "name": "QUANTITY_FROM_INT",
+      "number": 65856
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10141",
+      "name": "QUANTITY_FROM_DECIMAL",
+      "number": 65857
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10142",
+      "name": "QUANTITY_TO_DECIMAL",
+      "number": 65858
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10143",
+      "name": "QUANTITY_ADD",
+      "number": 65859
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10144",
+      "name": "QUANTITY_SUB",
+      "number": 65860
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10145",
+      "name": "QUANTITY_MUL_DECIMAL",
+      "number": 65861
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10146",
+      "name": "QUANTITY_DIV_DECIMAL_EXACT",
+      "number": 65862
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10147",
+      "name": "QUANTITY_DIV_DECIMAL_ROUND",
+      "number": 65863
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10148",
+      "name": "QUANTITY_RATIO_EXACT",
+      "number": 65864
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10149",
+      "name": "QUANTITY_RATIO_ROUND",
+      "number": 65865
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014A",
+      "name": "QUANTITY_EQ",
+      "number": 65866
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014B",
+      "name": "QUANTITY_NE",
+      "number": 65867
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014C",
+      "name": "QUANTITY_LT",
+      "number": 65868
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014D",
+      "name": "QUANTITY_LE",
+      "number": 65869
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014E",
+      "name": "QUANTITY_GT",
+      "number": 65870
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x1014F",
+      "name": "QUANTITY_GE",
+      "number": 65871
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10150",
+      "name": "QUANTITY_MUL_DIV_ROUND",
+      "number": 65872
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10160",
+      "name": "JSON_GET_INT",
+      "number": 65888
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10161",
+      "name": "JSON_GET_DECIMAL",
+      "number": 65889
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10162",
+      "name": "JSON_GET_QUANTITY",
+      "number": 65890
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10166",
+      "name": "JSON_GET_STRING",
+      "number": 65894
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10167",
+      "name": "JSON_GET_BOOL",
+      "number": 65895
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10200",
+      "name": "SET_ASSET_TRANSFER_AVAILABILITY",
+      "number": 66048
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10201",
+      "name": "SET_ASSET_TRANSFER_DAILY_LIMIT",
+      "number": 66049
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10202",
+      "name": "SET_ASSET_HOLDING_LIMIT",
+      "number": 66050
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10210",
+      "name": "ACCOUNT_RECOVERY_PROPOSE",
+      "number": 66064
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10211",
+      "name": "ACCOUNT_RECOVERY_APPROVE",
+      "number": 66065
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10212",
+      "name": "ACCOUNT_RECOVERY_CANCEL",
+      "number": 66066
+    },
+    {
+      "generic_program_allowed": true,
+      "hex": "0x10213",
+      "name": "ACCOUNT_RECOVERY_FINALIZE",
+      "number": 66067
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10220",
+      "name": "ASSET_LOCK_OPEN",
+      "number": 66080
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10221",
+      "name": "ASSET_LOCK_DRAWDOWN",
+      "number": 66081
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10222",
+      "name": "ASSET_LOCK_CANCEL",
+      "number": 66082
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10223",
+      "name": "ASSET_LOCK_EXPIRE",
+      "number": 66083
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10224",
+      "name": "ASSET_UID_HOLDING_QUOTE",
+      "number": 66084
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10225",
+      "name": "TRANSFER_TO_LINKED_FI",
+      "number": 66085
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10226",
+      "name": "ASSET_LOCK_DRAWDOWN_WATERFALL",
+      "number": 66086
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10227",
+      "name": "ASSET_LOCK_CANCEL_WATERFALL",
+      "number": 66087
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10228",
+      "name": "ASSET_LOCK_EXPIRE_WATERFALL",
+      "number": 66088
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x10229",
+      "name": "ASSET_FI_LINK_REVISION",
+      "number": 66089
+    },
+    {
+      "generic_program_allowed": false,
+      "hex": "0x1022A",
+      "name": "ASSET_SAME_UID",
+      "number": 66090
+    }
+  ],
+  "wire_tags": {
+    "IvmAdmissionError": [
+      {
+        "bare_hex": "00000000",
+        "debug": "MissingMaxCycles",
+        "json": {
+          "content": null,
+          "kind": "MissingMaxCycles"
+        },
+        "variant": "MissingMaxCycles",
+        "wire_tag": 0
+      },
+      {
+        "bare_hex": "010000000401020101",
+        "debug": "UnsupportedVersion(UnsupportedVersionInfo { major: 2, minor: 1 })",
+        "json": {
+          "content": {
+            "major": 2,
+            "minor": 1
+          },
+          "kind": "UnsupportedVersion"
+        },
+        "variant": "UnsupportedVersion",
+        "wire_tag": 1
+      },
+      {
+        "bare_hex": "020000000180",
+        "debug": "UnsupportedFeatureBits(128)",
+        "json": {
+          "content": 128,
+          "kind": "UnsupportedFeatureBits"
+        },
+        "variant": "UnsupportedFeatureBits",
+        "wire_tag": 2
+      },
+      {
+        "bare_hex": "030000000103",
+        "debug": "UnsupportedAbiVersion(3)",
+        "json": {
+          "content": 3,
+          "kind": "UnsupportedAbiVersion"
+        },
+        "variant": "UnsupportedAbiVersion",
+        "wire_tag": 3
+      },
+      {
+        "bare_hex": "040000000101",
+        "debug": "AbiVersionNotActive(1)",
+        "json": {
+          "content": 1,
+          "kind": "AbiVersionNotActive"
+        },
+        "variant": "AbiVersionNotActive",
+        "wire_tag": 4
+      },
+      {
+        "bare_hex": "050000000401410140",
+        "debug": "VectorLengthTooLarge(VectorLengthTooLargeInfo { vector_length: 65, max_allowed: 64 })",
+        "json": {
+          "content": {
+            "max_allowed": 64,
+            "vector_length": 65
+          },
+          "kind": "VectorLengthTooLarge"
+        },
+        "variant": "VectorLengthTooLarge",
+        "wire_tag": 5
+      },
+      {
+        "bare_hex": "06000000120841420f00000000000840420f0000000000",
+        "debug": "MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo { max_cycles: 1000001, upper_bound: 1000000 })",
+        "json": {
+          "content": {
+            "max_cycles": 1000001,
+            "upper_bound": 1000000
+          },
+          "kind": "MaxCyclesExceedsUpperBound"
+        },
+        "variant": "MaxCyclesExceedsUpperBound",
+        "wire_tag": 6
+      },
+      {
+        "bare_hex": "070000001208c13b47030000000008c03b470300000000",
+        "debug": "MaxCyclesExceedsFuel(MaxCyclesExceedsFuelInfo { max_cycles: 55000001, fuel_limit: 55000000 })",
+        "json": {
+          "content": {
+            "fuel_limit": 55000000,
+            "max_cycles": 55000001
+          },
+          "kind": "MaxCyclesExceedsFuel"
+        },
+        "variant": "MaxCyclesExceedsFuel",
+        "wire_tag": 7
+      },
+      {
+        "bare_hex": "0800000012080200000000000000080100000000000000",
+        "debug": "DecodedInstructionCountExceeded(DecodedInstructionLimitInfo { decoded_instructions: 2, limit: 1 })",
+        "json": {
+          "content": {
+            "decoded_instructions": 2,
+            "limit": 1
+          },
+          "kind": "DecodedInstructionCountExceeded"
+        },
+        "variant": "DecodedInstructionCountExceeded",
+        "wire_tag": 8
+      },
+      {
+        "bare_hex": "0900000012080800000000000000080400000000000000",
+        "debug": "DecodedCodeSizeExceeded(DecodedCodeSizeLimitInfo { decoded_bytes: 8, limit: 4 })",
+        "json": {
+          "content": {
+            "decoded_bytes": 8,
+            "limit": 4
+          },
+          "kind": "DecodedCodeSizeExceeded"
+        },
+        "variant": "DecodedCodeSizeExceeded",
+        "wire_tag": 9
+      },
+      {
+        "bare_hex": "0a00000008076578616d706c65",
+        "debug": "BytecodeDecodingFailed(\"example\")",
+        "json": {
+          "content": "example",
+          "kind": "BytecodeDecodingFailed"
+        },
+        "variant": "BytecodeDecodingFailed",
+        "wire_tag": 10
+      },
+      {
+        "bare_hex": "0b00000042201111111111111111111111111111111111111111111111111111111111111111202222222222222222222222222222222222222222222222222222222222222223",
+        "debug": "ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo { expected: 1111111111111111111111111111111111111111111111111111111111111111, actual: 2222222222222222222222222222222222222222222222222222222222222223 })",
+        "json": {
+          "content": {
+            "actual": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+            "expected": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+          },
+          "kind": "ManifestCodeHashMismatch"
+        },
+        "variant": "ManifestCodeHashMismatch",
+        "wire_tag": 11
+      },
+      {
+        "bare_hex": "0c00000042201111111111111111111111111111111111111111111111111111111111111111202222222222222222222222222222222222222222222222222222222222222223",
+        "debug": "ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo { expected: 1111111111111111111111111111111111111111111111111111111111111111, actual: 2222222222222222222222222222222222222222222222222222222222222223 })",
+        "json": {
+          "content": {
+            "actual": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+            "expected": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+          },
+          "kind": "ManifestAbiHashMismatch"
+        },
+        "variant": "ManifestAbiHashMismatch",
+        "wire_tag": 12
+      },
+      {
+        "bare_hex": "0d000000",
+        "debug": "ManifestCodeHashMissing",
+        "json": {
+          "content": null,
+          "kind": "ManifestCodeHashMissing"
+        },
+        "variant": "ManifestCodeHashMissing",
+        "wire_tag": 13
+      },
+      {
+        "bare_hex": "0e000000",
+        "debug": "ManifestAbiHashMissing",
+        "json": {
+          "content": null,
+          "kind": "ManifestAbiHashMissing"
+        },
+        "variant": "ManifestAbiHashMissing",
+        "wire_tag": 14
+      },
+      {
+        "bare_hex": "0f000000",
+        "debug": "ManifestMalformed",
+        "json": {
+          "content": null,
+          "kind": "ManifestMalformed"
+        },
+        "variant": "ManifestMalformed",
+        "wire_tag": 15
+      },
+      {
+        "bare_hex": "1000000042201111111111111111111111111111111111111111111111111111111111111111202222222222222222222222222222222222222222222222222222222222222223",
+        "debug": "ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo { expected: 1111111111111111111111111111111111111111111111111111111111111111, actual: 2222222222222222222222222222222222222222222222222222222222222223 })",
+        "json": {
+          "content": {
+            "actual": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+            "expected": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+          },
+          "kind": "ArtifactAbiHashMismatch"
+        },
+        "variant": "ArtifactAbiHashMismatch",
+        "wire_tag": 16
+      },
+      {
+        "bare_hex": "1100000004a0000000",
+        "debug": "GenericSyscallNotAllowed(160)",
+        "json": {
+          "content": 160,
+          "kind": "GenericSyscallNotAllowed"
+        },
+        "variant": "GenericSyscallNotAllowed",
+        "wire_tag": 17
+      }
+    ],
+    "IvmFaultKindV1": [
+      {
+        "bare_hex": "00000000",
+        "debug": "OutOfGas",
+        "json": {
+          "kind": "OutOfGas",
+          "value": null
+        },
+        "variant": "OutOfGas",
+        "wire_tag": 0
+      },
+      {
+        "bare_hex": "01000000",
+        "debug": "MemoryLimitExceeded",
+        "json": {
+          "kind": "MemoryLimitExceeded",
+          "value": null
+        },
+        "variant": "MemoryLimitExceeded",
+        "wire_tag": 1
+      },
+      {
+        "bare_hex": "02000000",
+        "debug": "MemoryAccessViolation",
+        "json": {
+          "kind": "MemoryAccessViolation",
+          "value": null
+        },
+        "variant": "MemoryAccessViolation",
+        "wire_tag": 2
+      },
+      {
+        "bare_hex": "03000000",
+        "debug": "MisalignedAccess",
+        "json": {
+          "kind": "MisalignedAccess",
+          "value": null
+        },
+        "variant": "MisalignedAccess",
+        "wire_tag": 3
+      },
+      {
+        "bare_hex": "04000000",
+        "debug": "MemoryOutOfBounds",
+        "json": {
+          "kind": "MemoryOutOfBounds",
+          "value": null
+        },
+        "variant": "MemoryOutOfBounds",
+        "wire_tag": 4
+      },
+      {
+        "bare_hex": "05000000",
+        "debug": "DecodeError",
+        "json": {
+          "kind": "DecodeError",
+          "value": null
+        },
+        "variant": "DecodeError",
+        "wire_tag": 5
+      },
+      {
+        "bare_hex": "06000000",
+        "debug": "InvalidOpcode",
+        "json": {
+          "kind": "InvalidOpcode",
+          "value": null
+        },
+        "variant": "InvalidOpcode",
+        "wire_tag": 6
+      },
+      {
+        "bare_hex": "07000000",
+        "debug": "UnknownSyscall",
+        "json": {
+          "kind": "UnknownSyscall",
+          "value": null
+        },
+        "variant": "UnknownSyscall",
+        "wire_tag": 7
+      },
+      {
+        "bare_hex": "08000000",
+        "debug": "UnsupportedSyscall",
+        "json": {
+          "kind": "UnsupportedSyscall",
+          "value": null
+        },
+        "variant": "UnsupportedSyscall",
+        "wire_tag": 8
+      },
+      {
+        "bare_hex": "09000000",
+        "debug": "GasCostOverflow",
+        "json": {
+          "kind": "GasCostOverflow",
+          "value": null
+        },
+        "variant": "GasCostOverflow",
+        "wire_tag": 9
+      },
+      {
+        "bare_hex": "0a0000000401000000",
+        "debug": "Numeric(MantissaOverflow)",
+        "json": {
+          "kind": "Numeric",
+          "value": {
+            "kind": "MantissaOverflow",
+            "value": null
+          }
+        },
+        "variant": "Numeric",
+        "wire_tag": 10
+      },
+      {
+        "bare_hex": "0b0000000401000000",
+        "debug": "PointerAbi(InvalidAddress)",
+        "json": {
+          "kind": "PointerAbi",
+          "value": {
+            "kind": "InvalidAddress",
+            "value": null
+          }
+        },
+        "variant": "PointerAbi",
+        "wire_tag": 11
+      },
+      {
+        "bare_hex": "0c000000",
+        "debug": "AssertionFailed",
+        "json": {
+          "kind": "AssertionFailed",
+          "value": null
+        },
+        "variant": "AssertionFailed",
+        "wire_tag": 12
+      },
+      {
+        "bare_hex": "0d000000",
+        "debug": "ExceededMaxCycles",
+        "json": {
+          "kind": "ExceededMaxCycles",
+          "value": null
+        },
+        "variant": "ExceededMaxCycles",
+        "wire_tag": 13
+      },
+      {
+        "bare_hex": "0e000000",
+        "debug": "InvalidMetadata",
+        "json": {
+          "kind": "InvalidMetadata",
+          "value": null
+        },
+        "variant": "InvalidMetadata",
+        "wire_tag": 14
+      },
+      {
+        "bare_hex": "0f000000",
+        "debug": "InvalidVectorLength",
+        "json": {
+          "kind": "InvalidVectorLength",
+          "value": null
+        },
+        "variant": "InvalidVectorLength",
+        "wire_tag": 15
+      },
+      {
+        "bare_hex": "10000000",
+        "debug": "MissingHalt",
+        "json": {
+          "kind": "MissingHalt",
+          "value": null
+        },
+        "variant": "MissingHalt",
+        "wire_tag": 16
+      },
+      {
+        "bare_hex": "11000000",
+        "debug": "VectorExtensionDisabled",
+        "json": {
+          "kind": "VectorExtensionDisabled",
+          "value": null
+        },
+        "variant": "VectorExtensionDisabled",
+        "wire_tag": 17
+      },
+      {
+        "bare_hex": "12000000",
+        "debug": "ZkExtensionDisabled",
+        "json": {
+          "kind": "ZkExtensionDisabled",
+          "value": null
+        },
+        "variant": "ZkExtensionDisabled",
+        "wire_tag": 18
+      },
+      {
+        "bare_hex": "13000000",
+        "debug": "NullifierAlreadyUsed",
+        "json": {
+          "kind": "NullifierAlreadyUsed",
+          "value": null
+        },
+        "variant": "NullifierAlreadyUsed",
+        "wire_tag": 19
+      },
+      {
+        "bare_hex": "14000000",
+        "debug": "PermissionDenied",
+        "json": {
+          "kind": "PermissionDenied",
+          "value": null
+        },
+        "variant": "PermissionDenied",
+        "wire_tag": 20
+      },
+      {
+        "bare_hex": "15000000",
+        "debug": "PrivacyViolation",
+        "json": {
+          "kind": "PrivacyViolation",
+          "value": null
+        },
+        "variant": "PrivacyViolation",
+        "wire_tag": 21
+      },
+      {
+        "bare_hex": "16000000",
+        "debug": "RegisterOutOfBounds",
+        "json": {
+          "kind": "RegisterOutOfBounds",
+          "value": null
+        },
+        "variant": "RegisterOutOfBounds",
+        "wire_tag": 22
+      },
+      {
+        "bare_hex": "17000000",
+        "debug": "NoritoInvalid",
+        "json": {
+          "kind": "NoritoInvalid",
+          "value": null
+        },
+        "variant": "NoritoInvalid",
+        "wire_tag": 23
+      },
+      {
+        "bare_hex": "18000000",
+        "debug": "AbiTypeNotAllowed",
+        "json": {
+          "kind": "AbiTypeNotAllowed",
+          "value": null
+        },
+        "variant": "AbiTypeNotAllowed",
+        "wire_tag": 24
+      },
+      {
+        "bare_hex": "19000000",
+        "debug": "HostOutputItemsExceeded",
+        "json": {
+          "kind": "HostOutputItemsExceeded",
+          "value": null
+        },
+        "variant": "HostOutputItemsExceeded",
+        "wire_tag": 25
+      },
+      {
+        "bare_hex": "1a000000",
+        "debug": "HostOutputBytesExceeded",
+        "json": {
+          "kind": "HostOutputBytesExceeded",
+          "value": null
+        },
+        "variant": "HostOutputBytesExceeded",
+        "wire_tag": 26
+      },
+      {
+        "bare_hex": "1b000000",
+        "debug": "AmxBudgetExceeded",
+        "json": {
+          "kind": "AmxBudgetExceeded",
+          "value": null
+        },
+        "variant": "AmxBudgetExceeded",
+        "wire_tag": 27
+      },
+      {
+        "bare_hex": "1c000000",
+        "debug": "ReentrantCall",
+        "json": {
+          "kind": "ReentrantCall",
+          "value": null
+        },
+        "variant": "ReentrantCall",
+        "wire_tag": 28
+      },
+      {
+        "bare_hex": "1d000000",
+        "debug": "CallDepthExceeded",
+        "json": {
+          "kind": "CallDepthExceeded",
+          "value": null
+        },
+        "variant": "CallDepthExceeded",
+        "wire_tag": 29
+      }
+    ],
+    "NumericFaultV1": [
+      {
+        "bare_hex": "01000000",
+        "debug": "MantissaOverflow",
+        "json": {
+          "kind": "MantissaOverflow",
+          "value": null
+        },
+        "variant": "MantissaOverflow",
+        "wire_tag": 1
+      },
+      {
+        "bare_hex": "02000000",
+        "debug": "ScaleOverflow",
+        "json": {
+          "kind": "ScaleOverflow",
+          "value": null
+        },
+        "variant": "ScaleOverflow",
+        "wire_tag": 2
+      },
+      {
+        "bare_hex": "03000000",
+        "debug": "DivisionByZero",
+        "json": {
+          "kind": "DivisionByZero",
+          "value": null
+        },
+        "variant": "DivisionByZero",
+        "wire_tag": 3
+      },
+      {
+        "bare_hex": "04000000",
+        "debug": "RepeatingDecimal",
+        "json": {
+          "kind": "RepeatingDecimal",
+          "value": null
+        },
+        "variant": "RepeatingDecimal",
+        "wire_tag": 4
+      },
+      {
+        "bare_hex": "05000000",
+        "debug": "ExactDivisionScaleOverflow",
+        "json": {
+          "kind": "ExactDivisionScaleOverflow",
+          "value": null
+        },
+        "variant": "ExactDivisionScaleOverflow",
+        "wire_tag": 5
+      },
+      {
+        "bare_hex": "06000000",
+        "debug": "InvalidScale",
+        "json": {
+          "kind": "InvalidScale",
+          "value": null
+        },
+        "variant": "InvalidScale",
+        "wire_tag": 6
+      },
+      {
+        "bare_hex": "07000000",
+        "debug": "InexactConversion",
+        "json": {
+          "kind": "InexactConversion",
+          "value": null
+        },
+        "variant": "InexactConversion",
+        "wire_tag": 7
+      },
+      {
+        "bare_hex": "08000000",
+        "debug": "NegativeQuantity",
+        "json": {
+          "kind": "NegativeQuantity",
+          "value": null
+        },
+        "variant": "NegativeQuantity",
+        "wire_tag": 8
+      },
+      {
+        "bare_hex": "09000000",
+        "debug": "QuantityUnderflow",
+        "json": {
+          "kind": "QuantityUnderflow",
+          "value": null
+        },
+        "variant": "QuantityUnderflow",
+        "wire_tag": 9
+      },
+      {
+        "bare_hex": "0a000000",
+        "debug": "InvalidRoundingMode",
+        "json": {
+          "kind": "InvalidRoundingMode",
+          "value": null
+        },
+        "variant": "InvalidRoundingMode",
+        "wire_tag": 10
+      },
+      {
+        "bare_hex": "0b000000",
+        "debug": "InvalidFailureMode",
+        "json": {
+          "kind": "InvalidFailureMode",
+          "value": null
+        },
+        "variant": "InvalidFailureMode",
+        "wire_tag": 11
+      },
+      {
+        "bare_hex": "0c000000",
+        "debug": "ReservedRegisterNonZero",
+        "json": {
+          "kind": "ReservedRegisterNonZero",
+          "value": null
+        },
+        "variant": "ReservedRegisterNonZero",
+        "wire_tag": 12
+      },
+      {
+        "bare_hex": "0d000000",
+        "debug": "NegativeSquareRoot",
+        "json": {
+          "kind": "NegativeSquareRoot",
+          "value": null
+        },
+        "variant": "NegativeSquareRoot",
+        "wire_tag": 13
+      }
+    ],
+    "PointerAbiFaultV1": [
+      {
+        "bare_hex": "01000000",
+        "debug": "InvalidAddress",
+        "json": {
+          "kind": "InvalidAddress",
+          "value": null
+        },
+        "variant": "InvalidAddress",
+        "wire_tag": 1
+      },
+      {
+        "bare_hex": "02000000",
+        "debug": "UnknownType",
+        "json": {
+          "kind": "UnknownType",
+          "value": null
+        },
+        "variant": "UnknownType",
+        "wire_tag": 2
+      },
+      {
+        "bare_hex": "03000000",
+        "debug": "TypeNotAllowed",
+        "json": {
+          "kind": "TypeNotAllowed",
+          "value": null
+        },
+        "variant": "TypeNotAllowed",
+        "wire_tag": 3
+      },
+      {
+        "bare_hex": "04000000",
+        "debug": "WrongType",
+        "json": {
+          "kind": "WrongType",
+          "value": null
+        },
+        "variant": "WrongType",
+        "wire_tag": 4
+      },
+      {
+        "bare_hex": "05000000",
+        "debug": "InvalidEnvelopeVersion",
+        "json": {
+          "kind": "InvalidEnvelopeVersion",
+          "value": null
+        },
+        "variant": "InvalidEnvelopeVersion",
+        "wire_tag": 5
+      },
+      {
+        "bare_hex": "06000000",
+        "debug": "OversizedLength",
+        "json": {
+          "kind": "OversizedLength",
+          "value": null
+        },
+        "variant": "OversizedLength",
+        "wire_tag": 6
+      },
+      {
+        "bare_hex": "07000000",
+        "debug": "TruncatedEnvelope",
+        "json": {
+          "kind": "TruncatedEnvelope",
+          "value": null
+        },
+        "variant": "TruncatedEnvelope",
+        "wire_tag": 7
+      },
+      {
+        "bare_hex": "08000000",
+        "debug": "PayloadHashMismatch",
+        "json": {
+          "kind": "PayloadHashMismatch",
+          "value": null
+        },
+        "variant": "PayloadHashMismatch",
+        "wire_tag": 8
+      },
+      {
+        "bare_hex": "09000000",
+        "debug": "MalformedFrame",
+        "json": {
+          "kind": "MalformedFrame",
+          "value": null
+        },
+        "variant": "MalformedFrame",
+        "wire_tag": 9
+      },
+      {
+        "bare_hex": "0a000000",
+        "debug": "SchemaMismatch",
+        "json": {
+          "kind": "SchemaMismatch",
+          "value": null
+        },
+        "variant": "SchemaMismatch",
+        "wire_tag": 10
+      },
+      {
+        "bare_hex": "0b000000",
+        "debug": "NonCanonical",
+        "json": {
+          "kind": "NonCanonical",
+          "value": null
+        },
+        "variant": "NonCanonical",
+        "wire_tag": 11
+      }
+    ]
+  },
+  "zk_default_max_cycles": 131072
+}

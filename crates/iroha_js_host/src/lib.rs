@@ -117,7 +117,7 @@ use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
     fmt, fs,
-    num::{NonZeroU32, NonZeroU64},
+    num::NonZeroU32,
     path::PathBuf,
     ptr,
     str::FromStr,
@@ -125,6 +125,8 @@ use std::{
 };
 // These types only construct fixtures in the in-file test module.
 // Keeping them cfg-scoped avoids carrying test topology into production builds.
+#[cfg(test)]
+use std::num::NonZeroU64;
 // Production receives the evidence through decoded instructions instead;
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]

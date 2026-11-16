@@ -1,0 +1,8 @@
+// Baseline capture: a declared nominal error aborts the invocation.
+seiyaku BaselineAbort {
+  error enum Failure { Missing = 1101 }
+  view fn run() authorize(anyone) -> int {
+    let Option<int> absent = Option::none;
+    return absent.expect(Failure::Missing);
+  }
+}

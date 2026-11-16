@@ -35,7 +35,11 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         Json::new("run".to_owned()),
     );
     let event_args = Json::from(norito::json!({"val": "1.25"}));
-    validate_trigger_call_execution_context(&metadata, contract.artifact())
+    validate_trigger_call_execution_context_for_policy(
+        &metadata,
+        contract.artifact(),
+        ivm::SyscallPolicy::AbiV1,
+    )
         .expect("registration validates the typed callback without a fabricated payload");
     let context =
         parse_prepared_trigger_call_execution_context(&metadata, &contract, &event_args, u64::MAX)

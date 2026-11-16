@@ -30,11 +30,16 @@ use iroha_wallet::operations::NativePreparationPhase;
 use std::{collections::BTreeMap, num::NonZeroU64, path::PathBuf};
 use zeroize::Zeroizing;
 
+/// One parent startup's budget in this fixture; each startup takes its own.
+const STARTUP_BUDGET: Duration = Duration::from_secs(300);
+
 #[test]
 fn expired_initial_body_uses_fresh_parent_authorization_and_preserves_original_native_custody() {
     let _guard = crate::managed::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let mut original = prepare_expired_initial(&temporary);
+    // The replacement is a new parent startup: it takes its own budget of the same length.
+    original.options.deadline = Instant::now() + STARTUP_BUDGET;
     let authorization = original
         .parent
         .authorize_test_startup(&original.options)
@@ -139,12 +144,29 @@ fn prepare_expired_initial(temporary: &tempfile::TempDir) -> ExpiredInitial {
         crate::genesis::profile::TAIRA_XOR_ASSET_DEFINITION_ID,
     )
     .unwrap();
+    // The executed native chain and its prerequisite are fixture setup, before the parent
+    // startup takes its budget. The child owner is released again so the parent's startup
+    // admission finds the generation free, exactly as before.
+    let owner = ManagedStreamTokenCustody::open(&prepared, provider).unwrap();
+    let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+    let log = quote_instructions(
+        &native,
+        &owner.authority.config,
+        [InstructionBox::from(Log::new(
+            iroha_data_model::Level::INFO,
+            "initial body prerequisites".into(),
+        ))],
+    );
+    drop(owner);
+    assert_eq!(native.chain.commit(vec![log]), vec![true]);
+    assert_eq!(native.chain.height(), 2);
+    drop(ports);
     // The original parent authorizes all prerequisites with one immutable fee intent.
     // SetSorafsReservePolicy, custody Configure and custody Enroll each meter 128 gas.
     let options = BoundedTransactionOptions {
         fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(128)),
         max_total_fees: BTreeMap::from([(asset, Quantity::from(1_000u64))]),
-        deadline: Instant::now() + Duration::from_secs(300),
+        deadline: Instant::now() + STARTUP_BUDGET,
     };
     let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
     let initial_authorization = parent.authorize_test_startup(&options).unwrap().unwrap();
@@ -156,18 +178,6 @@ fn prepare_expired_initial(temporary: &tempfile::TempDir) -> ExpiredInitial {
         .clone();
     let policy = policies.provider(provider).unwrap().custody.clone();
     let mut owner = ManagedStreamTokenCustody::open(&prepared, provider).unwrap();
-    let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
-    let log = quote_instructions(
-        &native,
-        &owner.authority.config,
-        [InstructionBox::from(Log::new(
-            iroha_data_model::Level::INFO,
-            "initial body prerequisites".into(),
-        ))],
-    );
-    assert_eq!(native.chain.commit(vec![log]), vec![true]);
-    assert_eq!(native.chain.height(), 2);
-    drop(ports);
     // Preserve the real parent dependency order, including its network reserve prerequisite.
     let mut reserve = ManagedInitialReservePolicy::open(&prepared).unwrap();
     let reserve_result = reserve.bootstrap_native_generated(

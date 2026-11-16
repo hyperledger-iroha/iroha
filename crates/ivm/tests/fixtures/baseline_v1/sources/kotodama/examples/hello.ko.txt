@@ -1,0 +1,22 @@
+// Minimal Kotodama example: a greeting counter that any account can call.
+seiyaku Hello {
+    state int greetings;
+
+    // Runs once after deployment, before any other entrypoint can be called.
+    hajimari() {
+        greetings = 0;
+    }
+
+    // Callers select entrypoints by name. `authorize(anyone)` lets every account call this one;
+    // a declared permission would have to be granted first.
+    kotoage fn greet() authorize(anyone) -> int {
+        debug::info("Hello from Kotodama");
+        greetings = greetings + 1;
+        return greetings;
+    }
+
+    // Views read state without a transaction.
+    view fn count() authorize(anyone) -> int {
+        return greetings;
+    }
+}

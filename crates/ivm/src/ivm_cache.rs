@@ -597,8 +597,12 @@ pub fn cache_limits() -> CacheLimits {
     current_cache_limits_snapshot()
 }
 /// RAII guard that restores previous cache limits when dropped.
+///
+/// While it lives, allocations made on the holding thread are charged to a private budget with
+/// the installed byte limit, so what other threads retain cannot refuse the holder retention.
 pub struct CacheLimitsGuard {
     previous: CacheLimits,
+    budget: crate::cache_memory::GuardBudgetScope,
     _claim: CacheLimitsGuardClaim,
     _configuration: ReentrantMutexGuard<'static, ()>,
 }
@@ -632,9 +636,16 @@ impl CacheLimitsGuard {
         configure_limits_locked(limits);
         Self {
             previous,
+            budget: crate::cache_memory::GuardBudgetScope::enter(),
             _claim: claim,
             _configuration: configuration,
         }
+    }
+}
+impl CacheLimitsGuard {
+    /// A handle that charges a helper thread of the holder to this guard's private budget.
+    pub fn budget_share(&self) -> crate::cache_memory::GuardBudgetShare {
+        self.budget.share()
     }
 }
 impl Drop for CacheLimitsGuard {
@@ -651,6 +662,30 @@ mod configuration_tests;
 mod tests {
     use super::*;
 
+    /// Hold the default retention limits for a test that asserts retention.
+    ///
+    /// Every lookup folds the process byte limit into its cache and retains against the budget
+    /// its thread is charged to, so a parallel test that lowers the limits would otherwise refuse
+    /// the retention this test observes. The published capacity is kept, so taking the guard
+    /// does not rebuild the global decode shards under other tests.
+    fn default_retention() -> CacheLimitsGuard {
+        let _configuration = lock_cache_configuration();
+        CacheLimitsGuard::new(CacheLimits {
+            max_bytes: DEFAULT_CACHE_MAX_BYTES,
+            max_decoded_ops: DEFAULT_CACHE_MAX_DECODED_OPS,
+            ..cache_limits()
+        })
+    }
+
+    /// The published limits while no guard is held.
+    ///
+    /// Another test's guard may install its limits as soon as the caller releases its own, so
+    /// the restored profile is read under the configuration lock.
+    fn resting_cache_limits() -> CacheLimits {
+        let _configuration = lock_cache_configuration();
+        cache_limits()
+    }
+
     #[test]
     fn zero_bytes_decodes_without_retaining_or_reusing_allocations() {
         let mut cache = IvmCache::new_with_max_bytes(4, 0);
@@ -665,6 +700,7 @@ mod tests {
 
     #[test]
     fn evicted_stream_stays_readable_until_its_last_borrower_returns() {
+        let _retention = default_retention();
         let mut cache = IvmCache::new_with_max_bytes(1, DEFAULT_CACHE_MAX_BYTES);
         let first_code = crate::encoding::wide::encode_halt().to_le_bytes();
         let second_code =
@@ -734,6 +770,7 @@ mod tests {
 
     #[test]
     fn byte_limit_shrink_releases_index_storage_and_preserves_borrowed_stream() {
+        let _retention = default_retention();
         let cache = ShardedCache {
             shards: RwLock::new(ShardedCache::build_shards(4, 1_000_000, 1)),
             total_capacity: AtomicUsize::new(4),
@@ -864,7 +901,7 @@ mod tests {
         assert_eq!(cache_limits(), second_limits);
         release_tx.send(()).expect("release second guard");
         second.join().expect("second cache guard thread");
-        assert_eq!(cache_limits(), baseline);
+        assert_eq!(resting_cache_limits(), baseline);
     }
 
     #[test]
@@ -888,6 +925,6 @@ mod tests {
         assert_eq!(cache_limits(), outer_limits);
 
         drop(outer);
-        assert_eq!(cache_limits(), baseline);
+        assert_eq!(resting_cache_limits(), baseline);
     }
 }

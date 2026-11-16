@@ -1,7 +1,9 @@
 //! Test-only preparation through the custody owner using genuine selected native cuts.
 use super::*;
 use crate::managed::native_operation::attempts::metadata;
-use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
+use crate::managed::native_operation::test_support::native_fixture::{
+    NativeFixture, NativeReadHttp,
+};
 
 /// Supplies an actual State proof at the exact retained native checkpoint.
 pub(super) struct NativeEnrollmentReads<'a>(pub(super) &'a NativeFixture);
@@ -31,6 +33,8 @@ impl ManagedStreamTokenCustody {
         utc: u64,
         options: &BoundedTransactionOptions,
     ) -> BodyHistory {
+        let started = Instant::now();
+        let window_ms = utc.saturating_sub(now_ms().unwrap());
         let terms = Terms::new(utc, options).unwrap();
         let turn = SigningTurn::Explicit(&terms);
         // The public enroll/renew paths carry their selected authenticated current proof
@@ -47,16 +51,26 @@ impl ManagedStreamTokenCustody {
         assert!(history.has_pending());
         assert!(history.original().is_none());
         assert!(history.dispatch().is_err());
-
-        history
-            .finish_pending_with_reads(
-                self,
-                current,
-                &turn,
-                options.deadline,
-                &NativeEnrollmentReads(native),
-            )
-            .unwrap()
+        let initialized = Instant::now();
+        let finished = history.finish_pending_with_reads(
+            self,
+            current,
+            &turn,
+            options.deadline,
+            &NativeEnrollmentReads(native),
+        );
+        // Attribute every signing window between body initialization and finish. A body that
+        // expired before its signature finishes unsigned: `ok` without `signed`.
+        eprintln!(
+            "native body timing: body={purpose:?} window_ms={window_ms} initialize_ms={} finish_ms={} ok={} signed={}",
+            initialized.duration_since(started).as_millis(),
+            initialized.elapsed().as_millis(),
+            finished.is_ok(),
+            finished
+                .as_ref()
+                .is_ok_and(|history| history.original().is_some()),
+        );
+        finished.unwrap()
     }
 
     pub(in crate::managed) fn bootstrap_native_configure(
@@ -65,6 +79,18 @@ impl ManagedStreamTokenCustody {
         policy: &SignerCustodyPolicyV1,
         utc: u64,
         options: &BoundedTransactionOptions,
+    ) -> ManagedCustodyProgress {
+        self.bootstrap_native_configure_authorized(native, policy, || (utc, options.clone()))
+    }
+
+    // Prepare the genuine native cut first, then take Configure's UTC authorization and I/O
+    // budget from `authorize` at its execution boundary. A caller that already holds a fixed
+    // authorization (a parent startup's children) passes it through unchanged.
+    pub(in crate::managed) fn bootstrap_native_configure_authorized(
+        &mut self,
+        native: &mut NativeFixture,
+        policy: &SignerCustodyPolicyV1,
+        authorize: impl FnOnce() -> (u64, BoundedTransactionOptions),
     ) -> ManagedCustodyProgress {
         self.authority.validate_profile().unwrap();
         self.validate_policy(policy).unwrap();
@@ -76,10 +102,11 @@ impl ManagedStreamTokenCustody {
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier).unwrap(),
         };
-        self.bootstrap_native_original(native, CustodyPurpose::Configure, &original, utc, options);
+        let (utc, options) = authorize();
+        self.bootstrap_native_original(native, CustodyPurpose::Configure, &original, utc, &options);
         self.recover_configure_selected_if_present(
             policy,
-            &Fees::from_options(options).unwrap(),
+            &Fees::from_options(&options).unwrap(),
             options.deadline,
         )
         .unwrap()
@@ -127,6 +154,9 @@ impl ManagedStreamTokenCustody {
         assert_eq!(state.record().revision, 1);
         assert!(!state.control().signer_revoked && !state.control().attester_revoked);
         assert!(state.control().active_head.is_none());
+        // The fixture's in-process Torii is serving before the interval is selected: starting
+        // it is fixture setup, not part of the client's signing window.
+        let http = native.read_http(&self.authority.config);
         let now = now_ms().unwrap();
         let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
@@ -147,6 +177,7 @@ impl ManagedStreamTokenCustody {
             body,
             interval.deadline_unix_ms,
             options,
+            Some(http),
         );
         let progress = self
             .recover_enroll_selected_if_present(
@@ -185,7 +216,7 @@ impl ManagedStreamTokenCustody {
         )
         .unwrap();
         let original = journal::required_original(&directory).unwrap();
-        self.bootstrap_native_selected(native, &original, &account, options);
+        self.bootstrap_native_selected(native, &original, &account, options, None);
     }
 
     fn bootstrap_native_enrollment_original(
@@ -195,13 +226,21 @@ impl ManagedStreamTokenCustody {
         history: BodyHistory,
         utc: u64,
         options: &BoundedTransactionOptions,
+        http: Option<NativeReadHttp>,
     ) {
+        let started = Instant::now();
         let (directory, original, scope) = history.dispatch().unwrap();
         self.validate_original(original, purpose).unwrap();
         let account = AccountService::new(self.authority.config.clone()).unwrap();
         journal::explicit(directory, original, utc, options, &account, scope).unwrap();
+        let journaled = Instant::now();
         let selected = history.into_reparsed_selected(self).unwrap();
-        self.bootstrap_native_selected(native, &selected, &account, options);
+        eprintln!(
+            "native request timing: body={purpose:?} journal_ms={} reparse_ms={}",
+            journaled.duration_since(started).as_millis(),
+            journaled.elapsed().as_millis(),
+        );
+        self.bootstrap_native_selected(native, &selected, &account, options, http);
     }
 
     fn bootstrap_native_selected(
@@ -210,10 +249,12 @@ impl ManagedStreamTokenCustody {
         original: &Selected<Original>,
         account: &AccountService,
         options: &BoundedTransactionOptions,
+        http: Option<NativeReadHttp>,
     ) {
         let directory = original.directory();
-        let mut http = native.read_http(&self.authority.config);
+        let mut http = http.unwrap_or_else(|| native.read_http(&self.authority.config));
         let path = directory.path().join("transaction");
+        let started = Instant::now();
         match original
             .request(original.terms.signing_deadline(options.deadline).unwrap())
             .unwrap()
@@ -226,10 +267,21 @@ impl ManagedStreamTokenCustody {
             }
         }
         .unwrap();
+        let prepared = Instant::now();
         let signed = self
             .verify_wallet(directory, original, options.deadline)
             .unwrap();
+        let verified = Instant::now();
         http.finish();
+        eprintln!(
+            "native wallet timing: prepare_ms={} verify_ms={} signing_window_left_ms={}",
+            prepared.duration_since(started).as_millis(),
+            verified.duration_since(prepared).as_millis(),
+            original
+                .terms
+                .signing_deadline_unix_ms
+                .saturating_sub(now_ms().unwrap()),
+        );
         assert!(!path.join("submission.json").exists());
         let carrier = native.bootstrap_commit(&self.authority, &signed);
         assert!(
@@ -289,6 +341,7 @@ impl ManagedStreamTokenCustody {
             body,
             utc,
             options,
+            None,
         );
         let recovered = self
             .recover_renewal(sequence, options.deadline)

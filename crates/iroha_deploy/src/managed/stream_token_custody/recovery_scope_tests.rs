@@ -10,7 +10,7 @@ fn recover(
     scoped: bool,
     deadline: Instant,
 ) -> Result<Option<ManagedCustodyProgress>> {
-    let fees = Fees::from_options(&fixture.options)?;
+    let fees = Fees::from_options(&fixture.options())?;
     if scoped {
         fixture.owner.recover_selected(
             &fixture.policy,
@@ -71,9 +71,9 @@ fn retained_paths(
 #[test]
 fn configure_and_enroll_recovery_workspace_preserves_native_source_refusal_and_retry() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled(4_000);
+    let mut fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     for purpose in [CustodyPurpose::Configure, CustodyPurpose::InitialEnroll] {
         let expected = recover(&mut fixture, purpose, false, deadline)
             .unwrap()
@@ -154,9 +154,9 @@ fn warmed_recovery_workspace_keeps_exact_finite_and_refused_outer_charges() {
         )
     }
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled(4_000);
+    let mut fixture = Fixture::predecessor();
     let mut peers = fixture.unavailable_peers();
-    let deadline = fixture.options.deadline;
+    let deadline = fixture.deadline();
     let ceiling = 256 * 1024 * 1024;
     for purpose in [CustodyPurpose::Configure, CustodyPurpose::InitialEnroll] {
         let warm = recover(&mut fixture, purpose, true, deadline)

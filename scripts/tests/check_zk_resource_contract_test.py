@@ -599,7 +599,8 @@ def test_declared_items_are_not_yet_implemented_and_state_their_requirements() -
     # model's envelope cap itself, never a second literal.
     defaults = "crates/iroha_config/src/parameters/defaults.rs"
     records = {tuple(record["module"]): record for record in CONTRACT["completeness"]["excluded"]
-               if record["path"] == defaults and any("ANONYMOUS_BALLOT" in symbol for symbol in record["symbols"])}
+               if record.get("path") == defaults
+               and any("ANONYMOUS_BALLOT" in symbol for symbol in record.get("symbols", ()))}
     assert set(records) == {("pub mod queue {",), ("pub mod torii {",)}
     assert records[("pub mod queue {",)]["exprs"] == {
         "ANONYMOUS_BALLOT_PENDING_LIMIT": "nonzero!(1_024_usize)",
@@ -612,7 +613,7 @@ def test_declared_items_are_not_yet_implemented_and_state_their_requirements() -
     assert ".ordinary_retained_bytes()" in sites["queue.max_retained_bytes"]
     assert (records[("pub mod torii {",)]["exprs"]["ANONYMOUS_BALLOT_INGRESS_MAX_BODY_BYTES_V1"]
             == "iroha_data_model::governance::anonymous_ballot::ANONYMOUS_BALLOT_ENVELOPE_MAX_BYTES_V1")
-    assert not any(record["path"] == "crates/iroha_core/src/queue/anonymous_ballots.rs"
+    assert not any(record.get("path") == "crates/iroha_core/src/queue/anonymous_ballots.rs"
                    for record in CONTRACT["completeness"]["excluded"])
     queue_source = (ROOT / "crates/iroha_core/src/queue/anonymous_ballots.rs").read_text(encoding="utf-8")
     assert "const ANONYMOUS_BALLOT" not in queue_source

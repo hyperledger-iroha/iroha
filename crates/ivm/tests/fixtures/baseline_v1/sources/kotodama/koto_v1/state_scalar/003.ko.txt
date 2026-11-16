@@ -1,0 +1,21 @@
+
+        seiyaku NamedStruct { permission WriteState;
+            struct Pair { int first, int second }
+            state int trace;
+
+            hajimari() { trace = 0; }
+
+            fn record(int value) -> int {
+                trace = trace * 10 + value;
+                value
+            }
+
+            kotoage fn main() authorize(WriteState) -> int {
+                let pair = Pair {
+                    second: record(value: 2),
+                    first: record(value: 1),
+                };
+                trace * 100 + pair.first * 10 + pair.second
+            }
+        }
+    
