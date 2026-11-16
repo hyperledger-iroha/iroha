@@ -584,7 +584,7 @@ only as the explicit `IvmProfileId::C10_ABI_V1`, which no root selects until pha
   had re-pinned them to ids derived from the C10 baseline; the anchor pins are restored.
 - `release_identity::wire_schema_hash` binds the ABI V1 hash, so it moves from `b2d6d37f…`
   to `9d96f872…` (not the anchor's `072924c3…`: covered wire roots changed after the anchor,
-  outside C10). Taira runs `8c6e5380…`; the cutover does not make this release's frames
+  outside C10). Taira runs `072924c3…` (`a34b1e7a60`); the cutover does not make this release's frames
   readable by Taira's binary, which the decoder-rollout gate of
   `ironwood_runtime_transition.md` already requires.
 - Frozen pins that C10 had re-derived from its own baseline are restored to the anchor values
@@ -600,20 +600,16 @@ only as the explicit `IvmProfileId::C10_ABI_V1`, which no root selects until pha
   both engines keep the gas cap.
 - World import (`runtime_amx_captures`, `parliament_anonymous_attempts`, `runtime_retirements`)
   is untouched; phase 4 does not change that picture.
-- Core lib failures that are not this phase's, each failing identically in the live tree's own
-  Core runs of 2026-11-15/16 (`artifacts/continuation-20261114/core-repair`): the seven
-  `snapshot` portable-transfer tests, `sumeragi::node::portable_resume_tests::…`, the four
-  `sumeragi::certified_chain` portable tests (the portable restore cannot read the native lane
-  evidence source),
-  `sumeragi::node::replay::check::tests::whole_store_copy_replays_from_an_authenticated_snapshot_without_touching_the_source`
-  (`NativeExecutionReplayRequired`),
-  `sumeragi::node::tests::history_cutover_tests::pinned_history_of_an_earlier_build_replays_to_its_pinned_state`
-  (the execution-digest mismatch above),
-  `smartcontracts::ivm::host::tests::runtime_obligation_host_gas_refusal_publishes_no_effect_or_return`
-  (`DecodeError`), and
-  `state::trigger_lifecycle::tests::lifecycle_compact_wire_identity_and_unchanged_ivm_abi`, which
-  pins Taira's wire identity `8c6e5380…` (it was failing on `b2d6d37f…`; its ABI half,
-  `7531b45d…`, now passes). None is re-pinned.
+- The Core lib failures that were not this phase's now pass on `optimizations` (2026-11-17):
+  the seven `snapshot` portable-transfer tests, `sumeragi::node::portable_resume_tests::…`,
+  the four `sumeragi::certified_chain` portable tests and the whole-store-copy replay check
+  (portable checkpoint stores, `e3c0409106`);
+  `history_cutover_tests::pinned_history_of_an_earlier_build_replays_to_its_pinned_state`
+  (the original fixture replays with the frozen quarantine slot, `5f99f31cff`, `d57abe2b78`);
+  `smartcontracts::ivm::host::tests::runtime_obligation_host_gas_refusal_publishes_no_effect_or_return`;
+  and `state::trigger_lifecycle::tests::lifecycle_compact_wire_identity_and_unchanged_ivm_abi`,
+  which pins the release wire identity `9d96f872…` and ABI V1 `7531b45d…`, the identities byte
+  accounting pins.
 - `iroha_core_privacy`'s step AIR models C10 only; a baseline run that requests proof-trace
   collection is refused locally (phase 3), and consensus requests none.
 
