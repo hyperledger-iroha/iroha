@@ -191,8 +191,8 @@ fn tides_fixture_has_bounded_real_ivm_entrypoints() -> Result<()> {
     let code = artifact()?;
     let verified = ivm::verify_contract_artifact_with_declared_profile(&code)?;
     ensure!(
-        verified.metadata.max_cycles == 0,
-        "a non-ZK fixture declares no trace bound; gas is its only budget"
+        verified.metadata.max_cycles == kotodama_lang::compiler::DEFAULT_BASELINE_MAX_CYCLES.get(),
+        "an ABI V1 fixture carries the baseline header's anchor cycle ceiling"
     );
     for name in [
         "hajimari",

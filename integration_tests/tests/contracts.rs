@@ -51,7 +51,12 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
         .expect("admit minimal contract");
     assert_eq!(verified.metadata.abi_version, 1);
-    assert_eq!(verified.metadata.max_cycles, 1_000);
+    // ABI V1 runs on the frozen baseline engine, whose header carries the anchor compiler's
+    // cycle ceiling for every artifact.
+    assert_eq!(
+        verified.metadata.max_cycles,
+        kotodama_lang::compiler::DEFAULT_BASELINE_MAX_CYCLES.get()
+    );
     let literal_section = verified.literal_section();
     let mut interface = verified.contract_interface;
     assert_eq!(interface.seiyaku_name, "TestContract");
