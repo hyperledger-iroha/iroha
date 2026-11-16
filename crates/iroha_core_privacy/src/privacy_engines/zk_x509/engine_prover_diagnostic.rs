@@ -543,18 +543,64 @@ fn append_receipt_v1(path: &Path, public_record: &str) -> io::Result<()> {
     file.sync_all()
 }
 
+/// Create a new, empty run directory under `parent`.
+///
+/// The name is `iroha-x509-full-credential-{pid}-{tick}-{sequence}`. The
+/// clock tick alone does not separate callers in one process: `SystemTime`
+/// has only microsecond resolution on macOS, so parallel tests can read the
+/// same tick. The process-wide sequence makes every name this process creates
+/// distinct; the process id and tick separate it from other and earlier
+/// processes. `create_dir` still refuses an existing path, so a run directory
+/// is never shared.
 fn run_directory_v1(parent: &Path) -> io::Result<PathBuf> {
+    static RUN_DIRECTORY_SEQUENCE_V1: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     fs::create_dir_all(parent)?;
     let tick = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
+    // Only uniqueness is needed, which every atomic increment provides.
+    let sequence = RUN_DIRECTORY_SEQUENCE_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let directory = parent.join(format!(
-        "iroha-x509-full-credential-{}-{tick}",
+        "iroha-x509-full-credential-{}-{tick}-{sequence}",
         std::process::id(),
     ));
     fs::create_dir(&directory)?;
     Ok(directory)
+}
+
+#[test]
+fn run_directories_stay_distinct_for_concurrent_callers_in_one_process() {
+    // Released together, the callers read the clock within microseconds of
+    // each other, which is how the pid-and-tick name alone collided.
+    const CALLERS: usize = 32;
+    let fixture = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let start = std::sync::Barrier::new(CALLERS);
+    let created = std::thread::scope(|scope| {
+        let callers: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                scope.spawn(|| {
+                    start.wait();
+                    run_directory_v1(&fixture)
+                })
+            })
+            .collect();
+        callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+    });
+    assert_eq!(created.len(), CALLERS);
+    let prefix = format!("iroha-x509-full-credential-{}-", std::process::id());
+    for directory in &created {
+        assert_eq!(directory.parent(), Some(fixture.as_path()));
+        let name = directory.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(&prefix), "{name}");
+        assert_eq!(fs::read_dir(directory).unwrap().count(), 0);
+    }
+    assert_eq!(fs::read_dir(&fixture).unwrap().count(), CALLERS);
+    fs::remove_dir_all(fixture).unwrap();
 }
 
 /// Keep diagnostic artifacts outside source custody and the harness's closed
