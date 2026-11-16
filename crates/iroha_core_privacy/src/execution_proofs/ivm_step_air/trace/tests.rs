@@ -59,7 +59,7 @@ fn try_contract_with_cycle_policy(
         callables: vec![crate::ivm_test_support::unit_callable(0)],
         seiyaku_name: "ScalarSegmentFixture".into(),
         compiler_fingerprint: "scalar-segment-test".into(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm::IvmProfileId::C10_ABI_V1.abi_hash(),
         features_bitmap: if mode & ivm::ivm_mode::ZK != 0 {
             ivm::CONTRACT_FEATURE_BIT_ZK
         } else {
