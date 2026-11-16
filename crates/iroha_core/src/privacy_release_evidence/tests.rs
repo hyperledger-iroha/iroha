@@ -165,99 +165,70 @@ fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
         "sequential transactions require ordered nonces"
     );
 }
+/// ZK-AMS compiles no profile until every MKHE release-readiness gate closes
+/// (`zk_ams_mkhe_readiness_v1`), so no provisioning statement or production
+/// envelope can be prepared. When this fails because the profile became
+/// available, add an envelope test showing that a canonical one-action envelope
+/// reaches the native ZK-AMS verifier while a second action index and an
+/// oversized proof are rejected at admission.
 #[test]
-fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
+fn zk_ams_release_statement_waits_for_mkhe_readiness() {
+    assert!(
+        crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
+        )
+        .is_err()
+    );
     let ring = zk_ams_sorted_ring_v1(ZK_AMS_MIN_RING_SIZE_V1).expect("canonical minimum ring");
     let key_image = zk_ams_key_image_v1(&ring[5].1).expect("canonical key image");
-    let statement = zk_ams_provision_statement_v1(
-        &ring,
-        key_image,
-        PrivacyRootV1::new([0x41; 32]),
-        2,
-        PrivacyZkAmsRegistryRecordDigestV1::new([0x42; 32]),
-    )
-    .expect("canonical provisioning statement");
-    let authoritative_network_id =
-        release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
-    let native_rejection = verify_zk_ams_release_production_envelope_v1(
-        &statement,
-        &[0x01],
-        &authoritative_network_id,
-        ZK_AMS_RELEASE_GENESIS_HASH_V1,
-        ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
-    );
-    assert_eq!(
-        native_rejection,
-        Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected),
-        "a canonical one-action envelope must reach the native ZK-AMS verifier"
-    );
-    assert_eq!(
-        require_zk_ams_release_production_native_rejection_v1(
-            native_rejection,
-            PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+    assert!(matches!(
+        zk_ams_provision_statement_v1(
+            &ring,
+            key_image,
+            PrivacyRootV1::new([0x41; 32]),
+            2,
+            PrivacyZkAmsRegistryRecordDigestV1::new([0x42; 32]),
         ),
-        Ok(()),
-    );
-    let mut impossible_second_action = statement.clone();
-    impossible_second_action.context.action_index = 1;
-    let pre_native_rejection = verify_zk_ams_release_production_envelope_v1(
-        &impossible_second_action,
-        &[0x01],
-        &authoritative_network_id,
-        ZK_AMS_RELEASE_GENESIS_HASH_V1,
-        ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
+        Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+    ));
+}
+/// Release corruption coverage counts only a native ZK-AMS rejection, and
+/// admission coverage only a production-envelope rejection; any other refusal
+/// is an evidence invariant, and acceptance reports the corruption class.
+#[test]
+fn zk_ams_release_rejection_classes_separate_admission_from_native() {
+    let accepted = PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted;
+    let native = Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected);
+    let admission = Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected);
+    let other = Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    assert_eq!(
+        require_zk_ams_release_production_native_rejection_v1(native, accepted),
+        Ok(())
     );
     assert_eq!(
-        pre_native_rejection,
-        Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
-        "Taira's one-action transaction limit must reject before native verification"
-    );
-    assert_eq!(
-        require_zk_ams_release_production_native_rejection_v1(
-            pre_native_rejection,
-            PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
-        ),
+        require_zk_ams_release_production_native_rejection_v1(admission, accepted),
         Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
         "a pre-native rejection cannot count as ZK-AMS corruption coverage"
     );
     assert_eq!(
-        require_zk_ams_release_production_admission_rejection_v1(
-            pre_native_rejection,
-            PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
-        ),
-        Ok(()),
-    );
-    let oversized_len = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
-        .expect("closed Taira proof-byte ceiling fits usize")
-        + 1;
-    let mut oversized = vec![0_u8; oversized_len];
-    oversized[0] = 1;
-    let oversized_rejection = verify_zk_ams_release_production_envelope_v1(
-        &statement,
-        &oversized,
-        &authoritative_network_id,
-        ZK_AMS_RELEASE_GENESIS_HASH_V1,
-        ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
+        require_zk_ams_release_production_admission_rejection_v1(admission, accepted),
+        Ok(())
     );
     assert_eq!(
-        oversized_rejection,
-        Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
-        "an oversized ZK-AMS proof must fail admission before native decoding"
-    );
-    assert_eq!(
-        require_zk_ams_release_production_native_rejection_v1(
-            oversized_rejection,
-            PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
-        ),
+        require_zk_ams_release_production_admission_rejection_v1(native, accepted),
         Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+        "a native rejection cannot count as admission coverage"
     );
-    assert_eq!(
-        require_zk_ams_release_production_admission_rejection_v1(
-            oversized_rejection,
-            PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
-        ),
-        Ok(()),
-    );
+    for require in [
+        require_zk_ams_release_production_native_rejection_v1,
+        require_zk_ams_release_production_admission_rejection_v1,
+    ] {
+        assert_eq!(require(Ok(()), accepted), Err(accepted));
+        assert_eq!(
+            require(other, accepted),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)
+        );
+    }
 }
 #[test]
 fn jindo_release_envelope_requires_the_production_native_dispatch() {
@@ -978,13 +949,13 @@ fn zk_x509_codec_bound_fits_cap_without_qualifying_the_engine() {
         privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
         Some(exact_x5s1_ceiling)
     );
-    assert_eq!(exact_x5s1_ceiling, 9_204_362);
+    assert_eq!(exact_x5s1_ceiling, 9_435_984);
     assert_eq!(
         PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1 - exact_x5s1_ceiling,
-        232_822
+        1_200
     );
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("projected-X5S1-maximum=9204362 bytes"));
+    assert!(descriptor.contains("projected-X5S1-maximum=9435984 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
     assert!(descriptor.contains("activation=unavailable-qualification"));
     assert!(crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id).is_err());
@@ -1125,10 +1096,13 @@ fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
                 )
                 .expect("every required artifact has one canonical ceiling");
                 assert!(ceiling > 0);
+                assert!(ceiling <= PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
                 if protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
+                    // The largest ceiling is the exact encoded X5S1 maximum; a proof one
+                    // byte over its exact ceiling is refused.
                     assert_eq!(ceiling, u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1));
-                    assert!(ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
-                    let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
+                    let canonical_proof_bytes =
+                        vec![0x58; usize::try_from(ceiling + 1).expect("ceiling fits usize")];
                     let artifact = PrivacyReleaseProofArtifactEvidenceV1 {
                         artifact_ordinal: u8::try_from(ordinal).expect("at most two artifacts"),
                         proof_sha256: sha256_v1(&canonical_proof_bytes),
@@ -1140,8 +1114,6 @@ fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
                         case_kind,
                         core::slice::from_ref(&artifact),
                     ));
-                } else {
-                    assert!(ceiling <= PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
                 }
             }
             assert!(

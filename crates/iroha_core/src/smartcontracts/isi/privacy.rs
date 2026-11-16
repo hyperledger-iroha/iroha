@@ -6904,16 +6904,19 @@ mod tests {
             })
             .clone()
     }
-    fn bind_submit_privacy_instruction(
+    /// Bind either direct submission type (Exact12 or Ironwood) as the signed source.
+    fn bind_submit_privacy_instruction<I>(
         transaction: &mut StateTransaction<'_, '_>,
-        instruction: &SubmitPrivacyProofV1,
-    ) {
-        let digest = instruction
-            .envelope
-            .statement
-            .context()
-            .transaction_intent_digest;
-        let submission_hash = crate::privacy::privacy_signed_submission_hash_v1(instruction)
+        instruction: &I,
+    ) where
+        I: Clone + Into<InstructionBox>,
+    {
+        let boxed: InstructionBox = instruction.clone().into();
+        let submission =
+            iroha_data_model::transaction::PrivacySubmissionRefV1::from_instruction(&boxed)
+                .expect("a direct privacy submission");
+        let digest = submission.context().transaction_intent_digest;
+        let submission_hash = crate::privacy::privacy_signed_submission_ref_hash_v1(submission)
             .expect("privacy submission encodes canonically");
         transaction.bind_privacy_transaction_intent_v1(Some((digest, submission_hash)));
         // This component fixture starts after intent admission. Authenticate the exact signed
@@ -6934,13 +6937,7 @@ mod tests {
         transaction
             .bind_privacy_transaction_source_v1(&signed)
             .expect("component privacy source matches the signed submission");
-        transaction.arm_direct_privacy_instruction_v1(
-            &signed,
-            &ALICE_ID,
-            &instruction.clone().into(),
-            0,
-            true,
-        );
+        transaction.arm_direct_privacy_instruction_v1(&signed, &ALICE_ID, &boxed, 0, true);
     }
     fn bind_payment_instruction(
         transaction: &mut StateTransaction<'_, '_>,
