@@ -242,6 +242,14 @@ other supported hardware. The prover has one outer suite and no digest-device
 option. Local batch limits do not change the proof profile. The ignored N=3
 smoke is selected with `atomic-private-settlement-smoke`.
 
+The prover evaluates the constraint quotient, and the fixed-policy columns it
+reads, only on the smallest subgroup of the evaluation domain that has more
+points than the quotient's degree bound and at least the trace's rows: half of
+that domain for the degree-four profile. It interpolates there, and a nonzero
+coefficient beyond the committed composition chunks makes proving fail. The
+chunks are still committed on the whole evaluation domain, so proof bytes do
+not depend on this choice.
+
 The verifier evaluates the complete AIR at the transcript-derived out-of-domain
 point from the DEEP openings and requires the opened composition chunks to equal
 the combined residues divided by the trace vanishing polynomial. The quotient
