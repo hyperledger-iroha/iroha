@@ -35,11 +35,15 @@ const STORED_ARGS_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     CONFIG_FILE_MAX_BYTES_V1 * 2,
     16,
 );
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const CONFIG_FILE_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+// `O_NOFOLLOW`: refuse a final-component symlink. Directory components may be links
+// (macOS reaches the temporary directory through `/var -> private/var`); the named file's
+// identity is checked again after opening. macOS's `O_NOFOLLOW_ANY` (`0x2000_0000`) would
+// instead refuse every path with a linked ancestor.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const CONFIG_FILE_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd",

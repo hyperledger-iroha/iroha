@@ -463,10 +463,12 @@ pub fn prepare_state(
             universal_domain,
         ))));
         nexus_genesis.push(InstructionBox::from(Register::account(gas_account)));
+        // Staking and rewards move only the network XOR: global balances at scale nine.
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 stake_asset.clone(),
                 "Nexus Stake".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             ),
