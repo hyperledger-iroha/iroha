@@ -6033,7 +6033,8 @@
         {
           "stage": "vm",
           "path": "crates/ivm_abi/src/metadata/program_header.rs",
-          "contains": "if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {"
+          "contains": "if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {",
+          "count": 2
         }
       ],
       "tests": [
@@ -6045,7 +6046,8 @@
           "path": "crates/ivm_abi/src/metadata/section_decode/tests.rs",
           "name": "whole_artifact_image_limit_precedes_section_resource_admission"
         }
-      ]
+      ],
+      "test_note": "The header module holds the check twice: in the C10 header parser and in the header parser of the frozen baseline engine (parse_baseline), which reads every ABI V1 artifact on the consensus path. Both named tests drive the C10 parser (ProgramMetadata::parse); neither places a baseline artifact at or above the limit."
     },
     {
       "id": "guest_memory.max_call_frame_bytes",
@@ -16219,6 +16221,53 @@
         }
       },
       {
+        "reason": "Header layout and vector geometry of the frozen baseline engine, the pre-C10 engine that executes every ABI V1 artifact on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md): the offset of the max_cycles field in its 49-byte header, and the largest logical vector length (64 lanes) a header may declare and SETVL may select. Every validator refuses a larger header value at admission (VectorLengthTooLarge) and faults a larger SETVL request (InvalidVectorLength). They are the frozen ABI's layout and the lane width of one vector instruction, not a size, count or work budget a transaction spends along this path: the image is bounded by guest_memory.max_program_image_bytes and the baseline gas schedule charges a vector instruction by its lane count inside work_budget.*. LOGICAL_VECTOR_MAX is the interpreter's alias of VECTOR_LENGTH_MAX.",
+        "files": [
+          {
+            "path": "crates/ivm_abi/src/baseline.rs",
+            "symbols": [
+              "HEADER_BUDGET_OFFSET",
+              "VECTOR_LENGTH_MAX"
+            ],
+            "exprs": {
+              "HEADER_BUDGET_OFFSET": "8",
+              "VECTOR_LENGTH_MAX": "64"
+            }
+          },
+          {
+            "path": "crates/ivm/src/ivm/baseline.rs",
+            "symbols": [
+              "LOGICAL_VECTOR_MAX"
+            ],
+            "exprs": {
+              "LOGICAL_VECTOR_MAX": "ivm_abi::baseline::VECTOR_LENGTH_MAX as usize"
+            }
+          }
+        ]
+      },
+      {
+        "path": "crates/ivm/src/gas/baseline.rs",
+        "reason": "Request shape bounds of the ED25519BATCHVERIFY opcode of the frozen baseline engine, the pre-C10 engine that executes every ABI V1 artifact on the consensus path: the entries, the encoded request bytes and the Norito decode budget of one request the opcode reads from guest memory. They are named parameters of the frozen baseline gas schedule, so every validator applies the same values, and an over-limit request makes the opcode return its failure result to the contract; it rejects no transaction. The request is bounded by guest_memory.* and its bytes and entries are charged gas before the work inside work_budget.*, so these are not bounds between the stages of this path. ED25519_BATCH_DECODE_LIMITS is the decode-limit structure assembled from the others and defines no value of its own. M.1 owns the semantic inventory of the opcode; its opcode table today (crates/ivm/src/proof_coverage/opcodes.rs) lists the C10 instruction set, which has no such opcode.",
+        "symbols": [
+          "ED25519_BATCH_MAX_ENTRIES",
+          "ED25519_BATCH_MAX_PAYLOAD_BYTES",
+          "ED25519_BATCH_MAX_SEQUENCE_ELEMENTS",
+          "ED25519_BATCH_MAX_TOTAL_ELEMENTS",
+          "ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES",
+          "ED25519_BATCH_MAX_DECODE_DEPTH",
+          "ED25519_BATCH_DECODE_LIMITS"
+        ],
+        "exprs": {
+          "ED25519_BATCH_MAX_ENTRIES": "512",
+          "ED25519_BATCH_MAX_PAYLOAD_BYTES": "512 * 1024",
+          "ED25519_BATCH_MAX_SEQUENCE_ELEMENTS": "64 * 1024",
+          "ED25519_BATCH_MAX_TOTAL_ELEMENTS": "ED25519_BATCH_MAX_PAYLOAD_BYTES",
+          "ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES": "2 * ED25519_BATCH_MAX_PAYLOAD_BYTES",
+          "ED25519_BATCH_MAX_DECODE_DEPTH": "8",
+          "ED25519_BATCH_DECODE_LIMITS": "norito::DecodeLimits::new( ED25519_BATCH_MAX_SEQUENCE_ELEMENTS, ED25519_BATCH_MAX_PAYLOAD_BYTES, ED25519_BATCH_MAX_TOTAL_ELEMENTS, ED25519_BATCH_MAX_DECODE_ALLOCATION_BYTES, ED25519_BATCH_MAX_DECODE_DEPTH, )"
+        }
+      },
+      {
         "reason": "Limits of host helpers that work on data already inside guest memory or a host payload: the ISO 20022 XML reader, the Ed25519 batch geometry and the state scan candidate count (an alias of the ABI constant). Each bounds one syscall's input, which is bounded by guest_memory.* and charged by work_budget.*; M.1 owns the per-syscall inventory.",
         "files": [
           {
@@ -16362,7 +16411,7 @@
         ]
       },
       {
-        "reason": "Not limits: lists of reserved identifiers and prefixes, the instruction-encoding field ranges (signed 14-bit immediate, 19-bit JAL and 24-bit JMP/JALS offsets, 24-bit syscall number, 6-bit rotate amount), the largest register index, the largest first input register of one opcode and two minimum capacities. Their names contain a limit word.",
+        "reason": "Not limits: lists of reserved identifiers and prefixes, the instruction-encoding field ranges of the C10 table (signed 14-bit immediate, 19-bit JAL and 24-bit JMP/JALS offsets, 24-bit syscall number, 6-bit rotate amount), the opcode number of the MAX instruction (0x1F in the C10 table and in the frozen baseline table; a name, not a ceiling), the largest first input register of the POSEIDON6 opcode of the frozen baseline table (its six consecutive input registers must lie inside the 256-register file; artifact admission and the baseline decoder refuse any other encoding on every validator) and two minimum capacities. Their names contain a limit word. The baseline table is the instruction set of the frozen baseline engine, which executes every ABI V1 artifact on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md).",
         "files": [
           {
             "path": "crates/ivm_abi/src/access_hints.rs",
@@ -16392,6 +16441,17 @@
               "OFFSET24_MAX": "(1 << 23) - 1",
               "SYSCALL_NUMBER_MAX": "0x00ff_ffff",
               "ROTATE_AMOUNT_MAX": "63"
+            }
+          },
+          {
+            "path": "crates/ivm_abi/src/baseline/instruction.rs",
+            "symbols": [
+              "MAX",
+              "POSEIDON6_MAX_INPUT_BASE"
+            ],
+            "exprs": {
+              "MAX": "0x1F",
+              "POSEIDON6_MAX_INPUT_BASE": "u8::MAX - (POSEIDON6_INPUTS as u8 - 1)"
             }
           },
           {

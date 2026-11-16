@@ -76,11 +76,15 @@
    "id": "blake2s",
    "algorithm": "BLAKE2s-256 (RFC 7693)",
    "kind": "native",
-   "output_bytes": [32],
+   "output_bytes": [16, 32],
    "token": {
     "pattern": "blake2s"
    },
    "owners": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const BLAKE2S: u8 = 0x86;"
+    },
     {
      "path": "IrohaSwift/Sources/IrohaSwift/Blake2s.swift",
      "symbol": "enum Blake2s {"
@@ -90,7 +94,7 @@
      "symbol": "object Blake2s {"
     }
    ],
-   "note": "Named only by standalone SDK implementations that no SDK code calls (IrohaSwift and Kotlin core-jvm, and the Java duplicate that only its own tests exercise) and by tooling tests; no role uses it.",
+   "note": "Computed by the BLAKE2S opcode of the frozen baseline IVM engine, which executes ABI V1 artifacts on the consensus path (role ivm.opcode-blake2s; the opcode keeps the first 16 bytes of the digest). Otherwise named only by standalone SDK implementations that no SDK code calls (IrohaSwift and Kotlin core-jvm, and the Java duplicate that only its own tests exercise) and by tooling tests.",
    "in_use": true
   },
   {
@@ -363,7 +367,7 @@
   },
   {
    "id": "poseidon2",
-   "algorithm": "Names containing `poseidon2`: the two-input BN254 Poseidon helper (original Poseidon, named for its arity), rejected `poseidon2` backend labels, and the development-only Poseidon2 Goldilocks prototype that G.2 measures.",
+   "algorithm": "Names containing `poseidon2`: the two-input BN254 Poseidon helper and the POSEIDON2 opcode of the frozen baseline IVM engine that calls it (original Poseidon, named for its arity), rejected `poseidon2` backend labels, and the development-only Poseidon2 Goldilocks prototype that G.2 measures.",
    "kind": "algebraic",
    "output_bytes": [8, 32],
    "token": {
@@ -2340,7 +2344,7 @@
   {
    "key": "bn254-poseidon.hash2-helper",
    "consumer": "ivm",
-   "role": "Host-side two-input BN254 Poseidon helpers of the IVM crate, named poseidon2 for their arity: the scalar, SIMD, batch and CUDA forms and the pair_hash bridge to the canonical owner. No opcode reaches them; the Kotlin and Python accelerator bindings call the batch form.",
+   "role": "Host-side two-input BN254 Poseidon helpers of the IVM crate, named poseidon2 for their arity: the scalar, SIMD, batch and CUDA forms and the pair_hash bridge to the canonical owner. The POSEIDON2 opcode of the frozen baseline engine calls the scalar form (role ivm.opcode-poseidon2); no C10 opcode reaches them; the Kotlin and Python accelerator bindings call the batch form.",
    "family": "native",
    "primitive": "poseidon2",
    "output_bytes": 32,
@@ -2361,8 +2365,141 @@
    ],
    "canonical_native": {
     "decision": "retained-family",
-    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings. Not a commitment: no ledger, proof or opcode consumer binds its output."
+    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings. Not a commitment: no ledger or proof consumer binds its output, and the baseline POSEIDON2 opcode returns only its low 64 bits to the contract."
    }
+  },
+  {
+   "key": "ivm.opcode-sha256block",
+   "consumer": "ivm",
+   "role": "SHA-256 compression opcode (SHA256BLOCK) of the frozen baseline IVM engine: one compression of a 64-byte block of public guest memory into the SHA-256 state held in two vector registers; it needs the vector mode.",
+   "family": "in-circuit",
+   "primitive": "sha2-256",
+   "output_bytes": 32,
+   "domain_separation": "Raw compression function; the contract owns padding and domain separation.",
+   "sites": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const SHA256BLOCK: u8 = 0x80;",
+     "compiled": "production"
+    },
+    {
+     "path": "crates/ivm/src/ivm/baseline.rs",
+     "symbol": "bwide::crypto::SHA256BLOCK => {",
+     "literals": ["vector::sha256_compress(&mut state, &block);"],
+     "compiled": "production"
+    }
+   ],
+   "canonical_native": {
+    "decision": "standard-internal",
+    "note": "Part of the instruction set of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md). The M.1 opcode inventory in the tree (crates/ivm/docs/proof_coverage_inventory.json) lists the C10 opcode table and records no relation obligation for this opcode."
+   },
+   "algorithm": "SHA-256 (FIPS 180-4)"
+  },
+  {
+   "key": "ivm.opcode-sha3block",
+   "consumer": "ivm",
+   "role": "Keccak-f[1600] block opcode (SHA3BLOCK) of the frozen baseline IVM engine: absorbs one 136-byte block into a 200-byte Keccak state read from public guest memory and writes the permuted state to the destination pointer.",
+   "family": "in-circuit",
+   "primitive": "sha3",
+   "output_bytes": 32,
+   "domain_separation": "Raw permutation block; the contract owns padding and domain separation.",
+   "sites": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const SHA3BLOCK: u8 = 0x81;",
+     "compiled": "production"
+    },
+    {
+     "path": "crates/ivm/src/ivm/baseline.rs",
+     "symbol": "bwide::crypto::SHA3BLOCK => {",
+     "literals": ["crate::sha3::sha3_absorb_block(&mut state, &block);"],
+     "compiled": "production"
+    }
+   ],
+   "canonical_native": {
+    "decision": "standard-internal",
+    "note": "Part of the instruction set of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md). The M.1 opcode inventory in the tree (crates/ivm/docs/proof_coverage_inventory.json) lists the C10 opcode table and records no relation obligation for this opcode."
+   },
+   "algorithm": "SHA3-256, SHA3-384 and SHA3-512 (FIPS 202)"
+  },
+  {
+   "key": "ivm.opcode-poseidon2",
+   "consumer": "ivm",
+   "role": "Two-input BN254 Poseidon opcode (POSEIDON2, named for its arity) of the frozen baseline IVM engine: the destination register receives the low 64 bits of the two-input hash of two register values, computed by the IVM helper poseidon2.",
+   "family": "in-circuit",
+   "primitive": "poseidon2",
+   "output_bytes": 8,
+   "domain_separation": "The fixed-arity mode of the canonical owner: capacity coordinate 0 holds the arity tag 2*2^64, the two u64 register values fill coordinates 1 and 2, one width-3 permutation, output coordinate 1. The opcode writes its low 64 bits, which are not a commitment.",
+   "sites": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const POSEIDON2: u8 = 0x82;",
+     "compiled": "production"
+    },
+    {
+     "path": "crates/ivm/src/ivm/baseline.rs",
+     "symbol": "bwide::crypto::POSEIDON2 => {",
+     "literals": ["let res = crate::poseidon::poseidon2(a, b);"],
+     "compiled": "production"
+    }
+   ],
+   "canonical_native": {
+    "decision": "retained-family",
+    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings. Part of the instruction set of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md). The M.1 opcode inventory in the tree (crates/ivm/docs/proof_coverage_inventory.json) lists the C10 opcode table and records no relation obligation for this opcode."
+   }
+  },
+  {
+   "key": "ivm.opcode-poseidon6",
+   "consumer": "ivm",
+   "role": "Six-input BN254 Poseidon opcode (POSEIDON6) of the frozen baseline IVM engine: the destination register receives the low 64 bits of the six-input hash of six consecutive registers, computed by the IVM helper poseidon6.",
+   "family": "in-circuit",
+   "primitive": "poseidon",
+   "output_bytes": 8,
+   "domain_separation": "The fixed-arity mode of the canonical owner: capacity coordinate 0 holds the arity tag 6*2^64 and the first five u64 register values fill coordinates 1 to 5; after one width-6 permutation the sixth value is added to coordinate 1 and the state is permuted again; output coordinate 1. The opcode writes its low 64 bits, which are not a commitment.",
+   "sites": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const POSEIDON6: u8 = 0x83;",
+     "compiled": "production"
+    },
+    {
+     "path": "crates/ivm/src/ivm/baseline.rs",
+     "symbol": "bwide::crypto::POSEIDON6 => {",
+     "literals": ["let res = crate::poseidon::poseidon6(vals);"],
+     "compiled": "production"
+    }
+   ],
+   "canonical_native": {
+    "decision": "retained-family",
+    "note": "BN254 algebraic hash; subject to the bn254_poseidon findings. Part of the instruction set of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md). The M.1 opcode inventory in the tree (crates/ivm/docs/proof_coverage_inventory.json) lists the C10 opcode table and records no relation obligation for this opcode."
+   }
+  },
+  {
+   "key": "ivm.opcode-blake2s",
+   "consumer": "ivm",
+   "role": "BLAKE2s opcode (BLAKE2S) of the frozen baseline IVM engine.",
+   "family": "in-circuit",
+   "primitive": "blake2s",
+   "output_bytes": 16,
+   "domain_separation": "BLAKE2s-256 of a 64-byte input; the first 16 bytes are written to two registers.",
+   "sites": [
+    {
+     "path": "crates/ivm_abi/src/baseline/instruction.rs",
+     "symbol": "pub const BLAKE2S: u8 = 0x86;",
+     "compiled": "production"
+    },
+    {
+     "path": "crates/ivm/src/ivm/baseline.rs",
+     "symbol": "bwide::crypto::BLAKE2S => {",
+     "literals": ["let mut hasher = Blake2s256::new();"],
+     "compiled": "production"
+    }
+   ],
+   "canonical_native": {
+    "decision": "standard-internal",
+    "note": "Part of the instruction set of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (specs/runtime/ivm_baseline_and_c10_profiles.md). The M.1 opcode inventory in the tree (crates/ivm/docs/proof_coverage_inventory.json) lists the C10 opcode table and records no relation obligation for this opcode."
+   },
+   "algorithm": "BLAKE2s-256 (RFC 7693)"
   },
   {
    "key": "ivm.syscall-sha256-hash",
@@ -3344,7 +3481,7 @@
    }
   },
   "ivm": {
-   "description": "IVM digest syscalls, their host implementations, gas and trace accounting, the Kotodama builtins that reach them and the zk trace helpers, and the host-side digest helpers and accelerators that no opcode reaches.",
+   "description": "IVM digest syscalls and the digest opcodes of the frozen baseline engine, which executes ABI V1 artifacts on the consensus path (SHA256BLOCK, SHA3BLOCK, POSEIDON2, POSEIDON6 and BLAKE2S), their host implementations, gas and trace accounting, the Kotodama builtins that reach the syscalls and the zk trace helpers, and the host-side digest helpers and accelerators. The C10 instruction table has no digest opcode, so no C10 opcode reaches a digest helper.",
    "uses": {
     "blake2b": {
      "class": "role",
@@ -3352,8 +3489,9 @@
      "roles": ["ivm.syscall-blake2b256-hash"]
     },
     "blake2s": {
-     "class": "label-only",
-     "note": "The frozen baseline v1 fixture test names the retired BLAKE2S opcode; no current opcode, syscall or host helper computes BLAKE2s."
+     "class": "role",
+     "note": "BLAKE2S opcode of the frozen baseline engine: its opcode constant, execution, gas price and the baseline v1 fixture test. No syscall, host helper or C10 opcode computes BLAKE2s.",
+     "roles": ["ivm.opcode-blake2s"]
     },
     "iroha-hash": {
      "class": "role",
@@ -3362,7 +3500,7 @@
     },
     "keccak": {
      "class": "role",
-     "note": "KECCAK256_HASH syscall and the host-side Keccak-f[1600] helpers with their CUDA and Metal accelerators, which no opcode reaches.",
+     "note": "KECCAK256_HASH syscall, the host-side Keccak-f[1600] permutation that the SHA3BLOCK opcode of the frozen baseline engine applies (role ivm.opcode-sha3block), and its CUDA and Metal accelerator entry points, which no opcode reaches.",
      "roles": ["ivm.syscall-keccak256-hash"]
     },
     "pedersen": {
@@ -3372,27 +3510,27 @@
     },
     "poseidon": {
      "class": "role",
-     "note": "Host-side BN254 Poseidon helpers (poseidon6 and the pair_hash bridge) with their SIMD and CUDA accelerators and cost policy, backend labels in host tests, and the Kotodama tests that reject the retired crypto::poseidon2 and crypto::poseidon6 spellings; no opcode reaches the helpers.",
-     "roles": ["bn254-poseidon.native-helpers"]
+     "note": "POSEIDON6 opcode of the frozen baseline engine (its opcode constant, canonical encoding, the artifact-admission and register-analysis checks of that encoding, execution and gas price), the host-side BN254 Poseidon helpers (poseidon6, which the opcode calls, and the pair_hash bridge) with their SIMD and CUDA accelerators and cost policy, backend labels in host tests, and the Kotodama tests that reject the retired crypto::poseidon2 and crypto::poseidon6 spellings. No C10 opcode reaches the helpers.",
+     "roles": ["ivm.opcode-poseidon6", "bn254-poseidon.native-helpers"]
     },
     "poseidon2": {
      "class": "role",
-     "note": "Host-side two-input helper poseidon2 with its batch, SIMD and CUDA forms and cost policy, and the Kotodama tests that reject the retired crypto::poseidon2 spelling; no opcode reaches the helper.",
-     "roles": ["bn254-poseidon.hash2-helper"]
+     "note": "POSEIDON2 opcode of the frozen baseline engine (its opcode constant, execution and gas price), the host-side two-input helper poseidon2 that it calls with its batch, SIMD and CUDA forms and cost policy, and the Kotodama tests that reject the retired crypto::poseidon2 spelling. No C10 opcode reaches the helper.",
+     "roles": ["ivm.opcode-poseidon2", "bn254-poseidon.hash2-helper"]
     },
     "sha2-256": {
      "class": "role",
-     "note": "SHA256_HASH syscall, the SHA-256 Merkle tree of guest memory and registers, and the host-side SHA-256 compression and Merkle helpers with their CUDA and Metal accelerators, which no opcode reaches.",
-     "roles": ["ivm.syscall-sha256-hash", "ivm.syscall-memory-merkle"]
+     "note": "SHA256_HASH syscall, the SHA256BLOCK opcode of the frozen baseline engine and the host-side SHA-256 compression helper it calls, the SHA-256 Merkle tree of guest memory and registers, the host-side Merkle helpers and the CUDA and Metal SHA-256 accelerators (one opcode block is below their launch floor), and the SHA-256 execution-summary digests of the trace helpers, including the constraint digest of the baseline engine. No C10 opcode reaches the compression helper.",
+     "roles": ["ivm.syscall-sha256-hash", "ivm.opcode-sha256block", "ivm.syscall-memory-merkle"]
     },
     "sha2-512": {
      "class": "standard-internal",
-     "note": "SHA-512 inside Ed25519 verification: the VERIFY_SIGNATURE syscall, the host-side batch verification helpers and their accelerators."
+     "note": "SHA-512 inside Ed25519 verification: the VERIFY_SIGNATURE syscall, the ED25519VERIFY and ED25519BATCHVERIFY opcodes of the frozen baseline engine, the host-side batch verification helpers and their accelerators."
     },
     "sha3": {
      "class": "role",
-     "note": "SHA3_HASH syscall and its host implementations.",
-     "roles": ["ivm.syscall-sha3-256-hash"]
+     "note": "SHA3_HASH syscall and its host implementations, and the SHA3BLOCK opcode of the frozen baseline engine.",
+     "roles": ["ivm.syscall-sha3-256-hash", "ivm.opcode-sha3block"]
     },
     "sm3": {
      "class": "role",
@@ -4894,6 +5032,7 @@
    "crates/iroha_core/src/smartcontracts/isi/world.rs": ["blake2b", "blake3", "iroha-hash", "pedersen", "poseidon", "poseidon2", "sha2-256"],
    "crates/iroha_core/src/smartcontracts/isi/world_validation_fee_tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/src/smartcontracts/ivm/cache.rs": ["iroha-hash"],
+   "crates/iroha_core/src/smartcontracts/ivm/cache/profile_key_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host.rs": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sm3"],
    "crates/iroha_core/src/smartcontracts/ivm/host/contract_calls.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/contract_event.rs": ["iroha-hash"],
@@ -4909,6 +5048,7 @@
    "crates/iroha_core/src/smartcontracts/ivm/host/tlv_transport.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs": ["poseidon"],
    "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs": ["iroha-hash", "poseidon", "sha2-256"],
+   "crates/iroha_core/src/smartcontracts/ivm/projection.rs": ["iroha-hash"],
    "crates/iroha_core/src/soracloud_runtime.rs": ["iroha-hash"],
    "crates/iroha_core/src/state.rs": ["blake2b", "iroha-hash", "lthash", "pedersen", "poseidon", "sha2-256"],
    "crates/iroha_core/src/state/authority_registry.rs": ["lthash"],
@@ -6124,6 +6264,7 @@
    "crates/ivm/examples/numeric_v1_fixture.rs": ["iroha-hash"],
    "crates/ivm/fixtures/koto_v1/kotodama/028.ko": ["blake2b", "keccak"],
    "crates/ivm/fixtures/koto_v1/kotodama/060.ko": ["poseidon", "poseidon2"],
+   "crates/ivm/src/analysis/aggregate.rs": ["poseidon", "poseidon2"],
    "crates/ivm/src/assets/text_v1/metal_keccak_f1600.metal": ["keccak"],
    "crates/ivm/src/assets/text_v1/metal_sha256_compress.metal": ["sha2-256"],
    "crates/ivm/src/assets/text_v1/metal_sha256_leaves.metal": ["sha2-256"],
@@ -6158,10 +6299,12 @@
    "crates/ivm/src/cuda_provenance.rs": ["sha2-256"],
    "crates/ivm/src/game_unit_step.rs": ["iroha-hash"],
    "crates/ivm/src/gas.rs": ["iroha-hash", "pedersen"],
+   "crates/ivm/src/gas/baseline.rs": ["blake2s", "iroha-hash", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/host.rs": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sha3", "sm3"],
    "crates/ivm/src/host/tests/quantity_pointer_tests.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/src/iso20022.rs": ["sha2-256"],
    "crates/ivm/src/ivm.rs": ["iroha-hash", "pedersen", "sha2-256"],
+   "crates/ivm/src/ivm/baseline.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/ivm/diagnostic.rs": ["iroha-hash"],
    "crates/ivm/src/ivm/input_cursor.rs": ["iroha-hash"],
    "crates/ivm/src/ivm/literal_table/tests.rs": ["iroha-hash"],
@@ -6239,6 +6382,7 @@
    "crates/ivm/src/zk_poseidon.rs": ["poseidon"],
    "crates/ivm/tests/abi_syscall_list_golden.rs": ["blake2b", "keccak", "sha2-256", "sm3"],
    "crates/ivm/tests/axt_host_flow.rs": ["iroha-hash"],
+   "crates/ivm/tests/baseline_v1_differential.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/tests/baseline_v1_fixtures.rs": ["blake2b", "blake2s", "iroha-hash", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/tests/byte_merkle_tree.rs": ["sha2-256"],
    "crates/ivm/tests/common.rs": ["iroha-hash"],
@@ -6346,6 +6490,9 @@
    "crates/ivm/tests/zk_verify_positive_matrix.rs": ["iroha-hash"],
    "crates/ivm/tests/zk_verify_syscall.rs": ["iroha-hash"],
    "crates/ivm_abi/src/axt.rs": ["iroha-hash", "poseidon"],
+   "crates/ivm_abi/src/baseline.rs": ["iroha-hash"],
+   "crates/ivm_abi/src/baseline/encoding.rs": ["poseidon", "poseidon2"],
+   "crates/ivm_abi/src/baseline/instruction.rs": ["blake2s", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm_abi/src/contract_call.rs": ["iroha-hash"],
    "crates/ivm_abi/src/metadata.rs": ["iroha-hash"],
    "crates/ivm_abi/src/metadata/literal_table/tests.rs": ["iroha-hash"],
@@ -6359,6 +6506,8 @@
    "crates/ivm_abi/src/syscalls_doc_gen.rs": ["blake2b", "keccak", "pedersen"],
    "crates/ivm_abi/tests/axt_policy_vectors.rs": ["iroha-hash"],
    "crates/ivm_abi/tests/norito_pointer_abi_roundtrip.rs": ["iroha-hash"],
+   "crates/ivm_artifact_admission/src/lib.rs": ["iroha-hash", "poseidon"],
+   "crates/ivm_artifact_admission/src/policy.rs": ["poseidon"],
    "crates/kaigi_zk/src/authorization_v1.rs": ["blake3", "poseidon"],
    "crates/kaigi_zk/src/authorization_v1/tests.rs": ["poseidon"],
    "crates/kaigi_zk/src/lib.rs": ["poseidon"],
@@ -7703,8 +7852,8 @@
    {
     "id": "bn254-poseidon",
     "family": "Original Poseidon over the BN254 scalar field",
-    "roles": ["bn254-poseidon.native-helpers", "fastpq.bn254-poseidon-statement", "axt.binding-poseidon", "bn254-poseidon.hash2-helper"],
-    "reason": "Native-field algebraic hash of BN254 relations and of their host-side helpers."
+    "roles": ["bn254-poseidon.native-helpers", "fastpq.bn254-poseidon-statement", "axt.binding-poseidon", "bn254-poseidon.hash2-helper", "ivm.opcode-poseidon2", "ivm.opcode-poseidon6"],
+    "reason": "Native-field algebraic hash of BN254 relations, of their host-side helpers and of the frozen baseline ABI V1 opcodes that call them."
    },
    {
     "id": "halo2-ipa",
@@ -7727,7 +7876,7 @@
    {
     "id": "standard-internal",
     "family": "Hashes fixed by external standards",
-    "roles": ["x509.certificate-sha2", "pq.mlkem-public-key-hash", "pq.mldsa-shake", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-memory-merkle"],
+    "roles": ["x509.certificate-sha2", "pq.mlkem-public-key-hash", "pq.mldsa-shake", "ivm.opcode-sha256block", "ivm.opcode-sha3block", "ivm.opcode-blake2s", "ivm.syscall-sha256-hash", "ivm.syscall-sha3-256-hash", "ivm.syscall-blake2b256-hash", "ivm.syscall-keccak256-hash", "ivm.syscall-sm3-hash", "ivm.syscall-memory-merkle"],
     "reason": "X.509, FIPS 203, FIPS 204 and ABI V1 define these; digest unification does not reach inside a standardized primitive."
    },
    {
@@ -7913,7 +8062,7 @@
     "id": "BN254-POSEIDON-D3",
     "title": "Fixed-arity capacity and domain mode replaces untagged compression",
     "class": "implemented correction awaiting current qualification",
-    "evidence": "hash2 starts [2*2^64,a,b] and returns coordinate1; hash6 starts [6*2^64,x0..x4], permutes, adds x5 to coordinate1, permutes again and returns coordinate1. Low64 forms remain non-commitment helper outputs.",
+    "evidence": "hash2 starts [2*2^64,a,b] and returns coordinate1; hash6 starts [6*2^64,x0..x4], permutes, adds x5 to coordinate1, permutes again and returns coordinate1. Low64 forms remain non-commitment outputs of the helpers and of the frozen baseline POSEIDON2 and POSEIDON6 opcodes that return them.",
     "effect": "Selected-source cutover; prior outputs are removed without compatibility paths. No whole F.5 or security qualification follows.",
     "consumer_needles": ["hash2_bytes", "hash2_u64", "hash6_bytes", "hash6_u64", "poseidon6"],
     "owner_task": "F.5",
@@ -8010,10 +8159,12 @@
    "crates/ivm/benches/bench_poseidon.rs": ["poseidon6"],
    "crates/ivm/cuda/poseidon.cu": ["poseidon6"],
    "crates/ivm/fixtures/koto_v1/kotodama/060.ko": ["poseidon6"],
+   "crates/ivm/src/analysis/aggregate.rs": ["poseidon6"],
    "crates/ivm/src/cuda.rs": ["poseidon6"],
    "crates/ivm/src/cuda/poseidon_api.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/src/cuda/poseidon_cost.rs": ["poseidon6"],
    "crates/ivm/src/cuda/poseidon_launch.rs": ["poseidon6"],
+   "crates/ivm/src/ivm/baseline.rs": ["poseidon6"],
    "crates/ivm/src/lib.rs": ["poseidon6"],
    "crates/ivm/src/poseidon.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/src/poseidon/golden.rs": ["poseidon6"],
@@ -8031,6 +8182,8 @@
    "crates/ivm/tests/poseidon_parameter_custody.rs": ["bn254_poseidon_params_width3", "bn254_poseidon_params_width6", "hash2_bytes", "hash6_bytes", "iroha_zkp_halo2::poseidon", "poseidon6"],
    "crates/ivm/tests/poseidon_simd.rs": ["poseidon6"],
    "crates/ivm/tests/tiny_workload_dispatch.rs": ["poseidon6"],
+   "crates/ivm_abi/src/baseline/encoding.rs": ["poseidon6"],
+   "crates/ivm_artifact_admission/src/policy.rs": ["poseidon6"],
    "crates/kotodama_lang/src/compiler/tests.rs": ["poseidon6"],
    "crates/kotodama_lang/src/secret.rs": ["poseidon6"],
    "crates/kotodama_lang/src/semantic.rs": ["poseidon6"],
@@ -8123,7 +8276,7 @@
    ]
   },
   "legacy_labels": {
-   "finding": "ML-KEM and ML-DSA bytes still travel under Kyber and Dilithium names in types, configuration keys, telemetry labels and comments.",
+   "finding": "ML-KEM and ML-DSA bytes still travel under Kyber and Dilithium names in types, configuration keys, telemetry labels and comments, and the instruction set of the frozen baseline IVM engine names its ML-DSA verification opcode DILITHIUMVERIFY.",
    "wire_visible": [
     {
      "path": "crates/norito/src/streaming.rs",
@@ -8146,7 +8299,7 @@
      "replacement_changes": "A command-line flag name."
     }
    ],
-   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/kaigi.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/baseline_v1_fixtures.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
+   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/kaigi.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/gas/baseline.rs", "crates/ivm/src/ivm/baseline.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/baseline_v1_fixtures.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/ivm_abi/src/baseline/instruction.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
   },
   "replacement_wire_impact": ["No algorithm replacement is needed for the locked packages: the bytes on the wire are already ML-KEM and ML-DSA.", "Renaming the superseded labels changes Norito variant names, schema identities, JSON tags, configuration keys and SDK codecs listed under wire_visible; first-release rules replace them directly without aliases.", "If a later dependency change replaced the implementation, the encoded lengths under parameter_sets stay fixed by the standards; a deployment that still held round-three keys or signatures would need new keys, because ML-KEM derivation and ML-DSA encodings are not compatible with them."],
   "findings": [
@@ -10897,6 +11050,123 @@
     ]
    },
    {
+    "name": "retained.ivm.opcode-sha256block",
+    "kind": "in-circuit-digest",
+    "status": "retained",
+    "identity": "d756c34eabf8ebecb511a1f178542bc019956207080fed9c885a78d5fc60ee25",
+    "role": "ivm.opcode-sha256block",
+    "parameters": [
+     {
+      "key": "profile_version",
+      "type": "u64",
+      "value": 1
+     },
+     {
+      "key": "role",
+      "type": "text",
+      "value": "ivm.opcode-sha256block"
+     },
+     {
+      "key": "primitive",
+      "type": "text",
+      "value": "sha2-256"
+     },
+     {
+      "key": "algorithm",
+      "type": "text",
+      "value": "SHA-256 (FIPS 180-4)"
+     },
+     {
+      "key": "output_bytes",
+      "type": "u64",
+      "value": 32
+     },
+     {
+      "key": "domain_separation",
+      "type": "text",
+      "value": "Raw compression function; the contract owns padding and domain separation."
+     }
+    ]
+   },
+   {
+    "name": "retained.ivm.opcode-sha3block",
+    "kind": "in-circuit-digest",
+    "status": "retained",
+    "identity": "45a576dbcde655f6511d533a27b19eee12dd618d77bfee52dac509380a659b1e",
+    "role": "ivm.opcode-sha3block",
+    "parameters": [
+     {
+      "key": "profile_version",
+      "type": "u64",
+      "value": 1
+     },
+     {
+      "key": "role",
+      "type": "text",
+      "value": "ivm.opcode-sha3block"
+     },
+     {
+      "key": "primitive",
+      "type": "text",
+      "value": "sha3"
+     },
+     {
+      "key": "algorithm",
+      "type": "text",
+      "value": "SHA3-256, SHA3-384 and SHA3-512 (FIPS 202)"
+     },
+     {
+      "key": "output_bytes",
+      "type": "u64",
+      "value": 32
+     },
+     {
+      "key": "domain_separation",
+      "type": "text",
+      "value": "Raw permutation block; the contract owns padding and domain separation."
+     }
+    ]
+   },
+   {
+    "name": "retained.ivm.opcode-blake2s",
+    "kind": "in-circuit-digest",
+    "status": "retained",
+    "identity": "8aa041359a41b12307f7af05ad7419ddd76c31143d25e126736ae4fc3a9b225d",
+    "role": "ivm.opcode-blake2s",
+    "parameters": [
+     {
+      "key": "profile_version",
+      "type": "u64",
+      "value": 1
+     },
+     {
+      "key": "role",
+      "type": "text",
+      "value": "ivm.opcode-blake2s"
+     },
+     {
+      "key": "primitive",
+      "type": "text",
+      "value": "blake2s"
+     },
+     {
+      "key": "algorithm",
+      "type": "text",
+      "value": "BLAKE2s-256 (RFC 7693)"
+     },
+     {
+      "key": "output_bytes",
+      "type": "u64",
+      "value": 16
+     },
+     {
+      "key": "domain_separation",
+      "type": "text",
+      "value": "BLAKE2s-256 of a 64-byte input; the first 16 bytes are written to two registers."
+     }
+    ]
+   },
+   {
     "name": "retained.ivm.syscall-sha256-hash",
     "kind": "in-circuit-digest",
     "status": "retained",
@@ -11630,8 +11900,28 @@
    "bn254-poseidon.hash2-helper": {
     "disposition": "frozen-profile",
     "profiles": ["bn254.poseidon.x5-t3.v1"],
-    "required_property": "none as a commitment: no ledger, proof or opcode consumer binds the output; SDK accelerator bindings, benchmarks and tests call the helpers, and the low-64-bit forms must not be used as commitments",
+    "required_property": "none as a commitment: no ledger or proof consumer binds the output; the POSEIDON2 opcode of the frozen baseline engine returns the low 64 bits to the contract (role ivm.opcode-poseidon2), SDK accelerator bindings, benchmarks and tests call the helpers, and the low-64-bit forms must not be used as commitments",
     "accepted_level": "nothing beyond the frozen profile's unqualified statement for one full field element (about 126.8 bits against classical collision search); the low-64-bit forms claim no level"
+   },
+   "ivm.opcode-sha256block": {
+    "disposition": "retained",
+    "profiles": ["retained.ivm.opcode-sha256block"]
+   },
+   "ivm.opcode-sha3block": {
+    "disposition": "retained",
+    "profiles": ["retained.ivm.opcode-sha3block"]
+   },
+   "ivm.opcode-poseidon2": {
+    "disposition": "frozen-profile",
+    "profiles": ["bn254.poseidon.x5-t3.v1"]
+   },
+   "ivm.opcode-poseidon6": {
+    "disposition": "frozen-profile",
+    "profiles": ["bn254.poseidon.x5-t6.v1"]
+   },
+   "ivm.opcode-blake2s": {
+    "disposition": "retained",
+    "profiles": ["retained.ivm.opcode-blake2s"]
    },
    "ivm.syscall-sha256-hash": {
     "disposition": "retained",
@@ -11723,7 +12013,7 @@
     "profile": "bn254.poseidon.x5-t3.v1",
     "correction": "Replace the width-3 table by the exact published instantiation: 8 full and 57 partial rounds with its complete constants and MDS matrix. The 56-round table is not endorsed.",
     "implemented_by": ["F.5", "I.5"],
-    "vectors_required": "Independent vectors of the permutation and of the corrected two-input hash; regenerated outputs of the IVM poseidon2 helper."
+    "vectors_required": "Independent vectors of the permutation and of the corrected two-input hash; regenerated outputs of the IVM poseidon2 helper, which the baseline ABI V1 opcode POSEIDON2 returns."
    },
    {
     "defect": "BN254-POSEIDON-D2",
@@ -11731,7 +12021,7 @@
     "profile": "bn254.poseidon.x5-t6.v1",
     "correction": "Replace the width-6 table by 8 full and 60 partial rounds with the complete constants and MDS matrix of the deployed circomlib width-6 table. The 56-round table is not endorsed.",
     "implemented_by": ["F.5", "I.5"],
-    "vectors_required": "Comparison of the generated table with the fetched circomlib table; independent vectors; regenerated outputs of the IVM poseidon6 helper on the CPU, SIMD and CUDA paths."
+    "vectors_required": "Comparison of the generated table with the fetched circomlib table; independent vectors; regenerated outputs of the IVM poseidon6 helper, which the baseline ABI V1 opcode POSEIDON6 returns, on the CPU, SIMD and CUDA paths."
    },
    {
     "defect": "BN254-POSEIDON-D3",

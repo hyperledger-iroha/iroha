@@ -2338,6 +2338,27 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
             fields(unreadable, push, "t")
     with pytest.raises(error, match="`zk_policy_put_u32\\(` call binds a field whose name"):
         fields(source.replace('"max_verify_batch"', "MAX_BATCH_FIELD"), put, "t")
+    # A frozen-slot helper binds the field it is given; one without an argument binds none.
+    frozen = source.replace(
+        "        // policy.push(",
+        "        policy.push_frozen_runtime_provenance_v1();\n"
+        "        policy.push_frozen_quarantine_tx_budget_v1(pipeline.quarantine_tx_max_gas);\n"
+        "        // policy.push(",
+    )
+    assert fields(frozen, push, "t")[:3] == [
+        "pipeline.dynamic_prepass",
+        "pipeline.overlay_max_bytes",
+        "pipeline.quarantine_tx_max_gas",
+    ]
+    with pytest.raises(error, match="binds a field whose name the checker cannot read"):
+        fields(
+            frozen.replace(
+                "push_frozen_quarantine_tx_budget_v1(pipeline.quarantine_tx_max_gas)",
+                "push_frozen_quarantine_tx_budget_v1(budget)",
+            ),
+            push,
+            "t",
+        )
 
     # A typed preimage struct: nested structs contribute their fields below the field's name.
     structs = """
