@@ -261,18 +261,27 @@ fn collect_private_settlement_availability_shares_v1(
 /// Results retain roster order, including ordinary request rejections. A local
 /// worker launch or panic is a fatal orchestration error, never an unavailable
 /// validator vote. No response is consumed until all initiated requests finish.
+///
+/// Each worker enters the calling thread's Tokio runtime context, if it has one, so
+/// the blocking-call guard refuses a request on a worker exactly as it would refuse
+/// the same request on the calling thread.
 fn collect_private_settlement_committee_responses_v1<T, F>(request: F) -> Result<Vec<Result<T>>>
 where
     T: Send,
     F: Fn(usize) -> Result<T> + Sync,
 {
     const REQUESTS: usize = PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1;
+    let runtime = tokio::runtime::Handle::try_current().ok();
     std::thread::scope(|scope| {
         let request = &request;
+        let runtime = &runtime;
         let children: [_; REQUESTS] = std::array::from_fn(|index| {
             std::thread::Builder::new()
                 .name(format!("aps-committee-{index}"))
-                .spawn_scoped(scope, move || request(index))
+                .spawn_scoped(scope, move || {
+                    let _context = runtime.as_ref().map(tokio::runtime::Handle::enter);
+                    request(index)
+                })
         });
         // Array::map completes every join before Result collection can return
         // the first roster-ordered orchestration error. Do not fuse these into
@@ -3430,6 +3439,123 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[test]
+    fn fanout_workers_answer_the_blocking_call_guard_like_the_calling_thread() {
+        let committee = || {
+            collect_private_settlement_committee_responses_v1(|_| {
+                Ok(crate::blocking::reject_inside_async_runtime().is_err())
+            })
+            .expect("every committee worker starts and is joined")
+            .into_iter()
+            .map(|refused| refused.expect("the probe never fails"))
+            .collect::<Vec<_>>()
+        };
+        // A leg worker's own committee workers inherit the context the leg entered.
+        let legs = || {
+            collect_private_settlement_legs_v1(6, |_| {
+                Ok((
+                    crate::blocking::reject_inside_async_runtime().is_err(),
+                    committee(),
+                ))
+            })
+            .expect("every leg worker starts and is joined")
+        };
+        assert!(crate::blocking::reject_inside_async_runtime().is_ok());
+        assert_eq!(
+            committee(),
+            [false; 4],
+            "outside a runtime neither the caller nor a worker is refused"
+        );
+        assert_eq!(legs(), vec![(false, vec![false; 4]); 6]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("fixture runtime");
+        let _context = runtime.enter();
+        assert!(crate::blocking::reject_inside_async_runtime().is_err());
+        assert_eq!(
+            committee(),
+            [true; 4],
+            "a request refused on the calling thread stays refused on its worker"
+        );
+        assert_eq!(legs(), vec![(true, vec![true; 4]); 6]);
+    }
+
+    #[test]
+    fn concurrent_fanouts_send_nothing_when_the_calling_thread_is_refused() {
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let leg = &barrier.manifest.legs[0];
+        let (authority, _) = finalization_authority_v1(leg.route, leg.ordinal);
+        let (material, _) = availability_material_fixture_v1(&client.network_id, &client.account);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let transport = with_mock_http(
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Vec::new())
+                    .expect("fixture response"),
+            ),
+            |transport| transport,
+        );
+        let client = client.with_test_http_transport(transport);
+        let endpoints = committee_endpoint_fixture_v1();
+        // The blocking-call guard refuses every request issued on this thread.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("fixture runtime");
+        let _context = runtime.enter();
+        let availability = client
+            .certify_private_settlement_leg_availability_v1(
+                &availability_endpoints_fixture_v1(),
+                &material,
+            )
+            .expect_err("every availability request is refused");
+        let availability = format!("{availability:#}");
+        assert!(availability.contains("valid_shares=0"));
+        for index in 0..4 {
+            assert!(availability.contains(&format!("roster[{index}]=transport_failed")));
+        }
+        assert!(
+            client
+                .recover_private_settlement_commit_certificate_v1(
+                    &endpoints,
+                    leg.payload_digest,
+                    &barrier,
+                    &authority,
+                )
+                .expect_err("every recovery read is refused")
+                .to_string()
+                .contains("three valid committee responses")
+        );
+        assert!(
+            client
+                .certify_private_settlement_commit_v1(
+                    &endpoints,
+                    leg.payload_digest,
+                    &barrier,
+                    &authority,
+                )
+                .expect_err("every Commit vote request is refused")
+                .to_string()
+                .contains("phase quorum is unavailable")
+        );
+        assert!(
+            client
+                .commit_private_settlement_bundle_v1(
+                    &vec![endpoints; barrier.manifest.legs.len()],
+                    &barrier,
+                )
+                .expect_err("every leg's Commit vote requests are refused")
+                .to_string()
+                .contains("phase quorum is unavailable")
+        );
+        assert!(
+            snapshots.lock().expect("snapshots").is_empty(),
+            "no worker sends a request the calling thread is refused"
+        );
     }
 
     #[test]

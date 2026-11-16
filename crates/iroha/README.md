@@ -525,6 +525,9 @@ certificate yet decides the phase exactly as a leg-by-leg loop would; later legs
 of that window have already been asked, later phases never start. Every
 availability certificate is durable before any promotion, every promotion joins
 before any Prepare vote, and Register finality precedes every Commit vote.
+Request and leg workers run in the calling thread's Tokio runtime context, if it
+has one, so a call made inside an async runtime is refused as it would be without
+the fan-out.
 Availability validates and encodes one immutable payload per committee, while
 transport retains a separate owned body and fresh signature for every endpoint.
 Genuine native wallet/prover/sealer orchestration belongs to the separate internal

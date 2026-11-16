@@ -17,6 +17,9 @@ pub(super) const PRIVATE_SETTLEMENT_LEG_FANOUT_V1: usize = 4;
 /// `Ok(None)`, and no later window starts. Legs of the deciding window that follow the
 /// deciding leg have already run; their results are discarded.
 ///
+/// Every leg runs in the calling thread's Tokio runtime context, if it has one, so the
+/// blocking-call guard answers a leg's requests exactly as it would on the calling thread.
+///
 /// # Errors
 /// The first failed leg's error in leg order, or a leg worker that could not start.
 ///
@@ -51,12 +54,17 @@ where
     T: Send,
     F: Fn(usize) -> Result<Option<T>> + Sync,
 {
+    // Each leg worker enters the calling thread's Tokio runtime context, if it has one,
+    // so the blocking-call guard refuses a leg's requests exactly as it would on the
+    // calling thread; the leg's own committee workers inherit that context in turn.
+    let runtime = tokio::runtime::Handle::try_current().ok();
     let mut complete = Vec::with_capacity(legs);
     let mut first = 0;
     while first < legs {
         let last = legs.min(first + width.max(1));
         let joined = std::thread::scope(|scope| {
             let work = &work;
+            let runtime = &runtime;
             // Start the whole window before joining any of it: a lazily driven iterator
             // would join each leg before starting the next and run the legs one by one.
             let mut started = Vec::with_capacity(last - first);
@@ -64,7 +72,10 @@ where
                 started.push(
                     std::thread::Builder::new()
                         .name(format!("aps-leg-{leg}"))
-                        .spawn_scoped(scope, move || work(leg)),
+                        .spawn_scoped(scope, move || {
+                            let _context = runtime.as_ref().map(tokio::runtime::Handle::enter);
+                            work(leg)
+                        }),
                 );
             }
             // Collecting into a Vec completes every join before any result is read. Do

@@ -494,6 +494,16 @@ original provisional material is still being qualified. The new SDK tests use
 synthetic outputs with real certificates; genuine localnet integration remains an
 acceptance requirement. See [the workflow contract](zk_durable_workflow.md).
 
+Within one phase the requests to the four validators of a leg's committee
+overlap, and up to four legs overlap, so at most sixteen requests are in flight.
+Every started request and leg joins before any response is used, and responses
+are read in roster order and leg order, so selected certificates, returned values
+and the reported error equal those of a serial loop. On a failure path a later
+validator or a later leg of the same window may already have been asked. Every
+worker runs in the calling thread's Tokio runtime context, if it has one, so the
+SDK's blocking-call guard refuses exactly the requests it would refuse on the
+calling thread.
+
 ## Protocol state machine
 
 The durable lifecycle is:
