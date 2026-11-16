@@ -949,13 +949,13 @@ fn zk_x509_codec_bound_fits_cap_without_qualifying_the_engine() {
         privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
         Some(exact_x5s1_ceiling)
     );
-    assert_eq!(exact_x5s1_ceiling, 9_435_984);
+    assert_eq!(exact_x5s1_ceiling, 9_436_144);
     assert_eq!(
         PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1 - exact_x5s1_ceiling,
-        1_200
+        1_040
     );
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("projected-X5S1-maximum=9435984 bytes"));
+    assert!(descriptor.contains("projected-X5S1-maximum=9436144 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
     assert!(descriptor.contains("activation=unavailable-qualification"));
     assert!(crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id).is_err());
