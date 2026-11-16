@@ -191,6 +191,15 @@ impl CommittedToriiRouterRuntime {
     pub fn router(&self) -> axum::Router {
         self.runtime.router()
     }
+    /// Commit `transactions` in one more block of the retained native chain and
+    /// report whether each executed. Torii reads this chain's State, so its
+    /// routes observe the block at once.
+    pub fn commit(
+        &mut self,
+        transactions: Vec<iroha_data_model::transaction::SignedTransaction>,
+    ) -> Vec<bool> {
+        self.chain.commit(transactions)
+    }
     /// Authenticate an operator request against this actual genesis-derived network.
     pub fn operator_signed_request(
         &self,

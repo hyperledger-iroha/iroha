@@ -27,10 +27,17 @@ use tower::ServiceExt as _;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
 fn build_router(
+    cfg: iroha_config::parameters::actual::Root,
+) -> fixtures::CommittedToriiRouterRuntime {
+    build_router_with_world(cfg, World::default())
+}
+/// [`build_router`] over a signed genesis of `world`.
+fn build_router_with_world(
     mut cfg: iroha_config::parameters::actual::Root,
+    world: World,
 ) -> fixtures::CommittedToriiRouterRuntime {
     let native_chain = fixtures::commit_genesis_fixture(
-        World::default(),
+        world,
         cfg.common.chain.clone(),
         &cfg.common.key_pair,
         Vec::new(),
@@ -4948,6 +4955,161 @@ async fn mcp_jsonrpc_tools_call_explorer_feeds_accept_the_shared_feed_query() {
                     && body.get("next_cursor").is_some(),
                 "{tool_name} must return an Explorer page: {body:?}"
             );
+        }
+    }
+    app.shutdown().await;
+}
+/// Rows and `next_cursor` of one successful Explorer page read through `tool_name`.
+async fn explorer_page_through_mcp(
+    app: &axum::Router,
+    id: u64,
+    tool_name: &str,
+    arguments: Value,
+) -> (Vec<Value>, Value) {
+    let (status, call) = post_mcp(
+        app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!tool_is_error(&call), "{tool_name}: {call:?}");
+    let structured = structured_content(&call);
+    assert_eq!(
+        structured.get("status").and_then(Value::as_u64),
+        Some(200),
+        "{tool_name}: {structured:?}"
+    );
+    let body = structured.get("body").expect("Explorer page body");
+    let rows = body
+        .get("items")
+        .and_then(Value::as_array)
+        .expect("Explorer page rows")
+        .clone();
+    let next_cursor = body.get("next_cursor").cloned().expect("Explorer cursor");
+    (rows, next_cursor)
+}
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_explorer_block_filter_reads_only_that_block() {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        Level, Registrable as _,
+        account::Account,
+        isi::{InstructionBox, Log, SetKeyValue},
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_model_base::name::Name;
+
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let key_pair = KeyPair::from_seed(vec![0x5b; 32], Algorithm::Ed25519);
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+    let mut app = build_router_with_world(cfg, world);
+    let log = |text: &str| -> InstructionBox { Log::new(Level::INFO, text.to_owned()).into() };
+    let metadata = |value: u32| -> InstructionBox {
+        let key: Name = "explorer_block".parse().expect("metadata key");
+        SetKeyValue::account(authority.clone(), key, value).into()
+    };
+    // Genesis entrypoints are not Explorer rows, so the filtered blocks follow
+    // it. Each block commits one transaction whose instruction kinds and order
+    // differ from its neighbour's.
+    let mut blocks = Vec::new();
+    for (height, instructions, kinds) in [
+        (
+            2_u64,
+            [log("block two"), metadata(2)],
+            ["Log", "SetKeyValue"],
+        ),
+        (3, [metadata(3), log("block three")], ["SetKeyValue", "Log"]),
+    ] {
+        let transaction = TransactionBuilder::new(
+            app.network_id(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(key_pair.private_key());
+        let hash = norito::json::to_value(&transaction.hash_as_entrypoint())
+            .expect("transaction hash literal");
+        assert_eq!(app.commit(vec![transaction]), vec![true], "block {height}");
+        let rows = (0_u64..)
+            .zip(kinds)
+            .map(|(index, kind)| {
+                norito::json!({
+                    "block": height,
+                    "index": index,
+                    "kind": kind,
+                    "transaction_hash": (hash.clone())
+                })
+            })
+            .collect::<Vec<_>>();
+        blocks.push((height, rows));
+    }
+    assert_eq!(app.state().view().height(), 3);
+
+    let select = norito::json!(["block", "index", "kind", "transaction_hash"]);
+    let mut id = 1_061_710;
+    for tool_name in [
+        "iroha.instructions.list",
+        "iroha.explorer.instructions.query",
+    ] {
+        id += 1;
+        let (rows, _) = explorer_page_through_mcp(
+            &app,
+            id,
+            tool_name,
+            norito::json!({ "select": (select.clone()), "limit": 25 }),
+        )
+        .await;
+        for (height, expected) in &blocks {
+            assert!(
+                expected.iter().all(|row| rows.contains(row)),
+                "{tool_name} unfiltered feed must hold block {height}: {rows:?}"
+            );
+        }
+        for (height, expected) in &blocks {
+            // One row per page, so every block needs its cursor followed.
+            let filter = format!("block = {height}");
+            let mut rows = Vec::new();
+            let mut cursor = None;
+            let mut pages = 0;
+            loop {
+                pages += 1;
+                assert!(pages <= 4, "{tool_name} block {height} cursor does not end");
+                let mut arguments = norito::json!({
+                    "filter": (filter.clone()),
+                    "select": (select.clone()),
+                    "limit": 1
+                });
+                if let Some(cursor) = cursor.take() {
+                    arguments
+                        .as_object_mut()
+                        .expect("tool arguments")
+                        .insert("cursor".to_owned(), cursor);
+                }
+                id += 1;
+                let (page, next_cursor) =
+                    explorer_page_through_mcp(&app, id, tool_name, arguments).await;
+                assert!(page.len() <= 1, "{tool_name} ignored `limit`: {page:?}");
+                rows.extend(page);
+                if next_cursor.is_null() {
+                    break;
+                }
+                cursor = Some(next_cursor);
+            }
+            assert!(pages >= 2, "{tool_name} block {height} fit one page");
+            rows.sort_by_key(|row| row.get("index").and_then(Value::as_u64));
+            // Exactly that block's rows: nothing from the neighbouring block.
+            assert_eq!(&rows, expected, "{tool_name} block {height}");
         }
     }
     app.shutdown().await;
