@@ -12354,6 +12354,7 @@
     {"path": "crates/iroha_sccp/tests/reference_support/bls_support.rs", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
     {"path": "scripts/sccp_reference/bls_sig.py", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
     {"path": "Cargo.lock", "purpose": "Lock entry of the hkdf crate."},
+    {"path": "experiments/kagemusha-spartan/Cargo.lock", "purpose": "Lock entry of the hkdf crate in the standalone Spartan experiment's lockfile."},
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "purpose": "Peer-nearby session transcript keys."},
@@ -12651,6 +12652,12 @@
   "other_derivations": []
  },
  "generated_consumers": [
+  {
+   "path": "crates/ivm/tests/fixtures/baseline_v1/descriptors/runtime_baseline_catalog.json",
+   "registered": false,
+   "purpose": "Frozen copy of the adoption anchor's runtime baseline catalog, pinned by the IVM baseline_v1 fixture manifest and read only by IVM's baseline fixture tests. It owns no arithmetic; this entry neither regenerates nor re-pins it.",
+   "evidence": {"path": "crates/ivm/tests/baseline_v1_fixtures.rs", "literal": "json(\"descriptors/runtime_baseline_catalog.json\")"}
+  },
   {
    "path": "specs/runtime_baseline_catalog.json",
    "registered": false,
@@ -13027,6 +13034,7 @@
    "tasks": ["F.4", "V.1"],
    "summary": "Generated installed-interface baseline definitions and the pinned payload layout of every baseline instruction name FHE and RAM-LFE policies and operations. These files own no arithmetic; inventory registration neither regenerates nor qualifies the frozen runtime baseline.",
    "files": [
+    {"path": "crates/ivm/tests/fixtures/baseline_v1/descriptors/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"], "test_only": true},
     {"path": "specs/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"]},
     {"path": "specs/runtime_baseline_instruction_layouts.tsv", "patterns": ["fhe", "ram_lfe"]}
    ]
@@ -15904,6 +15912,7 @@
    "files": [
     {"path": "Cargo.lock", "patterns": ["fhe", "hkdf"]},
     {"path": "Cargo.toml", "patterns": ["bfv", "bgv", "fhe"]},
+    {"path": "experiments/kagemusha-spartan/Cargo.lock", "patterns": ["fhe", "hkdf"]},
     {"path": "ci/rust_lanes.toml", "patterns": ["fhe"]},
     {"path": "crates/iroha_core_privacy/Cargo.toml", "patterns": ["fhe"]},
     {"path": "crates/iroha_fhe/Cargo.toml", "patterns": ["bfv", "bgv", "fhe", "ntt", "rns"]},
