@@ -40,10 +40,12 @@ impl<'block, V: mv::CellValue, C: Send + Sync + 'static> CellField<'block, V, C>
     }
 
     /// Borrow exact undo without dereferencing a frozen field as an executing block.
-    #[cfg(test)]
+    ///
+    /// Every build has this reader: the checkpoint capture reads the original predecessor
+    /// after the joint freeze, where `Deref` to the executing block would panic.
     #[expect(
         clippy::ref_option,
-        reason = "retained-owner tests compare the address of the original Option slot across publication phases"
+        reason = "callers read the original Option slot, and retained-owner tests compare its address across publication phases"
     )]
     pub(crate) fn original_undo(&self) -> &Option<V> {
         match self.cell_read_phase() {
