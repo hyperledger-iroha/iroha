@@ -53,10 +53,14 @@ fn direct_x509_requires_original_owner_and_complete_security_construction() {
         .clone()
         .execute(&ALICE_ID, &mut transaction)
         .unwrap_err();
+    // An invalid-parameter error displays only its kind; the refusal is its reason.
     assert!(
-        plain
-            .to_string()
-            .contains("original signed attachment owner")
+        matches!(
+            &plain,
+            Error::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                if reason.contains("original signed attachment owner")
+        ),
+        "{plain:?}"
     );
     crate::state::seed_committed_transaction_context(
         &mut transaction,
@@ -85,10 +89,15 @@ fn direct_x509_requires_original_owner_and_complete_security_construction() {
         unavailable,
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { .. }
     ));
-    assert!(
-        error.to_string().contains(&unavailable.to_string()),
-        "{error}"
-    );
+    // The validation failure displays only its kind; the refusal is in its source chain.
+    let mut rendered = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    assert!(rendered.contains(&unavailable.to_string()), "{rendered}");
     assert!(custody.finish().is_err());
     assert_eq!(transaction.privacy_budget_for_testing(), before);
     assert!(transaction.world.privacy_nullifiers.iter().next().is_none());

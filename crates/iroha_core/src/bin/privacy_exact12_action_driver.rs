@@ -404,13 +404,12 @@ fn bounded_ed25519_authority_v1(
             "VeRange {label} public key is not one nonzero Ed25519 key"
         ));
     }
+    // The canonical I105 literal carries half-width kana digits, so the account ID is
+    // bounded UTF-8, not ASCII.
     let account_id = authority.to_string();
-    if account_id.is_empty()
-        || !account_id.is_ascii()
-        || account_id.len() > MAX_ASSET_DEFINITION_ID_BYTES
-    {
+    if account_id.is_empty() || account_id.len() > MAX_ASSET_DEFINITION_ID_BYTES {
         return Err(format!(
-            "VeRange {label} authority account ID is not bounded ASCII"
+            "VeRange {label} authority account ID is outside its byte bound"
         ));
     }
     Ok((account_id, public_key_bytes.to_vec()))
@@ -1150,14 +1149,17 @@ mod tests {
             .as_any()
             .downcast_ref::<SubmitPrivacyProofV1>()
             .expect("the single instruction is SubmitPrivacyProofV1");
-        assert_eq!(submission.envelope.action_role_v1(), Ok(role));
+        // The signed instruction carries the frozen Exact12 envelope; its execution form
+        // is the canonical binding of its own statement and proof.
+        let runtime: PrivacyRuntimeProofEnvelopeV1 = submission.envelope.clone().into();
+        assert_eq!(runtime.action_role_v1(), Ok(role));
         assert_eq!(
             PrivacyRuntimeProofEnvelopeV1::bind_v1(
-                submission.envelope.statement.clone(),
-                submission.envelope.proof.clone()
+                runtime.statement.clone(),
+                runtime.proof.clone()
             )
             .as_ref(),
-            Ok(&submission.envelope)
+            Ok(&runtime)
         );
         // The same transaction is not a submission of any other role.
         for other in PrivacyActionRoleV1::ALL {
@@ -1200,7 +1202,8 @@ mod tests {
 
         // A relabelled protocol no longer resolves to one role.
         let mut relabelled = submission.clone();
-        relabelled.envelope.protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
+        relabelled.envelope.protocol_id =
+            iroha_data_model::privacy::PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
         let error = require_canonical_role_submission_v1(&rebuild(vec![relabelled.into()]), role)
             .expect_err("protocol substitution");
         assert!(error.contains("selects no single role"), "{error}");
