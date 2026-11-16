@@ -10413,6 +10413,11 @@ mod tests {
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
     }
+    /// Hold the network permit environment unchanged, for example while spawning a child
+    /// test process that must inherit this process's own permit settings.
+    pub(crate) fn lock_network_permit_env() -> AsyncMutexGuard<'static, ()> {
+        lock_env_guard(&NETWORK_PERMIT_ENV_GUARD)
+    }
     async fn lock_env_guard_async(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.lock().await
     }
@@ -16740,7 +16745,14 @@ mod tests {
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
         Ok(())
     }
-    fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
+    /// The genesis anchor of a peer run config, resolved exactly as the node resolves it.
+    ///
+    /// The resolved config stays in this frame: an unoptimized async caller would keep one
+    /// stack slot per inline config temporary, which overflows the ordinary 2 MiB stack.
+    #[inline(never)]
+    fn peer_run_config_expected_hash(
+        path: &Path,
+    ) -> Result<iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>> {
         let reader = ConfigReader::new()
             .with_env(MockEnv::default())
             .read_toml_with_extends(path)
@@ -16748,8 +16760,10 @@ mod tests {
         let user = reader
             .read_and_complete::<iroha_config::parameters::user::Root>()
             .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
-        user.parse()
-            .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
+        let actual = user
+            .parse()
+            .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))?;
+        Ok(actual.genesis.expected_hash)
     }
     #[tokio::test(flavor = "current_thread")]
     async fn shared_genesis_preparation_precedes_all_peer_configs_and_keeps_async_progress()
@@ -16846,9 +16860,7 @@ mod tests {
             .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
             .await?;
         assert_eq!(
-            parse_peer_run_config(&no_local_genesis_config)?
-                .genesis
-                .expected_hash,
+            peer_run_config_expected_hash(&no_local_genesis_config)?,
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
@@ -16862,9 +16874,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&bootstrap_config)?
-                .genesis
-                .expected_hash,
+            peer_run_config_expected_hash(&bootstrap_config)?,
             expected_hash
         );
         let genesis_path = peer
@@ -16882,9 +16892,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&restart_config)?
-                .genesis
-                .expected_hash,
+            peer_run_config_expected_hash(&restart_config)?,
             expected_hash,
             "restart must reuse the independently provisioned anchor"
         );

@@ -1079,11 +1079,11 @@ async fn profiling_enforces_token_policy() {
         AxQuery(params),
     )
     .await;
+    // A missing token is refused by the token policy, before any rate accounting.
     assert!(matches!(
         missing,
-        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-        )))
+        Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)))
+            if message == "missing or invalid API token"
     ));
     let mut headers_with_token = HeaderMap::new();
     headers_with_token.insert("x-api-token", HeaderValue::from_static("token-456"));

@@ -1221,7 +1221,7 @@ fn pre_direct_candidate_projection_surface_is_sealed_one_pass_and_fail_closed() 
         .0;
     assert_eq!(
         canonical_loop
-            .matches("chunks_exact(POINT_BYTES_V1)")
+            .matches("as_chunks::<POINT_BYTES_V1>()")
             .count(),
         1
     );

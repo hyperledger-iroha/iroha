@@ -31,7 +31,10 @@ use std::{
 
 const TARGET: u64 = 3;
 const OBSERVER: usize = 4;
-const WAIT: Duration = Duration::from_secs(60);
+/// Hang guard for each progress condition below (socket connection, commit, delivery).
+/// No condition here verifies a latency; five native socket actors in an unoptimized build
+/// took over a minute to connect at host load averages above 700.
+const WAIT: Duration = Duration::from_secs(300);
 
 #[derive(Default)]
 struct Lifecycle {

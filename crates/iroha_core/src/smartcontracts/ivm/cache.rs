@@ -3133,6 +3133,7 @@ impl IvmCache {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl IvmCache {
     /// Prepare and summarize a contract using the exact policy selected by its original root.
     pub(crate) fn summarize_program_in_world(

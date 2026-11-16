@@ -1336,6 +1336,9 @@ fn telemetry_sample_retention_is_bounded() {
 }
 #[test]
 fn command_completion_releases_permit_and_queue_stats_once() {
+    // Queue and staging telemetry are process-global; concurrent GPU tests would
+    // record into or reset this snapshot without the shared GPU lane.
+    let _gpu_lane = crate::backend::acquire_gpu_lane();
     super::enable_queue_depth_stats(true);
     let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
     assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
@@ -1394,6 +1397,9 @@ fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {
 }
 #[test]
 fn column_staging_stats_capture_events() {
+    // Queue and staging telemetry are process-global; concurrent GPU tests would
+    // record into or reset this snapshot without the shared GPU lane.
+    let _gpu_lane = crate::backend::acquire_gpu_lane();
     super::enable_queue_depth_stats(true);
     super::record_command_timing_values(super::ColumnStagingPhase::Fft, (3.0, 5.0, 1.0, 2.0));
     super::record_command_timing_values(super::ColumnStagingPhase::Fft, (7.0, 8.0, 6.0, 9.0));

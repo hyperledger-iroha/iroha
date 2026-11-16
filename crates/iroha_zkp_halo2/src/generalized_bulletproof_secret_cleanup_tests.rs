@@ -1,7 +1,7 @@
 const CLEANUP_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const CLEANUP_CONTRACT_ASSET_LEN: usize = 53_080;
+const CLEANUP_CONTRACT_ASSET_LEN: usize = 53_064;
 const CLEANUP_CONTRACT_ASSET_SHA3_256: &str =
-    "b770cd3980853578a1c3d7efedd5b96e97b29162e4a1b0484e1b6a9e751cf528";
+    "06b0b51c2e4669504a06bcb7cdfa92a49cbf7d38d6c5c5080b5bccb2f1fdcb3b";
 const CLEANUP_CONTRACT_ASSET: &[u8] =
     include_bytes!("generalized_bulletproof_secret_cleanup_contracts_v1.txt");
 

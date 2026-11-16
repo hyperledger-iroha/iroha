@@ -227,16 +227,18 @@ async fn physical_worker_panic_remains_visible_to_supervisor() {
     let (_sender, receiver) = mpsc::channel(1);
     supervisor.monitor(
         start(Duration::from_secs(60), receiver, shutdown.clone(), |_| {
-            // The deadline covers unwind propagation and supervision. Inject the
-            // unwind directly so process-global panic-hook I/O and backtrace
-            // symbolization cannot consume that protocol-observation budget.
+            // Inject the unwind directly: process-global panic-hook I/O and backtrace
+            // symbolization are not part of the supervision under test.
             std::panic::resume_unwind(Box::new("deliberate physical gossip worker failure"));
         })
         .expect("valid multithreaded gossip worker"),
     );
-    let result = timeout(Duration::from_secs(1), supervisor.start())
+    // Hang guard only. The verdict is that the panic reaches supervision; unwinding
+    // through this large test binary takes hundreds of milliseconds on a cold or busy
+    // host, so no latency budget may stand in for that verdict.
+    let result = timeout(Duration::from_secs(60), supervisor.start())
         .await
-        .unwrap();
+        .expect("supervision observes the panic before the hang guard");
     let report = result.expect_err("the physical worker panic must reach supervision");
     let mut contexts = report.current_contexts();
     assert!(matches!(

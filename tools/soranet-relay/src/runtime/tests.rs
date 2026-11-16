@@ -109,9 +109,21 @@ mod tests {
             .expect("create private test file")
     }
     fn secure_test_tempdir() -> TempDir {
+        private_test_tempdir_in(std::env::current_dir().expect("current test directory"))
+    }
+    /// A directory for a Unix socket endpoint. A socket path must fit `sockaddr_un` (104
+    /// bytes on macOS), which a deep checkout's current directory can exceed, so the endpoint
+    /// lives under the canonical system temporary directory instead.
+    #[cfg(unix)]
+    fn socket_test_tempdir() -> TempDir {
+        private_test_tempdir_in(
+            std::fs::canonicalize(std::env::temp_dir()).expect("canonical temporary directory"),
+        )
+    }
+    fn private_test_tempdir_in(base: std::path::PathBuf) -> TempDir {
         let directory = tempfile::Builder::new()
             .prefix("soranet-relay-test-")
-            .tempdir_in(std::env::current_dir().expect("current test directory"))
+            .tempdir_in(base)
             .expect("create private test directory");
         #[cfg(unix)]
         {
@@ -356,7 +368,7 @@ mod tests {
     async fn vpn_backend_connection_authenticates_socket_and_peer_before_handoff() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        let directory = secure_test_tempdir();
+        let directory = socket_test_tempdir();
         let path = std::fs::canonicalize(directory.path())
             .expect("canonical backend directory")
             .join("backend.sock");
@@ -458,7 +470,7 @@ mod tests {
     fn vpn_backend_socket_rejects_wrong_identity_mode_and_symlink() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        let directory = secure_test_tempdir();
+        let directory = socket_test_tempdir();
         let canonical = std::fs::canonicalize(directory.path()).expect("canonical backend dir");
         let path = canonical.join("backend.sock");
         let _listener =

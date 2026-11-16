@@ -4942,8 +4942,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let err = args
             .run(&mut writer)
             .expect_err("node config cannot override the original stake asset");
-        assert!(
-            err.to_string().contains("peer config") && err.to_string().contains("is invalid"),
+        // The signing loader refuses the parsed runtime config as a whole; the unmodified
+        // config above loads, so the override is what it refuses.
+        assert_eq!(
+            err.to_string(),
+            "runtime genesis signing config is invalid",
             "unexpected error: {err}"
         );
     }

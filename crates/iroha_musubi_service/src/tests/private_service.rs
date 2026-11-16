@@ -2073,6 +2073,9 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let root = tempfile::tempdir().expect("durable readback journal root");
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))
         .expect("private journal root permissions");
+    // The journal opens only an exact path without linked components; macOS reaches the
+    // temporary directory through `/var -> private/var`.
+    let root_path = std::fs::canonicalize(root.path()).expect("resolved journal root");
     let binding =
         MusubiPublicationServiceJournalBindingV1::from_configuration(&fixture.service.config);
     // The journal must retain all three fixed-shape fixture responses while still reserving one
@@ -2094,7 +2097,7 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     )
     .expect("durable journal limits");
     fixture.service.journal = Box::new(
-        DurableMusubiPublicationServiceJournalV1::initialize(root.path(), binding.clone(), limits)
+        DurableMusubiPublicationServiceJournalV1::initialize(&root_path, binding.clone(), limits)
             .expect("initialize durable readback journal"),
     );
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -2105,7 +2108,7 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let initial_response = control_readback_response(&mut fixture, &initial, 3_000);
     assert_eq!(initial_response.status, 200);
     assert_eq!(calls.lock().expect("readback calls").len(), 1);
-    reopen_durable_journal(&mut fixture, root.path(), &binding, limits);
+    reopen_durable_journal(&mut fixture, &root_path, &binding, limits);
     let cached = control_readback_response(&mut fixture, &initial, 3_100);
     assert_eq!(cached.status, 200);
     assert_eq!(cached.body, initial_response.body);
@@ -2131,7 +2134,7 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let renewal_response = control_readback_response(&mut fixture, &renewal, 3_300);
     assert_eq!(renewal_response.status, 200);
     assert_eq!(calls.lock().expect("replacement readback calls").len(), 3);
-    reopen_durable_journal(&mut fixture, root.path(), &binding, limits);
+    reopen_durable_journal(&mut fixture, &root_path, &binding, limits);
     let cached_replacement = control_readback_response(&mut fixture, &replacement, 3_400);
     assert_eq!(cached_replacement.status, 200);
     assert_eq!(cached_replacement.body, replacement_response.body);
@@ -2527,7 +2530,9 @@ fn storage_request_digest_charges_one_exact_frame_without_renewal() {
     let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, length, 128);
     norito::with_decode_limits_scope(limits, || {
         assert_eq!(request.canonical_request_digest().unwrap(), expected);
-        assert!(request.canonical_request_digest().is_err(),
-            "a second request frame cannot renew the original allowance");
+        assert!(
+            request.canonical_request_digest().is_err(),
+            "a second request frame cannot renew the original allowance"
+        );
     });
 }

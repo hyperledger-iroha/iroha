@@ -248,7 +248,7 @@ docs-cli:
 
 docs-kagami-cli:
 	@echo "Regenerating kagami CLI Markdown help..."
-	@cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md
+	@cargo run -p iroha_kagami --bin kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md
 	@echo "Done: crates/iroha_kagami/CommandLineHelp.md"
 
 # Run GOST perf benchmark + tolerance check.

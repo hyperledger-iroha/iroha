@@ -29,11 +29,29 @@ impl CertifiedTestChain {
     #[must_use]
     pub fn author_payload(&self, header: BlockHeader, payload: Vec<u8>) -> AvailableBody {
         assert_eq!(header.instance, self.instance, "original chain instance");
-        let config = self
-            .availability
-            .height_config(header.height)
-            .expect("read original authenticated historical availability authority")
-            .expect("exact height has a ready authenticated configuration");
+        // A State writer that is still publishing makes the read wait, not fail; the node
+        // reads the same authority again once it releases, and so does the fixture.
+        let busy_until = std::time::Instant::now() + super::STATE_VIEW_BUSY_HANG_GUARD;
+        let config = loop {
+            match self.availability.height_config(header.height) {
+                Err(Attempt::Rejected(error))
+                    if std::time::Instant::now() < busy_until
+                        && matches!(
+                            error.get_ref().and_then(
+                                |cause| cause.downcast_ref::<crate::state::StateViewError>()
+                            ),
+                            Some(crate::state::StateViewError::Busy(_))
+                        ) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                other => {
+                    break other
+                        .expect("read original authenticated historical availability authority");
+                }
+            }
+        }
+        .expect("exact height has a ready authenticated configuration");
         self.author_payload_in_context(header, payload, &config)
             .unwrap_or_else(|(_, error)| panic!("original signed RS16 authoring: {error:?}"))
     }

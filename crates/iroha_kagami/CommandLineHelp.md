@@ -61,6 +61,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced codec norito-to-json`↴](#kagami-advanced-codec-norito-to-json)
 * [`kagami advanced codec json-to-norito`↴](#kagami-advanced-codec-json-to-norito)
 * [`kagami advanced kura`↴](#kagami-advanced-kura)
+* [`kagami advanced kura checkpoint`↴](#kagami-advanced-kura-checkpoint)
 * [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
@@ -1244,11 +1245,32 @@ Commands related to block inspection
 
 ###### **Subcommands:**
 
+* `checkpoint` — Verify a copied Global ledger from a pinned genesis and export its checkpoint
 * `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `finality` — Verify a locally anchored retained prefix and export its exact finality proof
 * `pack-native-contexts` — Rewrite a stopped node's canonical native context records in packed form
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
+
+
+
+## `kagami advanced kura checkpoint`
+
+Verify a copied Global ledger from a pinned genesis and export its checkpoint
+
+**Usage:** `kagami advanced kura checkpoint --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --height <HEIGHT> --max-read-bytes <MAX_READ_BYTES> --output-dir <OUTPUT_DIR> <PATH_TO_BLOCK_STORE>`
+
+###### **Arguments:**
+
+* `<PATH_TO_BLOCK_STORE>` — Exact copied lane directory containing the canonical block journals
+
+###### **Options:**
+
+* `--chain-id <CHAIN_ID>` — Independently selected chain label, not a value discovered in the journal
+* `--network-id <NETWORK_ID>` — Independently authenticated signed-genesis network identity
+* `-H`, `--height <HEIGHT>` — Verify every height from genesis through this exact height (2..=1000000)
+* `--max-read-bytes <MAX_READ_BYTES>` — Explicit cumulative wire-byte budget, at most 64 GiB; each frame is <=32 MiB
+* `--output-dir <OUTPUT_DIR>` — New child directory outside the store; its existing parent must be owner-private
 
 
 

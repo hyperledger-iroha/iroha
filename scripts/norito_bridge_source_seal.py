@@ -457,7 +457,7 @@ _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS = {
     "experiments/kagemusha-spartan/fixtures/credential-source-vectors.txt": ("0ec355e47e6a7fdaef5dc3e8776c03849c8ac13de20a6ba4a339c0ed8d2abf48", 1842),
     "crates/iroha_config/tests/fixtures/full.env": ("89a46c809c1c5791a4d8f075af920995611b0b85249ed6193df084c54cad7fa4", 2048),
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env": ("196c68787e11f84107aaa983a5cb02a97b5d2ef6f860269c85920a1baf5817f5", 26),
-    "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("06f3e6f960e02cb8a452e85d634d6b5b7518ac511d9ab98c69d2ba3e42d8eb4f", 53080),
+    "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("95a0a74c9d0eb92ad958ee41f0a5b9071de40f2a2cd0e9ec62cf4665d621d297", 53064),
     "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv": ("cbb124b4bda971357c61de40bf82566436efecf593e4bb5f9df8e4ac77b678db", 3525),
 }
 

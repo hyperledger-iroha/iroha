@@ -11366,8 +11366,9 @@ fn runtime_obligation_host_refuses_baseline_missing_authority_and_other_subject(
 }
 #[test]
 fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
-    let mut host = CoreHost::new(ALICE_ID.clone());
-    bind_test_contract_runtime(&mut host, 872);
+    use iroha_data_model::smart_contract::entrypoint::{
+        EntrypointArgumentRecordV1, EntrypointValueAtomV1, entrypoint_argument_schema_hash_v1,
+    };
     let compiler = kotodama_lang::compiler::Compiler::new_with_options(
         kotodama_lang::compiler::CompilerOptions {
             host_policy: ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
@@ -11383,38 +11384,95 @@ fn runtime_obligation_host_gas_refusal_publishes_no_effect_or_return() {
     let metadata =
         ivm::ProgramMetadata::parse_for_policy(&program, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
             .unwrap();
-    let syscall_word =
-        encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-            .to_le_bytes();
-    let syscall_offset = program[metadata.code_offset..]
-        .chunks_exact(4)
-        .position(|word| word == syscall_word)
-        .expect("compiled bridge instruction")
-        * 4;
-    let mut vm = IVM::new(u64::MAX);
-    vm.load_program_for_policy(&program, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
-        .unwrap();
-    vm.set_program_counter((metadata.prefix_len() + syscall_offset) as u64)
-        .expect("actual admitted syscall boundary");
+    let descriptor = metadata
+        .contract_interface
+        .as_ref()
+        .expect("contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "call")
+        .expect("call entrypoint");
+    let schema = descriptor
+        .argument_schema
+        .as_ref()
+        .expect("argument schema");
+    let schema_hash =
+        entrypoint_argument_schema_hash_v1(&norito::to_bytes(schema).expect("encode schema"));
     let request = runtime_registration_request();
-    let pointer = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&request).unwrap(),
+    let canonical = norito::to_bytes(&EntrypointArgumentRecordV1 {
+        schema_hash,
+        atoms: vec![EntrypointValueAtomV1::Pointer(make_tlv(
+            PointerType::Blob as u16,
+            &norito::to_bytes(&request).unwrap(),
+        ))],
+    })
+    .expect("encode argument record");
+    let prepared =
+        ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
+            .expect("prepare argument record");
+    // A run begins only at an admitted callable entry; the root-call protocol
+    // refuses a seek into the middle of a body. Enter through `call` and fund
+    // the dispatcher exactly up to the bridge syscall.
+    let entrypoint_pc =
+        u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + descriptor.entry_pc;
+    let syscall_word =
+        encoding::wide::encode_scall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION);
+    let start = |gas: u64| {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        bind_test_contract_runtime(&mut host, 872);
+        host.set_entrypoint_argument_record(Some(prepared.clone()));
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program_for_policy(&program, ivm::SyscallPolicy::AbiV1RuntimeLifecycle)
+            .unwrap();
+        vm.set_gas_limit(gas);
+        vm.set_program_counter(entrypoint_pc)
+            .expect("admitted callable entry");
+        prepared
+            .precharge_vm(&mut vm)
+            .expect("precharge prepared arguments");
+        (host, vm)
+    };
+
+    // Calibrate the genuine path: gas consumed before the bridge SCALL, its
+    // dispatch price, and the syscall's own charge.
+    let calibration_gas = 100_000_000;
+    let (mut host, mut vm) = start(calibration_gas);
+    let budget = iroha_allocation::AllocationBudget::new(
+        4096 * std::mem::size_of::<ivm::execution_step_recorder::DiagnosticStepRecord>(),
     );
-    vm.set_register(10, pointer);
-    vm.set_register(
-        11,
-        ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
+    let mut recorder =
+        ivm::execution_step_recorder::DiagnosticStepRecorder::try_new(4096, &budget).unwrap();
+    vm.run_with_host_diagnostic_steps(&mut host, &mut recorder)
+        .expect("funded bridge call");
+    assert_eq!(host.queued.len(), 1, "funded bridge publishes its request");
+    let step = recorder
+        .records()
+        .iter()
+        .find(|record| record.instruction == Some(syscall_word))
+        .expect("bridge SCALL step");
+    let dispatch_gas = step.opcode_gas.expect("priced SCALL");
+    let consumed_before = calibration_gas - step.before.gas_remaining;
+    let syscall_charge = step.before.gas_remaining - dispatch_gas - step.after.gas_remaining;
+    assert!(syscall_charge > 0, "bridge syscall must be metered");
+    let request_pointer = step.before.registers[10];
+    let tag = step.before.registers[11];
+    let syscall_pc = step.before.pc;
+    assert_eq!(
+        tag,
+        ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION
     );
-    // Direct low-level host calls intentionally have no reserved gas. Exercise the real
-    // VM dispatcher, which must reserve the complete syscall cost before guest-visible work.
-    vm.set_gas_limit(20);
+    drop(recorder);
+
+    // One unit short of the complete syscall charge: the real dispatcher must
+    // refuse before any guest-visible return or queued effect.
+    let (mut host, mut vm) = start(consumed_before + dispatch_gas + syscall_charge - 1);
     let error = vm
         .run_with_host(&mut host)
-        .expect_err("original gas cannot fund the bridge");
+        .expect_err("gas cannot fund the bridge");
     assert!(matches!(error, ivm::VMError::OutOfGas), "{error:?}");
-    assert_eq!(vm.register(10), pointer);
+    assert_eq!(vm.pc(), syscall_pc, "refused at the bridge SCALL");
+    assert_eq!(vm.register(10), request_pointer);
+    assert_eq!(vm.register(11), tag);
     assert!(host.queued.is_empty());
 }
 

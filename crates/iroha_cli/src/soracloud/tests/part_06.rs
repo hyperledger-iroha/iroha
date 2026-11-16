@@ -640,7 +640,7 @@ fn static_asset_bytes_order_and_reconstruction_are_stable() {
     }
     assert_eq!(
         hex::encode(digest.finalize()),
-        "3f7bc8344d679c13a5138ed6149c9f86cf2ac486b1c2f16cb160900f82ae9774"
+        "d178d544d5d60df68fa6837178a9f8a84ad1e82ef2c735615d6dd2992229ff9e"
     );
     assert_eq!(
         webapp_api_server_mjs().strip_prefix(soracloud_auth_core_mjs()),

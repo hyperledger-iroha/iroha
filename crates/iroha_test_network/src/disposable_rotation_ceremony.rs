@@ -2975,11 +2975,25 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
             return false;
         }
         let module = module_path!().split_once("::").unwrap().1;
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &format!("{module}::{test}"), "--nocapture"])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
+        // Spawn while no test overrides the network permit environment, so the child inherits
+        // this process's own permit settings rather than another test's temporary directory.
+        // The guard blocks, so it is taken off this test's runtime thread.
+        let child = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _permit_env = crate::tests::lock_network_permit_env();
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", &format!("{module}::{test}"), "--nocapture"])
+                        .env(CHILD, "1")
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .unwrap()
+                })
+                .join()
+                .unwrap()
+        });
+        let output = child.wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),

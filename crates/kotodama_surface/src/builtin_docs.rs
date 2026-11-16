@@ -515,6 +515,14 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     ("ledger::role::revoke", "Revoke a role from an account."),
     ("ledger::role::unregister", "Unregister a named role."),
     (
+        "ledger::runtime::complete_obligation",
+        "End a runtime obligation and release its completion closure.",
+    ),
+    (
+        "ledger::runtime::register_obligation",
+        "Register or replace a runtime obligation with its exact terminal effects and expiry.",
+    ),
+    (
         "ledger::seiyaku::grant_permission",
         "Grant an account a declared instance permission for the authenticated executing seiyaku. Only the instance owner or an exact permission holder may delegate it.",
     ),

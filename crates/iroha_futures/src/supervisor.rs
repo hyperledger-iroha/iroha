@@ -848,6 +848,29 @@ mod tests {
                 .any(|ctx| matches!(ctx, Error::UnexpectedExit))
         );
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn draining_child_panic_inside_block_in_place_reaches_supervision() {
+        let mut sup = Supervisor::new();
+        let signal = sup.shutdown_signal();
+        sup.monitor(Child::new(
+            tokio::spawn(async {
+                tokio::task::block_in_place(|| {
+                    std::panic::resume_unwind(Box::new("explicit blocking panic"))
+                });
+            }),
+            OnShutdown::Drain,
+        ));
+        // Hang guard only: the verdict is that the drained child's exit ends supervision.
+        let err = timeout(Duration::from_secs(60), sup.start())
+            .await
+            .expect("a drained child that already exited must not block supervision")
+            .expect_err("should catch the panic");
+        assert!(matches!(
+            err.current_contexts().next(),
+            Some(Error::ChildPanicked)
+        ));
+        assert!(signal.is_sent());
+    }
     #[tokio::test]
     async fn graceful_shutdown_when_some_task_panics() {
         let mut sup = Supervisor::new();

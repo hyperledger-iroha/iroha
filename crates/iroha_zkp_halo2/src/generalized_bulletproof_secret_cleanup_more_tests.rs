@@ -206,7 +206,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         1
     );
     assert_eq!(padding.matches("source.clear_secret();").count(), 1);
-    assert_eq!(padding.matches("self.0.truncate(0);").count(), 1);
+    assert_eq!(padding.matches("self.0.clear();").count(), 1);
     assert_eq!(
         padding
             .matches("core::mem::swap(&mut self.0, &mut padded.0);")
@@ -348,7 +348,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         2
     );
     assert_eq!(split.matches("source.clear_secret();").count(), 2);
-    assert_eq!(split.matches("self.0.truncate(0);").count(), 1);
+    assert_eq!(split.matches("self.0.clear();").count(), 1);
     assert_eq!(split.matches("right.0.push(F::ZERO);").count(), 0);
     assert_eq!(
         split

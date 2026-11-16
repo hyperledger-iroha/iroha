@@ -182,6 +182,10 @@ Every release decodes the same bytes alike and stops at the same envelope (desig
   signatures do not depend on the release. A wire ID breaking the rule, and malformed pair framing,
   stay decode errors. `isi::decode_instruction_from_pair` remains the strict typed decoder for
   clients. Signed attachment actions name wire IDs under the same rule, never by registration.
+  Inside the trigger lifecycle Action scanner's validation scope, both decoders admit only the
+  release's static built-in inventory and charge every nested instruction frame to the scanner's
+  cumulative frame and work limits. A nested unregistered wire ID is therefore refused there, as
+  a top-level one is.
 - **Tolerant registration.** An addition's instructions register with
   `built_in_wire_id!(T => "id", tolerant)`: a frame that is not the canonical frame of a payload
   the decoder accepts (invalid bytes or the decoder's own protocol limits) yields the opaque

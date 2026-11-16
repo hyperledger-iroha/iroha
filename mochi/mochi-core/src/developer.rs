@@ -25,6 +25,8 @@ use std::{
 
 /// Execution gas for desktop views and calls: Kagami's default budget.
 const CONTRACT_GAS_LIMIT: u64 = 1_500_000;
+/// Preparation and startup budget for a desktop-created localnet.
+const LOCALNET_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 /// How long a desktop call may sign new work: Kagami's default `--timeout`.
 const CALL_SIGNING_WINDOW_MS: u64 = 60_000;
 
@@ -214,8 +216,13 @@ impl DeveloperWorkspace {
     /// # Errors
     /// Existing or concurrently owned name, generation, custody or startup failure.
     pub fn create_localnet(&self, name: &str) -> Result<ManagedStatus> {
+        self.create_localnet_within(name, LOCALNET_STARTUP_BUDGET)
+    }
+
+    /// [`Self::create_localnet`] with an explicit budget for preparation and startup.
+    fn create_localnet_within(&self, name: &str, budget: Duration) -> Result<ManagedStatus> {
         Ok(ManagedStore::open(&self.root)?
-            .create_localnet(&self.runtime.localnet_request(name, Duration::from_secs(30)))?)
+            .create_localnet(&self.runtime.localnet_request(name, budget))?)
     }
 
     /// Restart exactly the displayed generation without changing workspace selection.
@@ -1350,23 +1357,48 @@ mod tests {
         std::fs::create_dir(&bin).unwrap();
         // The native harness does not implement Kagami's worker entry point. Canonical
         // preparation is real; listener handoff detects its exit before adoption.
-        for program in ["kagami", "iroha3d"] {
-            std::fs::copy(
-                std::env::current_exe().unwrap(),
-                bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-            )
-            .unwrap();
-        }
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            bin.join(format!("kagami{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .unwrap();
+        // The daemon is a native program that accepts the generated configuration in the
+        // pre-start `--check-config --json` probe, so startup reaches the worker's listener
+        // handoff. Installed programs must be native executables, so it is compiled here.
+        let probe = temporary.path().join("accepting_daemon.rs");
+        std::fs::write(
+            &probe,
+            "fn main() {\n    if std::env::args().any(|arg| arg == \"--check-config\") {\n        println!(\"{{\\\"status\\\":\\\"ready\\\"}}\");\n        return;\n    }\n    std::process::exit(1);\n}\n",
+        )
+        .unwrap();
+        let compiled =
+            std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+                .args(["--edition=2024", "-C", "debuginfo=0"])
+                .arg(&probe)
+                .arg("-o")
+                .arg(bin.join(format!("iroha3d{}", std::env::consts::EXE_SUFFIX)))
+                .output()
+                .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
         let desktop = DeveloperWorkspace::with_runtime(
             &temporary.path().join("state"),
             &project,
             InstalledRuntime::from_directory(&bin).unwrap(),
         )
         .unwrap();
-        let failure = desktop.create_localnet("fixture").unwrap_err();
+        // Canonical preparation runs inside this budget; an unoptimized test build prepares
+        // the real generation much more slowly than the release desktop's budget assumes.
+        const BUDGET: Duration = Duration::from_secs(90);
+        let failure = desktop
+            .create_localnet_within("fixture", BUDGET)
+            .unwrap_err();
         let expected = format!(
             "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
-            iroha_deploy::managed::Error::Timeout(Duration::from_secs(30))
+            iroha_deploy::managed::Error::Timeout(BUDGET)
         );
         assert!(
             matches!(

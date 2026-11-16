@@ -215,8 +215,15 @@ impl Drop for Fixture {
                 }
             }
         }
-        // Keep the owner and temporary root used above visibly associated.
-        assert!(self.owner.path().starts_with(self.root.path()));
+        // Keep the owner and temporary root used above visibly associated. The owner retains
+        // the resolved path (macOS reaches the temporary directory through
+        // `/var -> private/var`), so compare it with the resolved root. A drop that runs
+        // during a failing test's unwind must not panic again and abort the binary.
+        let associated = fs::canonicalize(self.root.path())
+            .is_ok_and(|root| self.owner.path().starts_with(root));
+        if !std::thread::panicking() {
+            assert!(associated, "the owner directory left its temporary root");
+        }
     }
 }
 

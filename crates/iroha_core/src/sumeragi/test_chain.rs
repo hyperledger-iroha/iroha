@@ -115,6 +115,9 @@ use crate::{
 const VALIDATOR_SEEDS: [u8; 4] = [0xC1, 0xC2, 0xC3, 0xC4];
 /// Seed of the fixture's clock account (Ed25519).
 const CLOCK_SEED: u8 = 0xCC;
+/// Hang guard for one proposal deferred by a still-publishing State writer. It bounds a
+/// stuck writer; no fixture verifies the wait itself.
+const STATE_VIEW_BUSY_HANG_GUARD: Duration = Duration::from_secs(120);
 
 /// Which validators sign a block's `CommitQC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1739,25 +1742,36 @@ impl CertifiedTestChain {
         assert_eq!(block.header().height, height, "original next height");
         let block_hash = block.hash(&*self.crypto);
         let mut diagnostic_events = self.events.resubscribe();
-        let result = match self.executor.execute(&block, &block_hash, false) {
-            Ok(Some(ExecOutcome::Valid { result, .. })) => result,
-            other => {
-                use iroha_data_model::events::{
-                    EventBox,
-                    pipeline::{BlockStatus, PipelineEventBox},
-                };
-                let mut rejection = None;
-                while let Ok(event) = diagnostic_events.try_recv() {
-                    if let EventBox::Pipeline(PipelineEventBox::Block(event)) = event
-                        && event.header.height().get() == height
-                        && let BlockStatus::Rejected(reason) = event.status
-                    {
-                        rejection = Some(reason);
-                    }
+        // A State writer that is still publishing defers the proposal without consuming it.
+        // The node's driver retains the same source and executes it again once the writer
+        // releases; the fixture does the same, under a hang guard only.
+        let busy_until = std::time::Instant::now() + STATE_VIEW_BUSY_HANG_GUARD;
+        let result = loop {
+            match self.executor.execute(&block, &block_hash, false) {
+                Ok(Some(ExecOutcome::Valid { result, .. })) => break result,
+                Err(super::driver::traits::PublicationError::Deferred(
+                    super::driver::traits::PublicationDeferral::StateViewBusy(_),
+                )) if std::time::Instant::now() < busy_until => {
+                    std::thread::sleep(Duration::from_millis(1));
                 }
-                return Err(format!(
-                    "fixture block {height} does not execute: {other:?}; native rejection: {rejection:?}"
-                ));
+                other => {
+                    use iroha_data_model::events::{
+                        EventBox,
+                        pipeline::{BlockStatus, PipelineEventBox},
+                    };
+                    let mut rejection = None;
+                    while let Ok(event) = diagnostic_events.try_recv() {
+                        if let EventBox::Pipeline(PipelineEventBox::Block(event)) = event
+                            && event.header.height().get() == height
+                            && let BlockStatus::Rejected(reason) = event.status
+                        {
+                            rejection = Some(reason);
+                        }
+                    }
+                    return Err(format!(
+                        "fixture block {height} does not execute: {other:?}; native rejection: {rejection:?}"
+                    ));
+                }
             }
         };
         Ok(PendingTestExecution {
@@ -2050,12 +2064,20 @@ impl PendingTestExecution<'_> {
             .certificate
             .as_ref()
             .expect("original certificate retained");
-        match self
-            .chain
-            .executor
-            .prepare(&self.block, qc)
-            .map_err(|error| error.to_string())?
-        {
+        // A State reader or writer still publishing defers preparation without consuming the
+        // owner; the node's driver prepares the same execution again, and so does the fixture.
+        let busy_until = std::time::Instant::now() + STATE_VIEW_BUSY_HANG_GUARD;
+        let prepared = loop {
+            match self.chain.executor.prepare(&self.block, qc) {
+                Err(super::driver::traits::PublicationError::Deferred(
+                    super::driver::traits::PublicationDeferral::StateViewBusy(_),
+                )) if std::time::Instant::now() < busy_until => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => break other.map_err(|error| error.to_string())?,
+            }
+        };
+        match prepared {
             Some(result) if result == self.result => Ok(()),
             other => Err(format!("original execution preparation refused: {other:?}")),
         }
@@ -2141,17 +2163,41 @@ impl PendingTestExecution<'_> {
             return Ok(published.clone());
         }
         self.prepare(signers)?;
-        if !self.appended {
-            self.append_prepared().map_err(|error| error.to_string())?;
+        // Like the node's driver, retry the same original owner while a State reader or
+        // writer that is still publishing holds the State; anything else is returned.
+        let busy_until = std::time::Instant::now() + STATE_VIEW_BUSY_HANG_GUARD;
+        while !self.appended {
+            match self.append_prepared() {
+                Ok(()) => {}
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error))
+                    if std::time::Instant::now() < busy_until
+                        && matches!(
+                            error.get_ref().and_then(
+                                |cause| cause.downcast_ref::<crate::state::StateViewError>()
+                            ),
+                            Some(crate::state::StateViewError::Busy(_))
+                        ) =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
         }
         let (_, qc) = self
             .certificate
             .as_ref()
             .expect("prepared original certificate");
-        self.chain
-            .executor
-            .commit(&self.block, qc)
-            .map_err(|error| error.to_string())?;
+        loop {
+            match self.chain.executor.commit(&self.block, qc) {
+                Ok(_) => break,
+                Err(super::driver::traits::PublicationError::Deferred(
+                    super::driver::traits::PublicationDeferral::StateViewBusy(_),
+                )) if std::time::Instant::now() < busy_until => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
         self.chain.tip = (self.block.header().height, self.block_hash, self.result);
         let published = self.chain.committed(self.block.header().height);
         self.published = Some(published.clone());

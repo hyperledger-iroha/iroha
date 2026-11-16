@@ -1,34 +1,34 @@
 {
   "blocks": [
     {
-      "block_hash": "b6fbb15d1ca0259dcdbd5f55b06687c3e36665e3a11de9aa13f1c55871c6cb99",
+      "block_hash": "c3f68743544d1275157db3077a6fbd8fa0769f9b90d48614f77c9b168e98ae93",
       "bytes": 19036,
       "file": "block-1.wire",
       "height": 1,
-      "sha256": "2cc9bbd5178d4a23f9641297be793895999ea12498530b68481958fafa9a9117"
+      "sha256": "f3bfe20a8a3d923a5b566137eb412d38f8709750fbcb40d728156ede3427c6fe"
     },
     {
-      "block_hash": "e274eb38c0a60f55a0257bec59c5ac0d468a34e49b34ac933a65bf61b72cd8f9",
+      "block_hash": "459cddfc1a00656ee7733564967f4253fbba083510242bb4d5349370387eb4f9",
       "bytes": 13498,
       "file": "block-2.wire",
       "height": 2,
-      "sha256": "2ce785f34c5bd15fb873eaa6a74a0356a06371c83d95b31793591b300105db08"
+      "sha256": "fc9850bdced8a85189b7d7cf020577bcba985c6d86660eded11c908da1b14666"
     },
     {
-      "block_hash": "9d19c1607f16bb4187c19b2020784fc460a9ebfd5bae11847b0ae930cee879f3",
+      "block_hash": "90627368d07ce6c334c6d4cb8d0d04d3d5b2351b74c8b89cf0d56f902d773175",
       "bytes": 13883,
       "file": "block-3.wire",
       "height": 3,
-      "sha256": "90e796d5c0f77292bc029de25abbf10f316ec6f6f6591cc464c7c17f27ee1e84"
+      "sha256": "9ce9ef91d694cd87f1af995bd56f349956831499dc80194fc9a0ecc2156475a0"
     }
   ],
   "chain_id": "sumeragi-node-test",
   "execution_tip": {
-    "core_hash": "14439638CBAF60908F39084A6F794D9C1E602865D8CED3194E285B5381EFBBF1",
-    "creation_time_ms": 1793303254802,
+    "core_hash": "0DE4DE9ADC51F395959A83D16E1DF07D878779CD58850E9C01835E60B5B9D605",
+    "creation_time_ms": 1794730949391,
     "height": 3,
-    "iroha_hash": "hash:9D19C1607F16BB4187C19B2020784FC460A9EBFD5BAE11847B0AE930CEE879F3#38D7",
-    "result": "588FA04BAD05C677715D0D96268E4F61BC8DF76A97B24A8B32428A4B5E2723AD",
+    "iroha_hash": "hash:90627368D07CE6C334C6D4CB8D0D04D3D5B2351B74C8B89CF0D56F902D773175#5C11",
+    "result": "84DAF3D54F144EB8442347E717C3ED93329D2D78E3A0B05FCB359D7205D2334A",
     "root_scope": {
       "kind": "global",
       "value": null
@@ -39,7 +39,7 @@
     "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
     "test": "sumeragi::node::tests::history_cutover_tests::capture_pinned_first_release_history"
   },
-  "history_sha256": "61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5",
+  "history_sha256": "bbd5ea2b1b0b0370bbde9c2eb5fee7160ab4a2b221a00832d1c218d8f2713337",
   "validators": 4,
-  "world_state_root": "96d0e9544da1c171918fa14fb2b5a9a1cf920d5c6e26feb6977efe9ff1e59057"
+  "world_state_root": "747db447529fbc34e47d52d8be6fa5387d64b1b5b9c2b612970901328b0419c7"
 }

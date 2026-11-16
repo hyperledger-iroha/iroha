@@ -331,6 +331,14 @@ The inventory now records that existing capture; the fixture is unchanged from
 `90ea8ea33b`. This corrects the stale inventory digest from the earlier baseline
 capture in `e93b3f9d7f`, without regenerating history to make a replay pass.
 
+The 2026-11-13/14 IVM gas schedule and committed execution-policy changes
+(`c5511ebfc4`, `14e5a5e1f4`) changed the signed genesis execution policy digest
+and the baseline `abi.v1` host profile, so the pinned genesis no longer validates.
+This declares `fresh_genesis` for `genesis` and `execution_semantics`. The three
+pinned frames were regenerated with the capture test; the history digest is
+`bbd5ea2b1b0b0370bbde9c2eb5fee7160ab4a2b221a00832d1c218d8f2713337`. No live
+network was changed, and the previous history is not claimed to replay.
+
 The original V1 signing schema retains its atomic-private-settlement record in
 the nested SORA Nexus policy digest and its five named provenance fields in the
 execution-policy digest. Their removal in `e1f137143e` and `3b47f8a49f` changed the

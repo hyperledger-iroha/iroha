@@ -3264,13 +3264,23 @@ mod tests {
     struct TestDirectory(PathBuf);
     impl TestDirectory {
         fn new(label: &str) -> Self {
+            Self::new_in(std::env::current_dir().expect("current directory"), label)
+        }
+        /// A directory for a Unix socket endpoint. A socket path must fit `sockaddr_un`
+        /// (104 bytes on macOS), which a deep checkout's current directory can exceed, so
+        /// the endpoint lives under the canonical system temporary directory instead.
+        fn for_socket(label: &str) -> Self {
+            Self::new_in(
+                fs::canonicalize(std::env::temp_dir()).expect("canonical temporary directory"),
+                label,
+            )
+        }
+        fn new_in(base: PathBuf, label: &str) -> Self {
             let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::current_dir()
-                .expect("current directory")
-                .join(format!(
-                    ".sora-vpn-backend-{label}-{}-{sequence}",
-                    std::process::id()
-                ));
+            let path = base.join(format!(
+                ".sora-vpn-backend-{label}-{}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir(&path).expect("create test directory");
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
                 .expect("protect test directory");
@@ -4117,7 +4127,7 @@ mod tests {
     }
     #[test]
     fn unix_socket_startup_preserves_existing_live_socket() {
-        let directory = TestDirectory::new("live-socket");
+        let directory = TestDirectory::for_socket("live-socket");
         let path = directory.path().join("s");
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind live socket");
         let error = ensure_unix_socket_path_available(&path)
@@ -4133,7 +4143,7 @@ mod tests {
     }
     #[test]
     fn unix_socket_guard_removes_only_the_endpoint_it_captured() {
-        let directory = TestDirectory::new("socket-guard");
+        let directory = TestDirectory::for_socket("socket-guard");
         let path = directory.path().join("g");
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind owned socket");
         let mut guard = UnixSocketGuard::capture(&path).expect("capture owned socket identity");

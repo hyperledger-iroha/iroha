@@ -467,7 +467,7 @@ fn production_source_and_release_guards_are_static() {
         .next()
         .unwrap();
     assert!(!topology_body.contains("vector_arithmetic_plane_openings_v1"));
-    let registration = "#[path = \"vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs\"]\nmod ordered_snapshot_v1;";
+    let registration = "#[path = \"vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs\"]\npub(in crate::vega::zk_ams::mkhe) mod ordered_snapshot_v1;";
     assert_eq!(production.matches(registration).count(), 1);
     assert!(!production.contains(&format!("#[cfg(test)]\n{registration}")));
     assert!(!production.contains("approved_snapshot_layout_v1"));
