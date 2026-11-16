@@ -129,7 +129,7 @@ mod query_projection;
 pub(crate) use amx_initialization::AmxChainInitialization;
 pub use current_cut::{CurrentCertifiedCut, CurrentCutSourceLimits, read_current_certified_cut};
 pub(crate) use native_acquisition::NativeCarrierAcquisition;
-pub(crate) use portable_resume::portable_checkpoint_for_state;
+pub(crate) use portable_resume::{portable_checkpoint_for_state, portable_proof_source};
 mod identity;
 pub(crate) use identity::committed_identity;
 pub(crate) use prefix_checkpoints::{FinalityPrefixCheckpoints, PrefixCheckpoint};

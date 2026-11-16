@@ -53,8 +53,25 @@ pub(super) fn fixture() -> (CertifiedTestChain, NativeReplaySeed, AssetId) {
 pub(super) fn fixture_with_seeds(
     seed_count: usize,
 ) -> (CertifiedTestChain, Vec<NativeReplaySeed>, AssetId) {
+    fixture_with_world(World::new(), seed_count)
+}
+
+/// [`fixture`] on a chain whose genesis selects the keyed commitment profile. Only its
+/// certified parent root binds the complete published State, so only such a chain's
+/// snapshot can be restored without replaying from signed genesis.
+pub(super) fn keyed_fixture() -> (CertifiedTestChain, NativeReplaySeed, AssetId) {
+    let mut world = World::new();
+    crate::runtime::keyed_state::install_for_test(&mut world);
+    let (chain, mut seeds, asset) = fixture_with_world(world, 1);
+    (chain, seeds.pop().unwrap(), asset)
+}
+
+fn fixture_with_world(
+    world: World,
+    seed_count: usize,
+) -> (CertifiedTestChain, Vec<NativeReplaySeed>, AssetId) {
     assert!(seed_count > 0);
-    let mut config = TestChainConfig::new(World::new(), 1_000);
+    let mut config = TestChainConfig::new(world, 1_000);
     config.clock_bootstrap_in_genesis = true;
     let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
     let domain =

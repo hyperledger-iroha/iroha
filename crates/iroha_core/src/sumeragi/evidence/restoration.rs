@@ -25,7 +25,8 @@ struct SccpJob {
     read: crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead,
     reducer: crate::smartcontracts::isi::sccp::forgery::SccpRestore,
 }
-/// An absent/early/non-Global original cut cannot authenticate SCCP claims in either
+/// An absent/early/non-Global original cut, or a portable checkpoint store without its
+/// pre-checkpoint history, cannot authenticate SCCP claims in either
 /// current or predecessor state. Inspect the union of current and nonempty undo values:
 /// every value in that union occurs in one of the two exact cuts; undo `None` adds none.
 fn require_no_sccp_claims(state: &State) -> Result<(), EvidenceAdmissionError> {
@@ -91,10 +92,18 @@ impl RestorationRead {
         if capacity.record_capacity_exceeded || capacity.byte_capacity_exceeded {
             return Err(invalid("restored evidence exceeds canonical capacity"));
         }
-        let sccp = if view.native_execution_tip().is_some_and(|tip| {
-            tip.height() >= 2
-                && tip.root_scope() == iroha_data_model::block::consensus::SumeragiRootScope::Global
-        }) {
+        // The SCCP walk replays every original carrier and archive delta from genesis. A
+        // portable checkpoint store omits that pre-checkpoint history permanently, so it has no
+        // original Global history to authenticate claims against and must hold none.
+        // TODO: authenticate SCCP claims on a portable store, either by transferring the
+        // original archive interval or by starting the reducer from the certified checkpoint
+        // State; until then a joined node refuses restoration once any SCCP claim exists.
+        let sccp = if view.kura().checkpoint_prefix_height().is_none()
+            && view.native_execution_tip().is_some_and(|tip| {
+                tip.height() >= 2
+                    && tip.root_scope()
+                        == iroha_data_model::block::consensus::SumeragiRootScope::Global
+            }) {
             let read = crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead::new(
                 HistoryCapture::for_sccp(state, view, generation)
                     .map_err(EvidenceAdmissionError::Source)?

@@ -384,12 +384,13 @@ impl CapturedNetworkPolicyRoutes {
         };
         // Use the same committed ledger time as RoutingSnapshot::of, including replacement
         // owners whose history has already been rewound to the actual predecessor.
+        // A portable checkpoint parent lends its authenticated clock, not its omitted body.
         let ledger_time_ms = state
-            .latest_block()
+            .latest_block_creation_time()
             .map_err(|error| {
                 error.map_rejection(|_| "Network parent history is unavailable or invalid")
             })?
-            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
+            .and_then(|time| u64::try_from(time.as_millis()).ok())
             .unwrap_or(0);
         let (root_scope, candidate_testing) = if genesis {
             // A height-one header alone is not genesis authority. Reuse the canonical

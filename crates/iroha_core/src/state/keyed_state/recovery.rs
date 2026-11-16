@@ -191,6 +191,14 @@ impl State {
         let chain = CertifiedChain::new(&view).map_err(history_error)?;
         let block = if tip.height() == 1 {
             chain.committed(1).map_err(history_error)?
+        } else if view.kura().checkpoint_prefix_height() == Some(tip.height() - 1) {
+            // The parent is a sealed portable checkpoint whose body and execution receipt the
+            // store omits. The portable native prefix verifies this actual successor frame,
+            // its header and its exact-quorum CommitQC against the sealed parent instead.
+            chain
+                .certified(tip.height())
+                .map_err(history_error)?
+                .into_committed()
         } else {
             // Native replay has already authenticated the prefix. The terminal QC
             // can be independently checked from its original parent in bounded work.

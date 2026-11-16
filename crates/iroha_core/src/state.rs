@@ -37521,6 +37521,38 @@ pub trait StateReadOnly: WorldStateSnapshot {
         NonZeroUsize::new(self.height())
             .map_or_else(|| Ok(None), |height| self.block_by_height(height))
     }
+    /// Creation time of the latest committed block. Returns none if genesis is not committed.
+    ///
+    /// A portable checkpoint store omits the body of its checkpoint H permanently.
+    /// Complete-State restoration authenticated H's header and clock through the portable
+    /// successor and published them as the original native execution tip, so while H is the
+    /// latest block the clock of that exact tip stands in for the omitted body. It lends the
+    /// clock only; the omitted body never becomes a canonical receipt.
+    ///
+    /// # Errors
+    /// Returns the original local resource refusal or canonical history error if
+    /// the latest committed body is needed but cannot be read and authenticated.
+    #[inline]
+    fn latest_block_creation_time(
+        &self,
+    ) -> core::result::Result<
+        Option<Duration>,
+        crate::execution_attempt::ExecutionAttemptError<CanonicalHistoryError>,
+    > {
+        let height = self.height();
+        if height > 0
+            && self.kura().checkpoint_prefix_height() == u64::try_from(height).ok()
+            && let Some(native) = self.native_execution_tip().filter(|native| {
+                u64::try_from(height).ok() == Some(native.height())
+                    && Some(native.iroha_hash()) == self.latest_block_hash()
+            })
+        {
+            return Ok(Some(Duration::from_millis(native.creation_time_ms())));
+        }
+        Ok(self
+            .latest_block()?
+            .map(|block| block.header().creation_time()))
+    }
     /// Visit every canonical slot in the chain from `start`.
     ///
     /// The first unavailable or corrupt body is returned as a

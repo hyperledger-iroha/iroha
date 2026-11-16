@@ -16,7 +16,7 @@ use super::{NativeFinalityProofBudget, ProofDestinationError, proof_destination:
 #[cfg(not(all(test, sumeragi_core_mutation = "HC211")))]
 use crate::{
     execution_attempt::kura_read_attempt_error,
-    sumeragi::certified_chain::{proof_source_append, proof_source_start},
+    sumeragi::certified_chain::{portable_proof_source, proof_source_append, proof_source_start},
 };
 use crate::{
     execution_attempt::{ExecutionAttemptError, ExecutionDeferred},
@@ -572,7 +572,10 @@ fn check(
 // One complete byte pass over every frame this walk read, with original
 // namespace/index/object/start/length checks and a coherent journal-image bracket.
 // `start` is the fence before the first read frame: signed genesis for a fresh walk,
-// or the resumed checkpoint's parent. Loss never selects another source/pool or
+// or the resumed checkpoint's parent. A fresh walk over a portable checkpoint store starts
+// at the sealed checkpoint H instead, whose omitted bodies were never read: its fence is
+// recomputed from a fresh rewalk of the durable portable proof against the pinned
+// journal, so a changed proof fails the join. Loss never selects another source/pool or
 // returns previously verified graphs. This constant digest is only a local join.
 // Returns the fence through the final frame's parent for that frame's checkpoint.
 #[cfg(not(all(test, sumeragi_core_mutation = "HC211")))]
@@ -607,7 +610,10 @@ fn join_source(
     };
     progress()?;
     let first = get(1)?;
-    let (joined, mut digest) = start;
+    let (joined, mut digest) = match (start.0, source.kura.checkpoint_prefix_height()) {
+        (0, Some(height)) => (height, portable_join_start(source, height)?),
+        _ => start,
+    };
     if joined >= limits.to {
         return Err(unavailable(limits.to));
     }
@@ -644,6 +650,35 @@ fn join_source(
         return Err(unavailable(limits.to));
     }
     Ok(parent)
+}
+
+// The fence a portable query cursor started from, rederived from the durable proof files.
+#[cfg(not(all(test, sumeragi_core_mutation = "HC211")))]
+fn portable_join_start(
+    source: &NativeFinalityProofSource<'_>,
+    height: u64,
+) -> Result<Hash, NativeFinalityProofIntervalError> {
+    let unavailable = NativeFinalityProofIntervalError::Source { height };
+    let sealed = source
+        .kura
+        .walk_checkpoint_prefix_lookup(
+            source.chain_id,
+            *source.network,
+            source.hashes.hash_count(),
+            &|index| source.hashes.hash_at(index).copied(),
+            &mut |_| Ok(()),
+        )
+        .map_err(|error| match error {
+            ExecutionAttemptError::Deferred(local) => {
+                NativeFinalityProofIntervalError::Deferred(local)
+            }
+            ExecutionAttemptError::Rejected(_) => {
+                NativeFinalityProofIntervalError::Source { height }
+            }
+        })?
+        .filter(|sealed| sealed.checkpoint().header().height().get() == height)
+        .ok_or(unavailable)?;
+    Ok(portable_proof_source(&sealed))
 }
 
 #[cfg(test)]

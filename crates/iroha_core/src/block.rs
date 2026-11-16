@@ -5252,16 +5252,39 @@ pub(crate) mod valid {
             clippy::result_large_err,
             reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
         )]
-        fn block_time_floor(
-            block: &SignedBlock,
-            prev_block: &SignedBlock,
-            block_cadence: Duration,
-        ) -> Result<Duration, BlockValidationError> {
-            Self::block_time_floor_from_parent_time(
-                block,
-                prev_block.header().creation_time(),
-                block_cadence,
-            )
+        /// Creation time of the parent a block builds on: the latest committed block, or its
+        /// predecessor for a same-height replacement (`soft_fork`). `None` when the block has no
+        /// committed parent. A portable checkpoint parent lends its authenticated clock through
+        /// [`StateReadOnly::latest_block_creation_time`] instead of its omitted body.
+        ///
+        /// # Errors
+        /// The original local refusal, or a deferral when the parent body is unavailable.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
+        fn parent_creation_time(
+            state: &impl StateReadOnly,
+            soft_fork: bool,
+        ) -> Result<Option<Duration>, BlockValidationError> {
+            // TODO: a same-height replacement of the first successor on a portable store needs
+            // the checkpoint parent's clock from the predecessor native tip, which this view
+            // does not capture; it defers below as unavailable history until it does.
+            let parent = if soft_fork {
+                state
+                    .prev_block()
+                    .map(|parent| parent.map(|parent| parent.header().creation_time()))
+            } else {
+                state.latest_block_creation_time()
+            };
+            parent.map_err(|error| {
+                BlockValidationError::ExecutionDeferred(match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(original) => original,
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                        ivm::error::ExecutionDeferral::CanonicalHistoryUnavailable.into()
+                    }
+                })
+            })
         }
         /// Minimum permitted creation time over a parent created at `parent_creation_time`:
         /// at least one cadence later, at the certified lane floor and strictly after every
@@ -5440,25 +5463,13 @@ pub(crate) mod valid {
                     check_genesis_execution_results(block)?;
                 }
             } else {
-                let prev_block = if soft_fork {
-                    state.prev_block()
-                } else {
-                    state.latest_block()
-                }
-                .map_err(|error| {
-                    BlockValidationError::ExecutionDeferred(match error {
-                        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
-                            original
-                        }
-                        crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
-                            ivm::error::ExecutionDeferral::CanonicalHistoryUnavailable.into()
-                        }
-                    })
-                })?;
-                if let Some(prev_block) = prev_block {
-                    let prev_block_time = prev_block.header().creation_time();
+                if let Some(prev_block_time) = Self::parent_creation_time(state, soft_fork)? {
                     if let Some(block_cadence) = validation_profile.block_cadence() {
-                        let minimum = Self::block_time_floor(block, &prev_block, block_cadence)?;
+                        let minimum = Self::block_time_floor_from_parent_time(
+                            block,
+                            prev_block_time,
+                            block_cadence,
+                        )?;
                         let actual = block.header().creation_time();
                         if actual < minimum
                             || cfg!(all(test, sumeragi_core_mutation = "HC329"))

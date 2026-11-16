@@ -1,7 +1,10 @@
 //! Replay checks of genuine certified copies: a clean copy, a certified result this build does not
 //! reproduce, an absent body, a snapshot start on a whole-store copy and the upgrade checkpoint.
 
-use super::super::{NativeReplaySeed, tests::fixture};
+use super::super::{
+    NativeReplaySeed,
+    tests::{fixture, keyed_fixture},
+};
 use super::*;
 use crate::{
     governance::manifest::LaneManifestRegistry,
@@ -290,7 +293,9 @@ fn absent_body_is_missing_history_above_the_reproduced_prefix() {
 #[test]
 fn whole_store_copy_replays_from_an_authenticated_snapshot_without_touching_the_source() {
     run(|| {
-        let (mut chain, seed, asset) = fixture();
+        // Snapshot restoration requires the keyed profile: an LtHash root binds only the World,
+        // so a decoder refuses a nonempty LtHash snapshot as needing replay from genesis.
+        let (mut chain, seed, asset) = keyed_fixture();
         transfer(&mut chain, &asset, 1_200);
         let snapshot = crate::snapshot::CapturedStateSnapshot::capture(chain.state())
             .expect("stable snapshot cut at height three");

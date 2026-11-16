@@ -157,14 +157,17 @@ fn portable_transfer_export_retains_original_busy_reader_and_retries() {
         .spawn(|| {
             let fixture = transferred_checkpoint_fixture();
             let source = fixture.source.state();
-            let writer = source.world.block();
-            let error = match crate::sumeragi::checkpoint_prefix::CheckpointPrefixExport::new(
-                Arc::clone(source),
-                2,
-            ) {
-                Err(error) => error,
-                Ok(_) => panic!("checkpoint export bypassed its original World writer"),
-            };
+            // A World block writer never blocks lock-free readers; the original State publisher
+            // and its visibility interval are what make the export's nonblocking cut busy.
+            let error = source.with_held_view_publication_for_reader_test(|_| {
+                match crate::sumeragi::checkpoint_prefix::CheckpointPrefixExport::new(
+                    Arc::clone(source),
+                    2,
+                ) {
+                    Err(error) => error,
+                    Ok(_) => panic!("checkpoint export bypassed its original State publisher"),
+                }
+            });
             let crate::execution_attempt::ExecutionAttemptError::Rejected(
                 crate::sumeragi::checkpoint_prefix::Error::Storage(error),
             ) = error
@@ -181,7 +184,6 @@ fn portable_transfer_export_retains_original_busy_reader_and_retries() {
                     .and_then(|error| error.downcast_ref::<crate::state::StateViewError>()),
                 Some(crate::state::StateViewError::Busy(_))
             ));
-            drop(writer);
             crate::sumeragi::checkpoint_prefix::CheckpointPrefixExport::new(Arc::clone(source), 2)
                 .expect("release permits a fresh original-source read");
         })
@@ -369,6 +371,42 @@ fn portable_transfer_rebuilds_original_da_indexes_without_historical_bodies() {
                     .native_frame_read(2, fixture.source.committed(2).block_hash())
                     .unwrap()
                     .is_none()
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap_or_else(|error| std::panic::resume_unwind(error));
+}
+
+#[test]
+fn portable_transfer_restore_refuses_sccp_claims_without_original_history() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let mut fixture = transferred_checkpoint_fixture();
+            assert_eq!(fixture.kura.checkpoint_prefix_height(), Some(2));
+            // The portable store omits genesis through H, so no SCCP history walk can run;
+            // claim-free State still authenticates against the restored Global tip.
+            crate::sumeragi::evidence::validate_persisted_records(&fixture.restored)
+                .expect("claim-free portable State needs no SCCP history");
+            let state = Arc::get_mut(&mut fixture.restored).expect("sole restored State owner");
+            let budget = state
+                .world
+                .sccp_forgery_offences
+                .allocation_budget()
+                .clone();
+            state.world.sccp_forgery_max_generation =
+                crate::state::sccp_forgery_custody::initialize_max(
+                    Some(1),
+                    crate::state::sccp_forgery_custody::MaxGenerationPredecessor::Unchanged,
+                    &budget,
+                )
+                .unwrap();
+            let error = crate::sumeragi::evidence::validate_persisted_records(&fixture.restored)
+                .expect_err("a portable store cannot authenticate an SCCP claim");
+            assert!(
+                error.to_string().contains("no original Global history"),
+                "{error}"
             );
         })
         .unwrap()

@@ -3,7 +3,9 @@
 //! Omitted bodies never become `CommittedBlock` or `CheckedFrameProjection`. The sealed
 //! portable parent lends only successor predicates. A genuine full H+1 frame then passes
 //! the unchanged native frame, quorum, availability and schedule verifier before becoming
-//! the ordinary cursor. Query cursors retain the parent scalars with no invented wire fence.
+//! the ordinary cursor. Query cursors retain the parent scalars with no invented wire fence:
+//! a proof-capturing cursor starts its local source fence from the sealed portable identity
+//! ([`portable_proof_source`]), which the final source join rewalks from the durable proof.
 
 use super::*;
 use iroha_data_model::sumeragi_finality::{
@@ -47,6 +49,30 @@ pub(crate) fn portable_checkpoint_for_state(
         return Err(malformed("portable checkpoint differs from native execution identity").into());
     }
     Ok(Some(sealed))
+}
+
+/// Start of the local proof-source fence for a cursor bootstrapped from a sealed portable
+/// checkpoint H instead of signed genesis.
+///
+/// It binds the exact sealed parent and successor identities the portable verifier
+/// authenticated. Its zero length marks it as no wire frame: every appended native frame
+/// has a nonzero length, so this start can never equal a fence over genesis-to-H bodies the
+/// store omits. The final source join recomputes it by rewalking the durable portable proof.
+pub(crate) fn portable_proof_source(sealed: &VerifiedPortableCheckpointV1) -> Hash {
+    let checkpoint = sealed.checkpoint();
+    let header: Hash = checkpoint.header().hash().into();
+    let mut identity = [0_u8; 160];
+    identity[..32].copy_from_slice(header.as_ref());
+    identity[32..64].copy_from_slice(&checkpoint.core_hash().0);
+    identity[64..96].copy_from_slice(&checkpoint.result().0);
+    identity[96..128].copy_from_slice(&sealed.successor_core_hash().0);
+    identity[128..].copy_from_slice(&sealed.successor_result_hash().0);
+    proof_source_append(
+        proof_source_start(),
+        checkpoint.header().height().get(),
+        0,
+        Hash::new(identity),
+    )
 }
 
 impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
@@ -237,13 +263,17 @@ impl QueryCertifiedChain<'_> {
             return Ok(None);
         };
         let parent = PortableParent::from_sealed(&sealed, self.instance, self.root_scope, true)?;
+        // Only a proof-capturing cursor carries a source fence, as from signed genesis.
+        let proof_source = self
+            .proof_source_genesis
+            .map(|_| portable_proof_source(&sealed));
         Ok(Some(query_reader::QueryPrefix {
             tip: parent.tip,
             wire: None,
             schedule: parent.schedule,
             authority: parent.authority,
             validation: parent.validation,
-            proof_source: None,
+            proof_source,
             portable_successor: Some((
                 sealed.successor_header().height,
                 sealed.successor_core_hash(),
