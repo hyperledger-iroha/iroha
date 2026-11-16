@@ -14,7 +14,8 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
+use ivm_abi::baseline::{encoding, instruction};
 use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
@@ -53,15 +54,18 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
 /// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+///
+/// It is a program of the interface profile: ABI V1 on the frozen baseline engine, whose header
+/// requires a positive cycle limit.
 fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     let mut program = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     }
-    .encode();
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let pad = (4 - (data_offset + data_len) % 4) % 4;
@@ -164,7 +168,12 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
-            encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
+            // The baseline 8-bit `SCALL`.
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
+                    .expect("the 8-bit SCALL carries numbers up to 0xFF"),
+            ),
         ],
     );
     // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
@@ -306,11 +315,12 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
+    // This helper loads a C10 program (C10 header and encodings) directly into the VM.
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
+        &ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
     );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,

@@ -13,7 +13,8 @@ use iroha_data_model::{
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
-use ivm::{ProgramMetadata, encoding};
+use ivm::ProgramMetadata;
+use ivm_abi::baseline::{encoding, instruction};
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {
@@ -54,19 +55,27 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
     let network_id = *state.network_id_ref();
-    // Build a tiny program with an unknown syscall followed by HALT.
+    // Build a tiny program of the interface profile (ABI V1 on the frozen baseline engine: its
+    // header with a positive cycle limit and its 8-bit `SCALL`) with an unknown syscall followed
+    // by HALT.
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(unknown_syscall).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(unknown_syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+        )
+        .to_le_bytes(),
+    );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut program = meta.encode();
+    let mut program = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     program.extend_from_slice(&code);
     // Submit the program; admission should fail before execution due to the unknown syscall.
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);

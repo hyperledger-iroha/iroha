@@ -7,20 +7,29 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
+use ivm::{IVM, ProgramMetadata, syscalls as ivm_sys};
+use ivm_abi::baseline::{encoding, instruction};
 use std::{num::NonZeroU64, sync::Arc};
+/// A program of the interface profile (ABI V1 on the frozen baseline engine: its header with a
+/// positive cycle limit and its 8-bit `SCALL`) that invokes `sys` and halts.
 fn program_with_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(sys).to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(sys).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+        )
+        .to_le_bytes(),
+    );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut out = meta.encode();
+    let mut out = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     out.extend_from_slice(&code);
     out
 }

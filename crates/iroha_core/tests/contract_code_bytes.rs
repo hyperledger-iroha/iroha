@@ -22,12 +22,14 @@ fn assert_smart_contract_error(error: &InstructionExecutionError, expected_messa
         format!("Invalid smart contract: {expected_message}")
     );
 }
+/// A minimal contract of the interface profile: ABI V1 on the frozen baseline engine (its
+/// 49-byte header with a positive cycle limit, its encodings and its ABI hash).
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -69,14 +71,35 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     };
     let mut code = Vec::new();
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            12,
+            0,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            10,
+            12,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            1,
+        ),
+        // The protected return is the register form of the baseline `JALR`.
+        ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        ),
     ] {
         code.extend_from_slice(&instruction.to_le_bytes());
     }
-    let mut out = meta.encode();
+    let mut out = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
     ivm::verify_contract_artifact_with_declared_profile(&out)
@@ -111,7 +134,7 @@ fn minimal_contract_fixture_completes_its_authenticated_unit_table() {
 fn multi_chunk_ivm_program() -> Vec<u8> {
     use iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
     let mut program = minimal_ivm_program(1);
-    let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+    let halt = ivm_abi::baseline::encoding::encode_halt().to_le_bytes();
     let minimum_len = SMART_CONTRACT_CODE_CHUNK_BYTES
         .checked_mul(2)
         .and_then(|len| len.checked_add(128))
@@ -1055,7 +1078,7 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .execute(&auth, &mut stx)
     .expect("finalization of already registered code remains idempotent");
     let mut corrupted_program = minimal_ivm_program(1);
-    corrupted_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    corrupted_program.extend_from_slice(&ivm_abi::baseline::encoding::encode_halt().to_le_bytes());
     ivm::verify_contract_artifact_with_declared_profile(&corrupted_program)
         .expect("valid second race artifact");
     let corrupted_hash = ivm::contract_code_hash(&corrupted_program);

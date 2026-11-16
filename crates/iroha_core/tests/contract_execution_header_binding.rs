@@ -35,8 +35,13 @@ fn assert_manifest_signature_error(error: &InstructionExecutionError, field: &st
         "{field} mutation returned the wrong provenance error source"
     );
 }
+/// A contract of the interface profile: ABI V1 on the frozen baseline engine (its 49-byte
+/// header with a positive cycle limit, its encodings and its ABI hash).
 fn contract_artifact() -> Vec<u8> {
-    let metadata = ivm::ProgramMetadata::default();
+    let metadata = ivm::ProgramMetadata {
+        max_cycles: 1_000,
+        ..ivm::ProgramMetadata::default()
+    };
     let interface = ivm::EmbeddedContractInterfaceV1 {
         events: Vec::new(),
         enum_types: Vec::new(),
@@ -74,22 +79,49 @@ fn contract_artifact() -> Vec<u8> {
         error_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut artifact = metadata.encode();
+    let mut artifact = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     artifact.extend_from_slice(&interface.encode_section());
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            12,
+            0,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            10,
+            12,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            1,
+        ),
+        // The protected return is the register form of the baseline `JALR`.
+        ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        ),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
     ivm::verify_contract_artifact_with_declared_profile(&artifact).expect("valid contract fixture");
     artifact
 }
+/// Mutations of the baseline fixed header: every magic and ABI-hash byte and one value of each
+/// scalar field, in header order.
 fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
+    use ivm_abi::baseline::{
+        HEADER_ABI_HASH_OFFSET, HEADER_ABI_VERSION_OFFSET, HEADER_BUDGET_OFFSET, HEADER_SIZE,
+        HEADER_VECTOR_LENGTH_OFFSET,
+    };
     assert!(
-        original.len() >= ivm::HEADER_SIZE,
+        original.len() >= HEADER_SIZE,
         "fixture must contain the fixed IVM header"
     );
     let mut mutations = Vec::new();
@@ -105,16 +137,19 @@ fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     version_minor[5] = 0;
     mutations.push(("version_minor", version_minor));
     let mut mode = original.to_vec();
-    mode[6] = ivm::ivm_mode::ZK;
+    mode[6] = ivm_abi::baseline::mode::ZK;
     mutations.push(("mode", mode));
+    let mut vector_length = original.to_vec();
+    vector_length[HEADER_VECTOR_LENGTH_OFFSET] = 8;
+    mutations.push(("vector_length", vector_length));
     let mut max_cycles = original.to_vec();
-    max_cycles[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+    max_cycles[HEADER_BUDGET_OFFSET..HEADER_ABI_VERSION_OFFSET]
         .copy_from_slice(&2_u64.to_le_bytes());
     mutations.push(("max_cycles", max_cycles));
     let mut abi_version = original.to_vec();
-    abi_version[ivm::HEADER_ABI_VERSION_OFFSET] = 0;
+    abi_version[HEADER_ABI_VERSION_OFFSET] = 0;
     mutations.push(("abi_version", abi_version));
-    for index in ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE {
+    for index in HEADER_ABI_HASH_OFFSET..HEADER_SIZE {
         let mut abi_hash = original.to_vec();
         abi_hash[index] ^= 0xff;
         mutations.push(("abi_hash", abi_hash));
@@ -190,7 +225,8 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     let mutations = execution_header_mutations(&original);
     assert_eq!(
         mutations.len(),
-        ivm::METADATA_MAGIC.len() + 5 + ivm::HEADER_SIZE - ivm::HEADER_ABI_HASH_OFFSET,
+        ivm::METADATA_MAGIC.len() + 6 + ivm_abi::baseline::HEADER_SIZE
+            - ivm_abi::baseline::HEADER_ABI_HASH_OFFSET,
         "cover every fixed-header field and every physical ABI-digest byte"
     );
     for (field, mutated) in mutations {

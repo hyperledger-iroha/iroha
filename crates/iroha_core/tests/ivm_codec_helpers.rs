@@ -99,13 +99,40 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
         error_messages: Vec::new(),
         error_types: Vec::new(),
     };
-    let mut artifact = ProgramMetadata::default().encode();
+    // A contract of the interface profile: ABI V1 on the frozen baseline engine (its 49-byte
+    // header with a positive cycle limit, its encodings and its ABI hash).
+    let mut artifact = ProgramMetadata {
+        max_cycles: 1_000,
+        ..ProgramMetadata::default()
+    }
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     artifact.extend_from_slice(&interface.encode_section());
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ivm_abi::baseline::encoding::wide::encode_store(
+            ivm_abi::baseline::instruction::wide::memory::STORE64,
+            12,
+            0,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            10,
+            12,
+            0,
+        ),
+        ivm_abi::baseline::encoding::wide::encode_ri(
+            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+            11,
+            0,
+            1,
+        ),
+        // The protected return is the register form of the baseline `JALR`.
+        ivm_abi::baseline::encoding::wide::encode_rr(
+            ivm_abi::baseline::instruction::wide::control::JALR,
+            0,
+            1,
+            0,
+        ),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }

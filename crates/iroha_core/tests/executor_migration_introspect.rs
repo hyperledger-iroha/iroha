@@ -74,8 +74,14 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let original_data_model = state_transaction.world.executor_data_model().clone();
     let mut executor = RuntimeExecutor::Initial;
     {
-        let mut bytecode = ivm::ProgramMetadata::default().encode();
-        bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        // An executor upgrade runs under the interface profile: ABI V1 on the frozen baseline
+        // engine, whose header requires a positive cycle limit.
+        let mut bytecode = ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
+        bytecode.extend_from_slice(&ivm_abi::baseline::encoding::encode_halt().to_le_bytes());
         let raw = DataModelExecutor::new(IvmBytecode::from_compiled(bytecode));
         let error = executor
             .migrate(raw, &mut state_transaction, &ALICE_ID)

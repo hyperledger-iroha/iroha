@@ -46,12 +46,14 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
+/// A contract of the interface profile: ABI V1 on the frozen baseline engine (its 49-byte
+/// header with a positive cycle limit, its encodings and its ABI hash).
 fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, ContractManifest) {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
     let embedded_entrypoints = entrypoints
@@ -109,15 +111,36 @@ fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, Contract
     let mut code = Vec::new();
     for _ in entrypoints {
         for instruction in [
-            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ivm_abi::baseline::encoding::wide::encode_store(
+                ivm_abi::baseline::instruction::wide::memory::STORE64,
+                12,
+                0,
+                0,
+            ),
+            ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                10,
+                12,
+                0,
+            ),
+            ivm_abi::baseline::encoding::wide::encode_ri(
+                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
+                11,
+                0,
+                1,
+            ),
+            // The protected return is the register form of the baseline `JALR`.
+            ivm_abi::baseline::encoding::wide::encode_rr(
+                ivm_abi::baseline::instruction::wide::control::JALR,
+                0,
+                1,
+                0,
+            ),
         ] {
             code.extend_from_slice(&instruction.to_le_bytes());
         }
     }
-    let mut out = meta.encode();
+    let mut out = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
     let verified = ivm::verify_contract_artifact_with_declared_profile(&out)

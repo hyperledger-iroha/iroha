@@ -29,7 +29,8 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
+use ivm_abi::baseline::{encoding, instruction};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -78,19 +79,28 @@ fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
 fn built_account_in_domain(account_id: &AccountId) -> Account {
     new_account_in_domain(account_id).build(account_id)
 }
+/// The header of the interface profile: ABI V1 on the frozen baseline engine, which requires a
+/// positive cycle limit.
 fn make_header() -> Vec<u8> {
     ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     }
-    .encode()
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// The baseline 8-bit `SCALL` of a syscall number up to `0xFF`.
+fn baseline_scall(syscall: u32) -> u32 {
+    encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        u8::try_from(syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+    )
 }
 fn scall_program(syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
+    code.extend_from_slice(&baseline_scall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut program = make_header();
     program.extend_from_slice(&code);
@@ -155,7 +165,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([encoding::wide::encode_scall(syscall)])
+        .chain([baseline_scall(syscall)])
         .collect()
 }
 /// Effects the program's syscalls queue on a detached `CoreHost`.
