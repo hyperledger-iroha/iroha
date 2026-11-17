@@ -22,6 +22,23 @@ file explains how the design works and where each part stands.
 
 ## 0. Status at iroha `optimizations` 79d42d60da (2026-11-15)
 
+**Update 2026-11-18** (HEAD 60309bba27; supersedes the Payment-size and Burn bullets below):
+
+- **Complete chain on the Mac, 11-17** (`output/s2/chain-20261117T051751Z.log`, HEAD 1def5379c7 plus the then
+  uncommitted device-fixture work, layout p18-s17). Programs reported stable by digest from generation 2-4 on. Final
+  generation, linked pairs verified: Receive 29.35 s, Send 10.75 s, Load 10.99 s, Bootstrap 9.96 s, every pair
+  4,832 + 4,704 B. **Complete IPM1 Payment 11,597 B** (pair 9,610, envelope 10,748, companion 749): 403 B under the
+  12,000 B experimental budget. A malformed-R Receive burned under the same program. The process ended during the
+  native containment stage without an exit line, so the run has no peak-RSS line; its bundle
+  (`output/full-backend-run-20261117T051751Z/native-device`) is complete.
+- **Native Burn, end to end** (`output/r26/containment-20261117T175154Z.log`, from that bundle, 1,669 s wall,
+  5.67 GB peak RSS): `authenticated_native_containment_from_bundle` passed. Fifteen independently corrupted Payments
+  (P and S matrix claims, own and inherited generator claims, group and scalar equations, malformed proof words, the
+  link R, a Request signature with corrupted bindings, an isolated bad Request signature with a valid Send proof) each
+  burned 10, kept the unrelated 100, and let the next Send10 spend, leaving 90. A valid Payment could not be forced to
+  burn and credited without burn. TODO G4 is done.
+- **Library suite** at 1def5379c7: 196 passed, 0 failed, 11 ignored.
+
 This section supersedes the dated status statements later in this file (§1 "Where it stands", and the notes on the
 128 MiB stop, native rejection of invalid Payments, the unmeasured Payment and "uncommitted" work). The rest of the
 design text is unchanged. Everything below was read from committed source and the run logs in `output/`.
@@ -90,6 +107,18 @@ as one QR code of at most 12,000 bytes. Every proof is checked natively before v
    commitment the issuer certifies in the credential.
 5. Acceptance is always native: both proofs verify, the pair is linked, and the accumulated matrix claims and the
    generator claims hold.
+
+**What the proofs do not guarantee.** Read this before relying on them (§11 has the detail):
+
+- **No protection against double spending across forks.** Each proof shows that an operation follows the rules from
+  the wallet's previous state. Two Sends made from the same funded state each follow the rules, so the proofs alone
+  accept both. Only hardware custody, protected state and trusted wallet execution prevent this. They have to hold
+  through concurrency, restart, rollback and backup recovery on both phones; that qualification is open (TODO G7).
+- **Load finality is checked by native code**, not inside the relation.
+- **Payments are linkable.** Balances and witness values stay hidden, but a wallet's key-table commitment is not
+  blinded and ties all of its proofs together, and with generator claims folded in clear (§7.4) a Payment also links
+  to the payments that funded it. The owner accepted this for the research design on 2026-11-08. Production needs the
+  owner's confirmation, and the apps' privacy text has to say it (TODO G9).
 
 **Where it stands.**
 
@@ -173,9 +202,9 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
   balance is credited and the same amount is added to the adjusted burned value, so spendable value does not grow,
   and the credit id stays consumed. Neither the receiver nor the host chooses the branch (spec
   `kagemusha_lambda_omega_v1.md` §2.7, OQ-3).
-- **At HEAD, native admission still rejects an invalid incoming Payment** (`engine.rs` requires `valid == 1`). The
-  relation keeps the burn branch for an already selected historical Receive. Turning invalid candidates into a native
-  burn is in progress (uncommitted).
+- **Native admission derives the same verdict** (`engine.rs`, `valid` from parsing plus the exact full verifier;
+  resource and availability errors still return). Fifteen independently corrupted Payments each burn on the Mac
+  (2026-11-18, §0), and a valid Payment can neither be forced to burn nor fail to credit.
 - **Acceptance is native.** Before any pair's bytes are released, native code verifies both proofs, the link, both
   accumulated matrix claims and the own and inherited generator claims. A Spartan verifier accepting a proof is not,
   by itself, acceptance.
@@ -184,7 +213,7 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
 |---|---|
 | Transport, framing or reconstruction fails (length, header, profile) | Rejected before any verdict |
 | Incoming pair, claims and Request signature valid | Accept: credit; the credit id is inserted |
-| Incoming proof, claims or signature invalid, within the admitted profile | The relation derives burn. At HEAD, native admission rejects instead; native burn is in progress |
+| Incoming proof, claims or signature invalid, within the admitted profile | Burn: the relation and native admission both derive it; unrelated value is kept and the next operation proceeds |
 | A produced pair fails native verification, or its accumulators are false | Not released |
 
 ## 5. One proof
@@ -663,8 +692,8 @@ None of these has been timed on a phone.
 - high-S signatures;
 - a wrong scheme, issuer or digest;
 - tampered state, statement or receipt;
-- malformed incoming proofs and signatures, which derive an invalid verdict inside the relation; at HEAD, native
-  admission then rejects the Payment.
+- malformed incoming proofs and signatures, which derive an invalid verdict inside the relation and burn natively
+  (15 independent cases, 2026-11-18, §0).
 
 **Trust assumptions that proofs do not cover:**
 
@@ -703,7 +732,7 @@ None of these has been timed on a phone.
 | Exact Bootstrap | Validated | [BOOTSTRAP.md](BOOTSTRAP.md) |
 | Monetary components (state, Request, statement, fee, arithmetic, controls, indexed map) | Validated as components | [MONETARY_COMPONENTS.md](MONETARY_COMPONENTS.md), [INDEXED_MAP.md](INDEXED_MAP.md) |
 | Complete Send, Receive (total verdict) and Load inside the recursion | In code. The first full-chain run verified a generation-0 Receive pair, then stopped at the 128 MiB program-serialization bound (11-13) | `send.rs`, `receive*.rs`, `load.rs`, `backend_chain_tests.rs`; `codex-20261113/PROOF_VALIDATION.md` |
-| Native burn of invalid incoming Payments | In progress; HEAD rejects them natively | `engine.rs` (working tree) |
+| Native burn of invalid incoming Payments | In code; 15 corrupted cases burn, valid Payments credit (Mac, 11-18) | `engine.rs`, `engine_adversarial_tests.rs`; `output/r26/containment-20261117T175154Z.log` |
 | Private generator-claim restructuring | In code; decision to confirm | `generator_claim*.rs` |
 | Payment commitment, IPM1 wire, proof-byte binding | In code | `payment.rs`, `payment_wire.rs`, `proof_bytes.rs` |
 | Native engine, program artifacts, custody contracts | In code | `engine.rs`, `native.rs`, `program_artifact.rs` |

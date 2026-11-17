@@ -25,12 +25,10 @@ claim before item E5 measures it.
 - [ ] **G3. Independent cryptographic review.** A reviewer outside this lane, working from
   research/REPORT-b04a57-soundness.md, the written G1/G2 arguments and the code.
   *Done when:* every finding is fixed or explicitly accepted by the owner.
-- [ ] **G4. Native burn, end to end.** Native admission must derive the burn verdict for an invalid framed candidate
-  instead of rejecting it (HEAD's `engine.rs` still requires `valid == 1`). Specify OQ-3 (consumed root and existing
-  credit-digest records).
-  *Done when:* independently corrupted P and S matrix claims, own and inherited generator claims, proof words, group
-  and scalar equations and Request signatures each produce a verified burn, keep unrelated value, and allow the next
-  operation; a valid Payment never burns.
+- [x] **G4. Native burn, end to end** — done 2026-11-18. `engine.rs` derives `valid` from parsing plus the exact
+  full verifier; OQ-3 is applied in `specs/kagemusha_lambda_omega_v1.md` §2.7. `authenticated_native_containment_from_bundle`
+  passed on the 11-17 bundle (`output/r26/containment-20261117T175154Z.log`): 15 independently corrupted cases each
+  burned 10, kept 100 and let Send10 spend; a valid Payment could not be forced to burn and credited (DESIGN.md §0).
 - [ ] **G5. Native acceptance hardening.** Reject construction artifacts whose template accumulators are false at
   every accepting native boundary (linked verification accepted them:
   `../../output/kagemusha-100x-20261108/spike/runs/codex-20261112/bootstrap-resume-fixed-point-8.log` line 346).
@@ -45,11 +43,15 @@ claim before item E5 measures it.
   Load finality is verified natively, not inside the relation.
   *Done when:* the spec says so prominently, and concurrency, restart, rollback and backup recovery are qualified at
   the custody boundary on both phones.
+  *2026-11-18:* stated prominently in DESIGN.md §1 ("What the proofs do not guarantee") and §11. Phone qualification
+  open (needs E5/E6 devices).
 - [ ] **G8. Constant-time secret MSMs**, or the owner accepts the same side-channel exposure as today's prover, in
   writing.
 - [ ] **G9. Linkability.** The owner accepted on 2026-11-08 that payments can be linked to the payments that funded
   them; a wallet's unblinded table commitment also ties its proofs together.
   *Done when:* the spec and the apps' privacy text say this, and the owner confirms it for production.
+  *2026-11-18:* DESIGN.md §1 says it. Open: the owner's production confirmation, then the apps' privacy text when a
+  Path 2 generation ships (D4); today's apps do not use Path 2, so their text stays as is.
 
 ## Engineering: to a complete operation on a phone
 
@@ -57,6 +59,9 @@ claim before item E5 measures it.
 - [ ] **E2. Fresh complete chain on the Mac** (none since 14e5a5e1f4's bundle-frame fix): times per kind, peak RSS,
   and the complete IPM1 Payment size against the 12,000 B experimental budget (11-13 run5: 12,050 B; the 11-15
   two-wallet run: 11,597 B).
+  *2026-11-17/18:* chain run `output/s2/chain-20261117T051751Z.log` gave per-kind times and a complete Payment of
+  11,597 B (403 B under budget), but ended without a peak-RSS line. Rerun once after E3 and G5 land, for peak RSS and
+  the exact program-digest equality.
 - [ ] **E3. Memory.** The complete chain peaked at 6.64 GB RSS (11-13) against the 0.68 GiB proving admission for
   4 GB phones. *Done when:* every kind proves within the admission, measured.
 - [ ] **E4. Shrink P-boot's matrix program** (53,964 products, about 72% of the three P programs). Taking Bootstrap out
@@ -98,3 +103,5 @@ claim before item E5 measures it.
   "total from exact bytes" domain (within an admitted transport profile), burn accounting (Core credit plus adjusted
   burned value), the measured native q (196.6 / 32.2 / 179.9 / 48.9 ms, three-kind Mac), "sampled" rather than
   "identical" matrices, and research-checkpoint numbers labelled as such.
+  *2026-11-18:* all but the challenge bounds are now in DESIGN.md (burn status corrected in §4.3, §11, §12; the other
+  items were already fixed). The bounds wait for G2.
