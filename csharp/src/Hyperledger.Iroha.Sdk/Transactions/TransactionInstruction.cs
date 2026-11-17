@@ -13,12 +13,52 @@ public abstract record class TransactionInstruction
 
     internal abstract byte[] EncodePayload(TransactionEncodingContext context);
 
+    /// <summary>
+    /// Whether this instruction's payload encoder writes every count, discriminant and byte
+    /// sequence through the context's layout-aware writers, so its bare payload is valid in the
+    /// dense layout as well as the compact one.
+    /// </summary>
+    // TODO(dense-activation): the Kaigi, replication-order, asset-lock and conviction
+    // instructions still write compact-only bytes. Enable each once a shared dense vector pins
+    // its payload.
+    internal virtual bool SupportsDenseLayout => false;
+
+    /// <summary>The instruction's complete compact-layout Norito frame.</summary>
     internal virtual byte[] EncodeFramedPayload(TransactionEncodingContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Layout != NoritoWireLayout.Compact)
+        {
+            throw new InvalidOperationException(
+                "A framed instruction payload exists only in the compact layout; a dense envelope carries the bare payload.");
+        }
+
         return NoritoCodec.Encode(
             TypeName,
             EncodePayload(context),
             NoritoCodec.CanonicalLayoutFlags);
+    }
+
+    /// <summary>
+    /// The bytes this instruction's envelope carries in the context's layout: the complete
+    /// Norito frame in the compact layout, or the bare dense payload with no nested header in
+    /// the dense layout (<c>norito.md</c>, "Dense layout", rule 6).
+    /// </summary>
+    internal byte[] EncodeEnvelopePayload(TransactionEncodingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Layout != NoritoWireLayout.Dense)
+        {
+            return EncodeFramedPayload(context);
+        }
+
+        if (!SupportsDenseLayout)
+        {
+            throw new NotSupportedException(
+                $"Instruction `{WireId}` ({GetType().Name}) has no dense-layout encoder in this SDK.");
+        }
+
+        return EncodePayload(context);
     }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)

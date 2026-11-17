@@ -413,27 +413,7 @@ public sealed class TransactionBuilder
     /// </remarks>
     public SignedTransactionEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
-        if (executableEntries.Count == 0)
-        {
-            throw new InvalidOperationException("Transactions must contain at least one executable item.");
-        }
-        ValidateExecutableFeeIntent();
-
-        var context = new TransactionEncodingContext(AuthorityAccountId);
-        context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
-
-        var transactionPayload = BuildPayloadBytes(context, EffectiveCreationTimeMilliseconds());
-        var payloadHash = IrohaHash.Hash(transactionPayload);
-        var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
-
-        var transactionSignature = new CanonicalNoritoWriter();
-        transactionSignature.WriteField(context.EncodeConstVec(signature));
-
-        var signedTransaction = new CanonicalNoritoWriter();
-        signedTransaction.WriteField(transactionSignature.ToArray());
-        signedTransaction.WriteField(transactionPayload);
-        signedTransaction.WriteField(new byte[] { 0 });
-        var signedTransactionBytes = signedTransaction.ToArray();
+        var (transactionPayload, signedTransactionBytes) = SignBare(privateKeySeed, NoritoWireLayout.Compact);
         var versionedNoritoBytes = new byte[signedTransactionBytes.Length + 1];
         versionedNoritoBytes[0] = SignedTransactionWireVersion;
         signedTransactionBytes.CopyTo(versionedNoritoBytes.AsSpan(1));
@@ -450,22 +430,69 @@ public sealed class TransactionBuilder
             transactionHash);
     }
 
-    internal byte[] BuildPayloadBytes(TransactionEncodingContext context, ulong creationTimeMilliseconds)
+    /// <summary>
+    /// Signs the transaction's payload as encoded in an explicit Norito layout and returns the
+    /// bare signed transaction in that layout.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The signature covers the hash of the payload bytes in <paramref name="layout"/>, so it
+    /// verifies only against that encoding. <see cref="NoritoWireLayout.Compact"/> signs exactly
+    /// what <see cref="BuildSigned(ReadOnlySpan{byte})"/> signs.
+    /// </para>
+    /// <para>
+    /// No ledger selects <see cref="NoritoWireLayout.Dense"/> yet: nodes verify dense signatures
+    /// only once a governed definition activates the dense layout for transactions. Instruction
+    /// types without a dense encoder in this SDK raise <see cref="NotSupportedException"/>.
+    /// </para>
+    /// </remarks>
+    public BareSignedTransaction BuildSignedBare(ReadOnlySpan<byte> privateKeySeed, NoritoWireLayout layout)
     {
-        var payload = new CanonicalNoritoWriter();
-        payload.WriteField(context.EncodeNetworkDomain(NetworkId));
-        payload.WriteField(context.EncodeAccountId(AuthorityAccountId));
-        payload.WriteField(context.EncodeUInt64(creationTimeMilliseconds));
+        var (_, signedTransactionBytes) = SignBare(privateKeySeed, layout);
+        // The strict decoder rechecks the bytes this builder produced.
+        return BareSignedTransaction.Decode(signedTransactionBytes, layout);
+    }
+
+    private (byte[] Payload, byte[] SignedTransaction) SignBare(
+        ReadOnlySpan<byte> privateKeySeed,
+        NoritoWireLayout layout)
+    {
+        if (executableEntries.Count == 0)
+        {
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
+        }
+        ValidateExecutableFeeIntent();
+
+        var context = new TransactionEncodingContext(AuthorityAccountId, layout);
+        context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
+
+        var transactionPayload = BuildPayloadBytes(context, EffectiveCreationTimeMilliseconds());
+        var payloadHash = IrohaHash.Hash(transactionPayload);
+        var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
+        return (
+            transactionPayload,
+            TransactionWireCodec.EncodeSignedTransaction(layout, signature, transactionPayload));
+    }
+
+    internal byte[] BuildPayloadBytes(TransactionEncodingContext context, ulong creationTimeMilliseconds) =>
+        TransactionWireCodec.EncodePayload(BuildWirePayload(context, creationTimeMilliseconds));
+
+    /// <summary>The wire-level payload of this builder in the context's layout.</summary>
+    internal WireTransactionPayload BuildWirePayload(TransactionEncodingContext context, ulong creationTimeMilliseconds)
+    {
         var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
-        payload.WriteField(forceExecutableBatch || contractCallPresent
-            ? context.EncodeExecutableBatch(executableEntries)
-            : context.EncodeInstructionsExecutable(Instructions));
-        payload.WriteField(context.EncodeOption<ulong>(TimeToLiveMilliseconds, context.EncodeUInt64));
-        payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
-        payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
-        payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
-        payload.WriteField(new byte[] { 0 });
-        return payload.ToArray();
+        return new WireTransactionPayload(
+            context.Layout,
+            NetworkId.ToBytes(),
+            context.ToWireController(AuthorityAccountId),
+            creationTimeMilliseconds,
+            forceExecutableBatch || contractCallPresent
+                ? context.ToWireBatchExecutable(executableEntries)
+                : context.ToWireInstructionsExecutable(Instructions),
+            TimeToLiveMilliseconds,
+            Nonce,
+            context.ToWireFeePayment(feePayment),
+            TransactionEncodingContext.ToWireMetadata(metadata));
     }
 
     /// <summary>
