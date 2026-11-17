@@ -22,6 +22,8 @@ on:
       - "crates/kotodama_lang/src/samples/native_escrow.to"
       - "crates/sorafs_manifest/**"
       - "fixtures/account/address_vectors.json"
+      - "fixtures/norito_dense/**"
+      - "fixtures/norito_rpc/**"
       - "fixtures/sorafs_manifest/appeal_finance/**"
       - "fixtures/sorafs_manifest/governance/**"
       - "fixtures/sorafs_manifest/reference_sdk/**"

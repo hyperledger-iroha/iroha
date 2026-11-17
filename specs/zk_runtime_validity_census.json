@@ -5810,7 +5810,7 @@
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt", "sdk_availability", "exact12", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "release_manifest", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "sdk_availability", "exact12", 4]
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "sdk_availability", "exact12", 5]
    ]
   },
   {

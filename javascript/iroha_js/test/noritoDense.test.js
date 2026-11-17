@@ -226,4 +226,3 @@ test("Parliament state frames retain their declared current-layout contract", ()
   assert.equal(normalizeParliamentAttemptReadResponseV1({ ...response, state_payload_hex: state("current") }, id).state_payload_hex, state("current"));
   assert.throws(() => normalizeParliamentAttemptReadResponseV1({ ...response, state_payload_hex: state("dense") }, id), /layout dense does not match expected current/);
 });
-
