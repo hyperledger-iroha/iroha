@@ -41,9 +41,17 @@ claim before item E5 measures it.
   Pin program identity by canonical digest at every accepting boundary.
   *Done when:* those refusals are tested, and all eight complete programs are shown exactly equal (not the 32
   sampled matrix-evaluation comparisons).
-- [ ] **G6. Issuance parameters.** Pin generator namespace, capacity, column order and table construction in
+  *2026-11-18 (iroha a96dd1f3f4):* every accepting boundary decides both matrix and both inherited generator
+  accumulators through `engine::decide_accumulators`; imported tapes get their challenge degrees derived and refused
+  above the declaration (all eight saved programs pass); the chain test compares the exact canonical bytes of all
+  eight programs and refuses its template pairs at pair, head, Payment and Receive verdict. Open: that heavy chain run.
+- [x] **G6. Issuance parameters.** Pin generator namespace, capacity, column order and table construction in
   authenticated parameters (research/CONSTRUCTION.md).
   *Done when:* a correctly signed credential that carries a wrong table commitment is refused, by test.
+  *Done 2026-11-18 (a96dd1f3f4):* manifest v2 pins namespace, hash-to-curve, capacities, derived-set digests, table
+  construction and a known-answer table commitment; install recomputes them; credential intake recomputes the table
+  commitment. `correctly_signed_credential_with_wrong_table_commitment_is_refused` and
+  `generator_and_table_profile_is_pinned_by_authenticated_parameters` pass.
 - [ ] **G7. Trust model stated where it binds.** Double-spend prevention rests on hardware custody, protected state
   and trusted wallet execution, not on the proofs (two Sends from one funded state each satisfy local conservation);
   Load finality is verified natively, not inside the relation.
@@ -79,10 +87,17 @@ claim before item E5 measures it.
   phase timings, carrier bytes and peak RSS from the same run; then Send, Load and Bootstrap. The Pixel operator runs
   it only with the owner's go typed in the operator's own chat. *Done when:* the 3 s target is judged on these
   numbers.
+  *2026-11-18:* runner and package scripts ready (`output/e5-pixel-package/`: build with source-drift checks, run,
+  manifest template); no phone binary yet. Build after E3 lands, from a committed HEAD; if E3 changes a program, take
+  the bundle from a fresh chain run.
 - [ ] **E6. iPhone measurement** with the Secure Enclave / App Attest device fixture (iOS and Android must behave the
   same).
-- [ ] **E7. Two-wallet device runner** (the phone fixture's Bootstrap → Load100 → Send10 → `receive_self` flow is a
+- [x] **E7. Two-wallet device runner** (the phone fixture's Bootstrap → Load100 → Send10 → `receive_self` flow is a
   self-transfer and is refused at Send10).
+  *Done 2026-11-18 (670a26616d):* launch 1 runs A Bootstrap → Load100 → Send10 to software wallet B, B receives and
+  sends 10 back; launch 2 (fresh process) receives B's retained Payment to a verified, durable, credited output;
+  launch 3 finds it retained. Mac host run passes (`output/e7/host-run-20261117T211302Z`, contended: Receive 85.5 s,
+  peak 2.93 GB, Payment 11,597 B).
 
 ## Missing functionality
 
@@ -94,6 +109,10 @@ claim before item E5 measures it.
   *2026-11-18:* E4-F1-F2-DESIGN.md §5 puts it in one Control program shared with Load (no fifth kind; ten programs
   in all with E4 and F1). Not implemented.
 - [ ] **F3. The remaining policy signer roles**, including the fee-schedule signer check.
+  *2026-11-18 (a96dd1f3f4):* certificates authenticate exactly one role; manifests are signed by a root-certified
+  Artifact-role key (wire spec §1, §3.1); the fee-schedule check (RegulatoryPolicy role) exists but no transition
+  installs a schedule yet. Open: TimeAnchor (with F2), the Request certificate set (`kgwcset1`), and install paths
+  for the other RegulatoryPolicy objects.
 - [ ] **F4. Production codecs**: the 532-byte credential and the 30-field Core, per the credential-continuity and
   key-table spec changes (iroha 00fc09fcea, 2180d7956b).
 - [ ] **F5. SDK and apps**: Kotlin and Swift surfaces, the explicit root-signed Install that switches a wallet, and the

@@ -75,8 +75,9 @@ design text is unchanged. Everything below was read from committed source and th
   (`bootstrap::tests::recursive_natural_layout_profiles`, `full::tests::bootstrap_pair_carries_the_empty_claim`,
   `points::tests::points_side_holds_proves_and_refuses`), 10 ignored.
 - **Absent:** Unload and RefreshTimeAnchor have statement tags only (`statement.rs`), with no recursive kind and no
-  native transition. The fee-schedule signer is assumed checked "when installed" (`fee_schedule.rs`), and no check
-  exists. The written recursive soundness argument and an independent review are still open.
+  native transition. The fee-schedule signer check now exists natively (RegulatoryPolicy role, 2026-11-18), but no
+  transition installs a schedule yet. The written recursive soundness argument now exists (research/SOUNDNESS.md);
+  its independent review is open.
 - **Devices.** Hardware probes only (11-13): Android StrongBox key and iOS Secure Enclave key, neither requiring user
   confirmation. Five Swift SDK tests passed on an iPhone 17 Pro Max. The iOS runtime fixture installed but did not
   launch (phone locked); Android only built. No device proving or payment run exists. The planned confirmation prompts
@@ -591,7 +592,11 @@ credit-digest records are preserved.
 ## 9. The native side
 
 - **Programs:** eight public verifier programs, one per kind and side, holding instructions, constants and geometry
-  and no witness data (`program_artifact.rs`). A root-signed manifest pins them (`engine.rs`).
+  and no witness data (`program_artifact.rs`). A manifest (v2) signed by a root-certified Artifact-role key pins the
+  eight canonical program digests, the accumulator dimensions and the generator/table profile (namespace,
+  hash-to-curve suite, capacities, derived-set digests, table construction and its known answer). Installation
+  recomputes each and derives every program's matrix-tape challenge degrees instead of trusting the declared ones
+  (`engine.rs`).
 - **The engine** verifies every output against its program, checks both matrix accumulators and the generator claims,
   and takes fresh OS entropy for every proof's masks and the pair's μ.
 - **Custody:**
@@ -729,7 +734,8 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 - **Load finality.** Native code verifies Load's finality; the relation does not prove BLS finality.
 - **Issuance.** The issuer derives the certified table commitment, and the wallet recomputes it at intake. The
   recursion relies on that for every earlier counterparty. Generator namespace, capacity, column order and table
-  construction have to be pinned in authenticated parameters.
+  construction are pinned in the authenticated parameters; credential intake recomputes the table commitment under
+  them, and a correctly signed credential with a wrong commitment is refused (2026-11-18).
 
 **Known gaps:**
 
