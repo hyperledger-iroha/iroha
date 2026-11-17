@@ -329,6 +329,7 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
     throw new RangeError("state_payload_hex exceeds the 16 MiB Parliament bound");
   }
   validateNoritoFrame(stateBytes, {
+    expectedLayout: "current",
     context: "Parliament attempt state_payload_hex",
     requireNonEmptyPayload: true,
   });

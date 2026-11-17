@@ -28,7 +28,10 @@ pub use settlement_intents::{
     repo_intent_hashes,
 };
 mod archive;
-pub use archive::{decode_instruction_archive, encode_instruction_archive};
+pub use archive::{
+    decode_instruction_archive, decode_instruction_archive_with_layout, encode_instruction_archive,
+    encode_instruction_archive_with_layout,
+};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -252,9 +255,26 @@ pub fn parse_account_id(input: &str, label: &str) -> CodecResult<AccountId> {
 /// Returns an error when the JSON is malformed, violates a strict instruction contract
 /// or names an account outside `network_prefix`, or when Norito encoding fails.
 pub fn encode_instruction_frame(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
+    encode_instruction_frame_with_layout(
+        json_payload,
+        network_prefix,
+        norito_core::WireLayout::Compact,
+    )
+}
+
+/// Encode strict instruction JSON as a canonical frame in the selected layout.
+///
+/// # Errors
+/// Returns an error for invalid instruction JSON, account admission or encoding.
+pub fn encode_instruction_frame_with_layout(
+    json_payload: &str,
+    network_prefix: u16,
+    layout: norito_core::WireLayout,
+) -> CodecResult<Vec<u8>> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
-    let encoded = norito::encode_canonical(&instruction).map_err(codec_error)?;
+    let encoded =
+        norito::encode_canonical_with_layout(&instruction, layout).map_err(codec_error)?;
     Ok(encoded)
 }
 
@@ -267,10 +287,22 @@ pub fn encode_instruction_frame(json_payload: &str, network_prefix: u16) -> Code
 /// Returns an error when the bytes are not an exact public `InstructionBox` frame
 /// (including decoder panics), or when the instruction has no strict JSON rendering.
 pub fn decode_instruction_frame(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
+    decode_instruction_frame_with_layout(bytes, network_prefix, norito_core::WireLayout::Compact)
+}
+
+/// Decode a typed instruction frame whose header must match the selected layout.
+///
+/// # Errors
+/// Returns an error for a mismatched header, noncanonical bytes or invalid instruction.
+pub fn decode_instruction_frame_with_layout(
+    bytes: &[u8],
+    network_prefix: u16,
+    layout: norito_core::WireLayout,
+) -> CodecResult<String> {
     let _network = ChainDiscriminantGuard::enter(network_prefix);
     let decode = catch_unwind(AssertUnwindSafe(|| {
-        let slice = bytes;
-        let instruction = decode_instruction_aligned(slice).map_err(codec_error)?;
+        let instruction: InstructionBox =
+            norito::decode_canonical_with_layout(bytes, layout).map_err(codec_error)?;
         let value = instruction_to_json_value(&instruction)?;
         json::to_json(&value).map_err(codec_error)
     }));

@@ -122,6 +122,7 @@ fn assert_validation_fee_policy_instruction_roundtrip(policy: ValidationFeePolic
         Some(1_700_000_000_000),
         Some(60_000),
         Some(9),
+        TransactionCodecOptions::payload(None, None).unwrap(),
     )
     .expect("build validation-fee transaction payload");
     let payload: TransactionPayload =

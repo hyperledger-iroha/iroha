@@ -33,7 +33,8 @@ function fakeBinding(tag, byte) {
     buildTransaction(...args) {
       assert.equal(Object.getPrototypeOf(this), null);
       assert.equal(Object.isFrozen(this), true);
-      assert.equal(args.at(-1), null);
+      assert.equal(args.at(-3), null);
+      assert.deepEqual(args.slice(-2), ["current", "versioned"]);
       return {
         signed_transaction: Buffer.from([byte]),
         hash: Buffer.alloc(32, this.tag.charCodeAt(0)),

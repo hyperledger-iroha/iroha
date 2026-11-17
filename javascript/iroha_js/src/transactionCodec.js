@@ -14,6 +14,7 @@ import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { assertValidEd25519PublicKey, verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
 import { crc64Xz } from "./crc64Xz.js";
+import { getNoritoWireLayout, withNoritoWireLayout } from "./noritoValueCodecs.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
   encodeAccountIdNoritoValue,
@@ -260,6 +261,7 @@ class Reader {
     this.bytes = bytes;
     this.context = context;
     this.compactLengths = compactLengths;
+    this.layout = getNoritoWireLayout();
     this.offset = 0;
   }
 
@@ -273,6 +275,16 @@ class Reader {
 
   readU64(field) {
     return this.readBytes(8, field).readBigUInt64LE(0);
+  }
+
+  readCount(field) {
+    return this.layout === "dense" ? BigInt(this.readLength(field)) : this.readU64(field);
+  }
+
+  readEnumTag(field) {
+    const value = this.layout === "dense" ? this.readLength(field) : this.readU32(field);
+    if (value > 0xffff_ffff) fail(MALFORMED_PAYLOAD, `${this.context}.${field} exceeds u32`);
+    return value;
   }
 
   readLength(field) {
@@ -995,6 +1007,33 @@ function u64(value) {
   return output;
 }
 
+const LAYOUT_OPTION_FIELDS = new Set(["layout"]);
+const SIGNED_LAYOUT_OPTION_FIELDS = new Set(["layout", "format"]);
+
+function withBrowserWireOptions(options, signed, callback) {
+  options = snapshotAllowedFields(options, signed ? SIGNED_LAYOUT_OPTION_FIELDS : LAYOUT_OPTION_FIELDS, "codec options");
+  const layout = options.layout === undefined ? "current" : options.layout;
+  if (layout !== "current" && layout !== "dense") {
+    fail(INVALID_INPUT, "codec options.layout must be current or dense");
+  }
+  const format = signed ? (options.format === undefined ? "versioned" : options.format) : null;
+  if (signed && format !== "versioned" && format !== "bare") {
+    fail(INVALID_INPUT, "codec options.format must be versioned or bare");
+  }
+  if (signed && layout === "dense" && format !== "bare") {
+    fail(INVALID_INPUT, "dense has no governed versioned transaction mapping; request format: bare for an offline archive");
+  }
+  return withNoritoWireLayout(layout, () => callback(format));
+}
+
+function enumTag(value) {
+  return getNoritoWireLayout() === "dense" ? encodeCompactLength(value) : u32(value);
+}
+
+function sequenceCount(value) {
+  return getNoritoWireLayout() === "dense" ? encodeCompactLength(value) : u64(value);
+}
+
 function field(payload) {
   return Buffer.concat([encodeCompactLength(payload.length), payload]);
 }
@@ -1008,7 +1047,7 @@ function stringValue(value) {
 }
 
 function networkTransactionDomainArchive(value) {
-  return Buffer.concat([u32(0), field(Buffer.from(value))]);
+  return Buffer.concat([enumTag(0), field(Buffer.from(value))]);
 }
 
 function struct(fields) {
@@ -1020,16 +1059,17 @@ function option(value) {
 }
 
 function vector(values) {
-  return Buffer.concat([u64(values.length), ...values.map(field)]);
+  return Buffer.concat([sequenceCount(values.length), ...values.map(field)]);
 }
 
 function constVecBytes(bytes) {
+  if (getNoritoWireLayout() === "dense") return Buffer.concat([sequenceCount(bytes.length), bytes]);
   return Buffer.concat([u64(bytes.length), ...Array.from(bytes, (byte) => field(Buffer.of(byte)))]);
 }
 
 function accountArchive(info) {
   return Buffer.concat([
-    u32(0),
+    enumTag(0),
     field(constVecBytes(Buffer.concat([Buffer.of(0), info.publicKey]))),
   ]);
 }
@@ -1067,19 +1107,20 @@ function assetDefinitionArchive(literal) {
   if (!bytes.subarray(17).equals(expectedChecksum)) {
     fail(INVALID_ASSET, "source asset definition checksum is invalid");
   }
+  if (getNoritoWireLayout() === "dense") return bytes.subarray(1, 17);
   return Buffer.concat(Array.from(bytes.subarray(1, 17), (byte) => field(Buffer.of(byte))));
 }
 
 function assetScopeArchive(scope) {
   if (scope === null) {
-    return u32(0);
+    return enumTag(0);
   }
   const match = /^dataspace:(0|[1-9]\d*)$/u.exec(scope);
   if (!match) {
     fail(INVALID_ASSET, ("asset scope must use" + TEXT_CANONICAL + "dataspace:<u64> syntax"));
   }
   const value = normalizeUnsigned(match[1], UINT64_MAX, "asset dataspace scope");
-  return Buffer.concat([u32(1), field(field(u64(value)))]);
+  return Buffer.concat([enumTag(1), field(field(u64(value)))]);
 }
 
 function assetArchive(definition, owner, scope) {
@@ -1130,7 +1171,7 @@ function feeChargeLimitsArchive(chargeLimits) {
   return vector(
     chargeLimits.map((limit) =>
       struct([
-        u32(limit.tag),
+        enumTag(limit.tag),
         assetDefinitionArchive(limit.assetDefinitionId),
         numericArchive(limit.maxAmount),
       ]),
@@ -1145,7 +1186,7 @@ function feePaymentArchive(feePayment) {
   );
   if (feePayment.tag === 0) {
     return Buffer.concat([
-      u32(0),
+      enumTag(0),
       field(struct([chargeLimits, gasLimit])),
     ]);
   }
@@ -1154,7 +1195,7 @@ function feePaymentArchive(feePayment) {
     stringValue(feePayment.program.name),
   ]);
   return Buffer.concat([
-    u32(1),
+    enumTag(1),
     field(
       struct([
         programId,
@@ -1185,7 +1226,10 @@ function transferInstructionArchive(source, quantity, destination) {
     numericArchive(quantity),
     accountArchive(destination),
   ]);
-  const innerPayload = Buffer.concat([u32(2), field(body)]);
+  const innerPayload = Buffer.concat([enumTag(2), field(body)]);
+  if (getNoritoWireLayout() === "dense") {
+    return struct([stringValue(WIRE_ID_IROHA_TRANSFER), field(innerPayload)]);
+  }
   const innerFrame = frameTransferPayload(innerPayload);
   return Buffer.concat([
     field(stringValue(WIRE_ID_IROHA_TRANSFER)),
@@ -1308,6 +1352,9 @@ function assertTransactionPayloadByteBound(payload, networkPrefix) {
     fail(BOUNDS_EXCEEDED, (TEXT_TRANSACTION_PAYLOAD_2 + "exceeds the compiled browser payload limit"));
   }
   if (payload.length <= MAX_PAYLOAD_BYTES) return;
+  if (getNoritoWireLayout() === "dense") {
+    fail(BOUNDS_EXCEEDED, "dense transfer payload exceeds one MiB; dense native instructions are not supported");
+  }
   try {
     const outer = new Reader(payload, (TEXT_EXECUTION_TRANSACTION + "payload"));
     for (const name of ["domain", FIELD_AUTHORITY, FIELD_CREATION_TIME_MS]) outer.readField(name);
@@ -1357,7 +1404,7 @@ function encodeTransferPayload(normalized) {
   );
   return encodeTransactionPayload(
     normalized,
-    Buffer.concat([u32(0), field(vector([instruction]))]),
+    Buffer.concat([enumTag(0), field(vector([instruction]))]),
     assertTransferPayloadByteBound,
   );
 }
@@ -1626,7 +1673,7 @@ function validateStringArchive(payload, context, { maxBytes } = {}) {
 
 function validateNetworkTransactionDomainArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const variant = reader.readU32("variant");
+  const variant = reader.readEnumTag("variant");
   if (variant !== 0) {
     fail(
       UNSUPPORTED_PAYLOAD,
@@ -1649,9 +1696,14 @@ function validateNetworkTransactionDomainArchive(payload, context) {
 
 function validateConstVecBytes(payload, context, expectedLength) {
   const reader = new Reader(payload, context);
-  const count = reader.readU64("count");
+  const count = reader.readCount("count");
   if (count !== BigInt(expectedLength)) {
     fail(MALFORMED_PAYLOAD, `${context}${TEXT_MUST_CONTAIN}${expectedLength} bytes`);
+  }
+  if (getNoritoWireLayout() === "dense") {
+    const output = reader.readBytes(expectedLength, "bytes");
+    reader.assertEof();
+    return Buffer.from(output);
   }
   const output = Buffer.alloc(expectedLength);
   for (let index = 0; index < expectedLength; index += 1) {
@@ -1667,7 +1719,7 @@ function validateConstVecBytes(payload, context, expectedLength) {
 
 function validateAccountArchive(payload, context) {
   const reader = new Reader(payload, context);
-  if (reader.readU32("controllerTag") !== 0) {
+  if (reader.readEnumTag("controllerTag") !== 0) {
     fail(UNSUPPORTED_AUTHORITY, `${context} must use a single-key controller`);
   }
   const controller = validateConstVecBytes(
@@ -1691,6 +1743,10 @@ function validateAccountArchive(payload, context) {
 }
 
 function validateFixedByteArchive(payload, length, context) {
+  if (getNoritoWireLayout() === "dense") {
+    if (payload.length !== length) fail(MALFORMED_PAYLOAD, `${context} must contain exactly ${length} bytes`);
+    return Buffer.from(payload);
+  }
   const reader = new Reader(payload, context);
   const output = Buffer.alloc(length);
   for (let index = 0; index < length; index += 1) {
@@ -1706,7 +1762,7 @@ function validateFixedByteArchive(payload, length, context) {
 
 function validateScopeArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const tag = reader.readU32("tag");
+  const tag = reader.readEnumTag("tag");
   if (tag === 0) {
     reader.assertEof();
     return;
@@ -1782,7 +1838,7 @@ function validateNumericArchive(payload, context) {
 
 function validateFeeChargeLimitsArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const count = reader.readU64("count");
+  const count = reader.readCount("count");
   if (count > BigInt(Object.keys(FEE_CHARGE_KIND_TAG).length)) {
     fail(MALFORMED_PAYLOAD, `${context} contains too many charge limits`);
   }
@@ -1792,11 +1848,9 @@ function validateFeeChargeLimitsArchive(payload, context) {
       reader.readField(`item[${index}]`),
       `${context}[${index}]`,
     );
-    const kind = entry.readField("kind");
-    if (kind.length !== 4) {
-      fail(MALFORMED_PAYLOAD, `${context}[${index}].kind must be a u32 tag`);
-    }
-    const tag = kind.readUInt32LE(0);
+    const kind = new Reader(entry.readField("kind"), `${context}[${index}].kind`);
+    const tag = kind.readEnumTag("tag");
+    kind.assertEof();
     if (tag > 1 || tag <= previousTag) {
       fail(
         MALFORMED_PAYLOAD,
@@ -1832,7 +1886,7 @@ function validateFeeProgramIdArchive(payload, context) {
 
 function validateFeePaymentArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const tag = reader.readU32("payer");
+  const tag = reader.readEnumTag("payer");
   if (tag > 1) {
     fail(MALFORMED_PAYLOAD, `${context} uses unsupported payer tag ${tag}`);
   }
@@ -1892,11 +1946,11 @@ function validateFrame(frame, context) {
 
 function validateTransferExecutable(payload, context) {
   const executable = new Reader(payload, context);
-  if (executable.readU32("variant") !== 0) {
+  if (executable.readEnumTag("variant") !== 0) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Instructions`);
   }
   const instructions = new Reader(executable.readField(FIELD_INSTRUCTIONS), `${context}.instructions`);
-  if (instructions.readU64("count") !== 1n) {
+  if (instructions.readCount("count") !== 1n) {
     fail(UNSUPPORTED_EXECUTABLE, `${context}${TEXT_MUST_CONTAIN}exactly one ${TEXT_INSTRUCTION}`);
   }
   const instruction = new Reader(
@@ -1911,19 +1965,20 @@ function validateTransferExecutable(payload, context) {
   if (wireId !== WIRE_ID_IROHA_TRANSFER) {
     fail(UNSUPPORTED_INSTRUCTION, `${context}${TEXT_MUST_CONTAIN}iroha.transfer`);
   }
+  const dense = getNoritoWireLayout() === "dense";
   const frameContainer = new Reader(
     instruction.readField("frameContainer"),
     `${context}${TEXT_INSTRUCTIONS}0].frameContainer`,
-    false,
+    dense,
   );
   const frame = frameContainer.readField("frame");
   frameContainer.assertEof();
   instruction.assertEof();
   instructions.assertEof();
   executable.assertEof();
-  const transferPayload = validateFrame(frame, `${context}${TEXT_INSTRUCTIONS}0].frame`);
+  const transferPayload = dense ? frame : validateFrame(frame, `${context}${TEXT_INSTRUCTIONS}0].frame`);
   const transfer = new Reader(transferPayload, `${context}.transfer`);
-  if (transfer.readU32("variant") !== 2) {
+  if (transfer.readEnumTag("variant") !== 2) {
     fail(UNSUPPORTED_INSTRUCTION, `${context}${TEXT_MUST_CONTAIN}Transfer::Asset`);
   }
   const body = new Reader(transfer.readField("body"), `${context}.transfer.body`);
@@ -2145,7 +2200,7 @@ function validateRequiredTtlOption(payload, context) {
 
 function validateMetadataArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const count = reader.readU64("count");
+  const count = reader.readCount("count");
   if (count > BigInt(MAX_METADATA_ENTRIES)) {
     fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${MAX_METADATA_ENTRIES} entries`);
   }
@@ -2684,7 +2739,7 @@ function bareSignedTransaction(payload, signature) {
 }
 
 function transactionHashFromPayload(payload) {
-  return irohaHash(Buffer.concat([u32(0), field(payload)]));
+  return irohaHash(Buffer.concat([enumTag(0), field(payload)]));
 }
 
 /**
@@ -2695,9 +2750,14 @@ function transactionHashFromPayload(payload) {
  * are intentionally outside this narrow browser surface.
  *
  * @param {object} input
+ * @param {{layout?: "current" | "dense"}} [options] Explicit bare archive layout; current compact by default.
  * @returns {Buffer}
  */
-export function buildBrowserTransferPayload(input) {
+export function buildBrowserTransferPayload(input, options = {}) {
+  return withBrowserWireOptions(options, false, () => buildTransferPayloadWithLayout(input));
+}
+
+function buildTransferPayloadWithLayout(input) {
   const normalized = normalizeTransferInput(input);
   const payload = encodeTransferPayload(normalized);
   validateTransactionPayload(
@@ -2776,11 +2836,18 @@ export function buildBrowserExecutableBatchPayload(input) {
 }
 
 /**
- * Return the marked Iroha Blake2b-256 prehash for a transaction payload.
+ * Return the marked Iroha Blake2b-256 prehash for exact bare transaction bytes.
+ * Layout is explicit for resource checks; hashing does not perform typed admission.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
+ * @param {number} networkPrefix
+ * @param {{layout?: "current" | "dense"}} [options]
  * @returns {string}
  */
-export function browserTransactionPayloadHashHex(payloadBytes, networkPrefix) {
+export function browserTransactionPayloadHashHex(payloadBytes, networkPrefix, options = {}) {
+  return withBrowserWireOptions(options, false, () => transactionPayloadHashHexWithLayout(payloadBytes, networkPrefix));
+}
+
+function transactionPayloadHashHexWithLayout(payloadBytes, networkPrefix) {
   const payload = bytes(payloadBytes, "payloadBytes", {
     maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
@@ -2798,14 +2865,15 @@ export function browserTransactionPayloadHashHex(payloadBytes, networkPrefix) {
  *
  * @param {object} signable
  * @param {{networkId?: import("./networkId.js").NetworkId | null, authority?: string | null, signingPublicKey?: ArrayBufferView | ArrayBuffer | Buffer | string | null}} constraints
+ * @param {{layout?: "current" | "dense"}} [options] Declared bare payload layout.
  * @returns {{networkId: import("./networkId.js").NetworkId, payloadBytes: Buffer, payloadHashHex: string, authority: string, signingPublicKey: Buffer, signatureAlgorithm: ED25519_ALGORITHM}}
  */
-export function validateBrowserTransferSignable(signable, constraints = {}) {
-  return validateBrowserTransactionSignable(
+export function validateBrowserTransferSignable(signable, constraints = {}, options = {}) {
+  return withBrowserWireOptions(options, false, () => validateBrowserTransactionSignable(
     signable,
     constraints,
     validateTransactionPayload,
-  );
+  ));
 }
 
 function validateBrowserTransactionSignable(
@@ -2933,23 +3001,28 @@ export function validateBrowserInstructionTransactionSignable(
 
 /**
  * Verify and finalize an externally signed transparent transfer.
+ * Dense requires `{layout: "dense", format: "bare"}` and returns an offline
+ * archive, because no governed headerless transaction version selects dense.
  *
  * @param {object} signable
  * @param {object | ArrayBufferView | ArrayBuffer | Buffer} signature
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} signingPublicKey
+ * @param {{layout?: "current" | "dense", format?: "versioned" | "bare"}} [options]
  * @returns {{signedTransaction: Buffer, hash: Buffer, hashHex: string}}
  */
 export function finalizeBrowserSignedTransaction(
   signable,
   signature,
   signingPublicKey,
+  options = {},
 ) {
-  return finalizeBrowserTransaction(
+  return withBrowserWireOptions(options, true, (format) => finalizeBrowserTransaction(
     signable,
     signature,
     signingPublicKey,
     validateTransactionPayload,
-  );
+    format,
+  ));
 }
 
 function finalizeBrowserTransaction(
@@ -2957,6 +3030,7 @@ function finalizeBrowserTransaction(
   signature,
   signingPublicKey,
   validatePayload,
+  format = "versioned",
 ) {
   signable = snapshotAllowedFields(signable, SIGNABLE_FIELDS, "signable");
   if (
@@ -3023,7 +3097,7 @@ function finalizeBrowserTransaction(
     fail(INVALID_SIGNATURE, SIGNATURE_VERIFY_MESSAGE);
   }
   const bare = bareSignedTransaction(payload, signatureBytes);
-  const signedTransaction = Buffer.concat([Buffer.of(1), bare]);
+  const signedTransaction = format === "bare" ? bare : Buffer.concat([Buffer.of(1), bare]);
   const hash = transactionHashFromPayload(payload);
   return {
     signedTransaction,
@@ -3072,21 +3146,23 @@ export function finalizeBrowserExecutableBatchTransaction(
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @returns {string}
  */
-function signedTransactionPayload(signedTransaction) {
+function signedTransactionPayload(signedTransaction, format = "versioned") {
   const versioned = bytes(signedTransaction, "signedTransaction", {
     maxBytes: MAX_EXECUTION_SIGNED_TRANSACTION_BYTES,
   });
   if (
     versioned.length < 2 ||
     versioned.length > MAX_EXECUTION_SIGNED_TRANSACTION_BYTES ||
-    versioned[0] !== 1
+    (format === "versioned" && versioned[0] !== 1)
   ) {
     fail(
       MALFORMED_SIGNED_TRANSACTION,
-      "signedTransaction must be non-empty exact version-1 SignedTransaction bytes",
+      format === "bare"
+        ? "signedTransaction must be a non-empty exact bare SignedTransaction archive"
+        : "signedTransaction must be non-empty exact version-1 SignedTransaction bytes",
     );
   }
-  const bare = versioned.subarray(1);
+  const bare = format === "bare" ? versioned : versioned.subarray(1);
   const reader = new Reader(bare, "signed transaction");
   const signatureValue = new Reader(reader.readField(FIELD_SIGNATURE), "signed transaction.signature");
   const rawSignature = validateConstVecBytes(
@@ -3119,14 +3195,26 @@ export function _browserSignedTransferTransactionHashHex(signedTransaction, netw
   return transactionHashFromPayload(payload).toString(HEX_ENCODING);
 }
 
-/** Compute the pipeline hash after validating the complete supported transaction. */
-export function browserSignedTransactionHashHex(signedTransaction, networkPrefix) {
-  const payload = signedTransactionPayload(signedTransaction);
+/**
+ * Compute the intent hash after validating the complete supported transaction.
+ * Bare offline archives require explicit format/layout options; version 1 always means current.
+ */
+export function browserSignedTransactionHashHex(signedTransaction, networkPrefix, options = {}) {
+  return withBrowserWireOptions(options, true, (format) => signedTransactionHashHexWithLayout(signedTransaction, networkPrefix, format));
+}
+
+function signedTransactionHashHexWithLayout(signedTransaction, networkPrefix, format) {
+  const payload = signedTransactionPayload(signedTransaction, format);
   let transferError;
   try {
     validateTransactionPayload(payload, null, null, networkPrefix);
   } catch (error) {
     transferError = error;
+    if (getNoritoWireLayout() === "dense") {
+      // TODO(C11): add dense instruction admission when the native codec exposes an explicit layout.
+      if (error instanceof BrowserTransactionCodecError && error.code === BOUNDS_EXCEEDED) throw error;
+      fail(MALFORMED_SIGNED_TRANSACTION, `dense signedTransaction must be a supported transfer (${error.message})`);
+    }
     try {
       validateInstructionTransactionPayload(payload, null, null, networkPrefix);
     } catch (instructionError) {

@@ -11909,6 +11909,8 @@ export function sm2FixtureFromSeed(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
 ): Sm2Fixture;
 
+/** Explicit bare value layout; frames select it from their header minor. */
+export type NoritoWireLayout = "current" | "dense";
 /** Exact compact-length AccountId value encoding for typed policy codecs. */
 export function encodeAccountIdNoritoValue(
   value: string,
@@ -11949,6 +11951,7 @@ export function decodeCancelAssetLockV1(
 export function noritoEncodeInstruction(
   instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
   networkPrefix: number,
+  options?: NoritoLayoutOptions,
 ): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -11966,15 +11969,17 @@ export function verifyBlockProofs(
   proofs: ToriiBlockProofs,
   trustedAnchor: ToriiBlockProofTrustedAnchor,
 ): ToriiBlockProofVerification;
-/** Encode a canonical compact `InstructionBox` archive for a transaction. */
+/** Encode a canonical layout-selected `InstructionBox` archive for a transaction. */
 export function noritoEncodeInstructionBoxArchive(
   instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
   networkPrefix: number,
+  options?: NoritoLayoutOptions,
 ): Buffer;
-/** Decode one exact canonical compact `InstructionBox` transaction archive. */
+/** Decode one exact canonical layout-selected `InstructionBox` transaction archive. */
 export function noritoDecodeInstructionBoxArchive(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   networkPrefix: number,
+  options?: NoritoLayoutOptions,
 ): unknown;
 /** Encode the exact current Rust manifest-provenance signing frame. */
 export function noritoEncodeContractManifestSignaturePayload(
@@ -12141,12 +12146,14 @@ export interface NoritoFrameValidationOptions {
   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;
   expectedTypeName?: string;
   expectedPaddingLength?: number;
+  expectedLayout?: NoritoWireLayout;
   requireNonEmptyPayload?: boolean;
 }
 export interface ValidatedNoritoFrame {
   payload: Buffer;
   schemaHash: Buffer;
   flags: number;
+  layout: NoritoWireLayout;
 }
 /** Validate one canonical, uncompressed Norito v1 frame without decoding its payload. */
 export function validateNoritoFrame(
@@ -12156,7 +12163,7 @@ export function validateNoritoFrame(
 export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   networkPrefix: number,
-  options?: { parseJson?: boolean },
+  options?: NoritoLayoutOptions & { parseJson?: boolean },
 ): JsonValue;
 export interface SubscriptionTriggerActionSummary {
   version: 1;
@@ -12278,19 +12285,63 @@ export function buildHandleRefreshRequest(
   overrides?: Partial<AxtHandleRefreshHint>,
 ): AxtHandleRefreshHint;
 
+/** Exact layout selection. Bare archives have no header; current is the default. */
+export interface NoritoLayoutOptions { layout?: NoritoWireLayout; }
+/** Typed payload archive format; defaults to bare. */
+export interface TransactionPayloadCodecOptions extends NoritoLayoutOptions {
+  format?: "bare" | "framed";
+}
+/** Dense has no versioned wire mapping. Current signed APIs default to versioned. */
+export type SignedTransactionCodecOptions =
+  | { layout?: "current"; format?: "versioned" | "bare" | "framed" }
+  | { layout: "dense"; format: "bare" | "framed" };
+
+/** Decode to lossless canonical native model JSON text. */
+export function decodeTransactionPayloadJson(
+  payloadBytes: Buffer | ArrayBuffer | ArrayBufferView,
+  networkPrefix: number,
+  options?: TransactionPayloadCodecOptions,
+): string;
+/** Encode lossless canonical native model JSON text. */
+export function encodeTransactionPayloadJson(
+  json: string,
+  networkPrefix: number,
+  options?: TransactionPayloadCodecOptions,
+): Buffer;
+/** Encode native signed model JSON text; this does not authenticate its signature. */
+export function encodeSignedTransaction(
+  json: string,
+  networkPrefix: number,
+  options?: SignedTransactionCodecOptions,
+): Buffer;
+/** Sign a payload for the pinned network, preserving the selected bare/framed format. */
+export function signTransactionPayload(
+  networkId: NetworkId,
+  payloadBytes: Buffer | ArrayBuffer | ArrayBufferView,
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView,
+  networkPrefix: number,
+  options?: TransactionPayloadCodecOptions,
+): Buffer;
+
 export function hashSignedTransaction(
-  signedTransaction: VersionedSignedTransactionV1,
-  options?: { encoding?: BufferEncoding | "buffer" },
+  signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+  options?: SignedTransactionCodecOptions & { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
 export function hashSignedTransactionPayload(
-  signedTransaction: VersionedSignedTransactionV1,
-  options?: { encoding?: BufferEncoding | "buffer" },
+  signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+  options?: SignedTransactionCodecOptions & { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
 export function decodeSignedTransaction(
-  signedTransaction: VersionedSignedTransactionV1,
+  signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
   networkPrefix: number,
+  options: SignedTransactionCodecOptions & { parseJson: false },
+): string;
+export function decodeSignedTransaction(
+  signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+  networkPrefix: number,
+  options?: SignedTransactionCodecOptions & { parseJson?: true },
 ): Record<string, unknown>;
 
 export function encodeContractArgumentRecord(
@@ -12307,8 +12358,9 @@ export function hashInstructionBatch(
 
 export function resignSignedTransaction(
   networkId: NetworkId,
-  signedTransaction: VersionedSignedTransactionV1,
+  signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SignedTransactionCodecOptions,
 ): Buffer;
 
 /** Convert the ergonomic fee intent into the native signer's exact Norito JSON. */
@@ -12318,22 +12370,27 @@ export function feePaymentIntentToNoritoJson(
 
 export function buildTransaction(
   input: TransactionAssemblyInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 export function buildExecutableBatchTransaction(
   input: ExecutableBatchTransactionAssemblyInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 export function buildTransactionPayload(
   input: TransactionPayloadDraftInput,
+  options?: NoritoLayoutOptions,
 ): TransactionPayloadDraftResult;
 
 export function buildExecutableBatchTransactionPayload(
   input: ExecutableBatchTransactionPayloadDraftInput,
+  options?: NoritoLayoutOptions,
 ): TransactionPayloadDraftResult;
 
 export function signQuotedTransactionPayload(
   input: QuotedTransactionPayloadSigningInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 export function quoteAndSignTransaction(
@@ -12361,9 +12418,10 @@ export function quoteAndSignTransaction(
  */
 export function transactionPayloadSigningHash(
   payloadBytes: Buffer | ArrayBuffer | ArrayBufferView,
+  options?: TransactionPayloadCodecOptions,
 ): Buffer;
 
-/** Attach an external Ed25519 signature to exact canonical payload bytes. */
+/** Attach an external Ed25519 signature to bare payload bytes; options select signed output framing. */
 export function finalizeSignedTransaction(input: {
   networkId: NetworkId;
   payloadBytes: Buffer | ArrayBuffer | ArrayBufferView;
@@ -12372,7 +12430,7 @@ export function finalizeSignedTransaction(input: {
   /** Raw 32-byte Ed25519 public key controlling `authority`. */
   publicKey: Buffer | ArrayBuffer | ArrayBufferView;
   authority: string;
-}): SignedTransactionResult;
+}, options?: SignedTransactionCodecOptions): SignedTransactionResult;
 
 /**
  * Convert a fee quote's signed intent into the ergonomic `feePayment` shape,
@@ -12434,6 +12492,7 @@ export function buildRegisterPinManifestTransaction(
 
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 /**
@@ -12442,12 +12501,15 @@ export function buildRegisterDomainTransaction(
  */
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildIvmProvedTransactionPayload(
   input: IvmProvedTransactionPayloadDraftInput,
+  options?: NoritoLayoutOptions,
 ): IvmProvedTransactionPayloadDraftResult;
 export function signQuotedIvmProvedTransactionPayload(
   input: QuotedIvmProvedTransactionPayloadSigningInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
@@ -12476,6 +12538,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
 
 export function buildMintAssetTransaction(
   input: MintAssetInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::Asset` instruction.
@@ -12483,6 +12546,7 @@ export function buildMintAssetTransaction(
  */
 export function buildBurnAssetTransaction(
   input: BurnAssetInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::TriggerRepetitions`
@@ -12490,60 +12554,79 @@ export function buildBurnAssetTransaction(
  */
 export function buildBurnTriggerTransaction(
   input: BurnTriggerInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildMintTriggerTransaction(
   input: MintTriggerInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildTransferAssetTransaction(
   input: TransferAssetInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterMultisigTransaction(
   input: RegisterMultisigTransactionInput,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildTransferAssetDefinitionTransaction(
   input: TransferAssetDefinitionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildTransferDomainTransaction(
   input: TransferDomainInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildTransferNftTransaction(
   input: TransferNftInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterRwaTransaction(
   input: RegisterRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildTransferRwaTransaction(
   input: TransferRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildMergeRwasTransaction(
   input: MergeRwasInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRedeemRwaTransaction(
   input: RedeemRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildFreezeRwaTransaction(
   input: FreezeRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildUnfreezeRwaTransaction(
   input: UnfreezeRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildHoldRwaTransaction(
   input: HoldRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildReleaseRwaTransaction(
   input: ReleaseRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildForceTransferRwaTransaction(
   input: ForceTransferRwaInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildSetRwaControlsTransaction(
   input: SetRwaControlsInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildSetRwaKeyValueTransaction(
   input: SetRwaKeyValueInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRemoveRwaKeyValueTransaction(
   input: RemoveRwaKeyValueInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
@@ -12552,6 +12635,7 @@ export function buildRemoveRwaKeyValueTransaction(
  */
 export function buildMintAndTransferTransaction(
   input: MintAndTransferInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Register a domain and optionally perform follow-up mints in the same
@@ -12559,6 +12643,7 @@ export function buildMintAndTransferTransaction(
  */
 export function buildRegisterDomainAndMintTransaction(
   input: RegisterDomainAndMintInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Register an account and enqueue one or more asset transfers. Each transfer
@@ -12566,6 +12651,7 @@ export function buildRegisterDomainAndMintTransaction(
  */
 export function buildRegisterAccountAndTransferTransaction(
   input: RegisterAccountAndTransferInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Register an asset definition and optionally mint initial supply. When both
@@ -12574,6 +12660,7 @@ export function buildRegisterAccountAndTransferTransaction(
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
   input: RegisterAssetDefinitionAndMintInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 /**
  * Register an asset definition, mint supply, and optionally fan-out transfers.
@@ -12582,6 +12669,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(
  */
 export function buildRegisterAssetDefinitionMintAndTransferTransaction(
   input: RegisterAssetDefinitionMintAndTransferInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 
 export interface TimeTriggerActionOptions {
@@ -12609,69 +12697,91 @@ export function buildPrecommitTriggerAction(
 
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildLeaveKaigiTransaction(
   input: LeaveKaigiTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
   input: EndKaigiTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRecordKaigiUsageTransaction(
   input: RecordKaigiUsageTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildSetKaigiRelayManifestTransaction(
   input: SetKaigiRelayManifestTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterKaigiRelayTransaction(
   input: RegisterKaigiRelayTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildUnregisterKaigiRelayTransaction(
   input: UnregisterKaigiRelayTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildReportKaigiRelayHealthTransaction(
   input: ReportKaigiRelayHealthTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractCodeTransaction(
   input: RegisterSmartContractCodeTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractBytesTransaction(
   input: RegisterSmartContractBytesTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRemoveSmartContractBytesTransaction(
   input: RemoveSmartContractBytesTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildProposeDeployContractTransaction(
   input: ProposeDeployContractTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildCastZkBallotTransaction(
   input: CastZkBallotTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildCastPlainBallotTransaction(
   input: CastPlainBallotTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildUpdatePlainConvictionTransaction(
   input: UpdatePlainConvictionTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
   input: RegisterZkAssetTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildScheduleConfidentialPolicyTransitionTransaction(
   input: ScheduleConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildCancelConfidentialPolicyTransitionTransaction(
   input: CancelConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildCreateElectionTransaction(
   input: CreateElectionTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildSubmitBallotTransaction(
   input: SubmitBallotTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function buildFinalizeElectionTransaction(
   input: FinalizeElectionTransactionInput & FeePaymentRequired,
+  options?: SignedTransactionCodecOptions,
 ): SignedTransactionResult;
 export function submitSignedTransaction(
   client: ToriiClient,

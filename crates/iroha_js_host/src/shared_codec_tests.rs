@@ -41,27 +41,32 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
     .expect("instruction JSON");
     let shared_frame =
         iroha_js_codec::encode_instruction_frame(&source, 369).expect("shared frame");
-    let native_frame = norito_encode_instruction(source.clone(), 369.0).expect("native frame");
+    let native_frame =
+        norito_encode_instruction(source.clone(), 369.0, None).expect("native frame");
     assert_eq!(native_frame.as_ref(), shared_frame.as_slice());
     assert_eq!(
-        norito_decode_instruction(Uint8Array::from(shared_frame.clone()), 369.0)
+        norito_decode_instruction(Uint8Array::from(shared_frame.clone()), 369.0, None)
             .expect("native decode"),
         iroha_js_codec::decode_instruction_frame(&shared_frame, 369).expect("shared decode")
     );
     let shared_archive =
         iroha_js_codec::encode_instruction_archive(&source, 369).expect("shared archive");
     let native_archive =
-        norito_encode_instruction_box_archive(source, 369.0).expect("native archive");
+        norito_encode_instruction_box_archive(source, 369.0, None).expect("native archive");
     assert_eq!(native_archive.as_ref(), shared_archive.as_slice());
     assert_eq!(
-        norito_decode_instruction_box_archive(Uint8Array::from(shared_archive.clone()), 369.0)
-            .expect("native archive decode"),
+        norito_decode_instruction_box_archive(
+            Uint8Array::from(shared_archive.clone()),
+            369.0,
+            None
+        )
+        .expect("native archive decode"),
         iroha_js_codec::decode_instruction_archive(&shared_archive, 369)
             .expect("shared archive decode")
     );
     for malformed in ["{", "{\"Register\":null}"] {
         let shared_error = iroha_js_codec::encode_instruction_frame(malformed, 369).unwrap_err();
-        let native_error = norito_encode_instruction(malformed.to_owned(), 369.0)
+        let native_error = norito_encode_instruction(malformed.to_owned(), 369.0, None)
             .err()
             .expect("malformed instruction must fail native encoding");
         let expected_status = match shared_error.kind() {
@@ -75,22 +80,22 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
 
 fn malformed_context_operations(prefix: f64) -> [napi::Error; 9] {
     [
-        norito_encode_instruction("{}".to_owned(), prefix)
+        norito_encode_instruction("{}".to_owned(), prefix, None)
             .err()
             .unwrap(),
-        norito_decode_instruction(Uint8Array::from(vec![0_u8]), prefix)
+        norito_decode_instruction(Uint8Array::from(vec![0_u8]), prefix, None)
             .err()
             .unwrap(),
-        norito_encode_instruction_box_archive("{}".to_owned(), prefix)
+        norito_encode_instruction_box_archive("{}".to_owned(), prefix, None)
             .err()
             .unwrap(),
-        norito_decode_instruction_box_archive(Uint8Array::from(vec![0_u8]), prefix)
+        norito_decode_instruction_box_archive(Uint8Array::from(vec![0_u8]), prefix, None)
             .err()
             .unwrap(),
         inspect_subscription_trigger_action("bad-action".to_owned(), prefix)
             .err()
             .unwrap(),
-        decode_signed_transaction_json(Uint8Array::from(vec![0_u8]), prefix)
+        decode_signed_transaction_json(Uint8Array::from(vec![0_u8]), prefix, None, None)
             .err()
             .unwrap(),
         hash_instruction_batch(vec!["{}".to_owned()], prefix)
@@ -240,14 +245,15 @@ fn shared_codec_adapter_uses_explicit_network_for_instruction_and_batch_context(
         "Unregister": norito_json!({ "Account": literal.clone() })
     }))
     .unwrap();
-    let frame = norito_encode_instruction(source.clone(), 369.0).unwrap();
+    let frame = norito_encode_instruction(source.clone(), 369.0, None).unwrap();
     assert_eq!(
-        norito_decode_instruction(Uint8Array::from(frame.to_vec()), 369.0).unwrap(),
+        norito_decode_instruction(Uint8Array::from(frame.to_vec()), 369.0, None).unwrap(),
         source
     );
-    let archive = norito_encode_instruction_box_archive(source.clone(), 369.0).unwrap();
+    let archive = norito_encode_instruction_box_archive(source.clone(), 369.0, None).unwrap();
     assert_eq!(
-        norito_decode_instruction_box_archive(Uint8Array::from(archive.to_vec()), 369.0).unwrap(),
+        norito_decode_instruction_box_archive(Uint8Array::from(archive.to_vec()), 369.0, None)
+            .unwrap(),
         source
     );
     let batch = hash_instruction_batch(vec![source.clone()], 369.0).unwrap();
@@ -256,8 +262,8 @@ fn shared_codec_adapter_uses_explicit_network_for_instruction_and_batch_context(
         HashOf::new(&vec![instruction_from_json(&source).unwrap()])
     };
     assert_eq!(batch.as_ref(), expected.as_ref());
-    assert!(norito_encode_instruction(source.clone(), 753.0).is_err());
-    assert!(norito_encode_instruction_box_archive(source.clone(), 753.0).is_err());
+    assert!(norito_encode_instruction(source.clone(), 753.0, None).is_err());
+    assert!(norito_encode_instruction_box_archive(source.clone(), 753.0, None).is_err());
     assert!(hash_instruction_batch(vec![source], 753.0).is_err());
     assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),

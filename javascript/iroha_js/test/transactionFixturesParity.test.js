@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
 import { validateNoritoFrame } from "../src/norito.js";
 import { NumericV1, parseStrictLosslessIntegerJson } from "../src/numericV1.js";
+import * as valueCodec from "../src/noritoValueCodecs.js";
+import { createNoritoRecordDecoder, createNoritoRecordEncoder } from "../src/noritoRecordDecoder.js";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");
@@ -1462,3 +1465,139 @@ test("burn_asset fixture retains the expected burn wire payload", () => {
     "burn_asset wire payload must not be empty",
   );
 });
+
+// These schemas exercise the shared SDK primitives, including all transaction
+// envelope fields. Instruction bodies remain opaque: only the native registry
+// owns general instruction schemas. TODO: run full typed instruction parity when
+// its addon encode/decode/sign entrypoints accept an explicit WireLayout.
+const decodeEnvelopeRecord = createNoritoRecordDecoder(valueCodec.decodeStructFields, valueCodec.decodeOptionValue, valueCodec.decodeNoritoVec);
+const encodeEnvelopeRecord = createNoritoRecordEncoder(valueCodec.encodeStructValue, valueCodec.encodeOptionValue, valueCodec.encodeNoritoVec);
+const envelopePair = (encode, decode) => ({ encode, decode });
+const envelopeRecord = (fields) => {
+  const schema = fields.map(([name, type]) => [name, type.decode, 0, type.encode, 0]);
+  return envelopePair(
+    (value) => encodeEnvelopeRecord(value, "transaction fixture", schema),
+    (bytes) => decodeEnvelopeRecord(bytes, "transaction fixture", schema),
+  );
+};
+const envelopeRaw = envelopePair((value) => Buffer.from(value), (bytes) => Buffer.from(bytes));
+const envelopeScalar = (width) => envelopePair(
+  width === 8 ? valueCodec.u64ToLittleEndianBuffer : valueCodec.u32ToLittleEndianBuffer,
+  (bytes) => {
+    const reader = new valueCodec.BufferReader(bytes, "scalar");
+    const value = width === 8 ? reader.readU64LE("value") : reader.readU32LE("value");
+    reader.assertEof();
+    return value;
+  },
+);
+const envelopeOption = (type) => envelopePair(
+  (value) => valueCodec.encodeOptionValue(value, type.encode, "option"),
+  (bytes) => valueCodec.decodeOptionValue(bytes, type.decode, "option"),
+);
+const envelopeVec = (type) => envelopePair(
+  (value) => valueCodec.encodeNoritoVec(value, type.encode),
+  (bytes) => valueCodec.decodeNoritoVec(bytes, type.decode, "sequence"),
+);
+const envelopeEnum = (variants) => envelopePair(
+  ({ tag, value }) => valueCodec.encodeEnumTagValue(tag, variants[tag] === null ? undefined : () => variants[tag].encode(value)),
+  (bytes) => {
+    const reader = new valueCodec.BufferReader(bytes, "enum"), tag = reader.readEnumTag("tag");
+    assert.ok(Object.hasOwn(variants, tag), `unknown enum tag ${tag}`);
+    const value = variants[tag] === null ? null : variants[tag].decode(valueCodec.readNoritoField(reader, "value"));
+    reader.assertEof();
+    return { tag, value };
+  },
+);
+const envelopeString = envelopePair(valueCodec.encodeNoritoStringValue, (bytes) => valueCodec.decodeStringValue(bytes, "string"));
+const envelopeByteVec = envelopePair(valueCodec.encodeNoritoByteVec, (bytes) => valueCodec.decodeNoritoByteVec(bytes, "bytes"));
+const envelopeConstBytes = envelopePair(valueCodec.encodeConstVecU8Value, (bytes) => valueCodec.decodeConstVecU8Value(bytes, "const bytes"));
+const envelopeAccount = envelopeEnum({ 0: envelopeConstBytes });
+const envelopeInstruction = envelopePair(
+  ({ wireId, body, schemaHash, flags }) => valueCodec.encodeTupleValue([
+    envelopeString.encode(wireId),
+    envelopeByteVec.encode(valueCodec.getNoritoWireLayout() === "dense" ? body : valueCodec.frameNoritoPayload(body, schemaHash, flags)),
+  ]),
+  (bytes) => {
+    const fields = valueCodec.decodeTupleFields(bytes, "instruction envelope", ["wireId", "body"]);
+    const wireId = envelopeString.decode(fields.wireId);
+    const wireBody = envelopeByteVec.decode(fields.body);
+    if (valueCodec.getNoritoWireLayout() === "dense") return { wireId, body: wireBody };
+    const { payload: body, schemaHash, flags } = valueCodec.validateNoritoFrame(wireBody, { expectedLayout: "current" });
+    return { wireId, body, schemaHash, flags };
+  },
+);
+const envelopeInvocation = envelopeRecord([
+  ["contractAddress", envelopeString], ["expectedCodeHash", envelopeRaw],
+  ["entrypoint", envelopeString], ["arguments", envelopeOption(envelopeByteVec)],
+]);
+const envelopeExecutable = envelopeEnum({
+  0: envelopeVec(envelopeInstruction),
+  2: envelopeRecord([["bytes", envelopeByteVec]]),
+  1: envelopeInvocation,
+  4: envelopeVec(envelopeEnum({ 0: envelopeInstruction, 1: envelopeInvocation })),
+});
+const envelopeNumeric = envelopeRecord([["mantissa", envelopeRaw], ["scale", envelopeScalar(4)]]);
+const envelopeCharge = envelopeRecord([
+  ["kind", envelopeEnum({ 0: null, 1: null })],
+  ["assetDefinition", envelopePair(valueCodec.encodeNoritoByteArray, (bytes) => valueCodec.decodeNoritoByteArray(bytes, 16, "asset definition"))],
+  ["maxAmount", envelopeNumeric],
+]);
+const envelopeFee = envelopeEnum({
+  0: envelopeRecord([["chargeLimits", envelopeVec(envelopeCharge)], ["gasLimit", envelopeOption(envelopeScalar(8))]]),
+});
+const envelopePayload = envelopeRecord([
+  ["network", envelopeEnum({ 0: envelopeRaw })],
+  ["authority", envelopeAccount],
+  ["creationTime", envelopeScalar(8)],
+  ["executable", envelopeExecutable],
+  ["ttl", envelopeOption(envelopeScalar(8))],
+  ["nonce", envelopeOption(envelopeScalar(4))],
+  ["feePayment", envelopeFee],
+  ["metadata", envelopePair(valueCodec.encodeMetadataValue, (bytes) => valueCodec.decodeMetadataValue(bytes, "metadata"))],
+  ["attachments", envelopeOption(envelopeRaw)],
+]);
+const envelopeSigned = envelopeRecord([
+  ["signature", envelopeRecord([["payload", envelopeConstBytes]])],
+  ["payload", envelopePayload],
+  ["multisigSignatures", envelopeOption(envelopeRaw)],
+]);
+
+const denseManifest = loadJsonRelative("fixtures/norito_rpc/transaction_fixtures.dense.json");
+assert.equal(denseManifest.layout, "dense");
+assert.equal(denseManifest.fixtures.length, canonicalManifest.fixtures.length);
+for (const fixture of denseManifest.fixtures) {
+  test(`dense transaction envelope/signature parity: ${fixture.name}`, () => {
+    const bare = decodeCanonicalBase64(fixture.payload_base64, fixture.name);
+    const signed = decodeCanonicalBase64(fixture.signed_base64, fixture.name);
+    const current = selectFixture(canonicalManifest.fixtures, fixture.name);
+    const currentPayload = valueCodec.validateNoritoFrame(Buffer.from(current.payload_base64, "base64"), { expectedLayout: "current" }).payload;
+    const currentSigned = valueCodec.validateNoritoFrame(Buffer.from(current.signed_base64, "base64"), { expectedLayout: "current" }).payload;
+    const decoded = valueCodec.withNoritoWireLayout("dense", () => {
+      const payload = envelopePayload.decode(bare), transaction = envelopeSigned.decode(signed);
+      assert.deepEqual(transaction.payload, payload);
+      assert.deepEqual(envelopePayload.encode(payload), bare);
+      assert.deepEqual(envelopeSigned.encode(transaction), signed);
+      assert.equal(irohaHashHex(bare), fixture.signing_hash);
+      assert.equal(payload.authority.tag, 0);
+      assert.equal(payload.authority.value[0], 0); // Ed25519 algorithm tag.
+      assert.equal(transaction.signature.payload.length, 64);
+      assert.equal(ed25519.verify(transaction.signature.payload, Buffer.from(fixture.signing_hash, "hex"), payload.authority.value.subarray(1)), true);
+      assert.throws(() => envelopePayload.decode(bare.subarray(0, -1)));
+      assert.throws(() => envelopePayload.decode(Buffer.concat([bare, Buffer.of(0)])));
+      assert.throws(() => envelopeSigned.decode(signed.subarray(0, -1)));
+      assert.throws(() => envelopeSigned.decode(Buffer.concat([signed, Buffer.of(0)])));
+      assert.throws(() => envelopePayload.decode(currentPayload));
+      return payload;
+    });
+    valueCodec.withNoritoWireLayout("current", () => {
+      const payload = envelopePayload.decode(currentPayload);
+      assert.deepEqual(envelopePayload.encode(payload), currentPayload);
+      assert.deepEqual(envelopeSigned.encode(envelopeSigned.decode(currentSigned)), currentSigned);
+      for (const key of ["network", "authority", "creationTime", "ttl", "nonce", "feePayment", "metadata", "attachments"]) {
+        assert.deepEqual(decoded[key], payload[key], `${fixture.name}.${key}`);
+      }
+      assert.equal(decoded.executable.tag, payload.executable.tag);
+      assert.throws(() => envelopePayload.decode(bare));
+    });
+  });
+}
