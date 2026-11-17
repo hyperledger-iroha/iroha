@@ -114,6 +114,194 @@ struct CanonicalNoritoReader {
     func remaining() -> Int {
         data.count - offset
     }
+
+    // MARK: - Layout-directed reads (`norito.md`; see `NoritoLayoutWriter`)
+
+    /// Per-value length prefix of a field, sequence element, string or blob:
+    /// a `u64` in the fixed layout, a shortest-form varint otherwise.
+    mutating func readLength(layout: NoritoWireLayout) throws -> UInt64 {
+        switch layout {
+        case .fixed:
+            return try readUInt64LE()
+        case .compact, .dense:
+            return try readVarint()
+        }
+    }
+
+    /// Element count of a sequence, map or set: a `u64` in the current layouts,
+    /// a shortest-form varint in the dense layout.
+    mutating func readCount(layout: NoritoWireLayout) throws -> UInt64 {
+        switch layout {
+        case .fixed, .compact:
+            return try readUInt64LE()
+        case .dense:
+            return try readVarint()
+        }
+    }
+
+    /// Enum discriminant: a `u32` in the current layouts, its shortest-form
+    /// varint in the dense layout.
+    mutating func readEnumTag(layout: NoritoWireLayout) throws -> UInt32 {
+        switch layout {
+        case .fixed, .compact:
+            return try readUInt32LE()
+        case .dense:
+            let tag = try readVarint()
+            guard tag <= UInt64(UInt32.max) else {
+                throw CanonicalNoritoDecodingError.invalidField("enum discriminant overflow")
+            }
+            return UInt32(tag)
+        }
+    }
+
+    /// One length-prefixed value in `layout`.
+    mutating func readField(layout: NoritoWireLayout) throws -> Data {
+        let length = try readLength(layout: layout)
+        guard length <= UInt64(Int.max) else {
+            throw CanonicalNoritoDecodingError.invalidField("field length overflow")
+        }
+        return try readBytes(Int(length))
+    }
+
+    /// The `count` elements of a fixed `[u8; N]` or of a `u8` element sequence:
+    /// canonical `[len = 1][byte]` runs in the current layouts, raw bytes in the
+    /// dense layout.
+    mutating func readByteFields(count: Int, layout: NoritoWireLayout) throws -> Data {
+        guard count >= 0 else {
+            throw CanonicalNoritoDecodingError.truncatedPayload
+        }
+        if layout == .dense {
+            return try readBytes(count)
+        }
+        // Every framed element takes at least two bytes.
+        guard count <= remaining() / 2 else {
+            throw CanonicalNoritoDecodingError.truncatedPayload
+        }
+        var bytes = Data()
+        bytes.reserveCapacity(count)
+        for _ in 0..<count {
+            guard try readLength(layout: layout) == 1 else {
+                throw CanonicalNoritoDecodingError.invalidField("byte element is not canonical")
+            }
+            bytes.append(try readUInt8())
+        }
+        return bytes
+    }
+
+    /// `Vec<u8>`: `[count][raw bytes]` in every layout.
+    mutating func readBytesVec(layout: NoritoWireLayout) throws -> Data {
+        let count = try readCount(layout: layout)
+        guard count <= UInt64(remaining()) else {
+            throw CanonicalNoritoDecodingError.truncatedPayload
+        }
+        return try readBytes(Int(count))
+    }
+
+    /// `ConstVec<u8>` and every other `u8` element sequence: `[count]` then the
+    /// elements as `readByteFields` reads them.
+    mutating func readConstVec(layout: NoritoWireLayout) throws -> Data {
+        let count = try readCount(layout: layout)
+        guard count <= UInt64(remaining()) else {
+            throw CanonicalNoritoDecodingError.truncatedPayload
+        }
+        return try readByteFields(count: Int(count), layout: layout)
+    }
+
+    /// Refuse a payload that the decoder did not consume completely.
+    func requireFinished() throws {
+        guard remaining() == 0 else {
+            throw CanonicalNoritoDecodingError.invalidField("trailing bytes")
+        }
+    }
+}
+
+/// Exact decoders for the shapes `NoritoLayoutCodec` encodes. Each one reads a
+/// complete payload in the named layout and refuses truncated input, trailing
+/// bytes and non-canonical lengths; none tries another layout.
+extension NoritoLayoutCodec {
+    /// `String`: `[len][UTF-8 bytes]`.
+    static func decodeString(_ data: Data, layout: NoritoWireLayout) throws -> String {
+        var reader = CanonicalNoritoReader(data: data)
+        let length = try reader.readLength(layout: layout)
+        guard length <= UInt64(Int.max) else {
+            throw CanonicalNoritoDecodingError.invalidField("string length overflow")
+        }
+        let bytes = try reader.readBytes(Int(length))
+        try reader.requireFinished()
+        guard let value = String(data: bytes, encoding: .utf8) else {
+            throw CanonicalNoritoDecodingError.invalidField("invalid UTF-8 in string")
+        }
+        return value
+    }
+
+    /// `Option<T>`: a one-byte tag, then the length-prefixed value when present.
+    static func decodeOption<T>(
+        _ data: Data,
+        layout: NoritoWireLayout,
+        decode: (Data) throws -> T
+    ) throws -> T? {
+        var reader = CanonicalNoritoReader(data: data)
+        switch try reader.readUInt8() {
+        case 0:
+            try reader.requireFinished()
+            return nil
+        case 1:
+            let value = try decode(try reader.readField(layout: layout))
+            try reader.requireFinished()
+            return value
+        default:
+            throw CanonicalNoritoDecodingError.invalidField("invalid option tag")
+        }
+    }
+
+    /// A generic element sequence: `[count]` then every element length-prefixed.
+    static func decodeVec<T>(
+        _ data: Data,
+        layout: NoritoWireLayout,
+        decode: (Data) throws -> T
+    ) throws -> [T] {
+        var reader = CanonicalNoritoReader(data: data)
+        let count = try reader.readCount(layout: layout)
+        // Every element carries at least its own length prefix.
+        guard count <= UInt64(reader.remaining()) else {
+            throw CanonicalNoritoDecodingError.truncatedPayload
+        }
+        var values: [T] = []
+        values.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            values.append(try decode(try reader.readField(layout: layout)))
+        }
+        try reader.requireFinished()
+        return values
+    }
+
+    /// `Vec<u8>`: `[count][raw bytes]` in every layout.
+    static func decodeBytesVec(_ data: Data, layout: NoritoWireLayout) throws -> Data {
+        var reader = CanonicalNoritoReader(data: data)
+        let bytes = try reader.readBytesVec(layout: layout)
+        try reader.requireFinished()
+        return bytes
+    }
+
+    /// `ConstVec<u8>` and every other `u8` element sequence.
+    static func decodeConstVec(_ data: Data, layout: NoritoWireLayout) throws -> Data {
+        var reader = CanonicalNoritoReader(data: data)
+        let bytes = try reader.readConstVec(layout: layout)
+        try reader.requireFinished()
+        return bytes
+    }
+
+    /// A fixed `[u8; N]` outside a record field: exactly `count` elements.
+    static func decodeByteArray(
+        _ data: Data,
+        count: Int,
+        layout: NoritoWireLayout
+    ) throws -> Data {
+        var reader = CanonicalNoritoReader(data: data)
+        let bytes = try reader.readByteFields(count: count, layout: layout)
+        try reader.requireFinished()
+        return bytes
+    }
 }
 
 struct ParsedPublicAssetLiteral {
@@ -178,19 +366,7 @@ extension CanonicalNorito {
     }
 
     static func decodeString(_ data: Data) throws -> String {
-        var reader = CanonicalNoritoReader(data: data)
-        let length = try reader.readUInt64LE()
-        guard length <= UInt64(Int.max) else {
-            throw CanonicalNoritoDecodingError.invalidField("string length overflow")
-        }
-        let bytes = try reader.readBytes(Int(length))
-        guard reader.remaining() == 0 else {
-            throw CanonicalNoritoDecodingError.invalidField("trailing bytes")
-        }
-        guard let value = String(data: bytes, encoding: .utf8) else {
-            throw CanonicalNoritoDecodingError.invalidField("invalid UTF-8 in string")
-        }
-        return value
+        try NoritoLayoutCodec.decodeString(data, layout: .fixed)
     }
 
     /// Decode an AccountId string from a Norito-encoded string field.

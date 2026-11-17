@@ -4,6 +4,17 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-11-17: The Swift Norito codec implements the dense layout (`norito.md`, header minor `1`)
+  next to the unchanged current layouts. `NoritoWireLayout` (`.fixed`, `.compact`, `.dense`) is
+  the explicit selector: `noritoEncode(typeName:payload:layout:)` writes the header, `NoritoHeader`
+  gains `minor` and `layout`, and `AccountAddress.noritoAccountControllerPayload(layout:)` and
+  `CanonicalNorito.encodeAccountId(_:layout:)` encode in a named layout. The transaction payload,
+  executable, fee-payment, metadata and signed-transaction paths take the same parameter
+  internally. Frame decoders for the current layouts refuse a dense frame, and a headerless
+  payload is read only in the layout its owner names. No builder emits dense: no ledger
+  definition selects it, and the native bridge still encodes instruction bodies in the current
+  layout only.
+
 - 2026-10-31: `ToriiParliamentAPIV1` layout tables state Core's actual Norito and event-kind
   indices: the rows after `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN
   transitions and no-result kinds still occupy in the codec.

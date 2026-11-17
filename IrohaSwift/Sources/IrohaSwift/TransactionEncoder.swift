@@ -414,26 +414,109 @@ enum SingleInstructionSwiftNoritoEncoder {
             authorityId: authority
         )
         let executable = try encodeBatchExecutable(entries, expectedNetworkId: networkId)
-        var networkDomain = CompactNoritoWriter()
-        networkDomain.writeUInt32LE(0)
-        networkDomain.writeField(ids.networkId.bytes)
+        return try encodeTransactionPayloadFields(
+            networkId: ids.networkId,
+            authorityId: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            executable: executable,
+            ttlMs: resolvedTtlMs,
+            nonce: nonce,
+            feePayment: feePayment,
+            metadata: metadata,
+            layout: .compact
+        )
+    }
 
-        var transactionPayload = CompactNoritoWriter()
-        transactionPayload.writeField(networkDomain.data)
-        transactionPayload.writeField(try CanonicalNorito.encodeCompactAccountId(ids.authorityId))
+    /// `TransactionPayload` in `layout` around an executable that is already
+    /// decoded to its instruction pairs.
+    ///
+    /// `.compact` produces the payload of the current transaction wire. `.dense`
+    /// produces the dense payload (`norito.md`, "Dense layout"); the caller owns
+    /// the choice and it is never inferred from bytes.
+    ///
+    /// TODO(dense-activation): no ledger definition or signed-transaction wire
+    /// version selects the dense layout yet, so no public builder passes it.
+    static func transactionPayload(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32?,
+        executable: TransactionExecutableWire,
+        feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
+        layout: NoritoWireLayout
+    ) throws -> Data {
+        guard !executable.isEmpty else { throw ExecutableBatchInputError.emptyBatch }
+        if let ttlMs, ttlMs == 0 { throw ExecutableBatchInputError.zeroTimeToLive }
+        if let nonce, nonce == 0 { throw ExecutableBatchInputError.zeroNonce }
+        if executable.requiresGasLimit, feePayment.gasLimit == nil {
+            throw ExecutableBatchInputError.missingGasLimit
+        }
+        // Privacy instructions carry admission evidence and are built only
+        // through `TransactionInstructionFrame`. This path takes opaque pairs,
+        // so it refuses the whole privacy wire namespace.
+        guard !executable.instructionWireNames.contains(where: {
+            $0.hasPrefix(admissionGatedWirePrefix)
+        }) else {
+            throw SwiftTransactionEncoderError.invalidInput(
+                "privacy instructions are built only through their admitted instruction frames"
+            )
+        }
+        let ids = try TransactionInputValidator.validate(
+            networkId: networkId,
+            authorityId: authority
+        )
+        return try encodeTransactionPayloadFields(
+            networkId: ids.networkId,
+            authorityId: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            executable: try executable.encode(layout: layout),
+            ttlMs: ttlMs,
+            nonce: nonce,
+            feePayment: feePayment,
+            metadata: metadata,
+            layout: layout
+        )
+    }
+
+    /// Wire-ID namespace of the privacy instructions.
+    private static let admissionGatedWirePrefix = "iroha.privacy."
+
+    /// The nine `TransactionPayload` fields in declaration order, each with its
+    /// own length prefix, around an executable already encoded in `layout`.
+    private static func encodeTransactionPayloadFields(
+        networkId: NetworkId,
+        authorityId: String,
+        creationTimeMs: UInt64,
+        executable: Data,
+        ttlMs: UInt64?,
+        nonce: UInt32?,
+        feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
+        layout: NoritoWireLayout
+    ) throws -> Data {
+        var transactionPayload = NoritoLayoutWriter(layout: layout)
+        // `TransactionDomain::Network(NetworkId)`.
+        transactionPayload.writeField(
+            NoritoLayoutCodec.encodeEnum(tag: 0, fields: [networkId.bytes], layout: layout)
+        )
+        transactionPayload.writeField(
+            try CanonicalNorito.encodeAccountId(authorityId, layout: layout)
+        )
         transactionPayload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executable)
         transactionPayload.writeField(
-            try CompactNorito.encodeOption(resolvedTtlMs, encode: CompactNorito.encodeUInt64)
+            NoritoLayoutCodec.encodeOption(ttlMs, layout: layout, encode: CompactNorito.encodeUInt64)
         )
         transactionPayload.writeField(
-            try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
+            NoritoLayoutCodec.encodeOption(nonce, layout: layout, encode: CompactNorito.encodeUInt32)
         )
-        transactionPayload.writeField(try feePayment.compactNorito())
-
-        transactionPayload.writeField(try CanonicalNorito.encodeCompactMetadata(metadata))
+        transactionPayload.writeField(try feePayment.norito(layout: layout))
+        transactionPayload.writeField(
+            try CanonicalNorito.encodeTransactionMetadata(metadata, layout: layout)
+        )
         transactionPayload.writeField(encodeNoneOption())
-
         return transactionPayload.data
     }
 
@@ -463,6 +546,25 @@ enum SingleInstructionSwiftNoritoEncoder {
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed, payload: nil,
             transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
+        )
+    }
+
+    /// Bare `SignedTransaction` in `layout` for an exact payload of that layout
+    /// and its detached signature over `IrohaHash.hash(transactionPayload)`.
+    ///
+    /// The signature covers the payload bytes of one layout, so a signature over
+    /// the compact payload never verifies against the dense payload of the same
+    /// transaction. The versioned wire and the entrypoint hash exist for the
+    /// compact layout only (`signedEnvelope`).
+    static func signedTransaction(
+        transactionPayload: Data,
+        signature: Data,
+        layout: NoritoWireLayout
+    ) -> Data {
+        encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload,
+            layout: layout
         )
     }
 
@@ -673,98 +775,80 @@ enum SingleInstructionSwiftNoritoEncoder {
             networkId: networkId,
             authorityId: authority
         )
-        let executablePayload = encodeCompactNativeExecutable(
-            instructionPayloads: instructionPayloads
+        let executablePayload = TransactionExecutableWire.encodeInstructions(
+            instructionBoxPayloads: instructionPayloads,
+            layout: .compact
         )
-        var networkDomain = CompactNoritoWriter()
-        networkDomain.writeUInt32LE(0)
-        networkDomain.writeField(ids.networkId.bytes)
-
-        var transactionPayload = CompactNoritoWriter()
-        transactionPayload.writeField(networkDomain.data)
-        transactionPayload.writeField(
-            try CanonicalNorito.encodeCompactAccountId(ids.authorityId)
+        return try encodeTransactionPayloadFields(
+            networkId: ids.networkId,
+            authorityId: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            executable: executablePayload,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            feePayment: feePayment,
+            metadata: metadata,
+            layout: .compact
         )
-        transactionPayload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
-        transactionPayload.writeField(executablePayload)
-        transactionPayload.writeField(
-            try CompactNorito.encodeOption(
-                ttlMs,
-                encode: CompactNorito.encodeUInt64
-            )
-        )
-        transactionPayload.writeField(try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32))
-        transactionPayload.writeField(try feePayment.compactNorito())
-        transactionPayload.writeField(try CanonicalNorito.encodeCompactMetadata(metadata))
-        transactionPayload.writeField(encodeNoneOption())
-        return transactionPayload.data
-    }
-
-    private static func encodeCompactNativeExecutable(instructionPayloads: [Data]) -> Data {
-        var instructions = CompactNoritoWriter()
-        instructions.writeUInt64LE(UInt64(instructionPayloads.count))
-        for instructionPayload in instructionPayloads {
-            instructions.writeField(instructionPayload)
-        }
-
-        var executable = CompactNoritoWriter()
-        executable.writeUInt32LE(0)
-        executable.writeField(instructions.data)
-        return executable.data
     }
 
     private static func encodeBatchExecutable(
         _ entries: [TransactionBatchEntry],
         expectedNetworkId: NetworkId
     ) throws -> Data {
-        var sequence = CompactNoritoWriter()
-        sequence.writeUInt64LE(UInt64(entries.count))
+        var itemPayloads: [Data] = []
+        itemPayloads.reserveCapacity(entries.count)
         for entry in entries {
-            var item = CompactNoritoWriter()
             switch entry {
             case let .instruction(frame):
-                item.writeUInt32LE(0)
-                item.writeField(try frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId))
-            case let .contractCall(invocation):
-                item.writeUInt32LE(1)
-                var call = CompactNoritoWriter()
-                call.writeField(CompactNorito.encodeString(invocation.contractAddress))
-                call.writeField(invocation.expectedCodeHash)
-                call.writeField(CompactNorito.encodeString(invocation.entrypoint))
-                call.writeField(
-                    try CompactNorito.encodeOption(
-                        invocation.arguments,
-                        encode: CompactNorito.encodeBytesVec
+                let instructionBox = try frame.compactInstructionBoxPayload(expectedNetworkId: expectedNetworkId)
+                itemPayloads.append(
+                    TransactionBatchItemWire.encodeInstruction(
+                        instructionBoxPayload: instructionBox,
+                        layout: .compact
                     )
                 )
-                item.writeField(call.data)
+            case let .contractCall(invocation):
+                itemPayloads.append(
+                    try TransactionBatchItemWire.contractCall(invocation).encode(layout: .compact)
+                )
             }
-            sequence.writeField(item.data)
         }
-
-        var executable = CompactNoritoWriter()
-        executable.writeUInt32LE(4)
-        executable.writeField(sequence.data)
-        return executable.data
+        return TransactionExecutableWire.encodeBatch(itemPayloads: itemPayloads, layout: .compact)
     }
 
     private static func encodeCompactSignedTransaction(
         signature: Data,
         transactionPayload: Data
     ) -> Data {
+        encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload,
+            layout: .compact
+        )
+    }
+
+    private static func encodeSignedTransaction(
+        signature: Data,
+        transactionPayload: Data,
+        layout: NoritoWireLayout
+    ) -> Data {
         // `SignedTransaction.signature` contains the `TransactionSignature`
         // tuple-newtype. Its sole field wraps the transparent
         // `SignatureOf<TransactionPayload>`/`Signature` byte-vector payload.
-        var transactionSignature = CompactNoritoWriter()
-        transactionSignature.writeField(CompactNorito.encodeConstVec(signature))
+        var transactionSignature = NoritoLayoutWriter(layout: layout)
+        transactionSignature.writeField(NoritoLayoutCodec.encodeConstVec(signature, layout: layout))
 
-        var signedTransaction = CompactNoritoWriter()
+        var signedTransaction = NoritoLayoutWriter(layout: layout)
         signedTransaction.writeField(transactionSignature.data)
         signedTransaction.writeField(transactionPayload)
         signedTransaction.writeField(encodeNoneOption())
         return signedTransaction.data
     }
 
+    // The entrypoint hash is defined for the compact layout only.
+    // TODO(dense-activation): the dense `TransactionEntrypoint` hash follows the
+    // kernel definition that selects the dense layout (`norito.md`).
     private static func encodeTransactionEntrypoint(_ transactionPayload: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
