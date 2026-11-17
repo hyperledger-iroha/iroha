@@ -170,6 +170,9 @@ ABI_HASH_FORMS = (
 # of that fixed 49-byte header.
 IVM_MAGIC = b"IVM\0"
 IVM_ABI_HASH_SPAN = (17, 49)
+# Where the ABI hash of a program of each other engine profile ends its fixed header: C10's
+# 48-byte header has no vector length, so its hash starts one byte earlier.
+PROFILE_ENGINE_ABI_HASH_SPANS = {"c10": (16, 48)}
 HEX_WRAPPING = re.compile(rb'[\s"]+')
 IVM_MAGIC_HEX = IVM_MAGIC.hex()
 HEX_TEXT = re.compile(r"(?:[0-9a-f]{2})+\Z")
@@ -407,6 +410,7 @@ def load_inventory(root: Path) -> tuple[dict, list[str]]:
         "retired_store_artifacts": list,
         "incompatible_change_surfaces": list,
         "declared_abi_cutover": dict,
+        "declared_profile_abi_hashes": list,
         "obsolete_history_evidence": dict,
         "future_checkpoint_rule": dict,
         "test_prerequisites": list,
@@ -1270,15 +1274,23 @@ def check_surfaces(root: Path, inventory: dict) -> list[str]:
     return errors
 
 
-def ivm_program_abi_hash(program: bytes) -> bytes | None:
-    """The ABI hash field of an IVM program header, or `None` when the bytes are no IVM program."""
-    start, end = IVM_ABI_HASH_SPAN
+def ivm_program_abi_hash(
+    program: bytes, span: tuple[int, int] = IVM_ABI_HASH_SPAN
+) -> bytes | None:
+    """The ABI hash field of an IVM program header, or `None` when the bytes are no IVM program.
+
+    `span` is where the hash lies in the fixed header of the engine profile the program declares
+    (the baseline's by default).
+    """
+    start, end = span
     if len(program) < end or not program.startswith(IVM_MAGIC):
         return None
     return program[start:end]
 
 
-def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
+def abi_carrier_errors(
+    root: Path, target: dict, declared: str, span: tuple[int, int] = IVM_ABI_HASH_SPAN
+) -> list[str]:
     """One regeneration target carries the declared ABI hash in every form its entry states.
 
     A text form holds the hash exactly `occurrences` times (once by default), so a file with
@@ -1322,7 +1334,7 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
                 except OSError:
                     errors.append(f"{fields[2]}: IVM program listed in {artifact} is missing")
                     continue
-                if ivm_program_abi_hash(program) != raw:
+                if ivm_program_abi_hash(program, span) != raw:
                     errors.append(f"{fields[2]}: IVM program header {stale}")
             if not programs:
                 errors.append(f"{artifact}: artifact map lists no IVM program")
@@ -1344,7 +1356,7 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
                     errors.append(f"{artifact}:{number}: capture row holds no IVM program")
                 elif not all(
                     HEX_TEXT.match(program)
-                    and ivm_program_abi_hash(bytes.fromhex(program)) == raw
+                    and ivm_program_abi_hash(bytes.fromhex(program), span) == raw
                     for program in programs
                 ):
                     errors.append(f"{artifact}:{number}: IVM program header {stale}")
@@ -1359,10 +1371,10 @@ def abi_carrier_errors(root: Path, target: dict, declared: str) -> list[str]:
                     program = base64.b64decode(image, validate=True)
                 except ValueError:
                     program = b""
-                if ivm_program_abi_hash(program) != raw:
+                if ivm_program_abi_hash(program, span) != raw:
                     errors.append(f"{artifact}: base64 IVM program header {stale}")
         elif form == "ivm_header":
-            if ivm_program_abi_hash(data) != raw:
+            if ivm_program_abi_hash(data, span) != raw:
                 errors.append(f"{artifact}: {stale}")
         else:
             if form == "hex":
@@ -1487,6 +1499,143 @@ def check_abi_cutover(root: Path, inventory: dict) -> list[str]:
             "ABI hash (a contract or runtime-ABI record), so this cutover also needs a fresh "
             "genesis: regenerate the history and declare `fresh_genesis`"
         )
+    return errors
+
+
+def check_profile_abi_hashes(root: Path, inventory: dict) -> list[str]:
+    """Every other engine profile's ABI hash is declared with the fixtures that carry it.
+
+    ABI V1 (`declared_abi_cutover`) is the frozen baseline every live path admits. A fixture of
+    another engine profile (C10's own ABI V1 surface, selected explicitly by its tests) carries
+    that profile's hash instead. Each such hash is declared once, with its golden and every
+    carrier, so neither a stale baseline carrier nor a stale profile carrier can hide behind the
+    other. Every row of an artifact map belongs to exactly one declared profile, and no profile
+    hash may sit in the pinned history (a contract of that profile would need its own cutover).
+    The check reads bytes; it computes no ABI hash.
+    """
+    declarations = inventory["declared_profile_abi_hashes"]
+    baseline = inventory["declared_abi_cutover"]
+    surfaces = {
+        str(entry.get("id")): entry for entry in inventory["incompatible_change_surfaces"]
+    }
+    surface = surfaces.get(str(baseline.get("surface", "")))
+    if surface is None:
+        # `check_abi_cutover` reports the missing surface.
+        return []
+    targets = {str(target.get("artifact")): target for target in surface["regenerate"]}
+    errors: list[str] = []
+    seen_hashes = {str(baseline.get("abi_hash", ""))}
+    claims: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    for target in surface["regenerate"]:
+        forms = carrier_forms(target)
+        if forms and "artifact_map" in forms and carrier_owners_of(target) is not None:
+            claims.setdefault(target["artifact"], []).append(
+                ("ABI V1", carrier_owners_of(target) or ())
+            )
+    frames = pinned_frames(root, inventory)
+    for index, declaration in enumerate(declarations):
+        where = f"{INVENTORY}: `declared_profile_abi_hashes[{index}]`"
+        reported = len(errors)
+        if not isinstance(declaration, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        profile = declaration.get("profile")
+        engine = declaration.get("engine")
+        declared = str(declaration.get("abi_hash", ""))
+        golden = declaration.get("golden")
+        carriers = declaration.get("carriers")
+        if not isinstance(profile, str) or not profile:
+            errors.append(f"{where} names its `profile`")
+        if not isinstance(engine, str) or engine not in PROFILE_ENGINE_ABI_HASH_SPANS:
+            errors.append(
+                f"{where} names an engine with a known header layout, one of "
+                f"{', '.join(sorted(PROFILE_ENGINE_ABI_HASH_SPANS))}"
+            )
+        if not SHA256_HEX.match(declared):
+            errors.append(f"{where} records `abi_hash` as 64 hex digits")
+        elif declared in seen_hashes:
+            errors.append(
+                f"{where} declares {declared}, which another declaration (or ABI V1) already "
+                "declares"
+            )
+        seen_hashes.add(declared)
+        if (
+            not isinstance(golden, dict)
+            or not isinstance(golden.get("path"), str)
+            or not isinstance(golden.get("prefix"), str)
+            or not golden["path"]
+            or not golden["prefix"]
+        ):
+            errors.append(f"{where} names the `golden` path and prefix")
+        if not declaration.get("change"):
+            errors.append(f"{where} states the `change` it declares")
+        if not isinstance(carriers, list) or not carriers:
+            errors.append(f"{where} lists the `carriers` of the hash")
+        if len(errors) > reported:
+            continue
+        text = read(root / golden["path"])
+        if text is None or text.count(golden["prefix"]) != 1:
+            errors.append(
+                f"{golden['path']}: the {profile} golden must hold `{golden['prefix']}` exactly "
+                "once"
+            )
+        else:
+            start = text.index(golden["prefix"]) + len(golden["prefix"])
+            if text[start : start + 64] != declared:
+                errors.append(
+                    f"{golden['path']}: the {profile} golden is not the hash {INVENTORY} "
+                    f"declares ({declared})"
+                )
+        span = PROFILE_ENGINE_ABI_HASH_SPANS[engine]
+        for carrier in carriers:
+            artifact = str(carrier.get("artifact", "")) if isinstance(carrier, dict) else ""
+            forms = carrier_forms(carrier) if isinstance(carrier, dict) else None
+            if not artifact or not forms or carrier_owners_of(carrier) is None:
+                errors.append(
+                    f"{where}: carrier `{artifact}` states how it `carries` the hash in known "
+                    "forms"
+                )
+                continue
+            if artifact not in targets:
+                errors.append(
+                    f"{artifact}: carrier of the {profile} hash must be a regeneration target "
+                    f"of `{surface['id']}`"
+                )
+                continue
+            if targets[artifact].get("carries") is not None and "artifact_map" not in forms:
+                errors.append(
+                    f"{artifact}: carries the ABI V1 hash and cannot also carry the {profile} "
+                    "hash"
+                )
+            merged = dict(carrier)
+            merged.setdefault("generator", targets[artifact].get("generator"))
+            errors += abi_carrier_errors(root, merged, declared, span)
+            if "artifact_map" in forms:
+                claims.setdefault(artifact, []).append(
+                    (str(profile), carrier_owners_of(carrier) or ())
+                )
+        raw = bytes.fromhex(declared)
+        if any(raw in frame for frame in frames):
+            errors.append(
+                f"{inventory['pinned_history'].get('manifest')}: the pinned history holds the "
+                f"{profile} ABI hash; a contract of that profile needs its own declared cutover"
+            )
+    for artifact, holders in claims.items():
+        data = read(root / artifact) or ""
+        owners = {
+            line.split("\t")[0]
+            for line in data.splitlines()
+            if line and not line.startswith("#")
+        }
+        for owner in sorted(owners):
+            claimed = [
+                name for name, listed in holders if not listed or owner in listed
+            ]
+            if len(claimed) != 1:
+                errors.append(
+                    f"{artifact}: rows of owner `{owner}` must carry exactly one declared ABI "
+                    f"hash, not {len(claimed)} ({', '.join(claimed) or 'none'})"
+                )
     return errors
 
 
@@ -1627,6 +1776,7 @@ def check(root: Path) -> tuple[str, ...]:
     errors += check_retired_store_artifacts(root, sources, inventory)
     errors += check_surfaces(root, inventory)
     errors += check_abi_cutover(root, inventory)
+    errors += check_profile_abi_hashes(root, inventory)
     errors += check_evidence(root, inventory)
     errors += check_checkpoint_rule(root, inventory)
     errors += check_test_prerequisites(root, inventory)

@@ -25,7 +25,10 @@ use crate::{
     },
     numeric::NumericFaultV1,
 };
-use iroha_data_model::executor::fault::IvmFaultKindV1;
+use iroha_data_model::{
+    executor::fault::IvmFaultKindV1,
+    ivm_c10::{IvmFaultKindC10V1, NumericFaultC10V1},
+};
 use std::sync::OnceLock;
 
 /// Instruction-set engine behind the one `IVM` facade.
@@ -104,9 +107,9 @@ impl IvmEngine {
     ///
     /// The wire enum is the baseline's (`IvmFaultKindV1`, original tags): the baseline projection
     /// is exact. C10 faults the baseline enum cannot name (`ControlFlowViolation`, the register
-    /// integer overflow) have no wire value yet.
-    // TODO: phase 5 publishes C10's own fault family (`*C10V1`) and projects every C10 fault
-    // onto it; until then those C10 faults return `None`.
+    /// integer overflow) have no value in it; C10's own family is [`c10_wire_fault_kind`].
+    // TODO(phase 5 dispatch): C10 executions report through `c10_wire_fault_kind` once their
+    // results are dispatched to the C10 families; the lifecycle profile keeps this projection.
     #[must_use]
     pub fn fault_kind(self, error: &VMError) -> Option<IvmFaultKindV1> {
         match self {
@@ -279,6 +282,66 @@ fn c10_fault_kind(error: &VMError) -> Option<IvmFaultKindV1> {
         | VMError::VectorExtensionDisabled
         | VMError::ZkExtensionDisabled => return None,
         VMError::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
+    })
+}
+
+/// Project a failure the C10 engine raised onto C10's own wire fault family
+/// ([`IvmFaultKindC10V1`], the family of the `iroha.runtime.ivm_c10.v1` addition).
+///
+/// Unlike the projection onto the baseline family ([`IvmEngine::fault_kind`]), every deterministic
+/// fault of a started C10 invocation has a value here, the control-flow violation and the
+/// register integer overflow included. Admission errors, application rejections and local host or
+/// resource refusals return `None`, exactly as there.
+#[must_use]
+pub fn c10_wire_fault_kind(error: &VMError) -> Option<IvmFaultKindC10V1> {
+    match error.as_unmetered() {
+        VMError::ControlFlowViolation => Some(IvmFaultKindC10V1::ControlFlowViolation),
+        VMError::RegisterIntegerOverflow => Some(IvmFaultKindC10V1::Numeric(
+            NumericFaultC10V1::RegisterIntegerOverflow,
+        )),
+        other => c10_fault_kind(other).and_then(c10_kind_of_shared),
+    }
+}
+
+/// The C10 value of a fault kind both families name.
+///
+/// The baseline-only kinds (the vector-length and extension faults) have no C10 value; the C10
+/// engine never raises them, so [`c10_fault_kind`] never returns them. The match is exhaustive:
+/// a new baseline kind must be classified here.
+fn c10_kind_of_shared(kind: IvmFaultKindV1) -> Option<IvmFaultKindC10V1> {
+    use IvmFaultKindC10V1 as C;
+    use IvmFaultKindV1 as B;
+    Some(match kind {
+        B::OutOfGas => C::OutOfGas,
+        B::MemoryLimitExceeded => C::MemoryLimitExceeded,
+        B::MemoryAccessViolation => C::MemoryAccessViolation,
+        B::MisalignedAccess => C::MisalignedAccess,
+        B::MemoryOutOfBounds => C::MemoryOutOfBounds,
+        B::DecodeError => C::DecodeError,
+        B::InvalidOpcode => C::InvalidOpcode,
+        B::UnknownSyscall => C::UnknownSyscall,
+        B::UnsupportedSyscall => C::UnsupportedSyscall,
+        B::GasCostOverflow => C::GasCostOverflow,
+        B::Numeric(code) => C::Numeric(NumericFaultC10V1::from(code)),
+        B::PointerAbi(code) => C::PointerAbi(code),
+        B::AssertionFailed => C::AssertionFailed,
+        B::ExceededMaxCycles => C::ExceededMaxCycles,
+        B::InvalidMetadata => C::InvalidMetadata,
+        B::MissingHalt => C::MissingHalt,
+        B::NullifierAlreadyUsed => C::NullifierAlreadyUsed,
+        B::PermissionDenied => C::PermissionDenied,
+        B::PrivacyViolation => C::PrivacyViolation,
+        B::RegisterOutOfBounds => C::RegisterOutOfBounds,
+        B::NoritoInvalid => C::NoritoInvalid,
+        B::AbiTypeNotAllowed => C::AbiTypeNotAllowed,
+        B::HostOutputItemsExceeded => C::HostOutputItemsExceeded,
+        B::HostOutputBytesExceeded => C::HostOutputBytesExceeded,
+        B::AmxBudgetExceeded => C::AmxBudgetExceeded,
+        B::ReentrantCall => C::ReentrantCall,
+        B::CallDepthExceeded => C::CallDepthExceeded,
+        B::InvalidVectorLength | B::VectorExtensionDisabled | B::ZkExtensionDisabled => {
+            return None;
+        }
     })
 }
 
@@ -991,6 +1054,64 @@ mod tests {
                 expected,
                 "metering keeps the projection"
             );
+        }
+    }
+
+    #[test]
+    fn c10_wire_projection_names_every_c10_fault_in_its_own_family() {
+        use IvmFaultKindC10V1 as C;
+        for (error, baseline) in projection_table() {
+            let expected = match error.as_unmetered() {
+                VMError::ControlFlowViolation => Some(C::ControlFlowViolation),
+                VMError::RegisterIntegerOverflow => {
+                    Some(C::Numeric(NumericFaultC10V1::RegisterIntegerOverflow))
+                }
+                _ => baseline.map(|kind| {
+                    c10_kind_of_shared(kind).expect("the C10 engine raises only shared kinds")
+                }),
+            };
+            assert_eq!(
+                c10_wire_fault_kind(&error),
+                expected,
+                "projection of {error:?}"
+            );
+            let wrapped = VMError::Metered {
+                gas: 5,
+                source: Box::new(error),
+            };
+            assert_eq!(
+                c10_wire_fault_kind(&wrapped),
+                expected,
+                "metering keeps the projection"
+            );
+        }
+        // The shared kinds keep their names; their tags are C10's.
+        for tag in 1..=13 {
+            let code = NumericFaultV1::from_tag(tag).expect("numeric fault tag");
+            assert_eq!(
+                c10_wire_fault_kind(&VMError::NumericFault(code)),
+                Some(C::Numeric(NumericFaultC10V1::from(code)))
+            );
+            assert_eq!(NumericFaultC10V1::from(code).tag(), tag);
+        }
+        assert_eq!(
+            NumericFaultC10V1::RegisterIntegerOverflow.tag(),
+            crate::numeric::C10_REGISTER_INTEGER_OVERFLOW_TAG
+        );
+        for kind in [
+            F::InvalidVectorLength,
+            F::VectorExtensionDisabled,
+            F::ZkExtensionDisabled,
+        ] {
+            assert_eq!(c10_kind_of_shared(kind), None, "{kind:?} is baseline-only");
+        }
+        // The baseline-engine failures have no C10 value.
+        for error in [
+            VMError::VectorExtensionDisabled,
+            VMError::ZkExtensionDisabled,
+            VMError::InvalidVectorLength { vector_length: 65 },
+        ] {
+            assert_eq!(c10_wire_fault_kind(&error), None);
         }
     }
 

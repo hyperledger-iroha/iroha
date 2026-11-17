@@ -7,20 +7,34 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, ProgramMetadata, encoding, syscalls as ivm_sys};
+use ivm::{IVM, ProgramMetadata, syscalls as ivm_sys};
+use ivm_abi::baseline::{encoding, instruction::wide::system};
 use std::{num::NonZeroU64, sync::Arc};
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
+        Err(_) => encoding::wide::encode_syscallx(number),
+    }
+}
+/// A generic program invoking `sys` once before halting.
+///
+/// Transaction admission is a live ABI V1 path, which parses only baseline artifacts, so the
+/// program carries the 49-byte baseline header with a positive cycle bound and the baseline
+/// syscall and HALT encodings; the direct `CoreHost` loads read it under the same profile.
 fn program_with_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(sys).to_le_bytes());
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    code.extend_from_slice(&baseline_syscall(sys).to_le_bytes());
+    code.extend_from_slice(&encoding::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut out = meta.encode();
+    let mut out = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     out.extend_from_slice(&code);
     out
 }

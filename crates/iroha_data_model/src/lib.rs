@@ -115,6 +115,8 @@ pub mod identifier;
 pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
 pub mod isi;
+/// Public result families of the C10 IVM profile (`iroha.runtime.ivm_c10.v1`).
+pub mod ivm_c10;
 mod json_helpers;
 
 mod json_key_codec;

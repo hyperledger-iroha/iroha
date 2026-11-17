@@ -16,7 +16,13 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::nonzero;
-use ivm::{ProgramMetadata, encoding};
+use ivm::ProgramMetadata;
+// Contract registration and raw IVM dispatch are live ABI V1 paths, which admit only baseline
+// artifacts: the 49-byte baseline header with a positive cycle bound and the baseline encodings.
+use ivm_abi::baseline::{
+    encoding::wide,
+    instruction::wide::{arithmetic, control, memory, system},
+};
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 fn checked_random_ivm_manifest_keypair() -> KeyPair {
@@ -66,22 +72,39 @@ fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
         states: Vec::new(),
     }
 }
-fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractManifest) {
-    let meta = ProgramMetadata {
+/// The baseline fixed header of the fixture contracts, with a positive cycle bound.
+fn baseline_header(abi_version: u8) -> Vec<u8> {
+    ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 10_000,
         abi_version,
-    };
-    let mut artifact = meta.encode();
+    }
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// A complete baseline Unit return through the caller-owned result table and the protected
+/// return address (the register form of `JALR`).
+fn baseline_unit_return() -> [u32; 4] {
+    [
+        wide::encode_store(memory::STORE64, 12, 0, 0),
+        wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+        wide::encode_rr(control::JALR, 0, 1, 0),
+    ]
+}
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => wide::encode_sys(system::SCALL, short),
+        Err(_) => wide::encode_syscallx(number),
+    }
+}
+fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractManifest) {
+    let mut artifact = baseline_header(abi_version);
     artifact.extend_from_slice(&minimal_contract_interface().encode_section());
-    for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
-    ] {
+    for instruction in baseline_unit_return() {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
     let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
@@ -90,23 +113,11 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
 }
 fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
-    for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
-    ] {
+    code.extend_from_slice(&baseline_syscall(syscall).to_le_bytes());
+    for instruction in baseline_unit_return() {
         code.extend_from_slice(&instruction.to_le_bytes());
     }
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles: 0,
-        abi_version,
-    };
-    let mut out = meta.encode();
+    let mut out = baseline_header(abi_version);
     out.extend_from_slice(&minimal_contract_interface().encode_section());
     out.extend_from_slice(&code);
     out

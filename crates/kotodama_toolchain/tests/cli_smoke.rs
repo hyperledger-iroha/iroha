@@ -55,7 +55,13 @@ fn koto_build_meta_header_smoke() {
         assert_eq!(parsed.metadata.abi_version, 1);
         parsed.metadata
     };
-    let ordinary = header("cli_smoke_meta.to", &[]);
+    // The default target is the frozen baseline, whose header always declares its cycle limit.
+    let baseline = header("cli_smoke_meta_baseline.to", &[]);
+    assert_eq!(baseline.mode, 0);
+    assert_eq!(baseline.max_cycles, 1_000_000);
+    // C10's header rules: gas is a non-ZK artifact's only budget, and `max_cycles` is the
+    // trace bound of a ZK artifact.
+    let ordinary = header("cli_smoke_meta.to", &["--host-profile", "iroha.ivm.c10.v1"]);
     assert_eq!(ordinary.mode, 0);
     assert_eq!(
         ordinary.max_cycles, 0,
@@ -63,7 +69,13 @@ fn koto_build_meta_header_smoke() {
     );
     let zk = header(
         "cli_smoke_meta_zk.to",
-        &["--zk", "--zk-trace-cycles", "2000"],
+        &[
+            "--host-profile",
+            "iroha.ivm.c10.v1",
+            "--zk",
+            "--zk-trace-cycles",
+            "2000",
+        ],
     );
     assert_eq!(zk.mode, ivm::ivm_mode::ZK);
     assert_eq!(zk.max_cycles, 2000);
@@ -609,7 +621,10 @@ fn koto_build_named_runtime_profile_smoke() {
         String::from_utf8_lossy(&named.stderr)
     );
     let bytes = fs::read(output).expect("named artifact");
-    assert!(ivm::verify_contract_artifact_with_declared_profile(&bytes).is_err());
+    // C10's own ABI V1 verifier, of the same engine, refuses the named profile's hash.
+    assert!(
+        ivm::verify_contract_artifact_for_profile(&bytes, ivm::IvmProfileId::C10_ABI_V1).is_err()
+    );
     let admitted = ivm::verify_contract_artifact_with_declared_profile(&bytes)
         .expect("exact named artifact admission");
     assert_eq!(

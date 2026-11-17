@@ -14,7 +14,14 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
+// Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
+// engine: programs carry the 49-byte baseline header and the baseline instruction encodings, and
+// the direct `CoreHost` runs read them under the same profile.
+use ivm_abi::baseline::{
+    encoding,
+    instruction::{self, wide::system},
+};
 use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
@@ -52,16 +59,28 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
-/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
-fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
-    let mut program = ProgramMetadata {
+/// The baseline fixed header of a generic program, with its positive cycle bound.
+fn baseline_header() -> Vec<u8> {
+    ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 10_000,
         abi_version: 1,
     }
-    .encode();
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
+        Err(_) => encoding::wide::encode_syscallx(number),
+    }
+}
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
+    let mut program = baseline_header();
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let pad = (4 - (data_offset + data_len) % 4) % 4;
@@ -164,7 +183,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
-            encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
+            baseline_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
         ],
     );
     // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
@@ -307,18 +326,9 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
-    );
+    code.extend_from_slice(&baseline_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    };
-    let mut program = meta.encode();
+    let mut program = baseline_header();
     program.extend_from_slice(&code);
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(from.clone()));

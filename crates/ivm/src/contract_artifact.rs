@@ -10,9 +10,9 @@ use crate::{
 };
 pub use ivm_artifact_admission::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
-    verify_contract_artifact_for_policy, verify_contract_artifact_with_declared_profile,
-    verify_contract_artifact_with_memory_budget,
-    verify_contract_artifact_with_memory_budget_for_policy,
+    verify_contract_artifact_for_policy, verify_contract_artifact_for_profile,
+    verify_contract_artifact_with_declared_profile, verify_contract_artifact_with_memory_budget,
+    verify_contract_artifact_with_memory_budget_for_profile,
 };
 use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
@@ -69,16 +69,6 @@ pub fn prepare_contract_with_memory_budget(
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<PreparedContract, ContractArtifactError> {
     let verified = verify_contract_artifact_with_memory_budget(artifact, budget)?;
-    PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
-}
-/// Prepare with original State custody and an explicitly selected named host profile.
-pub fn prepare_contract_with_memory_budget_for_policy(
-    artifact: &[u8],
-    budget: &iroha_allocation::AllocationBudget,
-    policy: SyscallPolicy,
-) -> Result<PreparedContract, ContractArtifactError> {
-    let verified =
-        verify_contract_artifact_with_memory_budget_for_policy(artifact, budget, policy)?;
     PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
 }
 /// A prepared compiler-produced Kotodama test-suite artifact.

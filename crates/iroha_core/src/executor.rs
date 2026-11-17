@@ -3853,13 +3853,13 @@ fn resolve_callable_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-fn resolve_raw_contract_entrypoint_for_policy(
+fn resolve_raw_contract_entrypoint_for_profile(
     bytecode: &[u8],
     selector: &str,
     interface_required_message: &'static str,
-    policy: ivm::SyscallPolicy,
+    profile: ivm::IvmProfileId,
 ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
-    let parsed = ivm::ProgramMetadata::parse_for_policy(bytecode, policy).map_err(|err| {
+    let parsed = ivm::ProgramMetadata::parse_for_profile(bytecode, profile).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for contract call dispatch: {err}"
         ))
@@ -4025,7 +4025,7 @@ pub(crate) fn nested_contract_entrypoint_authorization(
 }
 #[derive(Clone, Copy)]
 enum ContractDispatchSource<'a> {
-    Bytecode(&'a [u8], ivm::SyscallPolicy),
+    Bytecode(&'a [u8], ivm::IvmProfileId),
     Prepared(&'a ivm::PreparedContract),
 }
 impl ContractDispatchSource<'_> {
@@ -4035,11 +4035,11 @@ impl ContractDispatchSource<'_> {
         interface_required_message: &'static str,
     ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
         match self {
-            Self::Bytecode(bytecode, policy) => resolve_raw_contract_entrypoint_for_policy(
+            Self::Bytecode(bytecode, profile) => resolve_raw_contract_entrypoint_for_profile(
                 bytecode,
                 selector,
                 interface_required_message,
-                *policy,
+                *profile,
             ),
             Self::Prepared(contract) => {
                 resolve_prepared_raw_contract_entrypoint(contract, selector)
@@ -4048,8 +4048,8 @@ impl ContractDispatchSource<'_> {
     }
     fn is_self_describing(&self) -> bool {
         match self {
-            Self::Bytecode(bytecode, policy) => {
-                ivm::ProgramMetadata::parse_for_policy(bytecode, *policy)
+            Self::Bytecode(bytecode, profile) => {
+                ivm::ProgramMetadata::parse_for_profile(bytecode, *profile)
                     .ok()
                     .and_then(|parsed| parsed.contract_interface)
                     .is_some()
@@ -4068,7 +4068,10 @@ pub(crate) fn parse_contract_call_execution_context(
 > {
     parse_contract_call_execution_context_from_source(
         metadata,
-        ContractDispatchSource::Bytecode(bytecode, ivm::SyscallPolicy::AbiV1),
+        ContractDispatchSource::Bytecode(
+            bytecode,
+            crate::smartcontracts::ivm::profile::interface_profile_id(),
+        ),
         ContractArgumentSource::Metadata,
         u64::MAX,
     )
@@ -4457,16 +4460,16 @@ pub(crate) fn parse_prepared_trigger_invocation_execution_context(
         argument_record,
     })
 }
-/// Validate trigger callback selection at registration, under the exact named profile selected
-/// by the registration root, without fabricating an event payload for a parameterized callback.
-pub(crate) fn validate_trigger_call_execution_context_for_policy(
+/// Validate trigger callback selection at registration, under the exact profile resolved by the
+/// registration root, without fabricating an event payload for a parameterized callback.
+pub(crate) fn validate_trigger_call_execution_context_for_profile(
     metadata: &Metadata,
     bytecode: &[u8],
-    policy: ivm::SyscallPolicy,
+    profile: ivm::IvmProfileId,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     parse_contract_call_execution_context_from_source(
         metadata,
-        ContractDispatchSource::Bytecode(bytecode, policy),
+        ContractDispatchSource::Bytecode(bytecode, profile),
         ContractArgumentSource::SchemaOnly,
         u64::MAX,
     )?
@@ -7204,7 +7207,7 @@ impl Executor {
         } = resolved;
         crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
             state_transaction,
-            summary.prepared_contract().syscall_policy(),
+            summary.prepared_contract().profile_id(),
         )?;
         let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
             state_transaction,
@@ -8580,7 +8583,7 @@ impl Executor {
         };
         crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
             state_transaction,
-            summary.prepared_contract().syscall_policy(),
+            summary.prepared_contract().profile_id(),
         )?;
         let effective_cycles = validate_prepared_ivm_execution_policy_for_profile(
             state_transaction,
@@ -10717,7 +10720,7 @@ impl LoadedExecutor {
         vm.set_heap_max_limit(heap_limit)?;
         // The executor-upgrade interface names the first-release interface profile.
         let profile = crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default();
-        vm.load_program_for_policy(raw_executor.bytecode().as_ref(), profile.policy())?;
+        vm.load_program_for_profile(raw_executor.bytecode().as_ref(), profile.id())?;
         vm.set_gas_limit(gas_limit);
         Ok(vm)
     }

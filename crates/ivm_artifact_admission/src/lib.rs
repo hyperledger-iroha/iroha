@@ -165,18 +165,6 @@ pub fn verify_contract_artifact_with_memory_budget_for_profile(
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     verify_contract_artifact_owned(artifact, Some(budget), profile)
 }
-/// Verify for an explicit named profile with the original State allocation budget.
-pub fn verify_contract_artifact_with_memory_budget_for_policy(
-    artifact: &[u8],
-    budget: &iroha_allocation::AllocationBudget,
-    policy: SyscallPolicy,
-) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_owned(
-        artifact,
-        Some(budget),
-        ivm_abi::IvmProfileId::of_policy(policy),
-    )
-}
 /// Admit under the verifier of the engine that executes `policy`.
 ///
 /// The caller resolved the policy before any artifact byte was read. Exactly one verifier runs:

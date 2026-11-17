@@ -13,7 +13,8 @@ use iroha_data_model::{
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
-use ivm::{ProgramMetadata, encoding};
+use ivm::ProgramMetadata;
+use ivm_abi::baseline::{encoding, instruction::wide::system};
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {
@@ -26,6 +27,14 @@ fn unknown_syscall_fixture_uses_checked_randomness() {
 }
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
+}
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
+        Err(_) => encoding::wide::encode_syscallx(number),
+    }
 }
 fn unlisted_syscall_number() -> u32 {
     (0u32..=0xff)
@@ -54,19 +63,21 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
     let network_id = *state.network_id_ref();
-    // Build a tiny program with an unknown syscall followed by HALT.
+    // Build a tiny program with an unknown syscall followed by HALT. Transaction admission is a
+    // live ABI V1 path, which parses only baseline artifacts: the 49-byte baseline header with a
+    // positive cycle bound and the baseline syscall and HALT encodings.
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(unknown_syscall).to_le_bytes());
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    code.extend_from_slice(&baseline_syscall(unknown_syscall).to_le_bytes());
+    code.extend_from_slice(&encoding::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
-    let mut program = meta.encode();
+    let mut program = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     program.extend_from_slice(&code);
     // Submit the program; admission should fail before execution due to the unknown syscall.
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);

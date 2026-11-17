@@ -29,7 +29,14 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
+// Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
+// engine: programs carry the 49-byte baseline header and the baseline instruction encodings, and
+// the detached `CoreHost` runs read them under the same profile.
+use ivm_abi::baseline::{
+    encoding,
+    instruction::{self, wide::system},
+};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -78,19 +85,28 @@ fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
 fn built_account_in_domain(account_id: &AccountId) -> Account {
     new_account_in_domain(account_id).build(account_id)
 }
+/// The baseline fixed header of a generic program, with its positive cycle bound.
 fn make_header() -> Vec<u8> {
     ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 10_000,
         abi_version: 1,
     }
-    .encode()
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
+        Err(_) => encoding::wide::encode_syscallx(number),
+    }
 }
 fn scall_program(syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
+    code.extend_from_slice(&baseline_syscall(syscall).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut program = make_header();
     program.extend_from_slice(&code);
@@ -155,7 +171,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([encoding::wide::encode_scall(syscall)])
+        .chain([baseline_syscall(syscall)])
         .collect()
 }
 /// Effects the program's syscalls queue on a detached `CoreHost`.

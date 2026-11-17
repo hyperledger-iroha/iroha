@@ -7,8 +7,9 @@
 //! own projection onto its own wire types and never widens the values of this one.
 
 use iroha_crypto::Hash;
-use iroha_data_model::executor::{
-    ArtifactAbiHashMismatchInfo, IvmAdmissionError, UnsupportedVersionInfo,
+use iroha_data_model::{
+    executor::{ArtifactAbiHashMismatchInfo, IvmAdmissionError, UnsupportedVersionInfo},
+    ivm_c10::IvmAdmissionErrorC10V1,
 };
 use ivm::IvmEngine;
 
@@ -30,9 +31,9 @@ fn baseline_admission_error(error: ivm::VMError) -> IvmAdmissionError {
 /// Admission projection of the consolidated (C10) engine onto the baseline wire enum.
 ///
 /// The wire enum is the baseline's. A C10 header rule it cannot name (a trace bound without the
-/// ZK bit) is carried by its text.
-// TODO: phase 5 publishes C10's own admission family (`*C10V1`) and projects
-// `MaxCyclesWithoutZk` onto it.
+/// ZK bit) is carried by its text. C10's own family is [`c10_admission_error_v1`].
+// TODO(phase 5 dispatch): C10 admissions report through `c10_admission_error_v1` once their
+// results are dispatched to the C10 families; the lifecycle profile keeps this projection.
 fn c10_admission_error(error: ivm::VMError) -> IvmAdmissionError {
     match error {
         ivm::VMError::UnsupportedProgramVersion { major, minor } => {
@@ -55,6 +56,47 @@ fn c10_admission_error(error: ivm::VMError) -> IvmAdmissionError {
             IvmAdmissionError::GenericSyscallNotAllowed(syscall)
         }
         other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
+    }
+}
+
+/// Project a deterministic preparation failure of the C10 engine onto C10's own admission
+/// family ([`IvmAdmissionErrorC10V1`], the family of the `iroha.runtime.ivm_c10.v1` addition).
+///
+/// This is C10's admission rule exactly as C10 defined it: a trace bound without the ZK bit has
+/// its own structured reason, and every other failure keeps its display text.
+#[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "C10 admissions are dispatched to the C10 families with the addition's services"
+    )
+)]
+pub(crate) fn c10_admission_error_v1(error: ivm::VMError) -> IvmAdmissionErrorC10V1 {
+    match error {
+        ivm::VMError::UnsupportedProgramVersion { major, minor } => {
+            IvmAdmissionErrorC10V1::UnsupportedVersion(UnsupportedVersionInfo { major, minor })
+        }
+        ivm::VMError::UnsupportedProgramFeatureBits { bits } => {
+            IvmAdmissionErrorC10V1::UnsupportedFeatureBits(bits)
+        }
+        ivm::VMError::UnsupportedProgramAbiVersion { version } => {
+            IvmAdmissionErrorC10V1::UnsupportedAbiVersion(version)
+        }
+        ivm::VMError::MissingMaxCycles => IvmAdmissionErrorC10V1::MissingMaxCycles,
+        ivm::VMError::MaxCyclesWithoutZk { max_cycles } => {
+            IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(max_cycles)
+        }
+        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+            IvmAdmissionErrorC10V1::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
+                expected: Hash::prehashed(expected),
+                actual: Hash::prehashed(actual),
+            })
+        }
+        ivm::VMError::GenericSyscallNotAllowed { syscall } => {
+            IvmAdmissionErrorC10V1::GenericSyscallNotAllowed(syscall)
+        }
+        other => IvmAdmissionErrorC10V1::BytecodeDecodingFailed(other.to_string()),
     }
 }
 
@@ -137,6 +179,53 @@ mod tests {
         assert_eq!(
             admission_error(IvmEngine::C10, error),
             IvmAdmissionError::BytecodeDecodingFailed(text)
+        );
+    }
+
+    #[test]
+    fn c10_family_projection_is_the_c10_admission_rule() {
+        use iroha_data_model::ivm_c10::IvmAdmissionErrorC10V1 as C10;
+        // The shared structured reasons keep their meaning in the C10 family.
+        for (error, expected) in structured_cases() {
+            let expected = match expected {
+                IvmAdmissionError::UnsupportedVersion(info) => C10::UnsupportedVersion(info),
+                IvmAdmissionError::UnsupportedFeatureBits(bits) => {
+                    C10::UnsupportedFeatureBits(bits)
+                }
+                IvmAdmissionError::UnsupportedAbiVersion(version) => {
+                    C10::UnsupportedAbiVersion(version)
+                }
+                IvmAdmissionError::ArtifactAbiHashMismatch(info) => {
+                    C10::ArtifactAbiHashMismatch(info)
+                }
+                IvmAdmissionError::GenericSyscallNotAllowed(number) => {
+                    C10::GenericSyscallNotAllowed(number)
+                }
+                other => panic!("unexpected structured case {other:?}"),
+            };
+            assert_eq!(c10_admission_error_v1(error), expected);
+        }
+        assert_eq!(
+            c10_admission_error_v1(ivm::VMError::MissingMaxCycles),
+            C10::MissingMaxCycles
+        );
+        // The trace-bound rule the baseline family cannot name is structured here.
+        assert_eq!(
+            c10_admission_error_v1(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 5 }),
+            C10::MaxCyclesWithoutZk(5)
+        );
+        for error in unstructured_cases() {
+            let text = error.to_string();
+            assert_eq!(
+                c10_admission_error_v1(error),
+                C10::BytecodeDecodingFailed(text)
+            );
+        }
+        // Its wire tag is C10's (6), distinct from the baseline's tag 6
+        // (`MaxCyclesExceedsUpperBound`).
+        assert_eq!(
+            norito::codec::Encode::encode(&C10::MaxCyclesWithoutZk(5))[0],
+            6
         );
     }
 

@@ -2925,7 +2925,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             let profile =
                 crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default();
             let parsed =
-                ivm::ProgramMetadata::parse_header_for_policy(bytecode.as_ref(), profile.policy())
+                ivm::ProgramMetadata::parse_header_for_profile(bytecode.as_ref(), profile.id())
                     .and_then(|header| header.parse_sections())
                     .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = parsed.metadata;
@@ -2971,7 +2971,7 @@ pub fn build_overlay_for_transaction_with_accounts(
             host.set_state_free_generic_execution();
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
-            vm.load_program_for_policy(bytecode.as_ref(), profile.policy())
+            vm.load_program_for_profile(bytecode.as_ref(), profile.id())
                 .map_err(OverlayBuildError::IvmLoad)?;
             reject_state_free_axt_syscalls(bytecode.as_ref())?;
             vm.set_gas_limit(tx_gas_limit);

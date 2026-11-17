@@ -5247,11 +5247,6 @@ pub(crate) mod valid {
             )))
         }
 
-        /// All static checks that require a state snapshot.
-        #[expect(
-            clippy::result_large_err,
-            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
-        )]
         /// Creation time of the parent a block builds on: the latest committed block, or its
         /// predecessor for a same-height replacement (`soft_fork`). `None` when the block has no
         /// committed parent. A portable checkpoint parent lends its authenticated clock through

@@ -16,7 +16,13 @@ use iroha_data_model::{block::BlockHeader, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
-use ivm::{PointerType, ProgramMetadata, encoding, instruction, syscalls};
+use ivm::{PointerType, ProgramMetadata, syscalls};
+// Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
+// engine: programs carry the 49-byte baseline header and the baseline instruction encodings.
+use ivm_abi::baseline::{
+    encoding,
+    instruction::{self, wide::system},
+};
 use std::str::FromStr;
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -28,18 +34,34 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
+/// The baseline fixed header of a generic program, with its positive cycle bound.
+fn baseline_header() -> Vec<u8> {
+    ProgramMetadata {
+        max_cycles: 10_000,
+        ..ProgramMetadata::default()
+    }
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
+/// `SYSTEM` form above.
+fn baseline_syscall(number: u32) -> u32 {
+    match u8::try_from(number) {
+        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
+        Err(_) => encoding::wide::encode_syscallx(number),
+    }
+}
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_scall(num).to_le_bytes());
+    code.extend_from_slice(&baseline_syscall(num).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = ProgramMetadata::default().encode();
+    let mut prog = baseline_header();
     prog.extend_from_slice(&code);
     prog
 }
 /// Generic program whose pointer arguments are its authenticated literal-table TLVs.
 fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     // Signed generic programs declare their cycle bound in the authenticated header.
-    let mut program = ProgramMetadata::default().encode();
+    let mut program = baseline_header();
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let pad = (4 - (data_offset + data_len) % 4) % 4;
@@ -77,7 +99,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([encoding::wide::encode_scall(syscall)])
+        .chain([baseline_syscall(syscall)])
         .collect()
 }
 /// Statelessly admit `program` as a generic IVM transaction signed by `key`.

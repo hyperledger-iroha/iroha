@@ -411,6 +411,7 @@ def inventory() -> dict:
             "fresh_genesis": False,
             "fresh_genesis_reason": "the pinned history holds no contract",
         },
+        "declared_profile_abi_hashes": [],
         "obsolete_history_evidence": {
             "tool": "scripts/first_release_history_evidence.py",
             "tool_test": "pytests/scripts/first_release_history_evidence_test.py",
@@ -1752,21 +1753,25 @@ def test_every_base64_program_of_a_fixture_is_read(tree: Path) -> None:
 
 
 def test_artifact_map_carrier_owners_exclude_other_engine_rows(tree: Path) -> None:
-    other_engine = "demo/other_engine.to"
-    write(tree, other_engine, ivm_program(OTHER_ABI_RAW))
-    write(tree, ABI_MAP_TSV, ABI_MAP + f"predecoder\t0\t{other_engine}\n")
+    write(tree, C10_PREDECODER_TO, c10_program(C10_RAW))
+    write(tree, ABI_MAP_TSV, ABI_MAP + f"predecoder\t0\t{C10_PREDECODER_TO}\n")
     # Without `carrier_owners` every row of the map carries the declared hash.
-    assert_single(GUARD.check(tree), other_engine, "IVM program header does not carry")
+    assert_single(GUARD.check(tree), C10_PREDECODER_TO, "IVM program header does not carry")
     owners = lambda names: lambda data: data["incompatible_change_surfaces"][2]["regenerate"][
         5
     ].update(carrier_owners=names)
     edit_inventory(tree, owners(["contract", "default"]))
+    # A row the ABI V1 carrier leaves out carries the declared hash of another engine profile.
+    assert_single(GUARD.check(tree), ABI_MAP_TSV, "rows of owner `predecoder`", "not 0 (none)")
+    declare_c10(tree)
     assert GUARD.check(tree) == ()
     # A carrier owner's stale row still fails, and every listed owner must own a row.
     write(tree, ABI_SAMPLE_TO, ivm_program(OTHER_ABI_RAW))
     assert_single(GUARD.check(tree), ABI_SAMPLE_TO, "IVM program header does not carry")
     write(tree, ABI_SAMPLE_TO, ivm_program(ABI_RAW))
-    edit_inventory(tree, owners(["contract", "default", "kotodama-zk"]))
+    declare_c10(
+        tree, lambda declaration, data: owners(["contract", "default", "kotodama-zk"])(data)
+    )
     assert_single(GUARD.check(tree), ABI_MAP_TSV, "carrier owner `kotodama-zk` owns no row")
 
 
@@ -1942,6 +1947,182 @@ def test_wrapped_hex_carrier_ignores_only_quotes_and_whitespace(tree: Path) -> N
 def test_malformed_abi_cutover_declaration_fails(tree: Path, change, fragment: str) -> None:
     edit_inventory(tree, change)
     assert_any(GUARD.check(tree), fragment)
+
+
+C10_HASH = hashlib.sha256(b"synthetic c10 surface").hexdigest()
+C10_RAW = bytes.fromhex(C10_HASH)
+C10_GOLDEN_RS = "crates/vm/tests/c10_golden.rs"
+C10_GOLDEN_PREFIX = 'const C10_GOLDEN: &str = "'
+C10_CAPTURE_TSV = "fixtures/c10/native_v1.tsv"
+C10_PREDECODER_TO = "fixtures/predecoder/mixed.to"
+
+
+def c10_program(abi_hash: bytes, body: bytes = b"\x00" * 8) -> bytes:
+    """A C10 program image: the fixed 48-byte header (no vector length) ending in the ABI hash."""
+    header = b"IVM\0" + bytes([1, 1, 0]) + (0).to_bytes(8, "little") + b"\x01"
+    return header + abi_hash + body
+
+
+def c10_capture(abi_hash: bytes = C10_RAW) -> str:
+    """A one-row capture of the C10 compiler target."""
+    return capture_row("c10", c10_program(abi_hash, b"CNTR"), c10_program(abi_hash))
+
+
+def declare_c10(tree: Path, change=lambda declaration, data: None) -> None:
+    """Add C10 fixtures to the synthetic tree and declare their profile's ABI hash.
+
+    The capture is a regeneration target of the ABI surface that carries no ABI V1 hash, and the
+    artifact map gains a `predecoder` row of the C10 profile: the ABI V1 map carrier keeps its
+    own owners.
+    """
+    write(tree, C10_GOLDEN_RS, f"//! C10 golden.\n{C10_GOLDEN_PREFIX}{C10_HASH}\";\n")
+    write(tree, C10_CAPTURE_TSV, c10_capture())
+    write(tree, C10_PREDECODER_TO, c10_program(C10_RAW))
+    write(tree, ABI_MAP_TSV, ABI_MAP + f"predecoder\t0\t{C10_PREDECODER_TO}\n")
+
+    def declared(data: dict) -> None:
+        surface = next(
+            entry for entry in data["incompatible_change_surfaces"] if entry["id"] == "abi"
+        )
+        for target in surface["regenerate"]:
+            if target["artifact"] == ABI_MAP_TSV:
+                target["carrier_owners"] = ["contract", "default"]
+        surface["regenerate"].append(
+            {
+                "artifact": C10_CAPTURE_TSV,
+                "generator": ABI_GENERATOR_SH,
+                "mention": "native_v1.tsv",
+            }
+        )
+        declaration = {
+            "profile": "iroha.ivm.c10.v1",
+            "engine": "c10",
+            "abi_hash": C10_HASH,
+            "golden": {"path": C10_GOLDEN_RS, "prefix": C10_GOLDEN_PREFIX},
+            "change": "the C10 surface is a profile of its own",
+            "carriers": [
+                {"artifact": C10_CAPTURE_TSV, "carries": "ivm_hex_rows"},
+                {
+                    "artifact": ABI_MAP_TSV,
+                    "carries": "artifact_map",
+                    "carrier_owners": ["predecoder"],
+                },
+            ],
+        }
+        change(declaration, data)
+        data["declared_profile_abi_hashes"] = [declaration]
+
+    edit_inventory(tree, declared)
+
+
+def test_current_inventory_declares_the_c10_profile_hash_and_its_carriers() -> None:
+    data, errors = GUARD.load_inventory(ROOT)
+    assert errors == []
+    (declaration,) = data["declared_profile_abi_hashes"]
+    assert (declaration["profile"], declaration["engine"]) == ("iroha.ivm.c10.v1", "c10")
+    assert declaration["abi_hash"] != data["declared_abi_cutover"]["abi_hash"]
+    golden = (ROOT / declaration["golden"]["path"]).read_text(encoding="utf-8")
+    assert f'{declaration["golden"]["prefix"]}{declaration["abi_hash"]}"' in golden
+    carriers = {carrier["artifact"]: carrier for carrier in declaration["carriers"]}
+    assert {
+        artifact for artifact, carrier in carriers.items() if carrier["carries"] == "ivm_hex_rows"
+    } == {
+        f"fixtures/kotodama/{name}/native_v1.tsv"
+        for name in (
+            "compact_emission",
+            "frame_emission",
+            "local_emission",
+            "numeric_zero",
+            "private_single_use",
+        )
+    }
+    assert carriers["scripts/ivm_artifacts.tsv"]["carrier_owners"] == ["predecoder"]
+
+
+def test_declared_profile_hash_with_its_carriers_passes(tree: Path) -> None:
+    declare_c10(tree)
+    assert GUARD.check(tree) == ()
+
+
+def test_stale_profile_carrier_fails(tree: Path) -> None:
+    declare_c10(tree)
+    # A capture carrying the ABI V1 hash at the C10 position is stale for the C10 profile.
+    write(tree, C10_CAPTURE_TSV, c10_capture(ABI_RAW))
+    assert_single(
+        GUARD.check(tree),
+        f"{C10_CAPTURE_TSV}:1:",
+        f"IVM program header does not carry the declared ABI hash {C10_HASH}",
+    )
+    write(tree, C10_CAPTURE_TSV, c10_capture())
+    # A C10 program is read at the C10 header position, not the baseline's.
+    write(tree, C10_PREDECODER_TO, ivm_program(C10_RAW))
+    assert_single(GUARD.check(tree), f"{C10_PREDECODER_TO}: IVM program header does not carry")
+    write(tree, C10_PREDECODER_TO, c10_program(C10_RAW))
+    write(tree, C10_GOLDEN_RS, f"{C10_GOLDEN_PREFIX}{OTHER_ABI_HASH}\";\n")
+    assert_single(GUARD.check(tree), C10_GOLDEN_RS, "golden is not the hash")
+
+
+def test_every_artifact_map_row_carries_exactly_one_declared_hash(tree: Path) -> None:
+    # The C10 map carrier claims every row: the ABI V1 rows are claimed twice.
+    declare_c10(tree, lambda declaration, data: declaration["carriers"][1].pop("carrier_owners"))
+    errors = GUARD.check(tree)
+    assert_any(errors, ABI_MAP_TSV, "rows of owner `default`", "not 2")
+    # Without a C10 declaration the predecoder row carries no declared hash.
+    declare_c10(tree, lambda declaration, data: declaration["carriers"].pop())
+    assert_single(GUARD.check(tree), ABI_MAP_TSV, "rows of owner `predecoder`", "not 0 (none)")
+
+
+@pytest.mark.parametrize(
+    "change,fragment",
+    [
+        (lambda declaration, data: declaration.update(engine="c11"), "known header layout"),
+        (lambda declaration, data: declaration.update(engine=["c10"]), "known header layout"),
+        (
+            lambda declaration, data: declaration.update(golden={"path": ["x"], "prefix": "p"}),
+            "`golden` path and prefix",
+        ),
+        (
+            lambda declaration, data: declaration.update(
+                abi_hash=data["declared_abi_cutover"]["abi_hash"]
+            ),
+            "already declares",
+        ),
+        (lambda declaration, data: declaration.update(abi_hash="00"), "64 hex digits"),
+        (lambda declaration, data: declaration.pop("golden"), "`golden` path and prefix"),
+        (lambda declaration, data: declaration.pop("change"), "states the `change`"),
+        (lambda declaration, data: declaration.update(carriers=[]), "lists the `carriers`"),
+        (
+            lambda declaration, data: declaration["carriers"][0].update(carries="base32"),
+            "in known forms",
+        ),
+        (
+            lambda declaration, data: declaration["carriers"][0].update(
+                artifact="fixtures/unlisted.tsv"
+            ),
+            "must be a regeneration target",
+        ),
+    ],
+)
+def test_malformed_profile_hash_declaration_fails(tree: Path, change, fragment: str) -> None:
+    declare_c10(tree, change)
+    assert_any(GUARD.check(tree), fragment)
+
+
+def test_pinned_history_holding_a_profile_hash_fails(tree: Path) -> None:
+    declare_c10(tree)
+    frames = (FRAMES[0], b"\x01c10 deployment under " + C10_RAW)
+    write(tree, f"{PINNED_DIR}/block-2.wire", frames[1])
+    write(tree, f"{PINNED_DIR}/manifest.json", json.dumps(pinned_manifest(frames)))
+
+    def regenerated(declaration: dict, data: dict) -> None:
+        data["pinned_history"].update(history_sha256=pinned_manifest(frames)["history_sha256"])
+
+    declare_c10(tree, regenerated)
+    assert_single(
+        GUARD.check(tree),
+        f"{PINNED_DIR}/manifest.json",
+        "holds the iroha.ivm.c10.v1 ABI hash",
+    )
 
 
 def test_pinned_history_holding_the_abi_hash_needs_a_fresh_genesis(tree: Path) -> None:

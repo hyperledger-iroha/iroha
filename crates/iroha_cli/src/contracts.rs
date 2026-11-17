@@ -943,7 +943,7 @@ fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtif
 fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
     let verified = verify_contract_from_bytes(bytes)?;
     let summary = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
-        .summarize_program_for_policy(bytes, verified.syscall_policy)
+        .summarize_program_for_profile(bytes, verified.profile)
         .map_err(|err| eyre!("failed to prepare IVM program summary: {err}"))?;
     match summary.metadata.abi_version {
         1 => {}

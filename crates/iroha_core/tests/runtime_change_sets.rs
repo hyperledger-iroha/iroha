@@ -36,16 +36,20 @@ use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 
+/// A HALT-only generic program declaring `abi_version`.
+///
+/// The baseline selection runs ABI V1 on the baseline engine, so the program carries the 49-byte
+/// baseline header with a positive cycle bound and the baseline HALT encoding.
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let mut program = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version,
     }
-    .encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
+    program.extend_from_slice(&ivm_abi::baseline::encoding::encode_halt().to_le_bytes());
     program
 }
 

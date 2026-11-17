@@ -14,7 +14,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
-use ivm::{ProgramMetadata, encoding, syscalls};
+use ivm::{ProgramMetadata, syscalls};
 use std::{
     collections::BTreeMap,
     time::{Duration, SystemTime},
@@ -47,11 +47,22 @@ fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     (start, start_ms)
 }
 fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
-    // One syscall and HALT under the non-ZK header: gas, supplied when the trigger fires,
-    // is the program's only execution budget.
-    let mut blob = ProgramMetadata::default().encode();
-    blob.extend_from_slice(&encoding::wide::encode_scall(syscall).to_le_bytes());
-    blob.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    // One syscall and HALT. A trigger registered through the interface runs on the frozen
+    // baseline engine of ABI V1: the 49-byte baseline header declaring a positive cycle limit
+    // (within the default admission ceiling and fuel), the 8-bit `SCALL` (24-bit `SYSTEM` above
+    // 0xFF) and the baseline HALT.
+    use ivm_abi::baseline::{encoding::wide, instruction::wide::system};
+    let mut blob = ProgramMetadata {
+        max_cycles: 1_000,
+        ..ProgramMetadata::default()
+    }
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
+    let call = match u8::try_from(syscall) {
+        Ok(number) => wide::encode_sys(system::SCALL, number),
+        Err(_) => wide::encode_syscallx(syscall),
+    };
+    blob.extend_from_slice(&call.to_le_bytes());
+    blob.extend_from_slice(&wide::encode_halt().to_le_bytes());
     IvmBytecode::from_compiled(blob)
 }
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {

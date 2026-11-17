@@ -45514,7 +45514,6 @@ impl StateTransaction<'_, '_> {
         if let Some(prepared) = self
             .pipeline_ivm_prepared_cache
             .get_in_world(&self.world, code_hash)
-            .map_err(crate::smartcontracts::ivm::program_admission_error)?
         {
             if prepared.artifact() != bytecode.as_ref() {
                 return Err(ValidationFail::NotPermitted(format!(
@@ -45533,9 +45532,9 @@ impl StateTransaction<'_, '_> {
             }
             return Ok(Some(ResolvedIvmTriggerProgram::Generic(summary)));
         }
-        let parsed = ivm::ProgramMetadata::parse_for_policy(
+        let parsed = ivm::ProgramMetadata::parse_for_profile(
             bytecode.as_ref(),
-            crate::smartcontracts::ivm::artifact_policy(&self.world, bytecode.as_ref()),
+            crate::smartcontracts::ivm::artifact_profile(&self.world, bytecode.as_ref()),
         )
         .map_err(crate::smartcontracts::ivm::program_admission_error)?;
         if parsed.contract_interface.is_some() {
@@ -45903,7 +45902,7 @@ impl StateTransaction<'_, '_> {
                 }
                 crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
                     self,
-                    summary.prepared_contract().syscall_policy(),
+                    summary.prepared_contract().profile_id(),
                 )?;
                 let effective_cycles =
                     crate::executor::validate_prepared_ivm_execution_policy_for_profile(
@@ -46139,7 +46138,7 @@ impl StateTransaction<'_, '_> {
                             let prepared_contract = prepared_contract.as_ref();
                             crate::smartcontracts::ivm::host_profile::ensure_in_transaction(
                                 self,
-                                prepared_contract.syscall_policy(),
+                                prepared_contract.profile_id(),
                             )?;
                             let effective_cycles =
                                 crate::executor::validate_prepared_ivm_execution_policy_for_profile(

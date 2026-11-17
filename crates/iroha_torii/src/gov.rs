@@ -2031,9 +2031,9 @@ pub async fn handle_gov_contract_get(
         ));
     }
     // The stored artifact is verified under the profile this root resolves for its bytes.
-    let verified = ivm::verify_contract_artifact_for_policy(
+    let verified = ivm::verify_contract_artifact_for_profile(
         &record.code_bytes,
-        iroha_core::smartcontracts::ivm::artifact_policy(view.world(), &record.code_bytes),
+        iroha_core::smartcontracts::ivm::artifact_profile(view.world(), &record.code_bytes),
     )
     .map_err(|error| {
         governed_contract_invariant(format!(

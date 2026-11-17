@@ -35,8 +35,19 @@ fn assert_manifest_signature_error(error: &InstructionExecutionError, field: &st
         "{field} mutation returned the wrong provenance error source"
     );
 }
+/// The signed contract fixture.
+///
+/// Contract registration is a live ABI V1 path, which admits only baseline artifacts: the
+/// 49-byte baseline header with a positive cycle bound and the baseline instruction encodings.
 fn contract_artifact() -> Vec<u8> {
-    let metadata = ivm::ProgramMetadata::default();
+    use ivm_abi::baseline::{
+        encoding::wide,
+        instruction::wide::{arithmetic, control, memory},
+    };
+    let metadata = ivm::ProgramMetadata {
+        max_cycles: 10_000,
+        ..ivm::ProgramMetadata::default()
+    };
     let interface = ivm::EmbeddedContractInterfaceV1 {
         events: Vec::new(),
         enum_types: Vec::new(),
@@ -74,22 +85,28 @@ fn contract_artifact() -> Vec<u8> {
         error_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut artifact = metadata.encode();
+    let mut artifact = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     artifact.extend_from_slice(&interface.encode_section());
     for instruction in [
-        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
-        ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        wide::encode_store(memory::STORE64, 12, 0, 0),
+        wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+        // The baseline protected return is the register form of `JALR`.
+        wide::encode_rr(control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&instruction.to_le_bytes());
     }
     ivm::verify_contract_artifact_with_declared_profile(&artifact).expect("valid contract fixture");
     artifact
 }
+/// Single-field mutations of the fixture's fixed header, located in the baseline header layout
+/// the fixture is encoded in.
 fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
+    use ivm_abi::baseline::{
+        HEADER_ABI_HASH_OFFSET, HEADER_ABI_VERSION_OFFSET, HEADER_BUDGET_OFFSET, HEADER_SIZE,
+    };
     assert!(
-        original.len() >= ivm::HEADER_SIZE,
+        original.len() >= HEADER_SIZE,
         "fixture must contain the fixed IVM header"
     );
     let mut mutations = Vec::new();
@@ -108,13 +125,13 @@ fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     mode[6] = ivm::ivm_mode::ZK;
     mutations.push(("mode", mode));
     let mut max_cycles = original.to_vec();
-    max_cycles[ivm::HEADER_BUDGET_OFFSET..ivm::HEADER_ABI_VERSION_OFFSET]
+    max_cycles[HEADER_BUDGET_OFFSET..HEADER_ABI_VERSION_OFFSET]
         .copy_from_slice(&2_u64.to_le_bytes());
     mutations.push(("max_cycles", max_cycles));
     let mut abi_version = original.to_vec();
-    abi_version[ivm::HEADER_ABI_VERSION_OFFSET] = 0;
+    abi_version[HEADER_ABI_VERSION_OFFSET] = 0;
     mutations.push(("abi_version", abi_version));
-    for index in ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE {
+    for index in HEADER_ABI_HASH_OFFSET..HEADER_SIZE {
         let mut abi_hash = original.to_vec();
         abi_hash[index] ^= 0xff;
         mutations.push(("abi_hash", abi_hash));
@@ -190,7 +207,8 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     let mutations = execution_header_mutations(&original);
     assert_eq!(
         mutations.len(),
-        ivm::METADATA_MAGIC.len() + 5 + ivm::HEADER_SIZE - ivm::HEADER_ABI_HASH_OFFSET,
+        ivm::METADATA_MAGIC.len() + 5 + ivm_abi::baseline::HEADER_SIZE
+            - ivm_abi::baseline::HEADER_ABI_HASH_OFFSET,
         "cover every fixed-header field and every physical ABI-digest byte"
     );
     for (field, mutated) in mutations {

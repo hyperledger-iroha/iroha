@@ -156,11 +156,11 @@ pub use crate::metadata::mode as ivm_mode;
 pub use crate::contract_artifact::{
     ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
     prepare_contract_for_policy, prepare_contract_for_profile, prepare_contract_with_memory_budget,
-    prepare_contract_with_memory_budget_for_policy,
     prepare_contract_with_memory_budget_for_profile, prepare_koto_test_contract,
     verify_contract_artifact, verify_contract_artifact_for_policy,
-    verify_contract_artifact_with_declared_profile, verify_contract_artifact_with_memory_budget,
-    verify_contract_artifact_with_memory_budget_for_policy,
+    verify_contract_artifact_for_profile, verify_contract_artifact_with_declared_profile,
+    verify_contract_artifact_with_memory_budget,
+    verify_contract_artifact_with_memory_budget_for_profile,
 };
 pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,

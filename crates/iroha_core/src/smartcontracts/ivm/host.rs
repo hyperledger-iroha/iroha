@@ -1826,8 +1826,8 @@ pub trait QueryStateRefOps {
     >;
     /// Enforce the named profile's effective restrictions at this original invocation boundary.
     /// State-free readers have no authority to opt into a named profile.
-    fn ensure_host_profile(&self, policy: ivm::SyscallPolicy) -> Result<(), ivm::VMError> {
-        if policy == ivm::SyscallPolicy::AbiV1 {
+    fn ensure_host_profile(&self, profile: ivm::IvmProfileId) -> Result<(), ivm::VMError> {
+        if profile == crate::smartcontracts::ivm::profile::interface_profile_id() {
             Ok(())
         } else {
             Err(ivm::VMError::PermissionDenied)
@@ -2725,19 +2725,19 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
         }
     }
-    fn ensure_host_profile(&self, policy: ivm::SyscallPolicy) -> Result<(), ivm::VMError> {
+    fn ensure_host_profile(&self, profile: ivm::IvmProfileId) -> Result<(), ivm::VMError> {
         use crate::smartcontracts::ivm::host_profile::{ensure_at_height, ensure_in_transaction};
         let result = match *self {
             QueryStateRef::View(view) => {
-                ensure_at_height(view.world(), policy, view.height() as u64)
+                ensure_at_height(view.world(), profile, view.height() as u64)
             }
             QueryStateRef::QueryView(view) => {
-                ensure_at_height(view.world(), policy, view.height() as u64)
+                ensure_at_height(view.world(), profile, view.height() as u64)
             }
             QueryStateRef::Block(block) => {
-                ensure_at_height(block.world(), policy, block._curr_block.height().get())
+                ensure_at_height(block.world(), profile, block._curr_block.height().get())
             }
-            QueryStateRef::Transaction(tx) => ensure_in_transaction(tx, policy),
+            QueryStateRef::Transaction(tx) => ensure_in_transaction(tx, profile),
         };
         result.map_err(|_| ivm::VMError::PermissionDenied)
     }
@@ -2751,9 +2751,9 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::QueryView(view) => cache.get_in_world(view.world(), code_hash),
             QueryStateRef::Block(block) => cache.get_in_world(block.world(), code_hash),
             QueryStateRef::Transaction(tx) => cache.get_in_world(tx.world(), code_hash),
-        }?;
+        };
         if let Some(contract) = prepared.as_ref() {
-            self.ensure_host_profile(contract.syscall_policy())?;
+            self.ensure_host_profile(contract.profile_id())?;
         }
         Ok(prepared)
     }
@@ -2787,7 +2787,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         let contract = prepared
             .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
             .ok_or(ivm::VMError::PermissionDenied)??;
-        self.ensure_host_profile(contract.syscall_policy())?;
+        self.ensure_host_profile(contract.profile_id())?;
         Ok(contract)
     }
     fn subscription_context_for_trigger(
@@ -4188,7 +4188,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     > {
         crate::smartcontracts::ivm::host_profile::ensure_at_height(
             state.world(),
-            contract.syscall_policy(),
+            contract.profile_id(),
             state.height() as u64,
         )?;
         let identity =

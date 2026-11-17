@@ -5120,6 +5120,7 @@ include!("host/attachment_lifecycle_tests.rs");
 include!("host/x509_attachment_tests.rs");
 include!("host/nested_return_funding_tests.rs");
 include!("host/nested_call_gas_tests.rs");
+include!("host/nested_profile_tests.rs");
 #[test]
 fn dispatched_call_contract_spends_reserved_gas_and_returns_output() {
     let authority: AccountId = fixture_account("alice");
