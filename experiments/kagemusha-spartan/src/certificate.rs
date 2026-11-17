@@ -552,6 +552,15 @@ pub(crate) struct Prepared {
 }
 
 pub(crate) fn prepare(context: &RootContext, cert: &Certificate) -> Result<Prepared, &'static str> {
+    prepare_role(context, cert, Role::Enrollment)
+}
+
+/// Hard-valid signer certificate for exactly the role its consumer requires.
+pub(crate) fn prepare_role(
+    context: &RootContext,
+    cert: &Certificate,
+    role: Role,
+) -> Result<Prepared, &'static str> {
     if context.scheme == [0; 32]
         || context.root.x >= p256::p()
         || context.root.y >= p256::p()
@@ -581,8 +590,8 @@ pub(crate) fn prepare(context: &RootContext, cert: &Certificate) -> Result<Prepa
     for byte in cert.body.iter().chain(&cert.signature).chain(mb.as_ref()) {
         c.byte(*byte);
     }
-    // Fixed wire version, Enrollment role and SEC1 tag.
-    for (k, v) in [(0, 1), (1, 0), (34, 1), (KEY_START, 4)].into_iter() {
+    // Fixed wire version, the required role and SEC1 tag.
+    for (k, v) in [(0, 1), (1, 0), (34, role as u8), (KEY_START, 4)].into_iter() {
         c.eq(own(k, 1), constant(vec![Fp::from(v as u64)]));
     }
     let scheme_sum = (2..34).fold(vec![], |acc, k| plus(&acc, &own(k, 1)));
@@ -823,6 +832,256 @@ pub(crate) fn add_signature(
         }
     }
     (sha_at, comb_at)
+}
+
+/// Install a fixed P-256 comb table (`nonnative::wallet_table_values`
+/// layout) under `id` unless that id is already present for the same key.
+/// Fixed values are circuit constants: changing `q` changes the circuit.
+pub(crate) fn install_fixed_key_table(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    name: &'static str,
+    id: u32,
+    q: &Point,
+) {
+    let values = nonnative::wallet_table_values(q);
+    if let Some((array, _)) = w.tables.iter().find(|(_, t)| *t == id) {
+        assert!(w.arrays[*array].values == values, "one key per table id");
+        return;
+    }
+    let array = w.push(Array {
+        name,
+        family,
+        rho: 9,
+        r_count: nonnative::WALLET_ROWS,
+        fixed: true,
+        lookups: vec![],
+        widths: vec![9, 88, 88, 80, 88, 88, 80],
+        rows: vec![],
+        values,
+    });
+    w.tables.push((array, id));
+}
+
+/// A signer certificate opened inside an operation relation with a total
+/// verdict for one required role. Every hash, byte, curve and ECDSA helper
+/// stays hard in both outcomes; only `valid` reports the verdict.
+pub struct SignerOpening {
+    valid: crate::send_arithmetic::Source,
+    digest: crate::send_arithmetic::Source,
+    key: nonnative::KeyLimbSource,
+    point: Point,
+}
+impl SignerOpening {
+    /// Exactly: version 1, the trusted scheme, the required role, SEC1 tag 4,
+    /// canonical on-curve key and a canonical low-S root signature.
+    pub fn valid(&self) -> crate::send_arithmetic::Source {
+        self.valid
+    }
+    /// Exact `P(kgwocrt1, [m, r_lo, r_hi, s_lo, s_hi])` of the original bytes.
+    pub fn digest(&self) -> crate::send_arithmetic::Source {
+        self.digest
+    }
+    /// The certified key's limbs when its encoding is a canonical on-curve
+    /// SEC1 point, otherwise the generator's: always a valid derivation input.
+    /// Only `valid` makes it an authority.
+    pub fn key(&self) -> nonnative::KeyLimbSource {
+        self.key
+    }
+    pub fn point(&self) -> &Point {
+        &self.point
+    }
+}
+
+/// Total signer-certificate authentication for `role` under the fixed scheme
+/// root (a circuit constant, like Bootstrap's root table) and the trusted
+/// scheme limbs. A false verdict keeps every row satisfiable, so an inactive
+/// branch can carry arbitrary bytes; the caller enforces `valid` where active.
+/// The generator table must already be installed (the own receipt does so).
+pub(crate) fn append_signer_total(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    root: &Point,
+    cert: &Certificate,
+    role: Role,
+    scheme: [crate::send_arithmetic::Source; 2],
+) -> SignerOpening {
+    use crate::credential_policy::{all, zero_predicate};
+    assert!(
+        root.x < p256::p() && root.y < p256::p() && p256::on_curve(root),
+        "installed scheme root"
+    );
+    crate::operation_auth::ensure_range(w, family);
+    install_fixed_key_table(w, family, "signer root fixed table", ROOT_TABLE, root);
+    let mut c = Cells::new(family);
+    c.a.name = "total signer certificate opening";
+    for byte in cert.body.iter().chain(&cert.signature) {
+        c.byte(*byte);
+    }
+    let byte = |c: &Cells, k: usize| (own(k, 1), c.a.values[k][0]);
+    let mut checks = vec![];
+    let (b0, v0) = byte(&c, 0);
+    let (b1, v1) = byte(&c, 1);
+    checks.push(zero_predicate(
+        &mut c,
+        plus(&plus(&b0, &scaled(&b1, Fp::from(256))), &constant(vec![-Fp::ONE])),
+        v0 + v1 * Fp::from(256) - Fp::ONE,
+    ));
+    for (k, v) in [(34, role as u64), (KEY_START, 4)] {
+        let (b, value) = byte(&c, k);
+        checks.push(zero_predicate(
+            &mut c,
+            plus(&b, &constant(vec![-Fp::from(v)])),
+            value - Fp::from(v),
+        ));
+    }
+    for (j, source) in scheme.into_iter().enumerate() {
+        let indices: Vec<_> = (2 + 16 * j..18 + 16 * j).collect();
+        let value = fp(&BigUint::from_bytes_le(&cert.body[2 + 16 * j..18 + 16 * j]));
+        let difference = plus(&c.bytes(&indices), &scaled(&source.linear(), -Fp::ONE));
+        checks.push(zero_predicate(&mut c, difference, value - source.value(w)));
+    }
+    let x = BigUint::from_bytes_be(&cert.body[36..68]);
+    let y = BigUint::from_bytes_be(&cert.body[68..100]);
+    let xle: Vec<_> = (36..68).rev().collect();
+    let yle: Vec<_> = (68..100).rev().collect();
+    checks.push(c.at_most_bit(&xle, &x, &(p256::p() - 1u32)));
+    checks.push(c.at_most_bit(&yle, &y, &(p256::p() - 1u32)));
+    let xc = c.value(&x, &xle);
+    let yc = c.value(&y, &yle);
+    let x2 = &x * &x % p256::p();
+    let residue = (&y * &y + &x * 3u32 + p256::p() * 4u32
+        - ((&x * &x2 + p256::b()) % p256::p()))
+        % p256::p();
+    let mut aux = |v: &BigUint| {
+        let indices: Vec<_> = scalar_bytes(v).iter().rev().map(|b| c.byte(*b)).collect();
+        c.value(v, &indices)
+    };
+    let x2c = aux(&x2);
+    let rc = aux(&residue);
+    // Limbs are nonnegative byte compositions: their sum is zero exactly when
+    // the residue integer is zero.
+    let residue_sum = rc.iter().fold(vec![], |a, k| plus(&a, &own(*k, 1)));
+    let residue_value = rc.iter().map(|k| c.a.values[*k][0]).sum();
+    checks.push(zero_predicate(&mut c, residue_sum, residue_value));
+    // checks[2] is SEC1, then both canonical coordinates and the curve.
+    let key_valid = all(
+        &mut c,
+        &[checks[2], checks[5], checks[6], checks[7]],
+    );
+    let certified = c.a.values[key_valid][0] == Fp::ONE
+        && x < p256::p()
+        && y < p256::p()
+        && p256::on_curve(&Point {
+            x: x.clone(),
+            y: y.clone(),
+        });
+    let generator = p256::generator();
+    let point = if certified {
+        Point {
+            x: x.clone(),
+            y: y.clone(),
+        }
+    } else {
+        generator.clone()
+    };
+    let g = [limbs(&generator.x), limbs(&generator.y)];
+    let selected: [[usize; 3]; 2] = std::array::from_fn(|axis| {
+        let limbs_of = [xc, yc][axis];
+        let values = limbs(if axis == 0 { &point.x } else { &point.y });
+        std::array::from_fn(|i| {
+            let gv = fp(g[axis][i].magnitude());
+            let k = c.cell(fp(values[i].magnitude()), if i == 2 { 80 } else { 88 });
+            c.a.rows.push([
+                own(key_valid, 1),
+                plus(&own(limbs_of[i], 1), &constant(vec![-gv])),
+                plus(&own(k, 1), &constant(vec![-gv])),
+            ]);
+            k
+        })
+    });
+    let rle: Vec<_> = (SIGNATURE_START..SIGNATURE_START + 32).rev().collect();
+    let sle: Vec<_> = (SIGNATURE_START + 32..SIGNATURE_START + 64).rev().collect();
+    let r = BigUint::from_bytes_be(&cert.signature[..32]);
+    let sv = BigUint::from_bytes_be(&cert.signature[32..]);
+    let m = message(cert);
+    let mcell = c.cell(m, 255);
+    let mstate = [c.cell(Fp::ZERO, 255), mcell, c.cell(Fp::ZERO, 255)];
+    let digest = certificate_digest(cert);
+    let dcell = c.cell(digest, 255);
+    let dstate = [c.cell(Fp::ZERO, 255), dcell, c.cell(Fp::ZERO, 255)];
+    let body_items: Vec<_> = std::iter::once((Fp::from(108), constant(vec![Fp::from(108)])))
+        .chain(cert.body.chunks(31).enumerate().map(|(i, b)| {
+            (
+                fp(&BigUint::from_bytes_le(b)),
+                c.bytes(&(31 * i..31 * i + b.len()).collect::<Vec<_>>()),
+            )
+        }))
+        .collect();
+    let obj_items = vec![
+        (m, own(mcell, 1)),
+        (fp(&(&r % pow2(128))), c.bytes(&rle[..16])),
+        (fp(&(&r >> 128)), c.bytes(&rle[16..])),
+        (fp(&(&sv % pow2(128))), c.bytes(&sle[..16])),
+        (fp(&(&sv >> 128)), c.bytes(&sle[16..])),
+    ];
+    let encoding = all(&mut c, &checks);
+    let local = w.push(c.a);
+    curve_relation(
+        w,
+        family,
+        local,
+        [xc, yc, x2c, rc],
+        [&x, &y, &x2, &residue],
+        &p256::p(),
+        3,
+        &p256::b(),
+    );
+    let mut rng = SpikeRng::new(b"total signer certificate hashes");
+    hash_relation(w, family, local, SIGN_DOMAIN, &body_items, mstate, &mut rng);
+    hash_relation(w, family, local, OBJECT_DOMAIN, &obj_items, dstate, &mut rng);
+    let source = |cell| crate::send_arithmetic::Source {
+        array: local,
+        cell,
+        instance: 0,
+    };
+    let signature = std::array::from_fn(|k| source(SIGNATURE_START + k));
+    let root_signature = crate::signature::append_signature_total(
+        w,
+        family,
+        "total signer-certificate root ECDSA arithmetic",
+        source(mcell),
+        &signature,
+        crate::signature::TotalKey {
+            table: ROOT_TABLE,
+            q: root,
+        },
+        vec![],
+    );
+    let mut v = Cells::new(family);
+    v.a.name = "total signer certificate verdict";
+    let parts = [source(encoding), root_signature.valid()].map(|s| {
+        let k = v.bit(s.value(w) == Fp::ONE);
+        v.eq(own(k, 1), s.linear());
+        k
+    });
+    let valid = all(&mut v, &parts);
+    let verdict = w.push(v.a);
+    SignerOpening {
+        valid: crate::send_arithmetic::Source {
+            array: verdict,
+            cell: valid,
+            instance: 0,
+        },
+        digest: source(dcell),
+        key: nonnative::KeyLimbSource {
+            array: local,
+            x: selected[0],
+            y: selected[1],
+            instance: 0,
+        },
+        point,
+    }
 }
 
 pub fn build(context: &RootContext, cert: &Certificate) -> Result<Built, &'static str> {
