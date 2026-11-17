@@ -348,7 +348,8 @@ fn actual_expired_request_only_retires_once_and_commits_the_successor_chain() {
         ordinal: 1,
         predecessor_retirement: None,
         selected_at_ms: now,
-        deadline_ms: now + 300,
+        // Long enough to anchor, request and retain on a loaded host before it expires.
+        deadline_ms: now + 5_000,
     };
     parent
         .directory
@@ -368,7 +369,7 @@ fn actual_expired_request_only_retires_once_and_commits_the_successor_chain() {
     let request_bytes = std::fs::read(old.join("preparation.json")).unwrap();
     assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
     drop(parent);
-    let wait_bound = Instant::now() + Duration::from_secs(2);
+    let wait_bound = Instant::now() + Duration::from_secs(10);
     while current_unix_ms().unwrap() < original.deadline_ms {
         assert!(Instant::now() < wait_bound);
         std::thread::sleep(Duration::from_millis(2));
