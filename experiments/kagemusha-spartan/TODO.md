@@ -20,6 +20,10 @@ claim before item E5 measures it.
   *2026-11-18:* written by Codex astra: [research/SOUNDNESS.md](research/SOUNDNESS.md) §4 (explicit assumption
   P2-RKFS, induction over the extracted DAG, well-foundedness from the implemented state, finite budgets in §8). It
   is conditional and says so; it waits for G3.
+  *Revision 2 (8672d5ee88):* minimal P2-RKFS (algebraic adversary + ideal recursive RP57), honest-wallet experiment,
+  closure over the extracted node set (no global rank), conservation corollary. The reviewer's re-check: accept,
+  conditionally on code findings 4 and 7 (canonicality) and the owner's decisions (adopt P2-RKFS, budgets, custody
+  hypotheses).
 - [ ] **G2. Written proofs and exact bounds.** Prove γ separation (CancelRound/AdaptiveWitness must stay refused) and
   the deferred matrix claims. Take each bound over the challenge's real distribution (β is a raw 126-bit integer; γ is
   an endoscalar from 126 bits; the pair-link challenge comes from S's Fp transcript), include the lean schedule's
@@ -28,6 +32,9 @@ claim before item E5 measures it.
   *2026-11-18:* written in SOUNDNESS.md §5-§7 (per-operation local algebraic bounds 104.0 / 101.6 / 101.4 / 100.7 bits
   for Bootstrap / Load / Send / Receive, LogUp-dominated, conditional); DESIGN.md §5, §7.2, §7.3 and §11 now quote
   them (the link ρ is a whole Fp word: `n/p`, not `n/2^126`). Closes with G3.
+  *Revision 2:* the "~3-4-bit loss" is replaced by exact per-term accounting and a round-by-round lemma (largest
+  single-reply charge about 2^-101.3; about 2^-61 total at Q = 2^40, N = 2^36, and 2^-37 at Q = 2^64). The reviewer's
+  re-check: accept, conditionally on code findings 5 and 9.
 - [ ] **G3. Independent cryptographic review.** A reviewer outside this lane, working from
   research/REPORT-b04a57-soundness.md, the written G1/G2 arguments and the code.
   *Done when:* every finding is fixed or explicitly accepted by the owner.
@@ -83,6 +90,10 @@ claim before item E5 measures it.
   the exact program-digest equality.
 - [ ] **E3. Memory.** The complete chain peaked at 6.64 GB RSS (11-13) against the 0.68 GiB proving admission for
   4 GB phones. *Done when:* every kind proves within the admission, measured.
+  *2026-11-18 (2b3671cae3):* prover cut about 3x with byte-identical proofs; every kind except P-Receive fits by the
+  accounting (P-Receive 869 MB, +139 MB); process peak 5.26 → 2.94 GB RSS; every proof faster (P-Receive 1.58 →
+  1.32 s Mac). In progress: the engine side (release private values, no private digest recompile, chunked
+  preparation check) and the real-RSS measurement of whole native operations.
 - [ ] **E4. Shrink P-boot's matrix program** (53,964 products, about 72% of the three P programs). Taking Bootstrap out
   of the per-step polynomial needs an authenticated discharge of its matrix obligation, not a one-time native check.
   *2026-11-18:* construction chosen in [research/E4-F1-F2-DESIGN.md](research/E4-F1-F2-DESIGN.md) §3 (Codex astra):
@@ -108,8 +119,11 @@ claim before item E5 measures it.
 
 - [ ] **F1. Unload** (offline to online) as a recursive kind with its Core path. The proof-before-payout hold on
   suffix-Unload stays.
-  *2026-11-18:* relation, Core acceptance and exactly-once storage specified in E4-F1-F2-DESIGN.md §4. Not
-  implemented; the Core side is future-generation code and ships with D4.
+  *2026-11-18:* relation, Core acceptance and exactly-once storage specified in E4-F1-F2-DESIGN.md §4. The Core side
+  is future-generation code and ships with D4.
+  *2026-11-18 (14e14627e6):* the exact Unload relation is in `src/unload.rs`, standalone (147,620 rows, 11 tests incl.
+  native parity with `iroha_data_model`'s nullifier and redeem leaf). Not yet a recursive kind: it needs E4 to free
+  the (0, 1) corner, then the full.rs/native/engine integration listed in that commit's checklist.
 - [ ] **F2. RefreshTimeAnchor** as a recursive kind (only statement tags exist in `statement.rs`).
   *2026-11-18:* E4-F1-F2-DESIGN.md §5 puts it in one Control program shared with Load (no fifth kind; ten programs
   in all with E4 and F1). Not implemented.

@@ -223,3 +223,112 @@ q is committed before β and native decision evaluates the authenticated program
   - If that is insufficient, one option is to draw the LogUp challenges A and B from full-width words, as τ and ρ already are. The LogUp term would drop to about (d+1)·M/p ≈ 2^-229, and the main proofs would dominate at about 2^-115.3. The in-circuit cost is unmeasured.
 - **The custody hypothesis in the conservation corollary**: no forks, and no re-Bootstrap of a credential or wallet id. These are custody and provider obligations, not proof properties.
 - **Interim status of finding 4**: until it is fixed, the "receiver cannot choose burn" statement in DESIGN.md §4.3 and SOUNDNESS.md §4.5 should be withdrawn, or qualified as holding only for the native verdict.
+
+---
+
+## Re-check of SOUNDNESS.md revision 2 (2026-11-18)
+
+**Updated verdict.**
+- **G1: accept, conditionally.** The argument and its restated assumption are now acceptable. G1 can close once two code findings are fixed and tested and the owner accepts the open items below. The code findings are 4 (unbound io leaves) and the canonicality half of 7.
+- **G2: accept, conditionally.** The proofs and bounds are acceptable. G2 can close once finding 5 (build-time LogUp phase check) and finding 9 (forgery refusal through the complete uniform builders) land, and DESIGN.md and TODO.md are synchronized as revision 2 §10 requires.
+
+What I checked, read-only:
+- `research/SOUNDNESS.md` as committed in `8672d5ee88` ("Revise … after its independent review").
+- Its source citations are pinned to `d4ba3c1a6a`. Between that commit and `8672d5ee88`, `src/` differs only by the new `unload.rs` and `mod unload;` at `lib.rs:56`. I spot-checked citations against HEAD.
+- I did not re-review code findings 4, 5, 7 or 9, except for judging the author's partial disagreement on 7. No builds or tests were run.
+
+### Findings on the document
+
+| Finding | Status | Reason |
+|---|---|---|
+| **1. Scope of P2-RKFS** | **Resolved** (two minor clarifications, R1 below) | §4.2 now has two model assumptions: A, straight-line algebraic representation access on the pinned bases, recorded when an element first enters a native or recursively evaluated RP57 evaluation; and B, idealization of concrete recursive RP57, with ε_RKFS left unquantified and said to be so. A explicitly does *not* assert that representations satisfy relations, that witnesses agree, or that accumulators are true. Prefix knowledge, two-field correspondence, accumulation closure, polynomial extraction cost and query charging are now derived (§4.2 items 1–5). Causal closure is removed. §6.1 no longer uses rewinding over γ. |
+| **2. Security experiment** | **Resolved** (residual R2) | §2.1 has the challenger running honest wallets and recording their witnesses and randomness. Node identity is by descriptor plus canonical statement, not proof bytes. The extractor outputs a witness or a pointer to an honest record for the same statement. Each proof occurrence's own obligations are still checked. §2.2 states that no non-malleability is assumed and keys credit uniqueness on the Request-derived id (`receive_lineage.rs:188-215`). Mauled honest proofs are covered because A lets the extractor substitute the challenger's openings. |
+| **3. Closure and conservation** | **Resolved** (residual R2) | §4.4 replaces induction with worklist closure over a finite set V, closed under the required parent edges. Truth propagates forward from the native terminal decisions. That is a reachability argument, valid with cycles, and I checked it. §4.3 roots each own chain at Bootstrap through the u128 counter. §4.6 states the corollary Σ S_w = L − F − U ≤ L − F under no forks, no second Bootstrap per credential *or wallet id*, credit uniqueness and authorized funding. I re-derived it: credit raises the balance; burn raises balance and adjusted burned total equally; Send debits principal plus fee against the prior adjusted burn (`send_arithmetic.rs:97-125`, carried forward at `send.rs:247-251`); the Request names payer wallet and ordinal, so each credit maps injectively to one Send under the hypotheses. |
+| **6. Restructuring checked only in-circuit** | **Resolved** | §6.8 now says native code decides only the exported claim. Its circuit audit matches `generator_claim_points.rs:160-273`: the digest is taken over the relation, the ordered source points (input cells tied to shared limbs) and their challenge limbs, and all 1+2ℓ masks; D is built from the digest limbs and m₀ and absorbed before μ; C* is built from the same source-point cells and absorbed before the evaluation point and ζ; L and R come before each challenge; the final H-corrected equality is a hard constraint. Comparing own sources with the proof's g_final is a soft equality, made hard for the predecessor through `require_true`. |
+| **8. Round-by-round lemma** | **Resolved** (residual R1) | Checked in the next subsection. |
+| **10. Degree declarations** | **Resolved** | §6.6, §9 and §10.2 now make the true degree of q − P∘Γ authoritative. Under-declaration is a completeness and advertised-bound issue, not a bypass of exact native evaluation. The new formal-degree checks exist at HEAD (`program_artifact.rs:476-482`, `engine.rs:445-452`). |
+| **11. Citations and records** | **Resolved** (editorial residual R3) | Citations are pinned to `d4ba3c1a6a`. The ones I checked are accurate there and at HEAD, except that `lib.rs` references are off by one at HEAD because of `mod unload;`. §10 lists the record updates, including TODO's "3-4-bit" wording, but they are not done yet: DESIGN.md:697 and :747 and TODO.md:21 and :26 still describe DAG induction, causal extraction and a "~3-4-bit loss". This blocks closure but is not a defect in SOUNDNESS.md. |
+
+### Is the restated P2-RKFS minimal, well defined and sufficient?
+
+**Minimal.** Yes. Nothing that a local lemma is meant to prove is assumed. A is needed for straight-line extraction and for the round-by-round state. B is needed for the concrete permutation used inside recursion. Neither can be dropped without supplying a different theorem.
+
+**Well defined.** Yes, with two clarifications (R1):
+- Pallas and Vesta allow *oblivious sampling*: pick x, take a square root, and get a point with no known representation. A as written ("the adversary is algebraic") silently excludes such points. State the standard treatment: an obliviously sampled or hash-to-curve point is an extra base with unknown discrete log, so a relation involving it is a DL break.
+- B idealizes the duplex transcript as an oracle over its prefix. The actual sponge has a one-element capacity (about 254 bits), so even in the ideal-permutation model there is a generic inner-collision term of about Q²/2^254. List it inside or beside ε_RKFS. It is negligible at Q ≤ 2^64, but it is the only part of B that can be quantified.
+
+**Sufficient for the closure argument.** Yes, given the listed premises:
+- A supplies representations for every required parent's commitments. They enter at least the child's recursively evaluated transcript, so they are recorded before that parent's challenges.
+- The local lemmas then give each node's witness once its own matrix and generator claims are known true. Those claims are true by propagation from the native terminal decisions.
+- The pair link gives two-field agreement.
+- Memoization by statement bounds the work by N.
+- Encoding divergence between native and circuit (findings 4 and 7) affects equivalence, not this argument: an aliased in-circuit replay is a different oracle input under B. The document rightly keeps equivalence as a separate premise.
+
+**Sufficient for the conservation corollary.** Yes, as a conditional statement (R2):
+- Hypotheses 1, 2 and 4 range over *every* wallet in the accounting set, including adversarial counterparties. A receiver's native admission checks the payer's Send pair, not the Load finality or fork-freedom of wallets deeper in the payer's history.
+- So the corollary reads: no spendable value beyond finalized Loads unless some joined wallet's custody or native engine fails. That matches the specification's trust model, but §4.6 should say it in those words.
+- The telescoping also uses continuity of the adjusted burned total across the Core[10] and lineage BURNED_TOTAL boundary. Send's continuity is source-visible (`send.rs:171-177`, `247-251`); cite Load's and Receive's exports the same way.
+
+### Round-by-round lemma (§8.1) and query bounds (§8.2)
+
+**The lemma is sound at sketch level.** The state is defined in A's recorded view before each fresh reply, and the per-reply events match the protocol order:
+- a violated sumcheck recurrence persists until α;
+- a recurrence-consistent false claim survives only at a root of degree ≤ 26;
+- α then γ;
+- IPA, folds and the link;
+- LogUp on the joint distribution of its challenge pair.
+
+Charging a shared reply its combined bound is correct, and two halves of one squeeze are not treated as independent.
+
+Residual (R1): write the "doomed" predicate explicitly as a function of (transcript prefix, recorded representations), so the Q·δ* step reads as an instance of the standard theorem. Sketch level is acceptable for G1, but that is the form a later proof will need.
+
+**Bounds checked.**
+- δ* ≤ (22,187,384 + 186)·λ*, which is 2^-101.27. It combines the Receive P LogUp term with the matrix-fold β drawn from the same phase-two reply. Every other reply group is smaller at this profile; the next largest is S Receive LogUp at 11.7M·λ*.
+- Q·δ* + Σ_v ε_v gives 2^-61.14 at Q = 2^40, N = 2^36, and 2^-37.27 at Q = 2^64. I reproduced both.
+- Adding the node sum on top of Q·δ* double-counts the final transcripts. That is harmless and correctly called conservative.
+- The second inequality, (Q+N)·max_k ε_k, holds because δ* ≤ max_k ε_k and |V| ≤ N.
+
+### Finding 7: the identity-point disagreement
+
+**The author is right about identity points; I withdraw that half of finding 7.**
+- My inference relied on the stale comment at `fs.rs:18-19` and on the non-total path.
+- In the complete builders, `generator_fold` sets the builder-wide flag `self.total = true` (`generator_claim_points.rs:168`); so does `verify_keyed_total` (`points.rs:381`).
+- With that flag, build uses an input check that admits identity, y² = x³ + b·(1 − [x=0][y=0]), with zero and inverse witnesses (`points.rs:998-1033`).
+- Points that must be non-identity are masked to finite: the hard Schnorr A (`points.rs:762-768`, `1029-1033`), matching native `ipa.rs:483-485`.
+- Additions, endoscalings and mixed multiplications switch to their complete forms (`points.rs:1176`, `1217`, `1311`, `1346`).
+- Both the native transcript and the in-circuit transcript absorb identity as (0,0).
+- So I have no forced-burn counterexample from identity rows, and the remaining question is equivalence testing, as revision 2 says.
+
+Residual (R4, editorial/robustness):
+- Identity semantics of the hard-predecessor path currently follow from a side effect: whether this circuit happens to run a private generator fold.
+- If owner decision D2 switches to clear folding and `generator_fold` disappears, hard verification of Send and Load predecessors reverts to the incomplete path.
+- That reversion is harmless for soundness but reintroduces the divergence between native and circuit.
+- Make total arithmetic an explicit builder parameter for every recursive verifier, and fix the comment at `fs.rs:18-19`.
+
+**The canonicality half of finding 7 stands.** The author agrees: full-width scalar limbs crossing circuits are recomposed only modulo the field (`full.rs:2846-2875`, `5031-5044`). It remains open and is not re-reviewed here.
+
+### New residual items from revision 2
+
+- **R1 (minor):** in A, treat oblivious sampling and hash-to-curve points as extra bases with unknown discrete log. In B, list the generic duplex inner-collision term (about Q²/2^254). In §8.1, write the doomed-state predicate explicitly.
+- **R2 (minor):** in §4.6, state that custody, no-fork and funding hypotheses quantify over all joined wallets, adversarial counterparties included. Cite continuity of the adjusted burned total for Load and Receive as for Send.
+- **R3 (editorial):**
+  - In §2.1, "exceeds the stated resource bounds" should say the *extractor* exceeding its time bound counts as failure; the adversary's T, Q, N, B are premises.
+  - `lib.rs` citations are off by one at `8672d5ee88`.
+- **R4 (editorial/robustness):** make identity-capable total arithmetic explicit, as described above.
+
+### Before G1 and G2 close (updated)
+
+1. Code, with tests, outside this document:
+   - finding 4: bind every io leaf, and add the unsatisfiable-mutation test;
+   - finding 7: canonical cross-field limbs, plus tests of identity ports against native acceptance;
+   - finding 5: build-time phase invariant for LogUp;
+   - finding 9: CancelRound and AdaptiveWitness refused through the complete uniform builders on both curves.
+2. SOUNDNESS.md: R1–R3, which are wording only.
+3. DESIGN.md §5, §7.2, §7.3 and §11, and TODO.md G1/G2: synchronize per revision 2 §10, replacing the DAG and causal-extraction text and the "3-4-bit" wording.
+4. Re-quote the ledger on one frozen candidate equal to the source then current.
+
+### Owner decisions (unchanged in substance)
+
+- Accept P2-RKFS A and B: an algebraic adversary on Pallas and Vesta, and concrete RP57 idealized inside recursion. Alternatively, fund a replacement theorem.
+- Choose history and query budgets and a numeric target. At this schedule: about 2^-61 at Q = 2^40, about 2^-37 at Q = 2^64. Drawing LogUp's challenges from full-width words remains the lever if that is insufficient.
+- Accept the corollary's custody hypotheses as obligations of custody and the provider, for every wallet: no forks, no second Bootstrap per credential or wallet id, native Load finality.

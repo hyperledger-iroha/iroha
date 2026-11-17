@@ -678,8 +678,13 @@ the IPA and the inner sumcheck.
 
 - **The prover's native q:** see §7.3.
 - **The final decisions:** about 0.2 ms per kind per accumulated claim, and one MSM per generator claim.
-- **Memory:** a stage A pair peaked at about 1 GB on the Pixel. The complete-chain driver peaked at 3.1 GB RSS on the
-  Mac (compiler and prover together). The complete backend's per-operation memory on a phone is unmeasured.
+- **Memory (2026-11-18, iroha 2b3671cae3, p18-s17, Mac):** the prover reads its caller's witness rows in place and
+  copies only the rows it writes; the first outer round streams Az, Bz, Cz; `M(r_x, ·)` uses a split equality table,
+  plans built one group at a time and pages written on demand; the matrix value comes from the folded table, so no
+  tape runs in the prover. Proofs are byte-identical. Accounted peaks: S 105-216 MB; P 345-432 MB for Bootstrap,
+  Load and Send; P-Receive 869 MB, 139 MB over the 0.68 GiB admission. The native operation's process peak fell
+  from 5.26 to 2.94 GB RSS and is now set by the engine (its program-digest compile and preparation check). Phone
+  memory is unmeasured.
 
 None of these has been timed on a phone.
 
@@ -689,13 +694,18 @@ None of these has been timed on a phone.
 
 - discrete log on Pallas and Vesta;
 - Fiat-Shamir with the Poseidon sponge as a random oracle;
-- for the recursion, the explicit recursive knowledge / Fiat-Shamir assumption **P2-RKFS**
-  ([research/SOUNDNESS.md](research/SOUNDNESS.md) §4.2). No PCD composition theorem is imported, and nothing here is
-  a DL-only theorem.
+- for the recursion, the explicit assumption **P2-RKFS** ([research/SOUNDNESS.md](research/SOUNDNESS.md) §4.2,
+  revision 2): (A) the adversary is algebraic on Pallas and Vesta, with representations recorded when each point
+  first enters a transcript, and (B) the RP57 Poseidon transcript used inside the recursion is an ideal oracle. No PCD
+  composition theorem is imported, and nothing here is a DL-only theorem.
 
-**The written argument (TODO G1/G2, 2026-11-18, Codex astra; independent review G3 pending):** SOUNDNESS.md gives a
-conditional recursive argument by induction over the extracted history, which is a DAG (a Receive joins its own
-history and the payer's), and written local lemmas with bounds over the real challenge distributions (raw 126-bit
+**The written argument (TODO G1/G2, 2026-11-18, Codex astra, revision 2 after the independent review):**
+SOUNDNESS.md defines the security experiment with honest wallets, argues by closure over the finite set of
+extracted operation nodes (a Receive joins its own history and the payer's; no global rank is needed, and own chains
+are rooted at Bootstrap by the sequence counter), and states a monetary conservation corollary under custody
+hypotheses that bind every wallet in the history: no forks, no second Bootstrap per credential or wallet id, and
+native Load finality. It gives written local lemmas, a round-by-round lemma for query accounting, and bounds over
+the real challenge distributions (raw 126-bit
 words, endoscalars from 126 bits, full-width words). At the 11-17 complete layout the conservative local algebraic
 bound per operation is about **104.0 bits for Bootstrap, 101.6 for Load, 101.4 for Send and 100.7 for Receive**,
 dominated by the compiler's LogUp terms; without LogUp the main proofs, folds and link give about 115.3 bits. These
@@ -743,9 +753,11 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 
 **Known gaps:**
 
-- the recursion rests on the explicit P2-RKFS assumption, not a proved theorem; incoming-payer edges have no
-  authenticated rank, so causal extraction through a Receive's second parent is part of that assumption
-  (SOUNDNESS.md §4, §9);
+- the recursion rests on the explicit P2-RKFS assumption, not a proved theorem; the independent reviewer accepts it
+  as minimal, well defined and sufficient, but adopting it is an owner decision (SOUNDNESS-REVIEW.md, re-check);
+- the conservation corollary holds only under the custody hypotheses above, for every wallet whose history joins;
+- open code findings from the review: unbound io-fold leaves (4), the LogUp phase invariant not enforced at build
+  time (5), cross-field limb canonicality (7) and forgery refusals through the complete builders (9);
 - no finite lifetime or query budget is enforced (the sequence counter is unsigned 128-bit), so the bounds above
   hold only under chosen budgets;
 - an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
