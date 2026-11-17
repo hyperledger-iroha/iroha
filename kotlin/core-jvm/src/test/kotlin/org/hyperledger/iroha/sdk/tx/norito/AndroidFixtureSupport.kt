@@ -49,8 +49,20 @@ internal data class TransactionManifestFixture(
     val signedLen: Long,
 )
 
+/**
+ * One fixture transaction in the dense Norito layout: its bare payload, the hash its signature
+ * covers, and the bare signed transaction (`transaction_fixtures.dense.json`).
+ */
+internal data class TransactionDenseFixture(
+    val name: String,
+    val payloadBase64: String,
+    val signingHash: String,
+    val signedBase64: String,
+)
+
 internal object AndroidFixtureSupport {
     private const val CANONICAL_FIXTURE_ROOT = "fixtures/norito_rpc"
+    private val DENSE_FIXTURE_FIELDS = setOf("name", "payload_base64", "signing_hash", "signed_base64")
     private val PAYLOAD_FIXTURE_FIELDS = setOf(
         "name",
         "network_id",
@@ -165,6 +177,33 @@ internal object AndroidFixtureSupport {
         }
         validateManifestFixtureIdentities(fixtures)
         return fixtures
+    }
+
+    /** The fixture transactions in the dense layout, in manifest order. */
+    fun loadDenseFixtures(): List<TransactionDenseFixture> {
+        val path = resolveSharedResource("transaction_fixtures.dense.json")
+        val manifest = asMap(JsonParser.parse(path.readText()), path.toString())
+        requireExactFields(manifest, setOf("layout", "fixtures"), "dense manifest")
+        require(manifest["layout"] == "dense") { "dense manifest must name the dense layout" }
+        val fixtures = asList(manifest["fixtures"], "dense manifest.fixtures").map(::denseFixtureFromValue)
+        check(fixtures.map { it.name }.toSet().size == fixtures.size) { "Duplicate dense fixture name" }
+        return fixtures
+    }
+
+    internal fun denseFixtureFromValue(value: Any?): TransactionDenseFixture {
+        val map = asMap(value, "dense manifest.fixture")
+        val name = requiredString(map["name"], "dense manifest.fixture.name")
+        requireExactFields(map, DENSE_FIXTURE_FIELDS, "dense fixture $name")
+        val signingHash = requiredString(map["signing_hash"], "$name.signing_hash")
+        require(Regex("[0-9a-f]{64}").matches(signingHash)) {
+            "$name.signing_hash must be 32 bytes of lowercase hex"
+        }
+        return TransactionDenseFixture(
+            name = name,
+            payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64"),
+            signingHash = signingHash,
+            signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64"),
+        )
     }
 
     internal fun manifestFixtureFromValue(value: Any?): TransactionManifestFixture {

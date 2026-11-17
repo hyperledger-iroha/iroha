@@ -1147,6 +1147,63 @@ The registry has exactly twelve IDs: `zk-ace-pq-authorization-v1`,
 `pq-masp-stark-v1`. Parsing is exact: aliases, retired IDs, case changes, and
 whitespace normalization fail closed.
 
+### Norito layouts
+
+The Norito codec (`org.hyperledger.iroha.sdk.norito`) implements both V1 payload
+layouts of `../norito.md`: the current layout (header minor `0`, flags `0x00` or
+`0x02`) and the dense layout (header minor `1`, flags `0x00`, no alignment
+padding). `WireLayout` names them: `FIXED`, `COMPACT` (the default) and `DENSE`.
+
+A layout is never inferred from payload bytes:
+
+- A frame declares it in the header. `NoritoCodec.decode(bytes, adapter, schema)`
+  and `NoritoHeader.decode` read the current layout and refuse a minor-1 frame.
+  `NoritoCodec.decode(bytes, adapter, schema, layout)` requires the header to
+  declare exactly `layout`, and `NoritoHeader.decodeDeclared` reports the declared
+  layout as `header.layout`. An unknown minor version, any flag with minor `1`,
+  and padding or trailing bytes in a dense frame are refused.
+- The owner of a headerless payload names it:
+  `NoritoCodec.encodeBare(value, adapter, layout)` and
+  `NoritoCodec.decodeBare(bytes, adapter, layout)`.
+- Encoders write the compact layout unless the caller passes `WireLayout.DENSE`,
+  as in `NoritoCodec.encode(value, schema, adapter, WireLayout.DENSE)`.
+
+An adapter works in every layout when it uses the shared primitives:
+`NoritoAdapters.sequence` and `map` for counts, `byteVecAdapter` and
+`rawByteVecAdapter` for byte sequences, `u8Array(n)` for a `[u8; N]` outside a
+record field, and `enumTag()` for enum discriminants. Hand-written adapters use
+`NoritoEncoder.writeCount`/`writeEnumTag` and `NoritoDecoder.readCount`/`readEnumTag`.
+A fixed-width `writeLength(_, false)` or `readLength(false)` throws in the dense
+layout, so an adapter that was not converted fails instead of writing another form.
+
+Transactions take the layout as a parameter of the existing typed codec.
+`NoritoJavaCodecAdapter(chainDiscriminant, schemaName, WireLayout.DENSE)` encodes
+and decodes dense payloads. `TransactionBuilder` signs the hash of the bytes that
+adapter produced, so a dense payload is signed over its dense hash.
+`SignedTransactionEncoder.encode(transaction, layout)` and `decode(bytes, layout)`
+carry the bare signed transaction. Bytes of one layout are refused by the other.
+
+No ledger definition selects the dense layout yet (`TODO(dense-activation)` in
+`../norito.md`), so nodes accept compact transactions only. Until one does, the
+dense transaction codec has these limits:
+
+- An instruction is an opaque `DenseWirePayload` envelope: its wire ID and its
+  bare dense payload (`InstructionBox.fromDenseWirePayload`). It encodes only into
+  a dense transaction, and a framed `WirePayload` encodes only into a compact one.
+  The typed instruction builders produce framed payloads only.
+- Dense envelopes of the privacy submissions, the Kaigi instructions and
+  `UpdatePlainConviction` are refused, because the SDK's typed checks for them
+  read framed payloads.
+- Signed attachments are refused in a dense payload.
+- `encodeVersioned` and `decodeVersioned` stay compact: no version byte names the
+  dense layout.
+
+`NoritoDenseLayoutTest` and `DenseTransactionWireTest` check
+`../fixtures/norito_dense/vectors.json` and
+`../fixtures/norito_rpc/transaction_fixtures.dense.json` without the native
+bridge. `TransactionDenseFixtureParityTest` runs the typed transaction codec on
+the same transactions and needs the bridge, like `TransactionFixtureParityTest`.
+
 ### Shared Java transaction fixtures
 
 Kotlin/JVM and the mirrored Java Android SDK validate the same Rust-owned

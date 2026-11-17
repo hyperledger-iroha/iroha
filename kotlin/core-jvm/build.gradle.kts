@@ -93,6 +93,13 @@ tasks.test {
             .dir("..")
             .file("fixtures/norito_rpc/atomic_private_settlement_sdk_v1.json"),
     )
+    // Dense Norito layout vectors and the dense transaction fixtures (norito.md, "Dense layout").
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/norito_dense/vectors.json"))
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/norito_rpc/transaction_fixtures.dense.json"),
+    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/musubi/sdk_v1.json"))
     inputs.file(
         rootProject.layout.projectDirectory

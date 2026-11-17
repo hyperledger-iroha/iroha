@@ -40,6 +40,24 @@ object NoritoAdapters {
     @JvmStatic
     fun fixedBytes(length: Int): TypeAdapter<ByteArray> = FixedBytesAdapter(length)
 
+    /**
+     * A fixed `[u8; N]` value outside a record field: an `Option` payload, a sequence element,
+     * a tuple member or a map key.
+     *
+     * The minor-0 layouts frame every byte as `[len = 1][byte]`; the dense layout writes
+     * exactly `length` raw bytes. A record field of this type is `length` raw bytes behind its
+     * own field prefix in every layout; use [fixedBytes] for that.
+     */
+    @JvmStatic
+    fun u8Array(length: Int): TypeAdapter<ByteArray> = U8ArrayAdapter(length)
+
+    /**
+     * An enum discriminant: a little-endian `u32` in the minor-0 layouts and a shortest-form
+     * varint of the same value in the dense layout.
+     */
+    @JvmStatic
+    fun enumTag(): TypeAdapter<Long> = EnumTagAdapter
+
     @JvmStatic
     fun stringAdapter(): TypeAdapter<String> = StringAdapter
 
@@ -83,7 +101,7 @@ object NoritoAdapters {
     @JvmStatic
     fun struct(fields: List<StructField<*>>): StructAdapter = StructAdapter(fields, null)
 
-    private class UIntAdapter(private val bits: Int) : TypeAdapter<Long> {
+    private class UIntAdapter(val bits: Int) : TypeAdapter<Long> {
         init {
             require(bits == 8 || bits == 16 || bits == 32 || bits == 64) {
                 "Unsupported unsigned size"
@@ -141,8 +159,16 @@ object NoritoAdapters {
         override fun isSelfDelimiting(): Boolean = true
     }
 
+    /**
+     * An element sequence of `u8` (`ConstVec<u8>`): `[count][len = 1][byte]...` in the minor-0
+     * layouts and `[count][raw bytes]` in the dense layout.
+     */
     private object ByteVecAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            if (encoder.denseLayoutActive()) {
+                encodeDenseBytes(encoder, value)
+                return
+            }
             encoder.writeLength(value.size.toLong(), false)
             val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
             for (b in value) {
@@ -152,6 +178,7 @@ object NoritoAdapters {
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
+            if (decoder.denseLayoutActive()) return decodeDenseBytes(decoder)
             val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Byte vector too large" }
             val count = length.toInt()
@@ -181,7 +208,8 @@ object NoritoAdapters {
 
     /**
      * Adapter that encodes `byte[]` as `length(u64) + raw bytes`, matching the Rust
-     * `Vec<u8>` fast-path serialization in Norito.
+     * `Vec<u8>` fast-path serialization in Norito. The dense layout writes the count as a
+     * varint.
      *
      * Use this for opaque byte payloads (wire instruction payloads, IVM bytecode) where
      * per-element framing is not expected by the server.
@@ -190,11 +218,16 @@ object NoritoAdapters {
      */
     private object RawByteVecAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            if (encoder.denseLayoutActive()) {
+                encodeDenseBytes(encoder, value)
+                return
+            }
             encoder.writeLength(value.size.toLong(), false)
             encoder.writeBytes(value)
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
+            if (decoder.denseLayoutActive()) return decodeDenseBytes(decoder)
             val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Raw byte vector too large" }
             return decoder.readBytes(length.toInt())
@@ -218,6 +251,58 @@ object NoritoAdapters {
         override fun decode(decoder: NoritoDecoder): ByteArray = decoder.readBytes(length)
 
         override fun fixedSize(): Int = length
+    }
+
+    private class U8ArrayAdapter(private val length: Int) : TypeAdapter<ByteArray> {
+        init {
+            require(length > 0) { "length must be positive" }
+        }
+
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            require(value.size == length) {
+                "expected $length bytes, found ${value.size}"
+            }
+            if (encoder.denseLayoutActive()) {
+                encoder.writeBytes(value)
+                return
+            }
+            val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+            for (byte in value) {
+                encoder.writeLength(1L, compact)
+                encoder.writeByte(byte.toInt())
+            }
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray {
+            if (decoder.denseLayoutActive()) return decoder.readBytes(length)
+            val compact = decoder.compactLenActive()
+            return ByteArray(length) { index ->
+                require(decoder.readLength(compact) == 1L) {
+                    "byte array element $index must contain exactly one byte"
+                }
+                decoder.readByte().toByte()
+            }
+        }
+    }
+
+    private object EnumTagAdapter : TypeAdapter<Long> {
+        override fun encode(encoder: NoritoEncoder, value: Long) {
+            encoder.writeEnumTag(value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): Long = decoder.readEnumTag()
+    }
+
+    /** Dense byte sequence: a varint count followed by exactly that many raw bytes. */
+    private fun encodeDenseBytes(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeCount(value.size.toLong())
+        encoder.writeBytes(value)
+    }
+
+    private fun decodeDenseBytes(decoder: NoritoDecoder): ByteArray {
+        val count = decoder.readCount()
+        require(count <= decoder.remaining()) { "Byte sequence count exceeds the payload" }
+        return decoder.readBytes(count.toInt())
     }
 
     private object StringAdapter : TypeAdapter<String> {
@@ -267,8 +352,19 @@ object NoritoAdapters {
     }
 
     private class SequenceAdapter<T>(private val element: TypeAdapter<T>) : TypeAdapter<List<T>> {
+        /** In the dense layout an element sequence of `u8` is its raw bytes, with no framing. */
+        private val u8Elements = element is UIntAdapter && element.bits == 8
+
         override fun encode(encoder: NoritoEncoder, value: List<T>) {
-            encoder.writeLength(value.size.toLong(), false)
+            encoder.writeCount(value.size.toLong())
+            if (u8Elements && encoder.denseLayoutActive()) {
+                for (elementValue in value) {
+                    val byte = elementValue as Long
+                    require(byte in 0L..0xFFL) { "u8 element out of range: $byte" }
+                    encoder.writeByte(byte.toInt())
+                }
+                return
+            }
             val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
             for (elementValue in value) {
                 val child = encoder.childEncoder()
@@ -279,10 +375,18 @@ object NoritoAdapters {
             }
         }
 
+        @Suppress("UNCHECKED_CAST")
         override fun decode(decoder: NoritoDecoder): List<T> {
-            val length = decoder.readLength(false)
+            val length = decoder.readCount()
             require(length <= Int.MAX_VALUE) { "Sequence too large" }
             val count = length.toInt()
+            if (decoder.denseLayoutActive()) {
+                // Every dense element takes at least one byte: its prefix, or the raw `u8`.
+                require(count <= decoder.remaining()) { "Sequence count exceeds the payload" }
+                if (u8Elements) {
+                    return List(count) { decoder.readByte().toLong() as T }
+                }
+            }
             val values = ArrayList<T>(count)
             val compact = decoder.compactLenActive()
             for (i in 0 until count) {
@@ -309,13 +413,17 @@ object NoritoAdapters {
 
         override fun encode(encoder: NoritoEncoder, value: Map<K, V>) {
             val entries = sortedEntries(value)
-            encoder.writeLength(entries.size.toLong(), false)
+            encoder.writeCount(entries.size.toLong())
             encodeDelimited(encoder, entries)
         }
 
         override fun decode(decoder: NoritoDecoder): Map<K, V> {
-            val length = decoder.readLength(false)
+            val length = decoder.readCount()
             require(length <= Int.MAX_VALUE) { "Map too large" }
+            // Every dense entry takes at least two bytes: its key and value prefixes.
+            require(!decoder.denseLayoutActive() || length <= decoder.remaining()) {
+                "Map count exceeds the payload"
+            }
             return decodeDelimited(decoder, length.toInt())
         }
 

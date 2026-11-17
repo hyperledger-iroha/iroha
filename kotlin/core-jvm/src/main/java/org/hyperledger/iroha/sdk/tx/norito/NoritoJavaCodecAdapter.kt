@@ -13,18 +13,40 @@ import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.WireLayout
 
+/**
+ * Transaction payload codec for one chain and one Norito layout.
+ *
+ * `layout` names the layout of the payloads this adapter encodes and decodes:
+ * [WireLayout.COMPACT], the current transaction layout and the default, or [WireLayout.DENSE]
+ * (`norito.md`, "Dense layout (header minor 1)"). A payload's layout is part of its identity:
+ * a signer signs the hash of the bytes this adapter produces, so a dense payload is signed over
+ * its dense hash, and bytes of the other layout are refused rather than reinterpreted.
+ *
+ * TODO(dense-activation): no ledger definition selects the dense layout yet, so nodes accept
+ * only compact transactions. In the dense layout an instruction is an opaque
+ * [org.hyperledger.iroha.sdk.core.model.DenseWirePayload] envelope; signed attachments and the
+ * typed instruction builders remain compact-only.
+ */
 class NoritoJavaCodecAdapter @JvmOverloads constructor(
     val chainDiscriminant: Int,
     private val schemaName: String = DEFAULT_SCHEMA,
+    val layout: WireLayout = WireLayout.COMPACT,
 ) : NoritoCodecAdapter {
+
+    init {
+        require(layout != WireLayout.FIXED) {
+            "Transactions are encoded in the compact or the dense Norito layout"
+        }
+    }
 
     private val adapter = TransactionPayloadAdapter.forChain(chainDiscriminant)
 
     @Throws(NoritoException::class)
     override fun encodeTransaction(payload: TransactionPayload): ByteArray {
         try {
-            return NoritoCodec.encodeAdaptive(payload, adapter).payload()
+            return TransactionPayloadAdapter.encodeBare(payload, adapter, layout)
         } catch (ex: Exception) {
             throw NoritoException("Failed to encode Norito transaction payload", ex)
         }
@@ -34,9 +56,14 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
     override fun decodeTransaction(encoded: ByteArray): TransactionPayload {
         try {
             if (hasHeader(encoded)) {
-                return NoritoCodec.decode(encoded, adapter, schemaName)
+                // A frame declares its layout in the header; it must be this adapter's.
+                return if (layout == WireLayout.DENSE) {
+                    NoritoCodec.decode(encoded, adapter, schemaName, layout)
+                } else {
+                    NoritoCodec.decode(encoded, adapter, schemaName)
+                }
             }
-            return NoritoCodec.decodeAdaptive(encoded, adapter)
+            return TransactionPayloadAdapter.decodeBare(encoded, adapter, layout)
         } catch (ex: Exception) {
             throw NoritoException("Failed to decode Norito transaction payload", ex)
         }
@@ -244,14 +271,32 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             decodeCanonicalTransactionPayload(encoded)
         }
 
+        /** [validateCanonicalTransactionPayload] for a bare payload in an explicit layout. */
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun validateCanonicalTransactionPayload(encoded: ByteArray, layout: WireLayout) {
+            decodeCanonicalTransactionPayload(encoded, layout)
+        }
+
         /** Decode one exact canonical payload so callers can verify signature-bound fields. */
         @JvmStatic
         @Throws(NoritoException::class)
         fun decodeCanonicalTransactionPayload(
             encoded: ByteArray,
+        ): TransactionPayload = decodeCanonicalTransactionPayload(encoded, WireLayout.COMPACT)
+
+        /**
+         * Decode one exact canonical bare payload in the layout its owner names. Bytes of the
+         * other layout are refused.
+         */
+        @JvmStatic
+        @Throws(NoritoException::class)
+        fun decodeCanonicalTransactionPayload(
+            encoded: ByteArray,
+            layout: WireLayout,
         ): TransactionPayload {
             try {
-                val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
+                val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded, layout)
                 return payload
             } catch (ex: Exception) {
                 throw NoritoException("Invalid canonical Norito transaction payload", ex)

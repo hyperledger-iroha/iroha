@@ -243,6 +243,53 @@ public final class NoritoJavaConsumerTest {
   }
 
   @Test
+  void testDenseLayoutIsNamedExplicitly() {
+    TypeAdapter<List<String>> adapter = NoritoAdapters.sequence(NoritoAdapters.stringAdapter());
+    List<String> value = Arrays.asList("ab");
+    String schema = "iroha.test.DenseStrings";
+
+    byte[] dense = NoritoCodec.encodeBare(value, adapter, WireLayout.DENSE);
+    assert Arrays.equals(dense, new byte[] {1, 3, 2, 'a', 'b'}) : "Dense count must be a varint";
+    assert NoritoCodec.decodeBare(dense, adapter, WireLayout.DENSE).equals(value);
+    byte[] compact = NoritoCodec.encodeBare(value, adapter, WireLayout.COMPACT);
+    assert Arrays.equals(compact, NoritoCodec.encodeAdaptive(value, adapter).payload())
+        : "Compact is the default bare layout";
+    expectIllegal(
+        () -> NoritoCodec.decodeBare(dense, adapter, WireLayout.COMPACT), "dense bytes read as compact");
+    expectIllegal(
+        () -> NoritoCodec.decodeBare(compact, adapter, WireLayout.DENSE), "compact bytes read as dense");
+
+    byte[] frame = NoritoCodec.encode(value, schema, adapter, WireLayout.DENSE);
+    NoritoHeader header =
+        NoritoHeader.decodeDeclared(frame, SchemaHash.hash16(schema)).getHeader();
+    assert header.minor == NoritoHeader.MINOR_VERSION_DENSE : "Dense frames declare minor 1";
+    assert header.flags == 0 : "Dense frames have no layout flags";
+    assert header.layout == WireLayout.DENSE;
+    assert WireLayout.DENSE.minor == 1 && WireLayout.DENSE.headerFlags == 0;
+    assert frame.length == NoritoHeader.HEADER_LENGTH + dense.length : "Dense frames have no padding";
+    assert NoritoCodec.decode(frame, adapter, schema, WireLayout.DENSE).equals(value);
+    expectIllegal(() -> NoritoCodec.decode(frame, adapter, schema), "dense frame read as current");
+    expectIllegal(() -> NoritoHeader.decode(frame, null), "dense header read as current");
+    expectIllegal(
+        () -> NoritoCodec.decode(frame, adapter, schema, WireLayout.COMPACT),
+        "dense frame read as compact");
+
+    byte[] current = NoritoCodec.encode(value, schema, adapter);
+    assert Arrays.equals(current, NoritoCodec.encode(value, schema, adapter, WireLayout.COMPACT));
+    assert NoritoHeader.decodeDeclared(current, null).getHeader().layout == WireLayout.COMPACT;
+    expectIllegal(
+        () -> NoritoCodec.decode(current, adapter, schema, WireLayout.DENSE),
+        "current frame read as dense");
+
+    assert new NoritoEncoder(WireLayout.DENSE).denseLayoutActive();
+    assert new NoritoDecoder(dense, WireLayout.DENSE).readCount() == 1L;
+    assert new org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter(
+                0x02F1, "iroha.android.transaction.Payload.v1", WireLayout.DENSE)
+            .getLayout()
+        == WireLayout.DENSE;
+  }
+
+  @Test
   void testEncodeDecodeUInt() {
     TypeAdapter<Long> adapter = NoritoAdapters.uint(64);
     byte[] encoded = NoritoCodec.encode(42L, "iroha.test.Value", adapter);

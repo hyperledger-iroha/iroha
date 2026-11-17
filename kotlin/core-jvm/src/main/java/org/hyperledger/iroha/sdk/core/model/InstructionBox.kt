@@ -12,6 +12,8 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 
 private const val ARG_WIRE_NAME = "wire_name"
 private const val ARG_PAYLOAD_BASE64 = "payload_base64"
+private const val ARG_DENSE_PAYLOAD_BASE64 = "dense_payload_base64"
+private const val MAX_WIRE_ID_BYTES = 192
 private const val PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 = "iroha.privacy.submit_proof.v1"
 
 /**
@@ -31,6 +33,8 @@ class InstructionBox private constructor(
     val payload: InstructionPayload = when (payload) {
         is WireInstructionPayload -> payload
         is WirePayload -> WireInstructionPayload(payload.wireName, payload.payloadBytes)
+        is DenseWireInstructionPayload -> payload
+        is DenseWirePayload -> DenseWireInstructionPayload(payload.wireName, payload.payloadBytes)
         else -> payload
     }
 
@@ -38,6 +42,7 @@ class InstructionBox private constructor(
     val name: String
         get() = when (payload) {
             is WirePayload -> payload.wireName
+            is DenseWirePayload -> payload.wireName
             else -> kind.displayName
         }
 
@@ -111,6 +116,18 @@ class InstructionBox private constructor(
         @JvmStatic
         fun fromWirePayload(wireName: String, payloadBytes: ByteArray): InstructionBox =
             InstructionBox(WireInstructionPayload(wireName, payloadBytes))
+
+        /**
+         * Builds an `InstructionBox` from a wire ID and the instruction's bare dense payload
+         * (`norito.md`, "Dense layout (header minor 1)").
+         *
+         * The payload carries no Norito header and stays opaque: the box encodes only into a
+         * dense transaction and is refused by the current layout. The wire ID must be well
+         * formed: 1 to 192 bytes of ASCII letters, digits and `. _ : - @ /`.
+         */
+        @JvmStatic
+        fun fromDenseWirePayload(wireName: String, payloadBytes: ByteArray): InstructionBox =
+            InstructionBox(DenseWireInstructionPayload(wireName, payloadBytes))
 
         /**
          * Build a retained Exact12 submit-proof instruction after native committed-policy checks.
@@ -198,7 +215,35 @@ class InstructionBox private constructor(
 
         override val payloadBytes: ByteArray get() = _payloadBytes.copyOf()
     }
+
+    private class DenseWireInstructionPayload(
+        override val wireName: String,
+        payloadBytes: ByteArray,
+    ) : DenseWirePayload {
+
+        init {
+            require(isWellFormedWireId(wireName)) { "wireName is not a well-formed instruction wire ID" }
+        }
+
+        private val _payloadBytes: ByteArray = payloadBytes.copyOf()
+
+        override val kind: InstructionKind = wireKindForName(wireName)
+
+        // The distinct key keeps a dense envelope unequal to a framed payload of the same bytes.
+        override val arguments: Map<String, String> = mapOf(
+            ARG_WIRE_NAME to wireName,
+            ARG_DENSE_PAYLOAD_BASE64 to Base64.encode(_payloadBytes),
+        )
+
+        override val payloadBytes: ByteArray get() = _payloadBytes.copyOf()
+    }
 }
+
+/** The envelope rule of `iroha_data_model::isi::is_well_formed_wire_id`. */
+private fun isWellFormedWireId(wireName: String): Boolean =
+    wireName.isNotEmpty() && wireName.length <= MAX_WIRE_ID_BYTES && wireName.all { char ->
+        char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' || char in "._:-@/"
+    }
 
 private fun wireKindForName(wireName: String): InstructionKind {
     val normalized = wireName.lowercase()

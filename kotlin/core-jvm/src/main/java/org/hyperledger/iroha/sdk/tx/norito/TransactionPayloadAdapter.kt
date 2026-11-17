@@ -19,6 +19,7 @@ import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.ContractInvocation
+import org.hyperledger.iroha.sdk.core.model.DenseWirePayload
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
@@ -49,6 +50,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.norito.WireLayout
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 internal class TransactionPayloadAdapter private constructor(
@@ -64,6 +66,7 @@ internal class TransactionPayloadAdapter private constructor(
 
     private fun encodePayload(encoder: NoritoEncoder, value: TransactionPayload, normalized: Boolean) {
         withChainContext(chainDiscriminant) {
+            requireDenseWithoutAttachments(encoder, value)
             if (!normalized) validateSignedAttachments(value)
             if (!normalized) when (val executable = value.executable) {
                 is Executable.Instructions -> executable.instructions.forEach {
@@ -100,6 +103,7 @@ internal class TransactionPayloadAdapter private constructor(
     /** Re-encode a payload decoded only by the closed canonical-byte inspector below. */
     private fun encodeCanonicalInspection(encoder: NoritoEncoder, value: TransactionPayload) {
         withChainContext(chainDiscriminant) {
+            requireDenseWithoutAttachments(encoder, value)
             validateSignedAttachments(value)
             require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
                 "feePayment.gasLimit is required for IVM and contract-call executables"
@@ -170,6 +174,11 @@ internal class TransactionPayloadAdapter private constructor(
 
     private class InspectionInstructionAdapter(private val networkId: NetworkId) : TypeAdapter<InstructionBox> {
         override fun encode(encoder: NoritoEncoder, value: InstructionBox) {
+            if (encoder.denseLayoutActive()) {
+                // A dense envelope is opaque; the envelope writer refuses the typed-check wire IDs.
+                encodeWireInstruction(encoder, value)
+                return
+            }
             val wire = value.payload as? WirePayload
                 ?: throw IllegalArgumentException("Instruction payload must be wire-framed")
             when (wire.wireName) {
@@ -204,7 +213,9 @@ internal class TransactionPayloadAdapter private constructor(
 
             val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
             val attachments: Optional<SignedAttachmentsV1> =
-                decodeBoundedSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER,
+                decodeBoundedSizedField(
+                    decoder,
+                    if (decoder.denseLayoutActive()) DENSE_ATTACHMENTS_OPTION_ADAPTER else ATTACHMENTS_OPTION_ADAPTER,
                     SignedAttachmentLimitsV1.MAX_FRAME_BYTES.toLong(), "signed attachments")
 
             TransactionPayload(
@@ -619,7 +630,7 @@ internal class TransactionPayloadAdapter private constructor(
         }
 
         override fun decode(decoder: NoritoDecoder): List<ByteArray> {
-            val countValue = decoder.readLength(false)
+            val countValue = decoder.readCount()
             require(countValue in 1L..LanePrivacyMerkleWitness.MAX_DEPTH.toLong()) {
                 "lane privacy audit path depth must be between 1 and ${LanePrivacyMerkleWitness.MAX_DEPTH}"
             }
@@ -994,6 +1005,7 @@ internal class TransactionPayloadAdapter private constructor(
         override fun decode(decoder: NoritoDecoder): InstructionBox {
             val payload = decoder.readBytes(decoder.remaining())
             require(payload.isNotEmpty()) { "Instruction payload must not be empty" }
+            if (decoder.denseLayoutActive()) return decodeDenseWireInstruction(payload, decoder.flags)
             return tryDecodeWireInstruction(payload, decoder.flags)
                 ?: throw IllegalArgumentException("Instruction payload must be wire-framed")
         }
@@ -1050,7 +1062,7 @@ internal class TransactionPayloadAdapter private constructor(
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
-            val length = decoder.readLength(false)
+            val length = decoder.readCount()
             require(length in 0L..ContractInvocation.MAX_ARGUMENT_BYTES.toLong()) {
                 "Contract argument record exceeds ${ContractInvocation.MAX_ARGUMENT_BYTES} bytes"
             }
@@ -1338,7 +1350,7 @@ internal class TransactionPayloadAdapter private constructor(
             NoritoAdapters.sequence(INSTRUCTION_ADAPTER).encode(encoder, value)
 
         override fun decode(decoder: NoritoDecoder): List<InstructionBox> {
-            val count = decoder.readLength(false)
+            val count = decoder.readCount()
             require(count in 0..decoder.remaining().toLong()) { "instruction count exceeds the encoded field" }
             return List(count.toInt()) { decodeSizedField(decoder, INSTRUCTION_ADAPTER) }
         }
@@ -1449,10 +1461,17 @@ internal class TransactionPayloadAdapter private constructor(
             return TransactionPayloadAdapter(chainDiscriminant)
         }
 
-        fun validateCanonicalPayloadBytes(encoded: ByteArray): TransactionPayload {
+        /**
+         * Decode and re-encode `encoded` as the bare payload of a transaction in `layout`; any
+         * other encoding, including the bytes of the other layout, is refused.
+         */
+        fun validateCanonicalPayloadBytes(
+            encoded: ByteArray,
+            layout: WireLayout = WireLayout.COMPACT,
+        ): TransactionPayload {
             val snapshot = encoded.copyOf()
             val validator = forChain(CANONICAL_VALIDATION_DISCRIMINANT)
-            val decoded = NoritoCodec.decodeAdaptive(snapshot, validator)
+            val decoded = decodeBare(snapshot, validator, layout)
             // This adapter is created only after decoding supplied bytes and never escapes.
             // It grants no admission: callers receive the same unadmitted decoded boxes.
             val inspection = object : TypeAdapter<TransactionPayload> {
@@ -1461,11 +1480,41 @@ internal class TransactionPayloadAdapter private constructor(
                 override fun decode(decoder: NoritoDecoder): TransactionPayload =
                     throw UnsupportedOperationException("canonical inspection is encode-only")
             }
-            val reencoded = NoritoCodec.encodeAdaptive(decoded, inspection).payload()
+            val reencoded = encodeBare(decoded, inspection, layout)
             require(snapshot.contentEquals(reencoded)) {
                 "transaction payload bytes are not the exact canonical encoding"
             }
             return decoded
+        }
+
+        /**
+         * Bare transaction-layer payload in the layout its owner names.
+         *
+         * A transaction travels in the current compact layout or in the dense layout; no
+         * transaction wire uses fixed-width lengths.
+         */
+        internal fun <T> encodeBare(value: T, adapter: TypeAdapter<T>, layout: WireLayout): ByteArray =
+            when (layout) {
+                WireLayout.COMPACT -> NoritoCodec.encodeAdaptive(value, adapter).payload()
+                WireLayout.DENSE -> NoritoCodec.encodeBare(value, adapter, layout)
+                WireLayout.FIXED -> throw IllegalArgumentException(TRANSACTION_LAYOUTS)
+            }
+
+        /** Inverse of [encodeBare]; bytes of another layout are refused, never reinterpreted. */
+        internal fun <T> decodeBare(payload: ByteArray, adapter: TypeAdapter<T>, layout: WireLayout): T =
+            when (layout) {
+                WireLayout.COMPACT -> NoritoCodec.decodeAdaptive(payload, adapter)
+                WireLayout.DENSE -> NoritoCodec.decodeBare(payload, adapter, layout)
+                WireLayout.FIXED -> throw IllegalArgumentException(TRANSACTION_LAYOUTS)
+            }
+
+        private const val TRANSACTION_LAYOUTS =
+            "Transactions are encoded in the compact or the dense Norito layout"
+
+        private fun requireDenseWithoutAttachments(encoder: NoritoEncoder, value: TransactionPayload) {
+            require(!encoder.denseLayoutActive() || value.attachments == null) {
+                DENSE_ATTACHMENTS_UNSUPPORTED
+            }
         }
 
         private fun requiredChainDiscriminant(): Int =
@@ -1541,7 +1590,8 @@ internal class TransactionPayloadAdapter private constructor(
             ExecutableBatchItemAdapter()
         private val BATCH_ADAPTER: TypeAdapter<List<ExecutableBatchItem>> =
             NoritoAdapters.sequence(BATCH_ITEM_ADAPTER)
-        private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
+        // A `u32` word in the minor-0 layouts, a varint in the dense layout.
+        private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.enumTag()
         private const val TRANSACTION_DOMAIN_NETWORK_TAG = 0L
         private const val TRANSACTION_DOMAIN_GENESIS_TAG = 1L
 
@@ -1589,6 +1639,20 @@ internal class TransactionPayloadAdapter private constructor(
                 override fun decode(decoder: NoritoDecoder): SignedAttachmentsV1 =
                     throw UnsupportedOperationException("a proof-free projection is not a signed attachment payload")
             })
+        // TODO(dense-activation): the action and statement digests bind framed minor-0 projections
+        // and the carriers are framed proof attachments. Their dense forms have no shared vector
+        // yet, so a dense payload carries no signed attachments until one is published.
+        private const val DENSE_ATTACHMENTS_UNSUPPORTED =
+            "Signed attachments are not supported in the dense Norito layout yet"
+        private val DENSE_ATTACHMENTS_OPTION_ADAPTER: TypeAdapter<Optional<SignedAttachmentsV1>> =
+            NoritoAdapters.option(object : TypeAdapter<SignedAttachmentsV1> {
+                override fun encode(encoder: NoritoEncoder, value: SignedAttachmentsV1) =
+                    throw IllegalArgumentException(DENSE_ATTACHMENTS_UNSUPPORTED)
+                override fun decode(decoder: NoritoDecoder): SignedAttachmentsV1 =
+                    throw IllegalArgumentException(DENSE_ATTACHMENTS_UNSUPPORTED)
+            })
+        private const val PRIVACY_SUBMIT_PROOF_WIRE_ID = "iroha.privacy.submit_proof.v1"
+        private const val KAIGI_WIRE_ID_PREFIX = "iroha.instruction.v1::kaigi::"
         private const val INSTRUCTION_BOX_SCHEMA =
             "(alloc::string::String, alloc::vec::Vec<u8>)"
         private const val CUSTOM_INSTRUCTION_SCHEMA =
@@ -1740,7 +1804,12 @@ internal class TransactionPayloadAdapter private constructor(
             return value
         }
 
+        /** A `[u8; N]`: per-byte `[len = 1][byte]` in the minor-0 layouts, raw in the dense layout. */
         private fun encodeFixedByteArray(encoder: NoritoEncoder, bytes: ByteArray) {
+            if (encoder.denseLayoutActive()) {
+                encoder.writeBytes(bytes)
+                return
+            }
             val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
             for (byte in bytes) {
                 encoder.writeLength(1, compact)
@@ -1749,6 +1818,7 @@ internal class TransactionPayloadAdapter private constructor(
         }
 
         private fun decodeFixedByteArray(decoder: NoritoDecoder, length: Int, fieldName: String): ByteArray {
+            if (decoder.denseLayoutActive()) return decoder.readBytes(length)
             val compact = (decoder.flags and NoritoHeader.COMPACT_LEN) != 0
             return ByteArray(length) { index ->
                 require(decoder.readLength(compact) == 1L) {
@@ -1813,6 +1883,23 @@ internal class TransactionPayloadAdapter private constructor(
 
         private fun encodeWireInstruction(encoder: NoritoEncoder, value: InstructionBox) {
             val payload = value.payload
+            if (encoder.denseLayoutActive()) {
+                // The dense envelope is the pair `(wire_id, payload)` with the bare dense payload
+                // and no nested header (`norito.md`, "Dense layout"). The SDK keeps the payload
+                // opaque, so it cannot transcode a framed minor-0 instruction into it.
+                val dense = payload as? DenseWirePayload ?: throw IllegalArgumentException(
+                    "Instruction envelope is not in the dense layout; " +
+                        "an opaque envelope encodes only in the layout it was decoded from",
+                )
+                requireDenseEnvelopeAdmitted(dense.wireName)
+                encodeSizedField(encoder, STRING_ADAPTER, dense.wireName)
+                encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, dense.payloadBytes)
+                return
+            }
+            require(payload !is DenseWirePayload) {
+                "Dense instruction envelope cannot be encoded in the current layout; " +
+                    "an opaque envelope encodes only in the layout it was decoded from"
+            }
             if (payload is WirePayload) {
                 require(isWirePayloadCandidate(payload.wireName, payload.payloadBytes)) {
                     "Wire payload must include a valid Norito header"
@@ -1873,6 +1960,36 @@ internal class TransactionPayloadAdapter private constructor(
                 )
                 EXECUTABLE_IVM_PROVED_TAG -> decodeSizedField(decoder, IVM_PROVED_ADAPTER)
                 else -> throw IllegalArgumentException("Unknown Executable discriminant: $tag")
+            }
+        }
+
+        /** One dense instruction envelope: the wire ID and the bare dense payload, kept opaque. */
+        private fun decodeDenseWireInstruction(payload: ByteArray, flags: Int): InstructionBox {
+            val wireDecoder = NoritoDecoder(payload, flags)
+            val wireName = decodeSizedField(wireDecoder, STRING_ADAPTER)
+            val densePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER)
+            require(wireDecoder.remaining() == 0) { "Trailing bytes after dense instruction envelope" }
+            requireDenseEnvelopeAdmitted(wireName)
+            return InstructionBox.fromDenseWirePayload(wireName, densePayload)
+        }
+
+        /**
+         * Refuse the wire IDs whose framed minor-0 payloads this SDK admits only after a typed
+         * check: Exact12 admission for the privacy submissions, and the canonical-frame checks of
+         * the Kaigi and plain-conviction instructions.
+         *
+         * TODO(dense-activation): their bare dense payloads have no SDK-side check yet. Accepting
+         * them opaquely would bypass those checks, so they stay refused until dense typed
+         * encoders exist.
+         */
+        private fun requireDenseEnvelopeAdmitted(wireName: String) {
+            require(
+                wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID &&
+                    wireName != SubmitPrivacyZkX509CertificateV1.WIRE_ID &&
+                    wireName != UpdatePlainConvictionWirePayloadEncoder.WIRE_NAME &&
+                    !wireName.startsWith(KAIGI_WIRE_ID_PREFIX),
+            ) {
+                "Instruction $wireName is not supported in the dense Norito layout yet"
             }
         }
 

@@ -17,10 +17,11 @@ object NoritoDump {
             System.exit(1)
         }
         val data = Files.readAllBytes(Paths.get(args[0]))
-        val result = NoritoHeader.decode(data, null)
+        val result = NoritoHeader.decodeDeclared(data, null)
         val header = result.header
         println("Norito header:")
-        println("  version: ${NoritoHeader.MAJOR_VERSION}.${NoritoHeader.MINOR_VERSION}")
+        println("  version: ${NoritoHeader.MAJOR_VERSION}.${header.minor}")
+        println("  layout: ${header.layout}")
         println("  schema hash: ${bytesToHex(header.schemaHash)}")
         println("  compression: ${header.compression}")
         println("  payload length: ${header.payloadLength}")
