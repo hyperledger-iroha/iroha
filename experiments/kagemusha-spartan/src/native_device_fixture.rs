@@ -7,9 +7,16 @@ use iroha_data_model::{
     sumeragi_finality::{SumeragiCommitVerifierV1, test_fixtures::NativeFinalityFixture},
 };
 
+/// Public secret of the fixture scheme root; [`scheme`] publishes its point.
+/// The root signs only certificates.
+const ROOT_SECRET: [u8; 32] = [0x11; 32];
+/// Public secret of the fixture's Artifact-role signer, which the root
+/// certifies and which signs parameter manifests.
+const ARTIFACT_SECRET: [u8; 32] = [0x15; 32];
+
 /// Exact public scheme from the canonical wallet vectors, under test root 0x11.
 pub fn scheme() -> KagemushaWalletSchemeV1 {
-    let root = p256::mul(&p256::generator(), &BigUint::from_bytes_be(&[0x11; 32])).unwrap();
+    let root = p256::mul(&p256::generator(), &BigUint::from_bytes_be(&ROOT_SECRET)).unwrap();
     let mut q = [0u8; 65];
     q[0] = 4;
     for (offset, value) in [(1, root.x), (33, root.y)] {
@@ -38,6 +45,44 @@ pub fn install(
     let finality = SumeragiCommitVerifierV1::new(&fixture.verifier())
         .map_err(|e| Error::Rejected(e.to_string()))?;
     AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)
+}
+
+/// Re-issue an authenticated device bundle whose root-signed manifest is in
+/// the retired v1 format, for its exact unchanged programs: `source` holds
+/// `program-bundle.norito`, `parameter-manifest.norito` and
+/// `parameter-signature.bin`; `destination` must be a new empty directory.
+/// It receives a byte-identical program bundle and a current-format manifest
+/// (same scheme, relation, programs, dimensions and finality scope, plus the
+/// generator/table profile and the root-issued Artifact-role certificate)
+/// signed by the fixture's Artifact-role key, and the result must install.
+/// The source directory is never written.
+pub fn reissue_bundle(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    let io = |e: std::io::Error| Error::Rejected(e.to_string());
+    if std::fs::read_dir(destination).map_err(io)?.next().is_some() {
+        return Err(Error::Rejected("re-issue destination is not empty".into()));
+    }
+    let read = |name: &str| std::fs::read(source.join(name)).map_err(io);
+    let bundle = read("program-bundle.norito")?;
+    let retired = read("parameter-manifest.norito")?;
+    let retired_signature: [u8; 64] = read("parameter-signature.bin")?
+        .try_into()
+        .map_err(|_| Error::Malformed("retired parameter signature"))?;
+    let (manifest, signature) = super::engine::reissue_fixture_manifest(
+        &bundle,
+        &retired,
+        retired_signature,
+        &ROOT_SECRET,
+        &ARTIFACT_SECRET,
+    )?;
+    install(&bundle, &manifest, signature)?;
+    for (name, bytes) in [
+        ("program-bundle.norito", bundle.as_slice()),
+        ("parameter-manifest.norito", manifest.as_slice()),
+        ("parameter-signature.bin", signature.as_slice()),
+    ] {
+        std::fs::write(destination.join(name), bytes).map_err(io)?;
+    }
+    Ok(())
 }
 /// Issue only fixture-root-authorized future credential bytes for the actual
 /// provider's enrolled intent and actual nonexportable public key. The receipt
@@ -348,12 +393,6 @@ mod tests {
         assert_eq!(step.statement[..25], chain.send.statement[..25]);
         assert_eq!(step.statement[18..20], chain.receiver_bootstrap.core[5..7]);
         assert_ne!(step.statement[18..20], step.before_core[5..7]);
-        // The self-transfer keeps its previous bytes: receiver and payer coincide.
-        let own = send10(&load, [0; 64]).unwrap();
-        let ExactOperationWitness::Send(own) = &own else {
-            unreachable!()
-        };
-        assert_eq!(own.statement[18..20], own.before_core[5..7]);
     }
 
     fn device_key(q: &p256::Point) -> KagemushaDevicePublicKeyV1 {
@@ -368,12 +407,14 @@ mod tests {
 
     /// Two wallets through the real engine under the authenticated program
     /// bundle of a complete compiler run: A Bootstrap, A Load100, B Bootstrap,
-    /// B-signed Request, A Send10 to B, B Receive. Wallet A is issued through
-    /// the `bootstrap` entry a device uses, with a software key standing in
-    /// for its hardware boundary. No platform custody is exercised here.
+    /// B-signed Request, A Send10 to B, B Receive; then back: A-signed
+    /// Request, B Send10 to A, A Receive after its own Send. The device runner
+    /// runs this flow with A in platform custody. Here wallet A is issued
+    /// through the `bootstrap` entry a device uses, with a software key
+    /// standing in for its hardware boundary.
     #[test]
     #[ignore = "requires the authenticated full-backend-chain/native-device bundle"]
-    fn two_wallet_send_and_receive_from_bundle() {
+    fn two_wallet_round_trip_from_bundle() {
         fn run() -> Result<()> {
             use std::time::Instant;
             let started = Instant::now();
@@ -404,6 +445,14 @@ mod tests {
                            head: &VerifiedWalletHead,
                            witness: &ExactOperationWitness|
              -> Result<CompletedOperation> {
+                // Wall-clock bounds let an external RSS sampler attribute
+                // its samples to this operation.
+                let unix_ms = || {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis())
+                };
+                let from = unix_ms();
                 let begun = Instant::now();
                 let prepared = engine.prepare(witness, head, &parameters)?;
                 let prepare = begun.elapsed().as_secs_f64();
@@ -411,8 +460,9 @@ mod tests {
                 let begun = Instant::now();
                 let completed = engine.finalize(prepared, &receipt, &parameters)?;
                 eprintln!(
-                    "two-wallet timing {label}: prepare={prepare:.3}s finalize={:.3}s",
-                    begun.elapsed().as_secs_f64()
+                    "two-wallet timing {label}: prepare={prepare:.3}s finalize={:.3}s unix_ms={from}..{}",
+                    begun.elapsed().as_secs_f64(),
+                    unix_ms()
                 );
                 Ok(completed)
             };
@@ -471,8 +521,54 @@ mod tests {
                 "two-wallet timing B verifies Payment: {:.3}s",
                 begun.elapsed().as_secs_f64()
             );
-            let receive = receive_from(b.bootstrap(), b_enrolled.head().profile(), &payment)?;
+            let receive = receive_from(
+                b.bootstrap(),
+                b.bootstrap(),
+                b_enrolled.head().profile(),
+                &payment,
+            )?;
             let received = advance("B Receive", &b_sign, b_enrolled.head(), &receive)?;
+
+            // Back: A makes the Request, B pays it from what it received, and
+            // A receives after its own Send.
+            let b_origin = SendOrigin::after_receive(&receive, received.head().profile())?;
+            let back_request = CompletedRequest {
+                body: request_from(&b_origin, a_bootstrap.credential())
+                    .try_into()
+                    .map_err(|_| Error::Malformed("fixture Request body"))?,
+                signature: [0; 64],
+            };
+            let a_request_signature = bootstrap::sign(
+                crate::request::commitments(&back_request)
+                    .map_err(Error::Malformed)?
+                    .message,
+                &a_key.d,
+                "two-wallet fixture wallet A Request",
+            );
+            let back = send10_from(&b_origin, a_bootstrap.credential(), a_request_signature)?;
+            let b_sent = advance("B Send10 to A", &b_sign, received.head(), &back)?;
+            let back_bytes = b_sent.completion().output_part(1)?;
+            eprintln!(
+                "two-wallet complete return Payment: {} B, blake3 {}",
+                back_bytes.len(),
+                blake3::hash(&back_bytes).to_hex()
+            );
+            if let Some(output) = std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT") {
+                std::fs::write(
+                    std::path::PathBuf::from(output).join("two-wallet-return-payment.ipm1"),
+                    &back_bytes,
+                )
+                .map_err(|e| Error::Rejected(e.to_string()))?;
+            }
+            let begun = Instant::now();
+            let back_payment = engine.verify_payment(&back_bytes, &parameters)?;
+            eprintln!(
+                "two-wallet timing A verifies Payment: {:.3}s",
+                begun.elapsed().as_secs_f64()
+            );
+            let a_receive =
+                receive_from(&a_bootstrap, &send, sent.head().profile(), &back_payment)?;
+            let a_received = advance("A Receive", &a_sign, sent.head(), &a_receive)?;
             eprintln!(
                 "two-wallet timing total: {:.3}s",
                 started.elapsed().as_secs_f64()
@@ -523,29 +619,62 @@ mod tests {
                 received.completion().output_part(1)?.is_empty(),
                 "Receive emits no Payment"
             );
-            assert!(
-                bytes.len() <= crate::payment_wire::QR_BUDGET,
-                "complete Payment {} exceeds {} bytes",
-                bytes.len(),
-                crate::payment_wire::QR_BUDGET
+
+            let ExactOperationWitness::Send(back_step) = &back else {
+                unreachable!()
+            };
+            let ExactOperationWitness::Receive {
+                step: a_received_step,
+                ..
+            } = &a_receive
+            else {
+                unreachable!()
+            };
+            assert_eq!(&back_payment.request().body[66..98], b_wallet, "B pays");
+            assert_eq!(
+                &back_payment.request().body[130..162],
+                a_wallet,
+                "A is paid"
             );
+            assert_eq!(back_step.after_core[9], Fp::ZERO, "B spent its 10");
+            assert_eq!(
+                a_received_step.after_core[9],
+                Fp::from(100),
+                "A holds 90 + 10"
+            );
+            assert_eq!(
+                b_sent.head().profile()[burned],
+                Fp::ZERO,
+                "B burned nothing"
+            );
+            assert_eq!(
+                a_received.head().profile()[burned],
+                Fp::ZERO,
+                "A credited the return Payment without Burn"
+            );
+            require_credited(sent.head().profile(), a_received.head().profile())?;
+            require_credited(b_enrolled.head().profile(), received.head().profile())?;
+            assert_eq!(
+                a_received.head().profile()[crate::full::HEAD_IO],
+                a_received_step.statement[15],
+                "A's head is its Receive successor"
+            );
+            assert!(
+                a_received.completion().output_part(1)?.is_empty(),
+                "Receive emits no Payment"
+            );
+            for (label, payment) in [("A to B", &bytes), ("B to A", &back_bytes)] {
+                assert!(
+                    payment.len() <= crate::payment_wire::QR_BUDGET,
+                    "complete Payment {label} {} exceeds {} bytes",
+                    payment.len(),
+                    crate::payment_wire::QR_BUDGET
+                );
+            }
             Ok(())
         }
         run().unwrap();
     }
-}
-
-/// Exact Request body for an isolated self-transfer. The caller obtains its
-/// signature from the enrolled hardware through the canonical Request domain.
-///
-/// The completed-Request relation refuses payer == receiver wallet
-/// (`request::append_completed`), so a Send built from this body is refused by
-/// native preparation. Successor and two-wallet fixtures use [`request_to`].
-pub fn request_self(load: &ExactOperationWitness) -> Result<Vec<u8>> {
-    let ExactOperationWitness::Load { step, .. } = load else {
-        return Err(Error::Malformed("fixture Request requires Load"));
-    };
-    request_to(load, &step.credential)
 }
 
 /// The exact wallet state a fixture Send10 spends from: the Core and Rest its
@@ -635,20 +764,10 @@ pub fn request_from(origin: &SendOrigin<'_>, receiver: &crate::credential::Crede
     body.to_vec()
 }
 
-/// Construct private Send10 witness material. It confers no authority: the
-/// actual native preparation and hardware-selected proof validate every field.
-pub fn send10(
-    load: &ExactOperationWitness,
-    request_signature: [u8; 64],
-) -> Result<ExactOperationWitness> {
-    let ExactOperationWitness::Load { step, .. } = load else {
-        return Err(Error::Malformed("fixture Send requires Load"));
-    };
-    send10_to(load, &step.credential, request_signature)
-}
-
 /// Send10 witness material paying `receiver`; `request_signature` signs the
-/// body from [`request_to`] with the same receiver.
+/// body from [`request_to`] with the same receiver. It confers no authority:
+/// the actual native preparation and hardware-selected proof validate every
+/// field.
 pub fn send10_to(
     load: &ExactOperationWitness,
     receiver: &crate::credential::Credential,
@@ -748,59 +867,45 @@ pub fn send10_from(
     )))
 }
 
-/// Private Receive witness for the exact self-transfer Payment. The ordinary
-/// Runtime validates the complete Payment and the resulting recursive proof.
-pub fn receive_self(
-    bootstrap: &ExactOperationWitness,
-    send: &ExactOperationWitness,
-    payment: &VerifiedIncomingPayment,
-) -> Result<ExactOperationWitness> {
-    let ExactOperationWitness::Bootstrap(boot) = bootstrap else {
-        return Err(Error::Malformed("fixture Bootstrap kind"));
-    };
-    let ExactOperationWitness::Send(send) = send else {
-        return Err(Error::Malformed("fixture Send kind"));
-    };
-    let mut receiver = boot.input.clone();
-    receiver.core = send.after_core;
-    receiver.rest = send.after_rest;
-    receiver.statement = send.statement;
-    receiver.receipt = payment.receipt().clone();
-    let key = crate::full::WalletKey {
-        d: BigUint::from(1u8),
-        q: super::point(&send.credential.body[130..195])?,
-    };
-    let mut actual_send = (**send).clone();
-    actual_send.receipt = payment.receipt().clone();
-    let mut witness = crate::receive_fixture::from_send(
-        &receiver,
-        &key,
-        &actual_send,
-        payment.exact_pair(),
-        *payment.profile(),
-    )
-    .map_err(Error::Malformed)?;
-    witness.receipt.signature.fill(0);
-    Ok(ExactOperationWitness::Receive {
-        step: Box::new(witness),
-        incoming_payment: payment.exact_bytes().into(),
-    })
-}
-
-/// Private Receive witness for a second wallet's first Receive after its own
-/// Bootstrap. It is built from that wallet's Bootstrap state, the public
-/// profile of its verified Bootstrap head and the verified incoming Payment
-/// alone: the receiver never holds the payer's private Send witness. The
-/// receipt stays unsigned until the receiver's payment key signs the selected
-/// body.
+/// Private Receive witness for a wallet's first Receive. `receiver` is that
+/// wallet's Bootstrap witness and `latest` its latest completed operation: the
+/// Bootstrap itself, a Load or a Send. `receiver_head` is the public profile
+/// of the head `latest` produced. The witness is built from that state and the
+/// verified incoming Payment alone: the receiver never holds the payer's
+/// private Send witness. The receipt stays unsigned until the receiver's
+/// payment key signs the selected body.
 pub fn receive_from(
     receiver: &ExactOperationWitness,
+    latest: &ExactOperationWitness,
     receiver_head: &[Fp; 64],
     payment: &VerifiedIncomingPayment,
 ) -> Result<ExactOperationWitness> {
     let ExactOperationWitness::Bootstrap(boot) = receiver else {
         return Err(Error::Malformed("fixture Bootstrap kind"));
     };
+    let own = latest.credential();
+    if own.body != boot.input.credential.body || own.signature != boot.input.credential.signature {
+        return Err(Error::AuthorityMismatch("fixture Receive state wallet"));
+    }
+    // The receiver's current Core and Rest; `from_send` rewrites every
+    // statement field after the fixed context it keeps.
+    let mut state = boot.input.clone();
+    match latest {
+        ExactOperationWitness::Bootstrap(_) => {}
+        ExactOperationWitness::Load { step, .. } => {
+            (state.core, state.rest, state.statement) =
+                (step.after_core, step.after_rest, step.statement);
+        }
+        ExactOperationWitness::Send(step) => {
+            (state.core, state.rest, state.statement) =
+                (step.after_core, step.after_rest, step.statement);
+        }
+        ExactOperationWitness::Receive { .. } => {
+            return Err(Error::Malformed(
+                "fixture Receive builds only a first Receive",
+            ));
+        }
+    }
     let key = crate::full::WalletKey {
         d: BigUint::from(1u8),
         q: super::point(&boot.input.credential.body[130..195])?,
@@ -829,7 +934,7 @@ pub fn receive_from(
         maps: crate::send_maps::Witness { pending, fee },
     };
     let mut witness = crate::receive_fixture::from_send(
-        &boot.input,
+        &state,
         &key,
         &incoming,
         payment.exact_pair(),
@@ -841,6 +946,26 @@ pub fn receive_from(
         step: Box::new(witness),
         incoming_payment: payment.exact_bytes().into(),
     })
+}
+
+/// Check that a completed Receive credited its incoming Payment instead of
+/// burning it. `before` is the public profile of the Receive's predecessor
+/// head and `after` that of the head the Receive produced. Native admission
+/// burns a Payment the receiver cannot accept (a bad Request signature, a
+/// foreign asset) rather than refusing the Receive, so a runner that counts a
+/// completed Receive as a credit must check this: the adjusted burned total is
+/// unchanged and the credit root moved.
+pub fn require_credited(before: &[Fp; 64], after: &[Fp; 64]) -> Result<()> {
+    use crate::bootstrap_context::{BURNED_TOTAL, CREDIT_ROOT, LINEAGE_IO};
+    if after[LINEAGE_IO + BURNED_TOTAL] != before[LINEAGE_IO + BURNED_TOTAL] {
+        return Err(Error::Rejected(
+            "fixture Receive burned the incoming Payment".into(),
+        ));
+    }
+    if after[LINEAGE_IO + CREDIT_ROOT] == before[LINEAGE_IO + CREDIT_ROOT] {
+        return Err(Error::Rejected("fixture Receive recorded no credit".into()));
+    }
+    Ok(())
 }
 
 /// Software stand-in for a fixture wallet's hardware boundary. The engine has
@@ -861,11 +986,12 @@ const COUNTERPARTY_MARKER: [u8; 32] = [0x42; 32];
 
 /// Second wallet (B) of the isolated two-wallet flow:
 /// A Bootstrap, A Load100, B Bootstrap, B-signed Request, A Send10 to B,
-/// B Receive. A device holds one hardware payment key, so B's key is a public
-/// deterministic fixture scalar. B guards nothing and its signatures stand in
-/// only for a second device's hardware boundary. B's Bootstrap and Receive are
-/// still prepared, proved and verified by the real engine under the installed
-/// programs, and B's Request signature is checked inside its Receive relation.
+/// B Receive, A-signed Request, B Send10 to A, A Receive. A device holds one
+/// hardware payment key, so B's key is a public deterministic fixture scalar.
+/// B guards nothing and its signatures stand in only for a second device's
+/// hardware boundary. B's Bootstrap, Receive and Send are still prepared,
+/// proved and verified by the real engine under the installed programs, and
+/// each receiver's Request signature is checked inside its Receive relation.
 pub struct Counterparty {
     key: crate::full::WalletKey,
     bootstrap: ExactOperationWitness,

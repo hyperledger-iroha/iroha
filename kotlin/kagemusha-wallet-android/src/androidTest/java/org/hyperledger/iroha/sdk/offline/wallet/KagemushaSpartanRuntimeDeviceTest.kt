@@ -98,7 +98,9 @@ internal class SpartanDeviceConfirmation {
         require(projection.operation == KagemushaSpartanOperationV1.SEND)
         require(projection.amount.low == 10L && projection.amount.high == 0L &&
             projection.fee.low == 0L && projection.fee.high == 0L)
-        require(projection.receiverWalletId().contentEquals(projection.walletId()))
+        // The fixture pays its software counterparty wallet; the completed
+        // Request relation refuses a Send to the payer's own wallet.
+        require(!projection.receiverWalletId().contentEquals(projection.walletId()))
         val request = SpartanDevicePrompt.Request(review.copyOf(), projection)
         SpartanDevicePrompt.register(request)
         try {
@@ -147,7 +149,7 @@ class KagemushaSpartanConfirmationActivity : Activity() {
         setContentView(TextView(this).apply {
             textSize = 18f; setPadding(32, 48, 32, 32)
             text = "Experimental KAGEMUSHA hardware fixture\n\n" +
-                "Self-transfer: 10 test units, fee 0\n\n" +
+                "Pay the fixture counterparty wallet: 10 test units, fee 0\n\n" +
                 "Exact native review SHA-256:\n${selected.digest}\n\n" +
                 "Confirm this isolated Send using Android authentication."
         })
@@ -161,7 +163,7 @@ class KagemushaSpartanConfirmationActivity : Activity() {
             val signal = CancellationSignal(); cancellation = signal
             BiometricPrompt.Builder(this).setTitle("Confirm experimental Send")
                 .setSubtitle("Review ${selected.digest.take(12)}")
-                .setDescription("Self-transfer 10 test units, fee 0")
+                .setDescription("Pay the fixture counterparty 10 test units, fee 0")
                 .setConfirmationRequired(true)
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or
                     BiometricManager.Authenticators.DEVICE_CREDENTIAL).build()
