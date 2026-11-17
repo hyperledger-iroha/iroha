@@ -18,6 +18,7 @@ class TargetContract:
     root: str
     modules: tuple[tuple[str, str], ...]
     tests: tuple[str, ...]
+    required_features: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,8 @@ XTASK = TargetContract(
     root="integration.rs",
     modules=XTASK_MODULES,
     tests=XTASK_TESTS,
+    # The suite drives the `xtask` binary, which exists only with `dev-tools`.
+    required_features=("dev-tools",),
 )
 
 
@@ -360,6 +363,9 @@ def validate(contract: TargetContract) -> None:
         raise AssertionError(f"{contract.package}: autotests must be disabled")
     tables = _test_tables(manifest)
     expected_table = f'name = "{contract.target}"\npath = "tests/{contract.root}"'
+    if contract.required_features:
+        features = ", ".join(f'"{feature}"' for feature in contract.required_features)
+        expected_table += f"\nrequired-features = [{features}]"
     if tables != [expected_table]:
         raise AssertionError(f"{contract.package}: unexpected test target tables: {tables!r}")
 

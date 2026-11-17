@@ -34,6 +34,8 @@ required-features = ["dev-tools"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+# The suite drives the `xtask` binary, which exists only with `dev-tools`.
+required-features = ["dev-tools"]
 
 [features]
 default = []
