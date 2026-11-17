@@ -53,6 +53,7 @@ mod sparse;
 mod spartan;
 mod statement;
 mod uniform;
+mod unload;
 mod verifier;
 mod wired;
 
