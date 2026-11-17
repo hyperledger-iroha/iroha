@@ -75,12 +75,36 @@ impl<F: Field> Table<F> for Vec<F> {
 pub struct Split<F> {
     pub dense: Vec<F>,
     pub tail: Vec<F>,
+    /// Which runs of [`SEGMENT`] dense entries were written (bit `s % 64` of
+    /// word `s / 64`); a run never written is zero and is never read, so a
+    /// zero-on-demand dense half holds memory only where written. `None`:
+    /// every run may hold anything.
+    pub written: Option<Vec<u64>>,
 }
 
 impl<F: Field> Split<F> {
     pub fn new(dense: Vec<F>, tail: Vec<F>) -> Self {
         assert!(tail.len() <= dense.len(), "the tail lies in the upper half");
-        Split { dense, tail }
+        Split {
+            dense,
+            tail,
+            written: None,
+        }
+    }
+    /// A split table written only in the runs `written` marks.
+    pub fn with_written(dense: Vec<F>, tail: Vec<F>, written: Vec<u64>) -> Self {
+        assert!(written.len() * 64 * SEGMENT >= dense.len(), "a bit per run");
+        Split {
+            written: Some(written),
+            ..Split::new(dense, tail)
+        }
+    }
+    /// Whether dense run `s` (entries `s * SEGMENT..`) may hold anything.
+    #[inline]
+    fn run_written(&self, s: usize) -> bool {
+        self.written
+            .as_ref()
+            .is_none_or(|bits| bits[s / 64] >> (s % 64) & 1 == 1)
     }
     /// The upper half's nonzero prefix becomes the tail.
     pub fn from_full(mut full: Vec<F>) -> Self {
@@ -93,7 +117,7 @@ impl<F: Field> Split<F> {
         let tail = full[half..half + used].to_vec();
         full.truncate(half);
         full.shrink_to_fit();
-        Split { dense: full, tail }
+        Split::new(full, tail)
     }
     pub fn to_full(&self) -> Vec<F> {
         let half = self.dense.len();
@@ -112,10 +136,13 @@ impl<F: Field> Table<F> for Split<F> {
     #[inline]
     fn at(&self, i: usize) -> F {
         let half = self.dense.len();
-        if i < half {
+        if i >= half {
+            self.tail.get(i - half).copied().unwrap_or(F::ZERO)
+        } else if self.run_written(i / SEGMENT) {
             self.dense[i]
         } else {
-            self.tail.get(i - half).copied().unwrap_or(F::ZERO)
+            // Never written: zero, and its page is never touched.
+            F::ZERO
         }
     }
     fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
@@ -123,10 +150,185 @@ impl<F: Field> Table<F> for Split<F> {
         let low = range.start.min(half)..range.end.min(half);
         let tail_end = half + self.tail.len();
         let high = range.start.clamp(half, tail_end)..range.end.clamp(half, tail_end);
-        self.dense[low].iter().all(|x| x.is_zero_vartime())
-            && self.tail[high.start - half..high.end - half]
+        // Runs never written are zero unread.
+        let mut at = low.start;
+        while at < low.end {
+            let s = at / SEGMENT;
+            let end = ((s + 1) * SEGMENT).min(low.end);
+            if self.run_written(s) && !self.dense[at..end].iter().all(|x| x.is_zero_vartime()) {
+                return false;
+            }
+            at = end;
+        }
+        self.tail[high.start - half..high.end - half]
+            .iter()
+            .all(|x| x.is_zero_vartime())
+    }
+}
+
+/// Read and write access to a witness by flat index: a slice, or the
+/// prover's [`Rows`].
+pub trait Cells<F> {
+    fn cell(&self, i: usize) -> F;
+    fn set_cell(&mut self, i: usize, value: F);
+}
+
+impl<F: Copy> Cells<F> for [F] {
+    #[inline]
+    fn cell(&self, i: usize) -> F {
+        self[i]
+    }
+    #[inline]
+    fn set_cell(&mut self, i: usize, value: F) {
+        self[i] = value;
+    }
+}
+
+/// The prover's witness as its Hyrax rows: every row is the caller's until
+/// the prover writes into it (masks, the link phase, the second phase), and
+/// only a written row is copied. The witness itself is never cloned.
+pub struct Rows<'a, F> {
+    shift: usize,
+    rows: Vec<Row<'a, F>>,
+}
+
+enum Row<'a, F> {
+    Shared(&'a [F]),
+    Own(Vec<F>),
+}
+
+impl<'a, F: Copy> Rows<'a, F> {
+    /// `w` in rows of `cols` (a power of two) entries.
+    pub fn new(w: &'a [F], cols: usize) -> Self {
+        assert!(cols.is_power_of_two() && w.len() % cols == 0, "whole rows");
+        Rows {
+            shift: cols.trailing_zeros() as usize,
+            rows: w.chunks_exact(cols).map(Row::Shared).collect(),
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.rows.len() << self.shift
+    }
+    pub fn row(&self, r: usize) -> &[F] {
+        match &self.rows[r] {
+            Row::Shared(row) => row,
+            Row::Own(row) => row,
+        }
+    }
+    /// Row `r`, copied first if it is still the caller's.
+    pub fn row_mut(&mut self, r: usize) -> &mut [F] {
+        if let Row::Shared(row) = self.rows[r] {
+            self.rows[r] = Row::Own(row.to_vec());
+        }
+        match &mut self.rows[r] {
+            Row::Own(row) => row,
+            Row::Shared(_) => unreachable!("an owned row"),
+        }
+    }
+    /// The rows as slices.
+    pub fn slices(&self) -> Vec<&[F]> {
+        (0..self.rows.len()).map(|r| self.row(r)).collect()
+    }
+    /// How many rows the prover holds its own copy of.
+    pub fn owned(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| matches!(r, Row::Own(_)))
+            .count()
+    }
+    /// Erases the rows the prover copied (its masked and filled values).
+    pub fn zeroize_owned(&mut self)
+    where
+        F: zeroize::Zeroize,
+    {
+        for row in &mut self.rows {
+            if let Row::Own(values) = row {
+                zeroize::Zeroize::zeroize(values);
+            }
+        }
+    }
+    /// The whole witness, copied (fallbacks of circuits without row access).
+    pub fn to_vec(&self) -> Vec<F> {
+        (0..self.rows.len())
+            .flat_map(|r| self.row(r).to_vec())
+            .collect()
+    }
+    /// Takes `full`'s values for every row where they differ.
+    pub fn write_back(&mut self, full: &[F])
+    where
+        F: PartialEq,
+    {
+        let cols = 1usize << self.shift;
+        for r in 0..self.rows.len() {
+            let new = &full[r * cols..(r + 1) * cols];
+            if self.row(r) != new {
+                self.row_mut(r).copy_from_slice(new);
+            }
+        }
+    }
+}
+
+impl<F: Copy> Cells<F> for Rows<'_, F> {
+    #[inline]
+    fn cell(&self, i: usize) -> F {
+        self.row(i >> self.shift)[i & ((1 << self.shift) - 1)]
+    }
+    #[inline]
+    fn set_cell(&mut self, i: usize, value: F) {
+        let mask = (1 << self.shift) - 1;
+        self.row_mut(i >> self.shift)[i & mask] = value;
+    }
+}
+
+/// `z = (w || io)` read through the prover's [`Rows`]: the public half is
+/// its tail (the io) and zero beyond.
+pub struct ZView<'r, 'a, F> {
+    pub rows: &'r Rows<'a, F>,
+    pub tail: &'r [F],
+}
+
+impl<F: Field> ZView<'_, '_, F> {
+    #[inline]
+    pub fn get(&self, i: usize) -> F {
+        let half = self.rows.len();
+        if i < half {
+            self.rows.cell(i)
+        } else {
+            self.tail.get(i - half).copied().unwrap_or(F::ZERO)
+        }
+    }
+}
+
+impl<F: Field> Table<F> for ZView<'_, '_, F> {
+    #[inline]
+    fn len(&self) -> usize {
+        2 * self.rows.len()
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        self.get(i)
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        let half = self.rows.len();
+        let cols = 1usize << self.rows.shift;
+        let tail_end = half + self.tail.len();
+        let mut at = range.start.min(half);
+        let end = range.end.min(half);
+        while at < end {
+            let (r, c) = (at >> self.rows.shift, at & (cols - 1));
+            let n = (cols - c).min(end - at);
+            if !self.rows.row(r)[c..c + n]
                 .iter()
                 .all(|x| x.is_zero_vartime())
+            {
+                return false;
+            }
+            at += n;
+        }
+        let high = range.start.clamp(half, tail_end)..range.end.clamp(half, tail_end);
+        self.tail[high.start - half..high.end - half]
+            .iter()
+            .all(|x| x.is_zero_vartime())
     }
 }
 
@@ -300,6 +502,109 @@ pub fn outer_round<F: Field>(
         .reduce(|| vec![F::ZERO; grid], add_into);
     basis.to_grid(&mut acc);
     acc
+}
+
+/// Low rows per chunk of a streamed first outer round.
+pub const CHUNK: usize = 1 << 11;
+
+/// The unfolded tables of a streamed first outer round, computed by the
+/// caller a chunk at a time: `fill(js, mats, out)` writes, for each selected
+/// matrix `m` (A, B, C), the corners `out[m][hi * js.len() + (j - js.start)]`
+/// (rows `hi * low + j`) of the low rows `js`.
+pub type Corners<'a, F> = dyn Fn(std::ops::Range<usize>, [bool; 3], &mut [Vec<F>; 3]) + Sync + 'a;
+
+/// [`outer_round`] of a satisfied relation's unfolded `Az, Bz` (no Boolean
+/// point, no `C`), which are never held whole: `fill` computes them a chunk
+/// of low rows at a time.
+pub fn outer_round_streamed<F: Field>(
+    basis: &Basis,
+    low: usize,
+    e: &[F],
+    fill: &Corners<'_, F>,
+) -> Vec<F> {
+    let (cube, grid) = (basis.cube, basis.grid);
+    assert_eq!(e.len(), low);
+    let chunk = CHUNK.min(low);
+    let mut acc = (0..low.div_ceil(chunk))
+        .into_par_iter()
+        .with_max_len(1)
+        .fold(
+            || {
+                (
+                    vec![F::ZERO; grid],
+                    vec![F::ZERO; 2 * cube],
+                    vec![F::ZERO; 2 * grid],
+                    [Vec::new(), Vec::new(), Vec::new()],
+                )
+            },
+            |(mut acc, mut corners, mut ext, mut tables), ci| {
+                let js = ci * chunk..((ci + 1) * chunk).min(low);
+                let n = js.len();
+                for t in tables.iter_mut().take(2) {
+                    t.clear();
+                    t.resize(cube * n, F::ZERO);
+                }
+                fill(js.clone(), [true, true, false], &mut tables);
+                for (jj, j) in js.enumerate() {
+                    let weight = e[j];
+                    let (ca, cb) = corners.split_at_mut(cube);
+                    for hi in 0..cube {
+                        ca[hi] = weight * tables[0][hi * n + jj];
+                        cb[hi] = tables[1][hi * n + jj];
+                    }
+                    let (ga, gb) = ext.split_at_mut(grid);
+                    basis.extend(ca, ga);
+                    basis.extend(cb, gb);
+                    for &g in &basis.upper {
+                        acc[g] += ga[g] * gb[g];
+                    }
+                }
+                (acc, corners, ext, tables)
+            },
+        )
+        .map(|(acc, ..)| acc)
+        .reduce(|| vec![F::ZERO; grid], add_into);
+    basis.to_grid(&mut acc);
+    acc
+}
+
+/// [`fold_top`] (without a support) of the unfolded `Az, Bz, Cz`, which
+/// `fill` computes a chunk of low rows at a time.
+pub fn fold_top_streamed<F: Field>(
+    k: usize,
+    low: usize,
+    r: &[F],
+    fill: &Corners<'_, F>,
+) -> [Vec<F>; 3] {
+    assert_eq!(r.len(), k);
+    let cube = 1usize << k;
+    let chunk = CHUNK.min(low);
+    let mut out = [vec![F::ZERO; low], vec![F::ZERO; low], vec![F::ZERO; low]];
+    let [oa, ob, oc] = &mut out;
+    oa.par_chunks_mut(chunk)
+        .zip(ob.par_chunks_mut(chunk))
+        .zip(oc.par_chunks_mut(chunk))
+        .enumerate()
+        .for_each(|(ci, ((a, b), c))| {
+            let js = ci * chunk..ci * chunk + a.len();
+            let n = js.len();
+            let mut tables = [
+                vec![F::ZERO; cube * n],
+                vec![F::ZERO; cube * n],
+                vec![F::ZERO; cube * n],
+            ];
+            fill(js, [true, true, true], &mut tables);
+            let mut corners = vec![F::ZERO; cube];
+            for (table, folded) in tables.iter().zip([a, b, c]) {
+                for (jj, value) in folded.iter_mut().enumerate() {
+                    for (hi, corner) in corners.iter_mut().enumerate() {
+                        *corner = table[hi * n + jj];
+                    }
+                    *value = fold_corners(&mut corners, r);
+                }
+            }
+        });
+    out
 }
 
 /// Rows per run of the corner support.

@@ -127,10 +127,50 @@ pub trait Rel<F: Scalar>: Sync {
     fn m_table_split(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> crate::kern::Split<F> {
         crate::kern::Split::from_full(self.m_table(shape, ex, ra, rb, rc))
     }
+    /// [`Rel::m_table_split`] at `ex = eq(r_x, .)`, given `r_x` (a relation
+    /// may never hold the whole equality table).
+    fn m_table_split_at(
+        &self,
+        shape: &Shape,
+        rx: &[F],
+        ra: F,
+        rb: F,
+        rc: F,
+    ) -> crate::kern::Split<F> {
+        let ex = crate::prof::time("i.eq", || crate::grid::eq_table(rx));
+        self.m_table_split(shape, &ex, ra, rb, rc)
+    }
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F);
     /// Nonzero entries of A, B and C (0 when the relation is structured).
     fn nnz(&self) -> [usize; 3] {
         [0; 3]
+    }
+    /// [`Rel::abc`] of `z = (w || io)` as the prover holds it: the witness in
+    /// its rows, the public half its tail (copied whole by default).
+    /// `Az, Bz, Cz` at the rows of `ranges` for the selected matrices,
+    /// written to `out[m]` range after range (each output starts zeroed).
+    /// `false` when the relation cannot, and the prover holds the whole
+    /// tables instead.
+    fn abc_ranges(
+        &self,
+        _shape: &Shape,
+        _z: &crate::kern::ZView<'_, '_, F>,
+        _ranges: &[std::ops::Range<usize>],
+        _mats: [bool; 3],
+        _out: &mut [Vec<F>; 3],
+    ) -> bool {
+        false
+    }
+    fn abc_rows(
+        &self,
+        shape: &Shape,
+        z: &crate::kern::ZView<'_, '_, F>,
+    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        let mut full = crate::kern::zeroed(2 << shape.sw());
+        let half = 1usize << shape.sw();
+        full[..half].copy_from_slice(&z.rows.to_vec());
+        full[half..half + z.tail.len()].copy_from_slice(z.tail);
+        self.abc(shape, &full)
     }
 }
 
@@ -186,6 +226,11 @@ pub trait Circuit<F: Scalar>: Sync {
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
         Vec::new()
     }
+    /// Row `k` of [`Circuit::fixed_values`] (`cols` values), without the rest.
+    fn fixed_row(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let cols = shape.cols();
+        self.fixed_values(shape)[k * cols..(k + 1) * cols].to_vec()
+    }
     /// The first of the fixed rows, holding one wallet's own constants (its
     /// key's comb tables): committed with blind 0 like the others and left out
     /// of proofs, but their commitments come from the instance (`wallet_io`)
@@ -230,6 +275,47 @@ pub trait Circuit<F: Scalar>: Sync {
     /// one.
     fn binding_r(&self, _w: &[F]) -> Option<[u8; 32]> {
         None
+    }
+    /// The prover's accounted memory (retained and phase peaks) for
+    /// measurement lines; empty when the circuit does not account it.
+    fn memory_note(&self) -> String {
+        String::new()
+    }
+
+    // The prover's witness hooks on its copy-on-write rows. By default each
+    // copies the whole witness and calls the slice hook.
+
+    /// [`Circuit::randomize_masks`] on the prover's rows.
+    fn randomize_masks_rows(&self, w: &mut crate::kern::Rows<'_, F>, rng: &mut SpikeRng) {
+        let mut full = w.to_vec();
+        self.randomize_masks(&mut full, rng);
+        w.write_back(&full);
+    }
+    /// [`Circuit::fill_link`] on the prover's rows.
+    fn fill_link_rows(&self, rho: &[u8; 32], w: &mut crate::kern::Rows<'_, F>) {
+        let mut full = w.to_vec();
+        self.fill_link(rho, &mut full);
+        w.write_back(&full);
+    }
+    /// [`Circuit::instantiate`] filling the prover's rows.
+    fn instantiate_rows<'a>(
+        &'a self,
+        shape: &Shape,
+        ch: &[F],
+        w: &mut crate::kern::Rows<'_, F>,
+    ) -> Box<dyn Rel<F> + 'a> {
+        let mut full = w.to_vec();
+        let rel = self.instantiate(shape, ch, Some(&mut full));
+        w.write_back(&full);
+        rel
+    }
+    /// [`Circuit::late_values`] of the prover's rows.
+    fn late_values_rows(&self, w: &crate::kern::Rows<'_, F>) -> Vec<F> {
+        self.late_values(&w.to_vec())
+    }
+    /// [`Circuit::binding_r`] of the prover's rows.
+    fn binding_r_rows(&self, w: &crate::kern::Rows<'_, F>) -> Option<[u8; 32]> {
+        self.binding_r(&w.to_vec())
     }
 }
 

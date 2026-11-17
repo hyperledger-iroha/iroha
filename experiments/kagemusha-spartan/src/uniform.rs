@@ -25,11 +25,168 @@ use iroha_pasta::poseidon::{PoseidonField, permute_with};
 use rayon::prelude::*;
 
 use crate::fs::{Scalar, SpikeRng};
+use crate::kern::Cells;
 use crate::r1cs::{Circuit, Instance, Rel, Shape, Witness};
 use crate::sparse::{Assembly, SLc};
 
-/// Template rows with each term's LogUp challenge factor.
-type SymbolicRows<F> = Vec<Vec<[Vec<(Term<F>, Factor)>; 3]>>;
+/// How the prover reads each template row: as the array declares it, or as
+/// the LogUp, copy-entry or challenge row [`UniformCircuit::symbolic_rows`]
+/// writes in its place. [`UniformCircuit::sym_lin`] resolves a row's terms
+/// on use, borrowing every coefficient and map from the circuit.
+#[derive(Clone, Copy, Debug)]
+enum RowKind {
+    Plain,
+    /// The array's lookup `j` (its helper cell `first_cell + j`).
+    Lookup(usize, usize),
+    /// The multiplicity/helper row of `tables[index]`.
+    Table(usize),
+    /// The entry row of `exports[index]`.
+    Export(usize),
+    /// `ch_rows[index]`.
+    Challenge(usize),
+}
+
+/// Per array and template row, its [`RowKind`].
+type SymbolicRows = Vec<Vec<RowKind>>;
+
+/// `values` as its maximal nonzero runs and their literals
+/// ([`FixedValues::compact`] without a dense copy first).
+fn fixed_runs<F: Scalar>(values: &[F]) -> FixedValues<F> {
+    let mut spans = Vec::new();
+    let mut literals = Vec::new();
+    let mut at = 0;
+    while at < values.len() {
+        if bool::from(values[at].is_zero()) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < values.len() && !bool::from(values[at].is_zero()) {
+            at += 1;
+        }
+        spans.push(fixed_values::LiteralSpan {
+            start,
+            offset: literals.len(),
+            len: at - start,
+        });
+        literals.extend_from_slice(&values[start..at]);
+    }
+    FixedValues::Runs {
+        len: values.len(),
+        spans: spans.into_boxed_slice(),
+        literals: literals.into_boxed_slice(),
+    }
+}
+
+/// Term `t` of a compressed tuple row: `alpha - (id + 1)`, then the tuple's
+/// terms by powers of beta.
+fn tuple_term<F: Copy>(t: usize, tid: u32, tuple: &[Lin<F>]) -> (TermView<'_, F>, Factor) {
+    if t == 0 {
+        return (
+            TermView::ones(SrcView::One),
+            Factor::AlphaMinus(tid as u64 + 1),
+        );
+    }
+    let mut at = t - 1;
+    for (k, lin) in tuple.iter().enumerate() {
+        if at < lin.len() {
+            return (TermView::of(&lin[at]), Factor::NegBeta(k + 1));
+        }
+        at -= lin.len();
+    }
+    unreachable!("a term of the tuple row")
+}
+
+/// A template term as the prover reads it: its coefficients per `r` are the
+/// circuit's own (or all ones), a link's map is the circuit's own (or the
+/// identity).
+#[derive(Clone, Copy)]
+struct TermView<'a, F> {
+    src: SrcView<'a>,
+    coef: CoefView<'a, F>,
+}
+
+#[derive(Clone, Copy)]
+enum SrcView<'a> {
+    One,
+    Own(usize),
+    Link {
+        array: usize,
+        cell: usize,
+        map: MapView<'a>,
+    },
+    All {
+        array: usize,
+        cell: usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum CoefView<'a, F> {
+    Slice(&'a [F]),
+    Ones,
+}
+
+#[derive(Clone, Copy)]
+enum MapView<'a> {
+    Slice(&'a [Option<usize>]),
+    Identity,
+}
+
+impl<'a, F: Copy> TermView<'a, F> {
+    fn of(t: &'a Term<F>) -> Self {
+        let src = match &t.src {
+            Src::One => SrcView::One,
+            Src::Own(k) => SrcView::Own(*k),
+            Src::Link { array, cell, map } => SrcView::Link {
+                array: *array,
+                cell: *cell,
+                map: MapView::Slice(map),
+            },
+            Src::All { array, cell } => SrcView::All {
+                array: *array,
+                cell: *cell,
+            },
+        };
+        TermView {
+            src,
+            coef: CoefView::Slice(&t.coef),
+        }
+    }
+    fn ones(src: SrcView<'a>) -> Self {
+        TermView {
+            src,
+            coef: CoefView::Ones,
+        }
+    }
+}
+
+impl<F: Field> CoefView<'_, F> {
+    #[inline]
+    fn at(self, r: usize) -> F {
+        match self {
+            CoefView::Slice(c) => c[r],
+            CoefView::Ones => F::ONE,
+        }
+    }
+}
+
+impl MapView<'_> {
+    #[inline]
+    fn at(self, r: usize) -> Option<usize> {
+        match self {
+            MapView::Slice(m) => m[r],
+            MapView::Identity => Some(r),
+        }
+    }
+    /// The reads of a map over a reading array of `n` slots.
+    fn len(self, n: usize) -> usize {
+        match self {
+            MapView::Slice(m) => m.len(),
+            MapView::Identity => n,
+        }
+    }
+}
 
 /// Where a template term reads from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -57,20 +214,6 @@ pub struct Term<F> {
 }
 
 pub type Lin<F> = Vec<Term<F>>;
-
-trait TemplateTerm<F> {
-    fn term(&self) -> &Term<F>;
-}
-impl<F> TemplateTerm<F> for Term<F> {
-    fn term(&self) -> &Term<F> {
-        self
-    }
-}
-impl<F> TemplateTerm<F> for (Term<F>, Factor) {
-    fn term(&self) -> &Term<F> {
-        &self.0
-    }
-}
 
 pub struct Array<F> {
     pub name: &'static str,
@@ -253,12 +396,35 @@ impl Block {
     }
 }
 
-/// A template term that reads a cell block, as the prover's gather sees it.
+/// A template term that reads a cell block, as the prover's gather sees it
+/// (compact: one per template term).
+#[derive(Clone, Copy)]
 struct Reader {
-    array: usize,
-    row: usize,
-    mat: usize,
-    term: usize,
+    array: u32,
+    row: u32,
+    term: u32,
+    mat: u8,
+}
+
+impl Reader {
+    fn new(array: usize, row: usize, mat: usize, term: usize) -> Self {
+        let small = |v: usize| u32::try_from(v).expect("a template index");
+        Reader {
+            array: small(array),
+            row: small(row),
+            term: small(term),
+            mat: mat as u8,
+        }
+    }
+    /// `(array, row, matrix, term)`.
+    fn at(self) -> (usize, usize, usize, usize) {
+        (
+            self.array as usize,
+            self.row as usize,
+            self.mat as usize,
+            self.term as usize,
+        )
+    }
 }
 
 /// What a verifier of a circuit's proofs depends on besides its key: the
@@ -353,16 +519,18 @@ pub struct UniformCircuit<F> {
     split_of: Vec<Option<(usize, usize)>>,
     /// The prover's gather of `Az, Bz, Cz`, built on first use.
     gather: OnceLock<Vec<GatherJob>>,
-    /// The symbolic rows (the terms of every proof's rows, LogUp rows over
-    /// their challenge factors), built on first use: the prover's kernels
-    /// read them with the factors' values instead of instantiating every
-    /// row per proof.
-    symbolic: OnceLock<SymbolicRows<F>>,
-    /// Readers of every cell block (the gather of `M(r_x, .)`), built on
-    /// first use.
+    /// The kind of every template row (LogUp rows over their challenge
+    /// factors), built on first use: the prover's kernels read the rows'
+    /// terms with the factors' values instead of instantiating every row per
+    /// proof, and borrow their coefficients instead of cloning them.
+    symbolic: OnceLock<SymbolicRows>,
+    /// Template readers of every cell block (the gather of `M(r_x, .)`),
+    /// built on first use.
     readers: OnceLock<Readers>,
-    /// The flat plan of `M(r_x, .)`, built on first use.
-    m_plans: OnceLock<Vec<MPlan<F>>>,
+    /// The placed blocks of `M(r_x, .)` with a bound on their flat plans'
+    /// bytes, built on first use; each proof builds the plans themselves a
+    /// group of blocks at a time ([`M_PLAN_GROUP`]).
+    m_plans: OnceLock<Vec<MBlock>>,
     /// The matrix evaluation compiled to a straight-line program, built on
     /// first use.
     plan: OnceLock<Tape<F>>,
@@ -1228,6 +1396,21 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         }
     }
+    /// Erase and free the private construction values once the witness is
+    /// built: the prover reads only the witness, so a circuit about to be
+    /// proved need not hold its arrays' values (about as much again as the
+    /// witness's nonzero cells). Fixed values stay (the public program's).
+    pub fn release_private_values(&mut self)
+    where
+        F: zeroize::Zeroize,
+    {
+        self.zeroize_witness_values();
+        for array in &mut self.arrays {
+            if !array.fixed {
+                array.values = Vec::new();
+            }
+        }
+    }
     fn m(&self, a: usize) -> usize {
         self.pi[self.arrays[a].family] + self.arrays[a].rho
     }
@@ -1278,12 +1461,16 @@ impl<F: Scalar> UniformCircuit<F> {
             return degrees;
         }
         let (mut da, mut db) = (0, 0);
-        for row in self.symbolic().iter().flatten() {
-            for (_, f) in row.iter().flatten() {
-                match f {
-                    Factor::One => {}
-                    Factor::AlphaMinus(_) => da = 1,
-                    Factor::NegBeta(e) => db = db.max(*e),
+        for (a, rows) in self.symbolic().iter().enumerate() {
+            for j in 0..rows.len() {
+                for mat in 0..3 {
+                    for (_, f) in self.sym_lin(a, j, mat) {
+                        match f {
+                            Factor::One => {}
+                            Factor::AlphaMinus(_) => da = 1,
+                            Factor::NegBeta(e) => db = db.max(e),
+                        }
+                    }
                 }
             }
         }
@@ -2314,8 +2501,8 @@ impl<F: Scalar> UniformCircuit<F> {
             );
             row[0] = F::ONE;
         }
-        let fixed_values =
-            FixedValues::Dense(w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec());
+        // The fixed tail as its nonzero runs (padding rows hold one entry).
+        let fixed_values = fixed_runs(&w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..]);
         let _ = n_user;
         let circuit = UniformCircuit {
             verifier_only: None,
@@ -2433,68 +2620,83 @@ impl<F: Scalar> UniformCircuit<F> {
     /// matrix, writing that row block.
     fn gather_plan(&self) -> &Vec<GatherJob> {
         self.gather.get_or_init(|| {
-            let sw = self.shape.sw();
             let mut jobs = Vec::new();
-            for (a, (arr, rows)) in self.arrays.iter().zip(self.symbolic()).enumerate() {
-                for (j, row) in rows.iter().enumerate() {
-                    for (mat, lin) in row.iter().enumerate() {
-                        let mut job = GatherJob {
+            for (a, arr) in self.arrays.iter().enumerate() {
+                for j in 0..arr.rows.len() {
+                    for mat in 0..3 {
+                        jobs.push(GatherJob {
                             a,
                             j,
                             mat,
                             base: self.row_base[a][j],
-                            targets: Vec::with_capacity(lin.len()),
-                            rs: (0..1usize << arr.rho)
-                                .filter(|r| self.r_present(a, *r))
-                                .collect(),
-                            factors: lin.iter().map(|(_, f)| *f).collect(),
-                            sums: Vec::new(),
-                        };
-                        // Retain one target per symbolic term. Expanding each
-                        // target/map/coefficient into every present r consumed
-                        // hundreds of MB for a single signature relation.
-                        for (ti, (term, _)) in lin.iter().enumerate() {
-                            let target = match &term.src {
-                                Src::One => Some(GatherTarget {
-                                    base: 1 << sw,
-                                    lo: 0,
-                                    hi: 0,
-                                    rho: 0,
-                                    carry: false,
-                                }),
-                                Src::Own(k) => {
-                                    let b = &self.blocks[a][*k];
-                                    Some(GatherTarget {
-                                        base: b.base,
-                                        lo: b.lo,
-                                        hi: b.hi,
-                                        rho: arr.rho,
-                                        carry: true,
-                                    })
-                                }
-                                Src::Link { array, cell, .. } => {
-                                    let b = &self.blocks[*array][*cell];
-                                    Some(GatherTarget {
-                                        base: b.base,
-                                        lo: b.lo,
-                                        hi: b.hi,
-                                        rho: self.arrays[*array].rho,
-                                        carry: !self.global(*array),
-                                    })
-                                }
-                                Src::All { .. } => {
-                                    job.sums.push(ti);
-                                    None
-                                }
-                            };
-                            job.targets.push(target);
-                        }
-                        jobs.push(job);
+                        });
                     }
                 }
             }
             jobs
         })
+    }
+
+    /// A gather job's terms, targets and sum terms.
+    fn job_terms(&self, g: &GatherJob) -> JobTerms<'_, F> {
+        let sw = self.shape.sw();
+        let arr = &self.arrays[g.a];
+        let lin = self.sym_lin(g.a, g.j, g.mat);
+        let mut targets = Vec::with_capacity(lin.len());
+        let mut sums = Vec::new();
+        for (ti, (term, _)) in lin.iter().enumerate() {
+            let target = match term.src {
+                SrcView::One => Some(GatherTarget {
+                    base: 1 << sw,
+                    lo: 0,
+                    hi: 0,
+                    rho: 0,
+                    carry: false,
+                }),
+                SrcView::Own(k) => {
+                    let b = &self.blocks[g.a][k];
+                    Some(GatherTarget {
+                        base: b.base,
+                        lo: b.lo,
+                        hi: b.hi,
+                        rho: arr.rho,
+                        carry: true,
+                    })
+                }
+                SrcView::Link { array, cell, .. } => {
+                    let b = &self.blocks[array][cell];
+                    Some(GatherTarget {
+                        base: b.base,
+                        lo: b.lo,
+                        hi: b.hi,
+                        rho: self.arrays[array].rho,
+                        carry: !self.global(array),
+                    })
+                }
+                SrcView::All { .. } => {
+                    sums.push(ti);
+                    None
+                }
+            };
+            targets.push(target);
+        }
+        JobTerms { lin, targets, sums }
+    }
+
+    /// [`Self::ypos`] for a term as the prover reads it.
+    fn ypos_view(&self, a: usize, src: SrcView<'_>, i: usize) -> Option<usize> {
+        match src {
+            SrcView::One => Some(1 << self.shape.sw()),
+            SrcView::Own(k) => Some(self.blocks[a][k].index(i)),
+            SrcView::Link { array, cell, map } => {
+                let rho = self.arrays[a].rho;
+                let (p, r) = (i >> rho, i & ((1 << rho) - 1));
+                let p = if self.global(array) { 0 } else { p };
+                map.at(r)
+                    .map(|rr| self.blocks[array][cell].index((p << self.arrays[array].rho) | rr))
+            }
+            SrcView::All { .. } => None,
+        }
     }
 
     fn ypos(&self, a: usize, src: &Src, i: usize) -> Option<usize> {
@@ -2578,7 +2780,7 @@ impl<F: Scalar> UniformCircuit<F> {
 
     /// Counts the link tables' multiplicities from the witness (after the
     /// link phase's fill), as the build counts the others.
-    fn recount_link_tables(&self, w: &mut [F]) {
+    fn recount_link_tables<W: Cells<F> + ?Sized>(&self, w: &mut W) {
         let key = |vals: &[F]| -> Vec<u8> {
             vals.iter()
                 .flat_map(|v| v.to_repr().as_ref().to_vec())
@@ -2592,7 +2794,7 @@ impl<F: Scalar> UniformCircuit<F> {
             let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
             for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
                 let entry: Vec<F> = (0..self.arrays[va].cells())
-                    .map(|k| w[self.blocks[va][k].index(i)])
+                    .map(|k| w.cell(self.blocks[va][k].index(i)))
                     .collect();
                 index.insert(key(&entry), i);
             }
@@ -2616,7 +2818,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 }
             }
             for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
-                w[self.blocks[wa][0].index(i)] = F::from(mult[i]);
+                w.set_cell(self.blocks[wa][0].index(i), F::from(mult[i]));
             }
         }
     }
@@ -2647,8 +2849,116 @@ impl<F: Scalar> UniformCircuit<F> {
     }
 
     /// The symbolic rows, built once per circuit.
-    fn symbolic(&self) -> &SymbolicRows<F> {
-        self.symbolic.get_or_init(|| self.symbolic_rows())
+    fn symbolic(&self) -> &SymbolicRows {
+        self.symbolic.get_or_init(|| {
+            // The same replacements, in the same order, as `symbolic_rows`.
+            let mut kinds: SymbolicRows = self
+                .arrays
+                .iter()
+                .map(|arr| vec![RowKind::Plain; arr.rows.len()])
+                .collect();
+            for &(a, first_cell, first_row) in &self.lookup_arrays {
+                for j in 0..self.arrays[a].lookups.len() {
+                    kinds[a][first_row + j] = RowKind::Lookup(j, first_cell);
+                }
+            }
+            for (index, &(_, _, wa)) in self.tables.iter().enumerate() {
+                kinds[wa][0] = RowKind::Table(index);
+            }
+            for (index, (_, wa, _, _)) in self.exports.iter().enumerate() {
+                kinds[*wa][0] = RowKind::Export(index);
+            }
+            for (index, (a, j, _)) in self.ch_rows.iter().enumerate() {
+                kinds[*a][*j] = RowKind::Challenge(index);
+            }
+            kinds
+        })
+    }
+
+    /// Matrix `mat` of template row `j` of array `a` as the prover reads it:
+    /// the terms of [`Self::symbolic_rows`] with their factors, borrowed.
+    fn sym_lin(&self, a: usize, j: usize, mat: usize) -> Vec<(TermView<'_, F>, Factor)> {
+        (0..self.sym_len(a, j, mat))
+            .map(|t| self.sym_term(a, j, mat, t))
+            .collect()
+    }
+
+    /// The number of terms of [`Self::sym_lin`].
+    fn sym_len(&self, a: usize, j: usize, mat: usize) -> usize {
+        let tuple_len = |tuple: &[Lin<F>]| 1 + tuple.iter().map(Vec::len).sum::<usize>();
+        match (self.symbolic()[a][j], mat) {
+            (RowKind::Plain, _) => self.arrays[a].rows[j][mat].len(),
+            (RowKind::Challenge(index), _) => self.ch_rows[index].2[mat].len(),
+            (RowKind::Lookup(lj, _), 1) => tuple_len(&self.arrays[a].lookups[lj].1),
+            (RowKind::Table(index), 1) => 1 + self.arrays[self.tables[index].0].cells(),
+            (RowKind::Export(index), 1) => tuple_len(&self.exports[index].3),
+            _ => 1,
+        }
+    }
+
+    /// Term `t` of [`Self::sym_lin`] and its factor, without resolving the
+    /// rest of the row.
+    fn sym_term(&self, a: usize, j: usize, mat: usize, t: usize) -> (TermView<'_, F>, Factor) {
+        let one = TermView::ones(SrcView::One);
+        match self.symbolic()[a][j] {
+            RowKind::Plain => (TermView::of(&self.arrays[a].rows[j][mat][t]), Factor::One),
+            RowKind::Challenge(index) => {
+                let (term, f) = &self.ch_rows[index].2[mat][t];
+                (TermView::of(term), *f)
+            }
+            RowKind::Lookup(lj, first_cell) => {
+                let (tid, tuple) = &self.arrays[a].lookups[lj];
+                match mat {
+                    0 => (TermView::ones(SrcView::Own(first_cell + lj)), Factor::One),
+                    1 => tuple_term(t, *tid, tuple),
+                    _ => {
+                        // A copy read that is off has right-hand side 0 there:
+                        // per r, or from its mask column.
+                        let rhs = match (
+                            self.lookup_mask.get(&(a, lj)),
+                            self.lookup_mask_col.get(&(a, lj)),
+                        ) {
+                            (_, Some(&(x, k))) => TermView::ones(SrcView::Link {
+                                array: x,
+                                cell: k,
+                                map: MapView::Identity,
+                            }),
+                            (Some(on), None) => TermView {
+                                src: SrcView::One,
+                                coef: CoefView::Slice(on),
+                            },
+                            (None, None) => one,
+                        };
+                        (rhs, Factor::One)
+                    }
+                }
+            }
+            // Table and copy-entry rows: `g (alpha - t) = m`.
+            RowKind::Table(index) => {
+                let (va, tid, _) = self.tables[index];
+                match (mat, t) {
+                    (0, _) => (TermView::ones(SrcView::Own(1)), Factor::One),
+                    (1, 0) => (one, Factor::AlphaMinus(tid as u64 + 1)),
+                    (1, _) => (
+                        TermView::ones(SrcView::Link {
+                            array: va,
+                            cell: t - 1,
+                            map: MapView::Identity,
+                        }),
+                        Factor::NegBeta(t),
+                    ),
+                    _ => (TermView::ones(SrcView::Own(0)), Factor::One),
+                }
+            }
+            RowKind::Export(index) => {
+                let (_, _, tid, tuple) = &self.exports[index];
+                match mat {
+                    0 => (TermView::ones(SrcView::Own(1)), Factor::One),
+                    1 => tuple_term(t, *tid, tuple),
+                    _ => (TermView::ones(SrcView::Own(0)), Factor::One),
+                }
+            }
+        }
     }
 
     /// A factor's value under the LogUp challenges `(alpha, beta)`; `None`
@@ -2781,20 +3091,20 @@ impl<F: Scalar> UniformCircuit<F> {
     }
 
     /// A linear combination's value at instance `i` of array `a`, from `w`.
-    fn eval_w(&self, w: &[F], a: usize, lin: &Lin<F>, i: usize) -> F {
+    fn eval_w<W: Cells<F> + ?Sized>(&self, w: &W, a: usize, lin: &Lin<F>, i: usize) -> F {
         let r = i & ((1 << self.arrays[a].rho) - 1);
         lin.iter()
             .map(|t| match &t.src {
                 Src::One => t.coef[r],
                 _ => self
                     .ypos(a, &t.src, i)
-                    .map_or(F::ZERO, |y| t.coef[r] * w[y]),
+                    .map_or(F::ZERO, |y| t.coef[r] * w.cell(y)),
             })
             .sum()
     }
 
     /// The prover's LogUp helpers: `h = 1/(alpha - f)`, `g = m/(alpha - t)`.
-    fn fill_helpers(&self, ch: &[F], w: &mut [F]) {
+    fn fill_helpers<W: Cells<F> + ?Sized>(&self, ch: &[F], w: &mut W) {
         let (alpha, beta) = (ch[0], ch[1]);
         let mut slots: Vec<(usize, F, F)> = Vec::new();
         for &(a, first_cell, _) in &self.lookup_arrays {
@@ -2809,7 +3119,7 @@ impl<F: Scalar> UniformCircuit<F> {
                         power *= beta;
                     }
                     let rhs = match self.lookup_mask_col.get(&(a, j)) {
-                        Some(&(x, k)) => w[self.blocks[x][k].index(i)],
+                        Some(&(x, k)) => w.cell(self.blocks[x][k].index(i)),
                         None => self
                             .lookup_mask
                             .get(&(a, j))
@@ -2824,13 +3134,13 @@ impl<F: Scalar> UniformCircuit<F> {
                 let mut t = F::from(tid as u64 + 1);
                 let mut power = beta;
                 for k in 0..self.arrays[va].cells() {
-                    t += power * w[self.blocks[va][k].index(i)];
+                    t += power * w.cell(self.blocks[va][k].index(i));
                     power *= beta;
                 }
                 slots.push((
                     self.blocks[wa][1].index(i),
                     alpha - t,
-                    w[self.blocks[wa][0].index(i)],
+                    w.cell(self.blocks[wa][0].index(i)),
                 ));
             }
         }
@@ -2845,214 +3155,206 @@ impl<F: Scalar> UniformCircuit<F> {
                 slots.push((
                     self.blocks[*wa][1].index(i),
                     alpha - t,
-                    w[self.blocks[*wa][0].index(i)],
+                    w.cell(self.blocks[*wa][0].index(i)),
                 ));
             }
         }
         let mut dens: Vec<F> = slots.iter().map(|s| s.1).collect();
         crate::uniform::batch_invert(&mut dens);
         for ((idx, _, m), inv) in slots.iter().zip(dens) {
-            w[*idx] = *m * inv;
+            w.set_cell(*idx, *m * inv);
         }
     }
 
     /// The flat plan of `M(r_x, .)`: per placed block and target r', the
     /// present constraint rows that read it, with their coefficients (public
     /// structure, built on first use).
-    fn m_plans(&self) -> &Vec<MPlan<F>> {
+    fn m_plans(&self) -> &Vec<MBlock> {
         self.m_plans.get_or_init(|| {
-            let (rows, rd) = (self.symbolic(), self.readers());
-            let mut plans = Vec::new();
+            let rd = self.readers();
+            let mut blocks = Vec::new();
             for (a2, arr2) in self.arrays.iter().enumerate() {
                 for k2 in (0..arr2.cells()).filter(|k| self.moved[a2][*k].is_none()) {
-                    let (starts, pairs) = &rd.at[a2][k2];
-                    let readers: Vec<MReader> = rd.readers[a2][k2]
+                    let list = &rd.readers[a2][k2];
+                    let reads: usize = list
                         .iter()
                         .map(|r| {
-                            let family = self.arrays[r.array].family;
-                            MReader {
-                                a: r.array,
-                                j: r.row,
-                                mat: r.mat,
-                                t: r.term,
-                                rho: self.arrays[r.array].rho,
-                                all_p: (family != arr2.family).then(|| self.counts[family]),
+                            let (a, j, mat, t) = r.at();
+                            let n = 1usize << self.arrays[a].rho;
+                            match self.sym_term(a, j, mat, t).0.src {
+                                SrcView::Link { map, .. } => map.len(n),
+                                _ => n,
                             }
                         })
-                        .collect();
-                    assert!(
-                        readers.len() <= u32::MAX as usize,
-                        "{}: readers of one block",
-                        arr2.name
-                    );
-                    let n2 = 1usize << arr2.rho;
-                    let mut offsets = Vec::with_capacity(n2 + 1);
-                    let (mut entries, mut coefs) = (Vec::new(), Vec::new());
-                    offsets.push(0u32);
-                    for r2 in 0..n2 {
-                        for &(ri, r) in &pairs[starts[r2] as usize..starts[r2 + 1] as usize] {
-                            let (reader, r) = (&rd.readers[a2][k2][ri as usize], r as usize);
-                            if !self.r_present(reader.array, r) {
-                                continue;
-                            }
-                            let coef = rows[reader.array][reader.row][reader.mat][reader.term]
-                                .0
-                                .coef[r];
-                            if bool::from(coef.is_zero()) {
-                                continue;
-                            }
-                            let row = u32::try_from(self.row_base[reader.array][reader.row] + r)
-                                .expect("a constraint row");
-                            let (kind, index) = if coef == F::ONE {
-                                (1u8, 0u32)
-                            } else if coef == -F::ONE {
-                                (2, 0)
-                            } else {
-                                coefs.push(coef);
-                                (0, (coefs.len() - 1) as u32)
-                            };
-                            entries.push((ri, kind, row, index));
-                        }
-                        offsets.push(u32::try_from(entries.len()).expect("plan entries"));
-                    }
-                    plans.push(MPlan {
+                        .sum();
+                    blocks.push(MBlock {
                         a2,
                         k2,
-                        offsets,
-                        entries,
-                        coefs,
-                        readers,
+                        bytes: MPlan::<F>::bound(1usize << arr2.rho, reads, list.len()),
                     });
                 }
             }
-            plans
+            blocks
         })
     }
 
-    /// Readers of every cell block (the prover's gather of `M(r_x, .)`).
-    /// The readers, from the symbolic rows (the terms of every proof's rows).
-    fn readers(&self) -> &Readers {
-        self.readers
-            .get_or_init(|| self.readers_for(self.symbolic()))
+    /// The flat plan of placed block `(a2, k2)` of `M(r_x, .)`: per target
+    /// r', the present constraint rows that read it, a reader's rows
+    /// together, with their coefficients (public structure).
+    fn m_plan(&self, a2: usize, k2: usize) -> MPlan<F> {
+        let arr2 = &self.arrays[a2];
+        let list = &self.readers().readers[a2][k2];
+        assert!(
+            list.len() <= u32::MAX as usize,
+            "{}: readers of one block",
+            arr2.name
+        );
+        let terms: Vec<TermView<'_, F>> = list
+            .iter()
+            .map(|r| {
+                let (a, j, mat, t) = r.at();
+                self.sym_term(a, j, mat, t).0
+            })
+            .collect();
+        let n2 = 1usize << arr2.rho;
+        // Reader `ri`'s reads (target r', source r), r ascending.
+        let reads = |ri: usize, f: &mut dyn FnMut(usize, usize)| {
+            let n = 1usize << self.arrays[list[ri].at().0].rho;
+            match terms[ri].src {
+                SrcView::Own(_) => (0..n).for_each(|r| f(r, r)),
+                SrcView::Link { map, .. } => {
+                    for r in 0..map.len(n) {
+                        if let Some(rr) = map.at(r) {
+                            assert!(rr < n2, "target instance in block");
+                            f(rr, r);
+                        }
+                    }
+                }
+                _ => unreachable!("a block's readers own or link it"),
+            }
+        };
+        // A read is an entry when its row is present and its coefficient
+        // nonzero.
+        let entry = |ri: usize, r: usize| -> Option<F> {
+            if !self.r_present(list[ri].at().0, r) {
+                return None;
+            }
+            let coef = terms[ri].coef.at(r);
+            (!bool::from(coef.is_zero())).then_some(coef)
+        };
+        // Count the entries per target, then place them: readers in order,
+        // each reader's rows in ascending order within a target.
+        let mut offsets = vec![0u32; n2 + 1];
+        let mut general = 0usize;
+        for ri in 0..list.len() {
+            reads(ri, &mut |rr, r| {
+                if let Some(coef) = entry(ri, r) {
+                    offsets[rr + 1] = offsets[rr + 1]
+                        .checked_add(1)
+                        .expect("reads per target block");
+                    general += usize::from(coef != F::ONE && coef != -F::ONE);
+                }
+            });
+        }
+        for r2 in 0..n2 {
+            offsets[r2 + 1] = offsets[r2 + 1]
+                .checked_add(offsets[r2])
+                .expect("total reads per target block");
+        }
+        let mut next = offsets[..n2].to_vec();
+        let mut entries = vec![(0u32, 0u8, 0u32, 0u32); offsets[n2] as usize];
+        let mut coefs = Vec::with_capacity(general);
+        for (ri, reader) in list.iter().enumerate() {
+            let (a, j, _, _) = reader.at();
+            let base = self.row_base[a][j];
+            reads(ri, &mut |rr, r| {
+                let Some(coef) = entry(ri, r) else {
+                    return;
+                };
+                let row = u32::try_from(base + r).expect("a constraint row");
+                let (kind, index) = if coef == F::ONE {
+                    (1u8, 0u32)
+                } else if coef == -F::ONE {
+                    (2, 0)
+                } else {
+                    coefs.push(coef);
+                    (0, (coefs.len() - 1) as u32)
+                };
+                entries[next[rr] as usize] = (ri as u32, kind, row, index);
+                next[rr] += 1;
+            });
+        }
+        let readers = list
+            .iter()
+            .map(|r| {
+                let (a, j, mat, t) = r.at();
+                let family = self.arrays[a].family;
+                MReader {
+                    a,
+                    j,
+                    mat,
+                    t,
+                    rho: self.arrays[a].rho,
+                    all_p: (family != arr2.family).then(|| self.counts[family]),
+                }
+            })
+            .collect();
+        MPlan {
+            a2,
+            k2,
+            offsets,
+            entries,
+            coefs,
+            readers,
+        }
     }
 
-    fn readers_for<T: TemplateTerm<F>>(&self, rows: &[Vec<[Vec<T>; 3]>]) -> Readers {
-        let mut readers: Vec<Vec<Vec<Reader>>> = self
-            .arrays
-            .iter()
-            .map(|arr| (0..arr.cells()).map(|_| Vec::new()).collect())
-            .collect();
-        let mut one_readers = Vec::new();
-        let mut all_readers: Vec<Vec<Vec<(usize, usize, usize, usize)>>> = self
-            .arrays
-            .iter()
-            .map(|arr| vec![Vec::new(); arr.cells()])
-            .collect();
-        // Store only actual reads, then bucket them into one CSR per target
-        // block. A dense inverse map per reader multiplies a large lookup
-        // helper's extent by the number of scalar readers (hundreds of GB for
-        // the total ECDSA relation), even if every reader maps one instance.
-        let mut edges: Vec<Vec<Vec<(u32, u32, u32)>>> = self
-            .arrays
-            .iter()
-            .map(|arr| vec![Vec::new(); arr.cells()])
-            .collect();
-        for (a, arr) in self.arrays.iter().enumerate() {
-            for (j, row) in rows[a].iter().enumerate() {
-                for (mat, lin) in row.iter().enumerate() {
-                    for (t, term) in lin.iter().enumerate() {
-                        let term = term.term();
-                        match &term.src {
-                            Src::One => one_readers.push((a, j, mat, t)),
-                            Src::Own(k) => {
-                                let ri = u32::try_from(readers[a][*k].len()).expect("reader index");
-                                readers[a][*k].push(Reader {
-                                    array: a,
-                                    row: j,
-                                    mat,
-                                    term: t,
-                                });
-                                edges[a][*k].extend((0..1usize << arr.rho).map(|r| {
-                                    let r = u32::try_from(r).expect("reader instance");
-                                    (r, ri, r)
-                                }));
-                            }
-                            Src::Link { array, cell, map } => {
-                                let ri = u32::try_from(readers[*array][*cell].len())
-                                    .expect("reader index");
-                                for (r, target) in map.iter().enumerate() {
-                                    if let Some(rr) = target {
-                                        assert!(
-                                            *rr < 1usize << self.arrays[*array].rho,
-                                            "target instance in block"
-                                        );
-                                        edges[*array][*cell].push((
-                                            u32::try_from(*rr).expect("target instance"),
-                                            ri,
-                                            u32::try_from(r).expect("reader instance"),
-                                        ));
-                                    }
+    /// Template readers of every cell block, constant terms and sum terms
+    /// (the prover's gather of `M(r_x, .)`), from the rows as the prover
+    /// reads them.
+    fn readers(&self) -> &Readers {
+        self.readers.get_or_init(|| {
+            let mut readers: Vec<Vec<Vec<Reader>>> = self
+                .arrays
+                .iter()
+                .map(|arr| (0..arr.cells()).map(|_| Vec::new()).collect())
+                .collect();
+            let mut one_readers = Vec::new();
+            let mut all_readers: Vec<Vec<Vec<Reader>>> = self
+                .arrays
+                .iter()
+                .map(|arr| vec![Vec::new(); arr.cells()])
+                .collect();
+            for (a, arr) in self.arrays.iter().enumerate() {
+                for j in 0..arr.rows.len() {
+                    for mat in 0..3 {
+                        for t in 0..self.sym_len(a, j, mat) {
+                            let reader = Reader::new(a, j, mat, t);
+                            match self.sym_term(a, j, mat, t).0.src {
+                                SrcView::One => one_readers.push(reader),
+                                SrcView::Own(k) => readers[a][k].push(reader),
+                                SrcView::Link { array, cell, .. } => {
+                                    let tf = self.arrays[array].family;
+                                    assert!(
+                                        tf == arr.family || self.pi[tf] == 0,
+                                        "links stay inside a family or read a global array"
+                                    );
+                                    readers[array][cell].push(reader);
                                 }
-                                let tf = self.arrays[*array].family;
-                                assert!(
-                                    tf == arr.family || self.pi[tf] == 0,
-                                    "links stay inside a family or read a global array"
-                                );
-                                readers[*array][*cell].push(Reader {
-                                    array: a,
-                                    row: j,
-                                    mat,
-                                    term: t,
-                                });
-                            }
-                            Src::All { array, cell } => {
-                                all_readers[*array][*cell].push((a, j, mat, t))
+                                SrcView::All { array, cell } => {
+                                    all_readers[array][cell].push(reader)
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        let at = edges
-            .into_iter()
-            .enumerate()
-            .map(|(a2, cells)| {
-                cells
-                    .into_iter()
-                    .map(|list| {
-                        let n2 = 1usize << self.arrays[a2].rho;
-                        let mut offsets = vec![0u32; n2 + 1];
-                        for &(target, _, _) in &list {
-                            offsets[target as usize + 1] = offsets[target as usize + 1]
-                                .checked_add(1)
-                                .expect("reads per target block");
-                        }
-                        for r2 in 0..n2 {
-                            offsets[r2 + 1] = offsets[r2 + 1]
-                                .checked_add(offsets[r2])
-                                .expect("total reads per target block");
-                        }
-                        let mut next = offsets[..n2].to_vec();
-                        let mut pairs = vec![(0u32, 0u32); list.len()];
-                        // Readers and their source instances were visited in
-                        // ascending order. Stable bucketing retains precisely
-                        // that order within each target's CSR segment.
-                        for (target, reader, r) in list {
-                            let at = &mut next[target as usize];
-                            pairs[*at as usize] = (reader, r);
-                            *at += 1;
-                        }
-                        (offsets, pairs)
-                    })
-                    .collect()
-            })
-            .collect();
-        Readers {
-            readers,
-            at,
-            one_readers,
-            all_readers,
-        }
+            Readers {
+                readers,
+                one_readers,
+                all_readers,
+            }
+        })
     }
 
     /// A term with its coefficients zeroed where array `a` has no instance.
@@ -3175,7 +3477,26 @@ impl<F: Scalar> UniformCircuit<F> {
         for v in [self.phase2_challenges(), degree.0, degree.1] {
             word(&mut h, v);
         }
-        let tape = self.plan();
+        // A program not compiled yet is compiled for its digest and dropped:
+        // a private circuit's prover never runs it (its folded M(r_x, .)
+        // table gives the matrix value), so it is not retained through the
+        // proof.
+        let compiled;
+        let tape = match self.plan.get() {
+            Some(tape) => tape,
+            None => {
+                let trace = crate::prof::MemTrace::start();
+                compiled = self.compile(None);
+                if let Some(trace) = trace {
+                    trace.mark("compile");
+                    println!(
+                        "{}",
+                        trace.finish(&format!("{} matrix program compile", self.label))
+                    );
+                }
+                &compiled
+            }
+        };
         word(&mut h, tape.inputs);
         word(&mut h, tape.ops.len());
         word(&mut h, tape.pool.len());
@@ -3822,38 +4143,38 @@ impl<F: Scalar> UniformCircuit<F> {
         // Selecting one array must not clone and instantiate every other
         // array. Streaming matrix audits call this once per array; the old
         // implementation made them quadratic in the program size.
-        let rows = self.symbolic();
         let mut out = Vec::new();
         for (a, arr) in self.arrays.iter().enumerate() {
             if only.is_some_and(|o| o != a) {
                 continue;
             }
             let rmask = (1 << arr.rho) - 1;
-            for (j, row) in rows[a].iter().enumerate() {
-                for (mat, lin) in row.iter().enumerate() {
+            for j in 0..arr.rows.len() {
+                for mat in 0..3 {
+                    let lin = self.sym_lin(a, j, mat);
                     let factors: Vec<F> = lin
                         .iter()
                         .map(|(_, f)| Self::factor_value(ch, *f).unwrap_or(F::ONE))
                         .collect();
                     for i in (0..1 << self.m(a)).filter(|i| self.present(a, *i)) {
                         for ((term, _), factor) in lin.iter().zip(&factors) {
-                            if let Src::All { array, cell } = &term.src {
+                            if let SrcView::All { array, cell } = term.src {
                                 for i2 in
-                                    (0..1 << self.m(*array)).filter(|i2| self.present(*array, *i2))
+                                    (0..1 << self.m(array)).filter(|i2| self.present(array, *i2))
                                 {
                                     out.push((
                                         mat,
                                         self.row_base[a][j] + i,
-                                        self.blocks[*array][*cell].index(i2),
-                                        term.coef[0] * factor,
+                                        self.blocks[array][cell].index(i2),
+                                        term.coef.at(0) * factor,
                                     ));
                                 }
-                            } else if let Some(y) = self.ypos(a, &term.src, i) {
+                            } else if let Some(y) = self.ypos_view(a, term.src, i) {
                                 out.push((
                                     mat,
                                     self.row_base[a][j] + i,
                                     y,
-                                    term.coef[i & rmask] * factor,
+                                    term.coef.at(i & rmask) * factor,
                                 ));
                             }
                         }
@@ -4366,6 +4687,17 @@ struct MReader {
 }
 
 /// One placed cell block's part of the `M(r_x, .)` plan.
+impl<F> MPlan<F> {
+    /// A bound on a plan's bytes: the plan, `n2 + 1` offsets, at most one
+    /// entry and one coefficient per read, the readers.
+    fn bound(n2: usize, reads: usize, readers: usize) -> usize {
+        size_of::<Self>()
+            + (n2 + 1) * size_of::<u32>()
+            + reads * (size_of::<(u32, u8, u32, u32)>() + size_of::<F>())
+            + readers * size_of::<MReader>()
+    }
+}
+
 struct MPlan<F> {
     a2: usize,
     k2: usize,
@@ -4382,12 +4714,20 @@ struct MPlan<F> {
 /// Readers of the cell blocks: template terms, constant terms, sum terms.
 struct Readers {
     readers: Vec<Vec<Vec<Reader>>>,
-    /// Per block, the (reader, reader r) pairs reading each r', as offsets
-    /// per r' into one list (a chunk block's readers each cover one chunk).
-    at: Vec<Vec<(Vec<u32>, Vec<(u32, u32)>)>>,
-    one_readers: Vec<(usize, usize, usize, usize)>,
-    all_readers: Vec<Vec<Vec<(usize, usize, usize, usize)>>>,
+    one_readers: Vec<Reader>,
+    all_readers: Vec<Vec<Vec<Reader>>>,
 }
+
+/// A placed block of `M(r_x, .)` and a bound on its flat plan's bytes.
+struct MBlock {
+    a2: usize,
+    k2: usize,
+    bytes: usize,
+}
+
+/// Flat plans of `M(r_x, .)` are built and dropped a group of consecutive
+/// blocks at a time, of about this many bytes (a larger block alone).
+const M_PLAN_GROUP: usize = 32 << 20;
 
 /// Where a gathered term reads: instance bits `x` of a cell block sit at
 /// `base + offset(x)`; the read instance keeps the reader's `p` within the
@@ -4428,78 +4768,161 @@ struct GatherJob {
     mat: usize,
     /// First constraint row of the block.
     base: usize,
-    /// One target per term; sum terms are computed separately.
+}
+
+/// A gather job's terms as the prover reads them, resolved when the job
+/// runs (no per-term plan is retained): the terms with their factors, one
+/// target per term (sum terms are computed separately), the sum terms.
+struct JobTerms<'a, F> {
+    lin: Vec<(TermView<'a, F>, Factor)>,
     targets: Vec<Option<GatherTarget>>,
-    /// The present r. Maps and coefficients stay in the symbolic terms.
-    rs: Vec<usize>,
-    /// Each term's LogUp challenge factor.
-    factors: Vec<Factor>,
-    /// Sum terms (the same value at every instance).
     sums: Vec<usize>,
 }
 
 impl GatherJob {
     /// Instances `p` of `ps`, written to `out` (the row block from `ps.start`).
-    /// `lin` holds the symbolic terms and `fv` each term's factor value
-    /// (`None` for 1).
+    /// `rs` lists the present r, `lin` holds the row's terms and `fv` each
+    /// term's factor value (`None` for 1).
     #[allow(clippy::too_many_arguments)]
-    fn run<F: Scalar>(
+    fn run<F: Scalar, Z: ZRead<F> + ?Sized>(
         &self,
         ps: std::ops::Range<usize>,
         rho: usize,
-        lin: &[(Term<F>, Factor)],
+        rs: &[u32],
+        terms: &JobTerms<'_, F>,
         fv: &[Option<F>],
-        z: &[F],
+        z: &Z,
         sums: F,
         out: OutPtr<F>,
     ) {
-        let mut pb = vec![0usize; self.targets.len()];
+        let mut pb = vec![0usize; terms.targets.len()];
         for p in ps {
-            for (b, t) in pb.iter_mut().zip(&self.targets) {
-                *b = t.map_or(0, |target| target.p_base(p));
-            }
+            bases(&terms.targets, p, &mut pb);
             let row0 = self.base + (p << rho);
-            for &r in &self.rs {
-                let mut acc = sums;
-                for (ti, ((term, _), target)) in lin.iter().zip(&self.targets).enumerate() {
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    let coef = term.coef[r];
-                    if bool::from(coef.is_zero()) {
-                        continue;
-                    }
-                    let rr = match &term.src {
-                        Src::One => Some(0),
-                        Src::Own(_) => Some(r),
-                        Src::Link { map, .. } => map[r],
-                        Src::All { .. } => unreachable!("sum targets are absent"),
-                    };
-                    let Some(rr) = rr else {
-                        continue;
-                    };
-                    let v = z[pb[ti] + target.offset(rr)];
-                    let kind = if coef == F::ONE {
-                        1
-                    } else if coef == -F::ONE {
-                        2
-                    } else {
-                        0
-                    };
-                    match (fv[ti], kind) {
-                        (None, 1) => acc += v,
-                        (None, 2) => acc -= v,
-                        (None, _) => acc += coef * v,
-                        (Some(f), 1) => acc += f * v,
-                        (Some(f), 2) => acc -= f * v,
-                        (Some(f), _) => acc += f * (coef * v),
-                    }
-                }
+            for &r in rs {
+                let r = r as usize;
+                let acc = row_value(terms, r, fv, z, sums, &pb);
                 // SAFETY: present rows of different jobs never coincide (the
                 // layout places them apart), so writes do not overlap.
                 unsafe { out.0.add(row0 + r).write(acc) };
             }
         }
+    }
+}
+
+/// Each target's witness position of instance `(p, 0)`.
+fn bases(targets: &[Option<GatherTarget>], p: usize, pb: &mut [usize]) {
+    for (b, t) in pb.iter_mut().zip(targets) {
+        *b = t.map_or(0, |target| target.p_base(p));
+    }
+}
+
+/// A gather job's row value at instance `(p, r)`, `pb` holding [`bases`] of
+/// p.
+#[inline]
+fn row_value<F: Scalar, Z: ZRead<F> + ?Sized>(
+    terms: &JobTerms<'_, F>,
+    r: usize,
+    fv: &[Option<F>],
+    z: &Z,
+    sums: F,
+    pb: &[usize],
+) -> F {
+    let mut acc = sums;
+    for (ti, ((term, _), target)) in terms.lin.iter().zip(&terms.targets).enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let (coef, kind) = match term.coef {
+            CoefView::Ones => (F::ONE, 1),
+            CoefView::Slice(c) => {
+                let coef = c[r];
+                if bool::from(coef.is_zero()) {
+                    continue;
+                }
+                let kind = if coef == F::ONE {
+                    1
+                } else if coef == -F::ONE {
+                    2
+                } else {
+                    0
+                };
+                (coef, kind)
+            }
+        };
+        let rr = match term.src {
+            SrcView::One => Some(0),
+            SrcView::Own(_) => Some(r),
+            SrcView::Link { map, .. } => map.at(r),
+            SrcView::All { .. } => unreachable!("sum targets are absent"),
+        };
+        let Some(rr) = rr else {
+            continue;
+        };
+        let v = z.z(pb[ti] + target.offset(rr));
+        match (fv[ti], kind) {
+            (None, 1) => acc += v,
+            (None, 2) => acc -= v,
+            (None, _) => acc += coef * v,
+            (Some(f), 1) => acc += f * v,
+            (Some(f), 2) => acc -= f * v,
+            (Some(f), _) => acc += f * (coef * v),
+        }
+    }
+    acc
+}
+
+impl GatherJob {
+    /// The job's present rows within `rows` (instances `p < count`, `r`
+    /// present by `rfield`), written to `out[row - rows.start]`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_range<F: Scalar, Z: ZRead<F> + ?Sized>(
+        &self,
+        rows: std::ops::Range<usize>,
+        count: usize,
+        rho: usize,
+        rfield: (usize, usize, usize),
+        terms: &JobTerms<'_, F>,
+        fv: &[Option<F>],
+        z: &Z,
+        sums: F,
+        out: &mut [F],
+    ) {
+        if rows.end <= self.base {
+            return;
+        }
+        let first = rows.start.saturating_sub(self.base) >> rho;
+        let last = ((rows.end - self.base).div_ceil(1 << rho)).min(count);
+        let mut pb = vec![0usize; terms.targets.len()];
+        for p in first..last {
+            let row0 = self.base + (p << rho);
+            let lo = rows.start.saturating_sub(row0);
+            let hi = (rows.end - row0).min(1 << rho);
+            bases(&terms.targets, p, &mut pb);
+            for r in (lo..hi).filter(|r| field_present(rfield, *r)) {
+                out[row0 + r - rows.start] = row_value(terms, r, fv, z, sums, &pb);
+            }
+        }
+    }
+}
+
+/// `z = (w || io)` as the gather reads it: a slice, or the prover's rows and
+/// io tail.
+trait ZRead<F>: Sync {
+    fn z(&self, i: usize) -> F;
+}
+
+impl<F: Scalar> ZRead<F> for [F] {
+    #[inline]
+    fn z(&self, i: usize) -> F {
+        self[i]
+    }
+}
+
+impl<F: Scalar> ZRead<F> for crate::kern::ZView<'_, '_, F> {
+    #[inline]
+    fn z(&self, i: usize) -> F {
+        self.get(i)
     }
 }
 
@@ -5078,18 +5501,86 @@ pub struct UniformRel<'a, F> {
     c: &'a UniformCircuit<F>,
     ch: Vec<F>,
     rows: OnceLock<Vec<Vec<[Lin<F>; 3]>>>,
+    /// The gather jobs by chunk of constraint rows (streamed rounds).
+    index: OnceLock<GatherIndex<F>>,
+}
+
+/// Which gather jobs write each [`crate::kern::CHUNK`] constraint rows, and
+/// the sum terms' values (the same at every instance) of the jobs with any.
+struct GatherIndex<F> {
+    chunks: Vec<Vec<u32>>,
+    sums: HashMap<u32, F>,
 }
 
 impl<F: Scalar> UniformRel<'_, F> {
-    fn rows(&self) -> &Vec<Vec<[Lin<F>; 3]>> {
-        self.rows.get_or_init(|| self.c.instantiated_rows(&self.ch))
+    /// Each term's factor value (`None` for 1) of a job.
+    fn factor_values(&self, terms: &JobTerms<'_, F>) -> Vec<Option<F>> {
+        terms
+            .lin
+            .iter()
+            .map(|(_, f)| UniformCircuit::<F>::factor_value(&self.ch, *f))
+            .collect()
     }
-}
 
-impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
-    fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
+    /// A job's sum terms (the same value at every instance).
+    fn job_sums<Z: ZRead<F> + ?Sized>(
+        &self,
+        terms: &JobTerms<'_, F>,
+        fv: &[Option<F>],
+        z: &Z,
+    ) -> F {
         let c = self.c;
-        let rows = c.symbolic();
+        let lin = &terms.lin;
+        terms
+            .sums
+            .iter()
+            .map(|&ti| match lin[ti].0.src {
+                SrcView::All { array, cell } => {
+                    let c0 = lin[ti].0.coef.at(0);
+                    let coef = fv[ti].map_or(c0, |f| f * c0);
+                    coef * (0..1usize << c.m(array))
+                        .filter(|i2| c.present(array, *i2))
+                        .map(|i2| z.z(c.blocks[array][cell].index(i2)))
+                        .sum::<F>()
+                }
+                _ => unreachable!("a sum term"),
+            })
+            .sum()
+    }
+
+    fn gather_index<Z: ZRead<F> + ?Sized>(&self, z: &Z) -> &GatherIndex<F> {
+        self.index.get_or_init(|| {
+            let c = self.c;
+            let jobs = c.gather_plan();
+            let bits = crate::kern::CHUNK.trailing_zeros();
+            let mut chunks = vec![Vec::new(); (1usize << c.shape.sx).div_ceil(1 << bits)];
+            for (gi, g) in jobs.iter().enumerate() {
+                let arr = &c.arrays[g.a];
+                let end = g.base + (c.counts[arr.family] << arr.rho);
+                if end > g.base {
+                    for chunk in &mut chunks[g.base >> bits..=((end - 1) >> bits)] {
+                        chunk.push(gi as u32);
+                    }
+                }
+            }
+            let sums = jobs
+                .par_iter()
+                .enumerate()
+                .filter_map(|(gi, g)| {
+                    let terms = c.job_terms(g);
+                    (!terms.sums.is_empty()).then(|| {
+                        let fv = self.factor_values(&terms);
+                        (gi as u32, self.job_sums(&terms, &fv, z))
+                    })
+                })
+                .collect();
+            GatherIndex { chunks, sums }
+        })
+    }
+
+    /// `Az, Bz, Cz` by the circuit's gather plan.
+    fn gather<Z: ZRead<F> + ?Sized>(&self, shape: &Shape, z: &Z) -> (Vec<F>, Vec<F>, Vec<F>) {
+        let c = self.c;
         let jobs = c.gather_plan();
         let n = 1 << shape.sx;
         let mut out = [vec![F::ZERO; n], vec![F::ZERO; n], vec![F::ZERO; n]];
@@ -5103,36 +5594,31 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
         jobs.par_iter().for_each(|g| {
             let optr = ptrs[g.mat];
             let arr = &c.arrays[g.a];
-            let lin = &rows[g.a][g.j][g.mat];
-            let fv: Vec<Option<F>> = g
-                .factors
-                .iter()
-                .map(|f| UniformCircuit::<F>::factor_value(&self.ch, *f))
+            let terms = c.job_terms(g);
+            let rs: Vec<u32> = (0..1u32 << arr.rho)
+                .filter(|r| c.r_present(g.a, *r as usize))
                 .collect();
+            let fv = self.factor_values(&terms);
             // Sum terms take the same value at every instance.
-            let sums: F = g
-                .sums
-                .iter()
-                .map(|&ti| match &lin[ti].0.src {
-                    Src::All { array, cell } => {
-                        let coef = fv[ti].map_or(lin[ti].0.coef[0], |f| f * lin[ti].0.coef[0]);
-                        coef * (0..1usize << c.m(*array))
-                            .filter(|i2| c.present(*array, *i2))
-                            .map(|i2| z[c.blocks[*array][*cell].index(i2)])
-                            .sum::<F>()
-                    }
-                    _ => unreachable!("a sum term"),
-                })
-                .sum();
+            let sums = self.job_sums(&terms, &fv, z);
             // Instances in runs of p, so a large block is shared by workers.
             let count = c.counts[arr.family];
             let span = (GATHER_SPAN >> arr.rho).max(1);
             if count <= span {
-                g.run(0..count, arr.rho, lin, &fv, z, sums, optr);
+                g.run(0..count, arr.rho, &rs, &terms, &fv, z, sums, optr);
             } else {
                 (0..count.div_ceil(span)).into_par_iter().for_each(|i| {
                     let p0 = i * span;
-                    g.run(p0..(p0 + span).min(count), arr.rho, lin, &fv, z, sums, optr);
+                    g.run(
+                        p0..(p0 + span).min(count),
+                        arr.rho,
+                        &rs,
+                        &terms,
+                        &fv,
+                        z,
+                        sums,
+                        optr,
+                    );
                 });
             }
         });
@@ -5140,139 +5626,109 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
         (a, b, cc)
     }
 
+    fn rows(&self) -> &Vec<Vec<[Lin<F>; 3]>> {
+        self.rows.get_or_init(|| self.c.instantiated_rows(&self.ch))
+    }
+}
+
+impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
+    fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
+        self.gather(shape, z)
+    }
+
+    fn abc_rows(
+        &self,
+        shape: &Shape,
+        z: &crate::kern::ZView<'_, '_, F>,
+    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        self.gather(shape, z)
+    }
+
+    fn abc_ranges(
+        &self,
+        _shape: &Shape,
+        z: &crate::kern::ZView<'_, '_, F>,
+        ranges: &[std::ops::Range<usize>],
+        mats: [bool; 3],
+        out: &mut [Vec<F>; 3],
+    ) -> bool {
+        let c = self.c;
+        let jobs = c.gather_plan();
+        let index = self.gather_index(z);
+        let bits = crate::kern::CHUNK.trailing_zeros();
+        let mut offset = 0;
+        for rows in ranges {
+            let n = rows.end - rows.start;
+            if n == 0 {
+                continue;
+            }
+            let mut seen = HashSet::new();
+            for chunk in &index.chunks[rows.start >> bits..=((rows.end - 1) >> bits)] {
+                for &gi in chunk {
+                    let g = &jobs[gi as usize];
+                    if !mats[g.mat] || !seen.insert(gi) {
+                        continue;
+                    }
+                    let arr = &c.arrays[g.a];
+                    let terms = c.job_terms(g);
+                    let fv = self.factor_values(&terms);
+                    let sums = index.sums.get(&gi).copied().unwrap_or(F::ZERO);
+                    g.run_range(
+                        rows.clone(),
+                        c.counts[arr.family],
+                        arr.rho,
+                        c.rfield[g.a],
+                        &terms,
+                        &fv,
+                        z,
+                        sums,
+                        &mut out[g.mat][offset..offset + n],
+                    );
+                }
+            }
+            offset += n;
+        }
+        true
+    }
+
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F> {
         self.m_table_split(shape, ex, ra, rb, rc).to_full()
     }
 
     fn m_table_split(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> crate::kern::Split<F> {
-        let c = self.c;
-        let rm = [ra, rb, rc];
-        // The symbolic rows with each term's factor value: no row is
-        // instantiated per proof.
-        let (rows, rd) = (c.symbolic(), self.c.readers());
-        let weight = |a: usize, j: usize, mat: usize, t: usize| -> F {
-            UniformCircuit::<F>::factor_value(&self.ch, rows[a][j][mat][t].1)
-                .map_or(rm[mat], |f| rm[mat] * f)
-        };
-        // One job per placed block, large blocks in ranges of instances; the
-        // rows that read each instance come from the circuit's flat plan.
-        const SPAN: usize = 2048;
-        let plans = c.m_plans();
-        // The witness half is dense. The public half holds only the io
-        // arrays' blocks and the constant slot (its first entry), so it ends
-        // at their last index.
-        let half = 1usize << shape.sw();
-        let tail_len = plans
-            .iter()
-            .filter(|plan| c.is_io(plan.a2))
-            .flat_map(|plan| {
-                let block = &c.blocks[plan.a2][plan.k2];
-                (0..1usize << c.m(plan.a2))
-                    .filter(move |i2| c.present(plan.a2, *i2))
-                    .map(move |i2| block.index(i2) + 1)
-            })
-            .fold(half + 1, usize::max)
-            - half;
-        let mut dense = crate::kern::zeroed::<F>(half);
-        let mut tail = vec![F::ZERO; tail_len];
-        let jobs: Vec<(usize, usize)> = plans
+        self.m_table_with(shape, &FullEq(ex), ra, rb, rc)
+    }
+
+    fn m_table_split_at(
+        &self,
+        shape: &Shape,
+        rx: &[F],
+        ra: F,
+        rb: F,
+        rc: F,
+    ) -> crate::kern::Split<F> {
+        // eq(r_x, row) = eq(top, row's high bits) eq(rest, row's low bits):
+        // every reader's rows lie in one aligned block of 2^m rows, so with
+        // `low` at least the largest m a reader's weight takes the high
+        // factor and its entries read the low table alone (2^low entries,
+        // not 2^sx).
+        let low = self
+            .c
+            .arrays
             .iter()
             .enumerate()
-            .flat_map(|(b, plan)| {
-                (0..(1usize << c.m(plan.a2)).div_ceil(SPAN)).map(move |s| (b, s * SPAN))
-            })
-            .collect();
-        // Each reader's matrix challenge times its factor's value.
-        let weights: Vec<Vec<F>> = plans
-            .iter()
-            .map(|plan| {
-                plan.readers
-                    .iter()
-                    .map(|r| weight(r.a, r.j, r.mat, r.t))
-                    .collect()
-            })
-            .collect();
-        let output = SplitOut {
-            dense: OutPtr(dense.as_mut_ptr()),
-            tail: OutPtr(tail.as_mut_ptr()),
-            half,
-            tail_len,
-        };
-        let write_job = |&(b, start): &(usize, usize)| {
-            let (plan, weights) = (&plans[b], &weights[b]);
-            let (a2, k2) = (plan.a2, plan.k2);
-            let rho2 = c.arrays[a2].rho;
-            let block = &c.blocks[a2][k2];
-            // A sum row adds the same weight to every instance of its block.
-            let all: F = rd.all_readers[a2][k2]
-                .iter()
-                .map(|&(a, j, mat, t)| {
-                    ex[c.row_base[a][j]] * weight(a, j, mat, t) * rows[a][j][mat][t].0.coef[0]
-                })
-                .sum();
-            for i2 in (start..(start + SPAN).min(1usize << c.m(a2))).filter(|i2| c.present(a2, *i2))
-            {
-                let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
-                let mut acc = all;
-                let entries =
-                    &plan.entries[plan.offsets[r2] as usize..plan.offsets[r2 + 1] as usize];
-                let mut at = 0;
-                while at < entries.len() {
-                    // One reader's rows: their sum, then one product
-                    // by the reader's weight.
-                    let ri = entries[at].0;
-                    let reader = &plan.readers[ri as usize];
-                    let mut sum = F::ZERO;
-                    while at < entries.len() && entries[at].0 == ri {
-                        let (_, kind, row, index) = entries[at];
-                        let e = match reader.all_p {
-                            None => ex[row as usize + (p << reader.rho)],
-                            Some(count) => (0..count)
-                                .map(|pp| ex[row as usize + (pp << reader.rho)])
-                                .sum(),
-                        };
-                        match kind {
-                            1 => sum += e,
-                            2 => sum -= e,
-                            _ => sum += plan.coefs[index as usize] * e,
-                        }
-                        at += 1;
-                    }
-                    acc += weights[ri as usize] * sum;
-                }
-                // SAFETY: each plan owns a distinct placed cell
-                // block, and jobs partition that block's instances.
-                // Public-IO jobs run serially below because separate
-                // arrays can name the same IO slots. The constant slot
-                // is updated only after all jobs have finished.
-                unsafe {
-                    output.write(block.index(i2), acc);
-                }
-            }
-        };
-        jobs.par_iter()
-            .filter(|(b, _)| !c.is_io(plans[*b].a2))
-            .for_each(&write_job);
-        for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
-            write_job(job);
-        }
-        let one: F = rd
-            .one_readers
-            .par_iter()
-            .map(|&(a, j, mat, t)| {
-                let rmask = (1 << c.arrays[a].rho) - 1;
-                let base = c.row_base[a][j];
-                let coef = &rows[a][j][mat][t].0.coef;
-                (0..1usize << c.m(a))
-                    .filter(|i| c.present(a, *i))
-                    .map(|i| ex[base + i] * coef[i & rmask])
-                    .sum::<F>()
-                    * weight(a, j, mat, t)
-            })
-            .sum();
-        // The constant slot opens the public half.
-        tail[0] += one;
-        crate::kern::Split::new(dense, tail)
+            .filter(|(_, arr)| !arr.rows.is_empty())
+            .map(|(a, _)| self.c.m(a))
+            .max()
+            .unwrap_or(0)
+            .min(shape.sx);
+        let (high, rest) = rx.split_at(shape.sx - low);
+        let eq = crate::prof::time("i.eq", || SplitEq {
+            high: crate::grid::eq_table(high),
+            low: crate::grid::eq_table(rest),
+            bits: low,
+        });
+        self.m_table_with(shape, &eq, ra, rb, rc)
     }
 
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F) {
@@ -5310,8 +5766,251 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
     }
 }
 
-impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
-    fn randomize_masks(&self, w: &mut [F], rng: &mut SpikeRng) {
+/// `eq(r_x, .)` as the M table reads it: whole, or as a tensor of a high and
+/// a low table ([`SplitEq`]).
+trait EqRows<F>: Sync {
+    /// `eq(r_x, row)`.
+    fn at(&self, row: usize) -> F;
+    /// The factor of the aligned block holding `row`, and `row`'s entry in
+    /// the block's table (their product is [`EqRows::at`]).
+    fn block(&self, row: usize) -> F;
+    fn in_block(&self, row: usize) -> F;
+}
+
+struct FullEq<'a, F>(&'a [F]);
+
+impl<F: Scalar> EqRows<F> for FullEq<'_, F> {
+    #[inline]
+    fn at(&self, row: usize) -> F {
+        self.0[row]
+    }
+    #[inline]
+    fn block(&self, _row: usize) -> F {
+        F::ONE
+    }
+    #[inline]
+    fn in_block(&self, row: usize) -> F {
+        self.0[row]
+    }
+}
+
+struct SplitEq<F> {
+    high: Vec<F>,
+    low: Vec<F>,
+    bits: usize,
+}
+
+impl<F: Scalar> EqRows<F> for SplitEq<F> {
+    #[inline]
+    fn at(&self, row: usize) -> F {
+        self.block(row) * self.in_block(row)
+    }
+    #[inline]
+    fn block(&self, row: usize) -> F {
+        self.high[row >> self.bits]
+    }
+    #[inline]
+    fn in_block(&self, row: usize) -> F {
+        self.low[row & ((1 << self.bits) - 1)]
+    }
+}
+
+impl<F: Scalar> UniformRel<'_, F> {
+    /// `M(r_x, .)` split, from `eq(r_x, .)` as `ex` gives it.
+    fn m_table_with<E: EqRows<F>>(
+        &self,
+        shape: &Shape,
+        ex: &E,
+        ra: F,
+        rb: F,
+        rc: F,
+    ) -> crate::kern::Split<F> {
+        let c = self.c;
+        let rm = [ra, rb, rc];
+        // The rows' terms with each term's factor value: no row is
+        // instantiated per proof.
+        let rd = c.readers();
+        let weight = |a: usize, j: usize, mat: usize, t: usize| -> F {
+            UniformCircuit::<F>::factor_value(&self.ch, c.sym_term(a, j, mat, t).1)
+                .map_or(rm[mat], |f| rm[mat] * f)
+        };
+        // One job per placed block, large blocks in ranges of instances; the
+        // rows that read each instance come from the block's flat plan.
+        const SPAN: usize = 2048;
+        let blocks = c.m_plans();
+        // The witness half is dense. The public half holds only the io
+        // arrays' blocks and the constant slot (its first entry), so it ends
+        // at their last index.
+        let half = 1usize << shape.sw();
+        let tail_len = blocks
+            .iter()
+            .filter(|b| c.is_io(b.a2))
+            .flat_map(|b| {
+                let block = &c.blocks[b.a2][b.k2];
+                (0..1usize << c.m(b.a2))
+                    .filter(move |i2| c.present(b.a2, *i2))
+                    .map(move |i2| block.index(i2) + 1)
+            })
+            .fold(half + 1, usize::max)
+            - half;
+        let mut dense = crate::kern::zeroed::<F>(half);
+        let mut tail = vec![F::ZERO; tail_len];
+        let output = SplitOut {
+            dense: OutPtr(dense.as_mut_ptr()),
+            tail: OutPtr(tail.as_mut_ptr()),
+            half,
+            tail_len,
+        };
+        // The dense runs written: the inner round reads no other (their
+        // pages stay unallocated).
+        let seg = crate::kern::SEGMENT;
+        let written: Vec<std::sync::atomic::AtomicU64> = (0..half.div_ceil(seg).div_ceil(64))
+            .map(|_| std::sync::atomic::AtomicU64::new(0))
+            .collect();
+        let mark = |pos: usize, last: &mut usize| {
+            let s = pos / seg;
+            if pos < half && s != *last {
+                written[s / 64].fetch_or(1 << (s % 64), std::sync::atomic::Ordering::Relaxed);
+                *last = s;
+            }
+        };
+        // Consecutive blocks in groups of about M_PLAN_GROUP plan bytes: each
+        // group's plans are built, written out and dropped before the next.
+        let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
+        let (mut first, mut bytes) = (0, 0);
+        for (i, b) in blocks.iter().enumerate() {
+            if i > first && bytes + b.bytes > M_PLAN_GROUP {
+                groups.push(first..i);
+                (first, bytes) = (i, 0);
+            }
+            bytes += b.bytes;
+        }
+        if first < blocks.len() {
+            groups.push(first..blocks.len());
+        }
+        for group in groups {
+            let plans: Vec<MPlan<F>> = blocks[group]
+                .par_iter()
+                .map(|b| c.m_plan(b.a2, b.k2))
+                .collect();
+            // Each reader's matrix challenge times its factor's value, and
+            // each block's sum rows (the same weight at every instance).
+            // (Its rows lie in one aligned block: the block's equality factor
+            // joins the weight.)
+            let weights: Vec<Vec<F>> = plans
+                .iter()
+                .map(|plan| {
+                    plan.readers
+                        .iter()
+                        .map(|r| weight(r.a, r.j, r.mat, r.t) * ex.block(c.row_base[r.a][r.j]))
+                        .collect()
+                })
+                .collect();
+            let alls: Vec<F> = plans
+                .iter()
+                .map(|plan| {
+                    rd.all_readers[plan.a2][plan.k2]
+                        .iter()
+                        .map(|r| {
+                            let (a, j, mat, t) = r.at();
+                            ex.at(c.row_base[a][j])
+                                * weight(a, j, mat, t)
+                                * c.sym_term(a, j, mat, t).0.coef.at(0)
+                        })
+                        .sum()
+                })
+                .collect();
+            let jobs: Vec<(usize, usize)> = plans
+                .iter()
+                .enumerate()
+                .flat_map(|(b, plan)| {
+                    (0..(1usize << c.m(plan.a2)).div_ceil(SPAN)).map(move |s| (b, s * SPAN))
+                })
+                .collect();
+            let write_job = |&(b, start): &(usize, usize)| {
+                let (plan, weights) = (&plans[b], &weights[b]);
+                let (a2, k2) = (plan.a2, plan.k2);
+                let rho2 = c.arrays[a2].rho;
+                let block = &c.blocks[a2][k2];
+                let mut last = usize::MAX;
+                for i2 in
+                    (start..(start + SPAN).min(1usize << c.m(a2))).filter(|i2| c.present(a2, *i2))
+                {
+                    let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
+                    let mut acc = alls[b];
+                    let entries =
+                        &plan.entries[plan.offsets[r2] as usize..plan.offsets[r2 + 1] as usize];
+                    let mut at = 0;
+                    while at < entries.len() {
+                        // One reader's rows: their sum, then one product
+                        // by the reader's weight.
+                        let ri = entries[at].0;
+                        let reader = &plan.readers[ri as usize];
+                        let mut sum = F::ZERO;
+                        while at < entries.len() && entries[at].0 == ri {
+                            let (_, kind, row, index) = entries[at];
+                            let e = match reader.all_p {
+                                None => ex.in_block(row as usize + (p << reader.rho)),
+                                Some(count) => (0..count)
+                                    .map(|pp| ex.in_block(row as usize + (pp << reader.rho)))
+                                    .sum(),
+                            };
+                            match kind {
+                                1 => sum += e,
+                                2 => sum -= e,
+                                _ => sum += plan.coefs[index as usize] * e,
+                            }
+                            at += 1;
+                        }
+                        acc += weights[ri as usize] * sum;
+                    }
+                    // SAFETY: each plan owns a distinct placed cell
+                    // block, and jobs partition that block's instances.
+                    // Public-IO jobs run serially below because separate
+                    // arrays can name the same IO slots. The constant slot
+                    // is updated only after all jobs have finished.
+                    let pos = block.index(i2);
+                    mark(pos, &mut last);
+                    unsafe {
+                        output.write(pos, acc);
+                    }
+                }
+            };
+            jobs.par_iter()
+                .filter(|(b, _)| !c.is_io(plans[*b].a2))
+                .for_each(&write_job);
+            for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
+                write_job(job);
+            }
+        }
+        let one: F = rd
+            .one_readers
+            .par_iter()
+            .map(|r| {
+                let (a, j, mat, t) = r.at();
+                let rmask = (1 << c.arrays[a].rho) - 1;
+                let base = c.row_base[a][j];
+                let coef = c.sym_term(a, j, mat, t).0.coef;
+                (0..1usize << c.m(a))
+                    .filter(|i| c.present(a, *i))
+                    .map(|i| ex.at(base + i) * coef.at(i & rmask))
+                    .sum::<F>()
+                    * weight(a, j, mat, t)
+            })
+            .sum();
+        // The constant slot opens the public half.
+        tail[0] += one;
+        crate::kern::Split::with_written(
+            dense,
+            tail,
+            written.into_iter().map(|w| w.into_inner()).collect(),
+        )
+    }
+}
+
+// The prover's witness hooks, on a slice or on the prover's rows.
+impl<F: Scalar> UniformCircuit<F> {
+    fn randomize_masks_in<W: Cells<F> + ?Sized>(&self, w: &mut W, rng: &mut SpikeRng) {
         assert!(
             self.verifier_only.is_none(),
             "an imported public program has no prover witness"
@@ -5320,9 +6019,76 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
             let a = rng.scalar();
             let b = rng.scalar();
             for (cell, value) in cells.into_iter().zip([a, b, a * b]) {
-                w[self.cell_index(array, cell, instance)] = value;
+                w.set_cell(self.cell_index(array, cell, instance), value);
             }
         }
+    }
+
+    fn fill_second_phase<W: Cells<F> + ?Sized>(&self, ch: &[F], w: &mut W) {
+        if self.logup() {
+            assert!(
+                self.verifier_only.is_none(),
+                "an imported public program cannot fill private witnesses"
+            );
+            self.fill_helpers(ch, w);
+            if let Some(fill) = &self.ch_fill {
+                for (a, k, i, v) in fill(ch) {
+                    w.set_cell(self.cell_index(a, k, i), v);
+                }
+            }
+        }
+    }
+
+    fn rel(&self, ch: &[F]) -> Box<dyn Rel<F> + '_> {
+        Box::new(UniformRel {
+            c: self,
+            ch: ch.to_vec(),
+            rows: OnceLock::new(),
+            index: OnceLock::new(),
+        })
+    }
+
+    fn late_values_in<W: Cells<F> + ?Sized>(&self, w: &W) -> Vec<F> {
+        self.late_io
+            .iter()
+            .map(|&(_, a, k, i)| w.cell(self.cell_index(a, k, i)))
+            .collect()
+    }
+
+    fn fill_link_in<W: Cells<F> + ?Sized>(&self, rho: &[u8; 32], w: &mut W) {
+        if let Some(fill) = &self.link_fill {
+            for (a, k, i, v) in fill(rho) {
+                w.set_cell(self.cell_index(a, k, i), v);
+            }
+        }
+        self.recount_link_tables(w);
+    }
+
+    fn binding_r_in<W: Cells<F> + ?Sized>(&self, w: &W) -> Option<[u8; 32]> {
+        use num_bigint::BigUint;
+        let (cells, bits) = self.link_binding.as_ref()?;
+        let mut r = BigUint::default();
+        for (j, &(a, k, i)) in cells.iter().enumerate() {
+            let v = w.cell(self.cell_index(a, k, i));
+            r += BigUint::from_bytes_le(v.to_repr().as_ref()) << (*bits as usize * j);
+        }
+        let bytes = r.to_bytes_le();
+        // A value past 32 bytes is no word: it never equals the link's R.
+        let mut word = [0xff_u8; 32];
+        if bytes.len() <= 32 {
+            word = [0_u8; 32];
+            word[..bytes.len()].copy_from_slice(&bytes);
+        }
+        Some(word)
+    }
+}
+
+impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
+    fn randomize_masks(&self, w: &mut [F], rng: &mut SpikeRng) {
+        self.randomize_masks_in(w, rng);
+    }
+    fn randomize_masks_rows(&self, w: &mut crate::kern::Rows<'_, F>, rng: &mut SpikeRng) {
+        self.randomize_masks_in(w, rng);
     }
 
     fn phase2_challenges(&self) -> usize {
@@ -5334,25 +6100,19 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         ch: &[F],
         w: Option<&mut [F]>,
     ) -> Box<dyn Rel<F> + 'a> {
-        if let Some(w) = w
-            && self.logup()
-        {
-            assert!(
-                self.verifier_only.is_none(),
-                "an imported public program cannot fill private witnesses"
-            );
-            self.fill_helpers(ch, w);
-            if let Some(fill) = &self.ch_fill {
-                for (a, k, i, v) in fill(ch) {
-                    w[self.cell_index(a, k, i)] = v;
-                }
-            }
+        if let Some(w) = w {
+            self.fill_second_phase(ch, w);
         }
-        Box::new(UniformRel {
-            c: self,
-            ch: ch.to_vec(),
-            rows: OnceLock::new(),
-        })
+        self.rel(ch)
+    }
+    fn instantiate_rows<'a>(
+        &'a self,
+        _shape: &Shape,
+        ch: &[F],
+        w: &mut crate::kern::Rows<'_, F>,
+    ) -> Box<dyn Rel<F> + 'a> {
+        self.fill_second_phase(ch, w);
+        self.rel(ch)
     }
     fn row_bounds(&self, _shape: &Shape) -> Option<Vec<usize>> {
         Some(self.bounds.clone())
@@ -5366,6 +6126,25 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     fn fixed_values(&self, _shape: &Shape) -> Vec<F> {
         self.fixed_values.expanded()
     }
+    fn fixed_row(&self, shape: &Shape, k: usize) -> Vec<F> {
+        let cols = shape.cols();
+        let (start, end) = (k * cols, (k + 1) * cols);
+        let mut row = vec![F::ZERO; cols];
+        let mut at = 0;
+        self.fixed_values
+            .visit_runs::<std::convert::Infallible>(|count, values| {
+                if let Some(values) = values {
+                    let (lo, hi) = (at.max(start), (at + count).min(end));
+                    if lo < hi {
+                        row[lo - start..hi - start].copy_from_slice(&values[lo - at..hi - at]);
+                    }
+                }
+                at += count;
+                Ok(())
+            })
+            .unwrap();
+        row
+    }
     fn wallet_rows(&self) -> usize {
         self.wallet_rows
     }
@@ -5376,10 +6155,10 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         self.late_io.iter().map(|x| x.0).collect()
     }
     fn late_values(&self, w: &[F]) -> Vec<F> {
-        self.late_io
-            .iter()
-            .map(|&(_, a, k, i)| w[self.cell_index(a, k, i)])
-            .collect()
+        self.late_values_in(w)
+    }
+    fn late_values_rows(&self, w: &crate::kern::Rows<'_, F>) -> Vec<F> {
+        self.late_values_in(w)
     }
     fn link_rows(&self, _shape: &Shape) -> usize {
         self.pl_rows
@@ -5395,29 +6174,46 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         }
     }
     fn fill_link(&self, rho: &[u8; 32], w: &mut [F]) {
-        if let Some(fill) = &self.link_fill {
-            for (a, k, i, v) in fill(rho) {
-                w[self.cell_index(a, k, i)] = v;
-            }
-        }
-        self.recount_link_tables(w);
+        self.fill_link_in(rho, w);
+    }
+    fn fill_link_rows(&self, rho: &[u8; 32], w: &mut crate::kern::Rows<'_, F>) {
+        self.fill_link_in(rho, w);
+    }
+    fn memory_note(&self) -> String {
+        let a = self.proving_memory_accounting();
+        let p = self.phase_memory_accounting();
+        let mb = |b: u64| b as f64 / 1e6;
+        let parts = self.construction_breakdown();
+        format!(
+            "constraint extent {} of {}; accounted peak {:.0} MB = retained {:.0} + phase {:.0} (construction {:.0} [private values {:.0}, fixed values {:.0}, templates {:.0}, fixed tail {:.0}], symbolic {:.0}, gather {:.0}, readers {:.0}, m plans {:.0}, tape {:.0}); phases MB: preparation {:.0}, phase1 {:.0}, outer {:.0}, matrix {:.0}, inner {:.0}, opening {:.0}",
+            self.constraints,
+            1usize << self.shape.sx,
+            mb(a.accounted_peak_bytes),
+            mb(a.retained_bytes),
+            mb(a.additional_peak_bytes),
+            mb(a.construction_bytes),
+            mb(parts[0]),
+            mb(parts[1]),
+            mb(parts[2]),
+            mb(parts[3]),
+            mb(a.symbolic_bytes),
+            mb(a.gather_bytes),
+            mb(a.readers_bytes),
+            mb(a.m_plan_bytes),
+            mb(a.matrix_program_bytes),
+            mb(p.preparation_bytes),
+            mb(p.phase1_bytes),
+            mb(p.outer_bytes),
+            mb(p.matrix_bytes),
+            mb(p.inner_bytes),
+            mb(p.opening_bytes),
+        )
     }
     fn binding_r(&self, w: &[F]) -> Option<[u8; 32]> {
-        use num_bigint::BigUint;
-        let (cells, bits) = self.link_binding.as_ref()?;
-        let mut r = BigUint::default();
-        for (j, &(a, k, i)) in cells.iter().enumerate() {
-            let v = w[self.cell_index(a, k, i)];
-            r += BigUint::from_bytes_le(v.to_repr().as_ref()) << (*bits as usize * j);
-        }
-        let bytes = r.to_bytes_le();
-        // A value past 32 bytes is no word: it never equals the link's R.
-        let mut word = [0xff_u8; 32];
-        if bytes.len() <= 32 {
-            word = [0_u8; 32];
-            word[..bytes.len()].copy_from_slice(&bytes);
-        }
-        Some(word)
+        self.binding_r_in(w)
+    }
+    fn binding_r_rows(&self, w: &crate::kern::Rows<'_, F>) -> Option<[u8; 32]> {
+        self.binding_r_in(w)
     }
 }
 
@@ -5843,39 +6639,54 @@ mod tests {
             4,
             b"sparse readers",
         );
+        // Each placed block's flat plan: per target, its readers' present
+        // nonzero reads in reader order, each reader's rows ascending.
         let rd = c.readers();
-        let symbolic = c.symbolic();
         for (a, cells) in rd.readers.iter().enumerate() {
             for (cell, list) in cells.iter().enumerate() {
-                let (offsets, pairs) = &rd.at[a][cell];
-                assert_eq!(offsets.len(), (1usize << c.arrays[a].rho) + 1);
+                if c.moved[a][cell].is_some() {
+                    continue;
+                }
+                let plan = c.m_plan(a, cell);
+                assert_eq!(plan.offsets.len(), (1usize << c.arrays[a].rho) + 1);
                 let mut expected = std::collections::BTreeMap::<usize, Vec<(u32, u32)>>::new();
                 for (ri, reader) in list.iter().enumerate() {
-                    let term = &symbolic[reader.array][reader.row][reader.mat][reader.term].0;
-                    match &term.src {
-                        Src::Own(_) => {
-                            for r in 0..1usize << c.arrays[reader.array].rho {
-                                expected.entry(r).or_default().push((ri as u32, r as u32));
-                            }
+                    let (ra, rj, rmat, rt) = reader.at();
+                    let term = c.sym_term(ra, rj, rmat, rt).0;
+                    let n = 1usize << c.arrays[ra].rho;
+                    let base = c.row_base[ra][rj];
+                    let mut push = |target: usize, r: usize| {
+                        if c.r_present(ra, r) && !bool::from(term.coef.at(r).is_zero()) {
+                            expected
+                                .entry(target)
+                                .or_default()
+                                .push((ri as u32, (base + r) as u32));
                         }
-                        Src::Link { map, .. } => {
-                            for (r, target) in map.iter().enumerate() {
-                                if let Some(target) = target {
-                                    expected
-                                        .entry(*target)
-                                        .or_default()
-                                        .push((ri as u32, r as u32));
+                    };
+                    match term.src {
+                        SrcView::Own(_) => (0..n).for_each(|r| push(r, r)),
+                        SrcView::Link { map, .. } => {
+                            for r in 0..map.len(n) {
+                                if let Some(target) = map.at(r) {
+                                    push(target, r);
                                 }
                             }
                         }
                         _ => unreachable!(),
                     }
                 }
-                assert_eq!(pairs.len(), expected.values().map(Vec::len).sum::<usize>());
-                for r in 0..offsets.len() - 1 {
-                    let actual = &pairs[offsets[r] as usize..offsets[r + 1] as usize];
+                assert_eq!(
+                    plan.entries.len(),
+                    expected.values().map(Vec::len).sum::<usize>()
+                );
+                for r in 0..plan.offsets.len() - 1 {
+                    let actual: Vec<(u32, u32)> = plan.entries
+                        [plan.offsets[r] as usize..plan.offsets[r + 1] as usize]
+                        .iter()
+                        .map(|e| (e.0, e.2))
+                        .collect();
                     assert_eq!(
-                        actual,
+                        actual.as_slice(),
                         expected.get(&r).map_or(&[][..], Vec::as_slice),
                         "block {a}:{cell}, target {r}"
                     );
@@ -6704,4 +7515,124 @@ mod tests {
             );
         }
     }
+
+    /// Proof bytes of the uniform fixtures (lookups, copies, a link phase,
+    /// product masks; both curves) and first-phase digests under fixed RNG
+    /// streams, as the prover at iroha 9ee63f379a produced them: the
+    /// prover's memory layout may change, its bytes may not.
+    #[test]
+    fn prover_bytes_match_the_recorded_proofs() {
+        use crate::ipa::F;
+        use crate::spartan::{Link, prepare_linked_phase1, prove_circuit, prove_linked_circuit};
+        use ff::PrimeField;
+        type Built<C> = (UniformCircuit<F<C>>, Instance<F<C>>, Witness<F<C>>);
+        fn linked<C: iroha_pasta::PastaCurve>(
+            name: &str,
+            (c, i, w): Built<C>,
+            out: &mut Vec<String>,
+        ) {
+            let gens = crate::ipa::Gens::<C>::new(c.shape.cols());
+            let seed = format!("E3 golden {name}");
+            let d = prepare_linked_phase1(
+                &c.shape,
+                &gens,
+                &i,
+                &w,
+                &mut SpikeRng::new(seed.as_bytes()),
+                &c,
+            );
+            let link = Link::First {
+                rho: F::<C>::from(7).to_repr(),
+                r: F::<C>::from(11).to_repr(),
+            };
+            let (proof, d2, r) = prove_linked_circuit(
+                &c.shape,
+                &gens,
+                &i,
+                &w,
+                &mut SpikeRng::new(seed.as_bytes()),
+                &link,
+                &c,
+            );
+            assert_eq!(d, d2);
+            out.push(format!("{name} digest {}", blake3::hash(&d).to_hex()));
+            out.push(format!(
+                "{name} linked {} r {}",
+                blake3::hash(&proof.to_bytes()).to_hex(),
+                blake3::hash(&r).to_hex()
+            ));
+        }
+        fn rp<C: iroha_pasta::PastaCurve>() -> Built<C>
+        where
+            F<C>: iroha_pasta::poseidon::PoseidonField,
+        {
+            let (arrays, pi, _) = rp57::<F<C>>(2, b"E3 golden rp57");
+            let counts = pi.iter().map(|p| 1 << p).collect();
+            UniformCircuit::build(
+                "E3 golden rp57",
+                arrays,
+                pi,
+                counts,
+                Vec::new(),
+                11,
+                4,
+                b"E3 golden rp57 witness",
+            )
+        }
+        let mut out = Vec::new();
+        linked::<Vesta>("rp57 Vesta", rp::<Vesta>(), &mut out);
+        linked::<iroha_pasta::Ep>("rp57 Pallas", rp::<iroha_pasta::Ep>(), &mut out);
+        linked::<Vesta>(
+            "phased Vesta",
+            crate::spartan::phase1_tests::phased_fixture::<Fv>(15),
+            &mut out,
+        );
+        linked::<iroha_pasta::Ep>(
+            "phased Pallas",
+            crate::spartan::phase1_tests::phased_fixture::<F<iroha_pasta::Ep>>(15),
+            &mut out,
+        );
+        for (name, (c, i, w)) in [
+            ("small", small()),
+            ("lookup", lookup_circuit()),
+            ("copy", copy_circuit()),
+        ] {
+            let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+            let seed = format!("E3 golden {name}");
+            let (proof, _) = prove_circuit(
+                &c.shape,
+                &gens,
+                &i,
+                &w,
+                &mut SpikeRng::new(seed.as_bytes()),
+                &c,
+            );
+            out.push(format!(
+                "{name} proof {}",
+                blake3::hash(&proof.to_bytes()).to_hex()
+            ));
+        }
+        for line in &out {
+            println!("E3 golden {line}");
+        }
+        assert_eq!(
+            out.iter().map(String::as_str).collect::<Vec<_>>(),
+            RECORDED,
+            "prover bytes"
+        );
+    }
+
+    const RECORDED: [&str; 11] = [
+        "rp57 Vesta digest 370707a54b9034cf1ff5f0706686287144b4c1eac6f01221df09386af531a817",
+        "rp57 Vesta linked 30e287805c1b9a423a31f06f57fe48cf1354148ac73654955a1b8096570d5b17 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "rp57 Pallas digest c89bb7e0b69eb9e6e247a344403eea3981a922aa8970ccabebc69b896e99f0ac",
+        "rp57 Pallas linked f9d46a87a2b6ded82e4cc95f7d9988818ca97584787c41e13f655dd024467676 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "phased Vesta digest 66c2c273306ae19b855e60dc9015132b661d438e13718bb728d1941abeef007e",
+        "phased Vesta linked 610ac3d682a935d03340ea91f93602f6225f4fb5185bff5901185d908063f9a7 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "phased Pallas digest 6debc9688293ad5441616407547a450dbb962efbd1d46e58de82672c5f450581",
+        "phased Pallas linked af3ddb007ccc5f5c0884359ad5ecb7dc8f02391cdf70893f09b9a2432ab2a9d3 r 34a95913f6584f315e6e69c3ad141fb48dd4d6f7d95d55527191e8d4cd9cf825",
+        "small proof 4d43a5714d243ebd5ad86d6d5bd088292b1559cfece1ab96472fff02598eb0e3",
+        "lookup proof db4a4d0651fec879e8b48540c1faf6d3f365e26bcbb397c7e3f6959b1d97e142",
+        "copy proof f4b6b3baef1707acbe3ffdb4e89a246eef0cf96eafb1811becc90c8cef669c9a",
+    ];
 }

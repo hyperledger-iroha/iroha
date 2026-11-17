@@ -68,29 +68,44 @@ fn growing<T>(n: u128) -> u128 {
 struct BlockCounts {
     readers: u128,
     all: u128,
-    edges: u128,
+    /// Reads of the block's readers (each over its whole map), the bound
+    /// that groups the flat plans.
+    reads: u128,
+    #[cfg(test)]
     entries: u128,
+    #[cfg(test)]
     coefficients: u128,
 }
 
 #[derive(Default)]
 pub(super) struct PlanCounts {
     pub symbolic: u128,
-    pub symbolic_build_scratch: u128,
     pub gather: u128,
     pub gather_scratch: u128,
     pub readers: u128,
-    pub readers_build_scratch: u128,
     pub m_plans: u128,
+    /// The largest group of flat `M(r_x, .)` plans alive at once (built and
+    /// dropped per group while the M table is written).
+    pub m_plan_group: u128,
     pub matrix_scratch: u128,
     pub helpers: u128,
-    #[cfg(test)]
-    pub edge_count: u128,
+    /// Witness rows the prover copies: those holding product masks, the link
+    /// phase's and the second phase's.
+    pub owned_rows: u128,
+    /// Pages of `M(r_x, .)`'s dense half its plans write ([`M_PAGE`] bytes
+    /// each); the inner rounds never touch another.
+    pub m_pages: u128,
+    /// The streamed outer round's job index and sum-term values.
+    pub gather_index: u128,
     #[cfg(test)]
     pub entry_count: u128,
     #[cfg(test)]
     pub coefficient_count: u128,
 }
+
+/// Page size of the resident-memory bound: the larger of the 4 KiB and
+/// 16 KiB pages of the supported platforms.
+pub(super) const M_PAGE: usize = 16 << 10;
 
 enum Replacement {
     Lookup(usize, usize),
@@ -111,43 +126,38 @@ impl<F: Scalar> UniformCircuit<F> {
             .collect();
         let mut one_readers = 0u128;
         let mut jobs = 0u128;
-        let mut gather_factors = 0u128;
-        let mut max_lin = 0u128;
-        let mut symbolic_original = 0u128;
-        let mut max_replacement = 0u128;
+        // The longest rows: at most two jobs per worker hold their resolved
+        // terms at once (a running one and a suspended outer one).
+        let resident_jobs = 2 * workers as usize;
+        let mut longest: std::collections::BinaryHeap<std::cmp::Reverse<u128>> =
+            std::collections::BinaryHeap::new();
+        let mut max_present = 0u128;
+        let mut max_sums = 0u128;
         let mut replacements = HashMap::new();
-        if self.symbolic.get().is_none() {
-            for &(a, first_cell, first_row) in &self.lookup_arrays {
-                for j in 0..self.arrays[a].lookups.len() {
-                    replacements.insert((a, first_row + j), Replacement::Lookup(j, first_cell));
-                }
-            }
-            for &(va, _, wa) in &self.tables {
-                replacements.insert((wa, 0), Replacement::Table(va));
-            }
-            for (index, (_, wa, _, _)) in self.exports.iter().enumerate() {
-                replacements.insert((*wa, 0), Replacement::Export(index));
-            }
-            for (index, (a, j, _)) in self.ch_rows.iter().enumerate() {
-                replacements.insert((*a, *j), Replacement::Challenge(index));
+        for &(a, first_cell, first_row) in &self.lookup_arrays {
+            for j in 0..self.arrays[a].lookups.len() {
+                replacements.insert((a, first_row + j), Replacement::Lookup(j, first_cell));
             }
         }
-        counts.symbolic +=
-            self.arrays.len() as u128 * size_of::<Vec<[Vec<(Term<F>, Factor)>; 3]>>() as u128;
+        for &(va, _, wa) in &self.tables {
+            replacements.insert((wa, 0), Replacement::Table(va));
+        }
+        for (index, (_, wa, _, _)) in self.exports.iter().enumerate() {
+            replacements.insert((*wa, 0), Replacement::Export(index));
+        }
+        for (index, (a, j, _)) in self.ch_rows.iter().enumerate() {
+            replacements.insert((*a, *j), Replacement::Challenge(index));
+        }
+        // The symbolic rows are one kind per template row; their terms are
+        // the circuit's own, borrowed.
+        counts.symbolic += self.arrays.len() as u128 * size_of::<Vec<RowKind>>() as u128;
         for (a, arr) in self.arrays.iter().enumerate() {
             let n = 1usize << arr.rho;
             let present = (0..n).filter(|r| self.r_present(a, *r)).count() as u128;
-            counts.symbolic +=
-                arr.rows.len() as u128 * size_of::<[Vec<(Term<F>, Factor)>; 3]>() as u128;
+            max_present = max_present.max(present);
+            counts.symbolic += arr.rows.len() as u128 * size_of::<RowKind>() as u128;
             for (j, original) in arr.rows.iter().enumerate() {
-                let row: [Vec<TermRef<'_, F>>; 3] = if let Some(symbolic) = self.symbolic.get() {
-                    std::array::from_fn(|mat| {
-                        symbolic[a][j][mat]
-                            .iter()
-                            .map(|(t, _)| TermRef::borrowed(t))
-                            .collect()
-                    })
-                } else {
+                let row: [Vec<TermRef<'_, F>>; 3] = {
                     match replacements.get(&(a, j)) {
                         Some(Replacement::Challenge(index)) => std::array::from_fn(|mat| {
                             self.ch_rows[*index].2[mat]
@@ -208,19 +218,15 @@ impl<F: Scalar> UniformCircuit<F> {
                         }),
                     }
                 };
-                let mut row_storage = 0u128;
                 for lin in &row {
                     let len = lin.len() as u128;
                     jobs += 1;
-                    gather_factors += len;
-                    max_lin = max_lin.max(len);
-                    counts.gather += len
-                        * (size_of::<Option<GatherTarget>>() + size_of::<Factor>()) as u128
-                        + growing::<usize>(present);
-                    row_storage += growing::<(Term<F>, Factor)>(len);
+                    longest.push(std::cmp::Reverse(len));
+                    if longest.len() > resident_jobs {
+                        longest.pop();
+                    }
                     let mut sums = 0u128;
                     for &term in lin {
-                        row_storage += term.len() as u128 * field;
                         let target = match term.source {
                             Source::One => {
                                 one_readers += 1;
@@ -232,25 +238,18 @@ impl<F: Scalar> UniformCircuit<F> {
                                 None
                             }
                             Source::Own(k) => Some((a, k)),
-                            Source::Link(a2, k2, map) => {
-                                row_storage +=
-                                    map.len() as u128 * size_of::<Option<usize>>() as u128;
-                                Some((a2, k2))
-                            }
-                            Source::Identity(a2, k2, n) => {
-                                row_storage += n as u128 * size_of::<Option<usize>>() as u128;
-                                Some((a2, k2))
-                            }
+                            Source::Link(a2, k2, _) | Source::Identity(a2, k2, _) => Some((a2, k2)),
                         };
                         if let Some((a2, k2)) = target {
                             let block = &mut blocks[a2][k2];
                             block.readers += 1;
+                            block.reads += term.len() as u128;
+                            #[cfg(test)]
                             for r in 0..term.len() {
                                 if matches!(term.source, Source::Link(_, _, map) if map[r].is_none())
                                 {
                                     continue;
                                 }
-                                block.edges += 1;
                                 if !self.r_present(a, r) {
                                     continue;
                                 }
@@ -265,69 +264,34 @@ impl<F: Scalar> UniformCircuit<F> {
                             }
                         }
                     }
-                    counts.gather += growing::<usize>(sums);
-                }
-                counts.symbolic += row_storage;
-                // symbolic_rows first clones originals, then replaces helper
-                // rows. Only one replacement row is being constructed at once.
-                if replacements.contains_key(&(a, j)) {
-                    max_replacement = max_replacement.max(row_storage);
-                    symbolic_original += original
-                        .iter()
-                        .map(|lin| {
-                            lin.len() as u128 * size_of::<(Term<F>, Factor)>() as u128
-                                + lin
-                                    .iter()
-                                    .map(|t| {
-                                        t.coef.len() as u128 * field
-                                            + match &t.src {
-                                                Src::Link { map, .. } => {
-                                                    map.len() as u128
-                                                        * size_of::<Option<usize>>() as u128
-                                                }
-                                                _ => 0,
-                                            }
-                                    })
-                                    .sum::<u128>()
-                        })
-                        .sum::<u128>();
+                    max_sums = max_sums.max(sums);
                 }
             }
         }
-        counts.symbolic_build_scratch = symbolic_original + max_replacement;
         counts.gather += growing::<GatherJob>(jobs);
-        // Nested Rayon work may keep one factor array for each suspended outer
-        // gather job. Bases are per active worker and bounded by the largest row.
-        counts.gather_scratch = gather_factors * size_of::<Option<F>>() as u128
-            + workers * max_lin * size_of::<usize>() as u128;
-        counts.readers += self.arrays.len() as u128
-            * (size_of::<Vec<Vec<Reader>>>()
-                + size_of::<Vec<Vec<(usize, usize, usize, usize)>>>()
-                + size_of::<Vec<(Vec<u32>, Vec<(u32, u32)>)>>()) as u128
-            + growing::<(usize, usize, usize, usize)>(one_readers);
+        // A job's terms, targets, factor values and bases are resolved when
+        // it runs: the longest rows' at once, for as many jobs as can be
+        // resident; present r and sum terms are per active worker.
+        let per_term = (size_of::<(TermView<'_, F>, Factor)>()
+            + size_of::<Option<GatherTarget>>()
+            + size_of::<Option<F>>()
+            + size_of::<usize>()) as u128;
+        counts.gather_scratch = longest.iter().map(|len| len.0).sum::<u128>() * per_term
+            + workers * (growing::<usize>(max_sums) + max_present * size_of::<u32>() as u128);
+        counts.readers += self.arrays.len() as u128 * 2 * size_of::<Vec<Vec<Reader>>>() as u128
+            + growing::<Reader>(one_readers);
         let mut plans = 0u128;
-        let mut edge_scratch = 0u128;
-        let mut max_csr_scratch = 0u128;
         let mut matrix_jobs = 0u128;
         let mut weight_count = 0u128;
+        // The flat plans are built per group of consecutive placed blocks,
+        // as `m_table_split` groups them (by the same per-block bound).
+        let (mut group, mut group_max) = (0u128, 0u128);
+        let budget = M_PLAN_GROUP as u128;
         for (a, (arr, cells)) in self.arrays.iter().zip(&blocks).enumerate() {
             let n = 1u128 << arr.rho;
-            counts.readers += cells.len() as u128
-                * (size_of::<Vec<Reader>>()
-                    + size_of::<Vec<(usize, usize, usize, usize)>>()
-                    + size_of::<(Vec<u32>, Vec<(u32, u32)>)>()) as u128;
+            counts.readers += cells.len() as u128 * 2 * size_of::<Vec<Reader>>() as u128;
             for (k, b) in cells.iter().enumerate() {
-                #[cfg(test)]
-                {
-                    counts.edge_count += b.edges;
-                }
-                counts.readers += growing::<Reader>(b.readers)
-                    + growing::<(usize, usize, usize, usize)>(b.all)
-                    + (n + 1) * size_of::<u32>() as u128
-                    + b.edges * size_of::<(u32, u32)>() as u128;
-                edge_scratch +=
-                    growing::<(u32, u32, u32)>(b.edges) + size_of::<Vec<(u32, u32, u32)>>() as u128;
-                max_csr_scratch = max_csr_scratch.max(n * size_of::<u32>() as u128);
+                counts.readers += growing::<Reader>(b.readers) + growing::<Reader>(b.all);
                 if self.moved[a][k].is_none() {
                     #[cfg(test)]
                     {
@@ -335,22 +299,25 @@ impl<F: Scalar> UniformCircuit<F> {
                         counts.coefficient_count += b.coefficients;
                     }
                     plans += 1;
-                    counts.m_plans += (n + 1) * size_of::<u32>() as u128
-                        + b.readers * size_of::<MReader>() as u128
-                        + growing::<(u32, u8, u32, u32)>(b.entries)
-                        + growing::<F>(b.coefficients);
+                    let bound =
+                        MPlan::<F>::bound(n as usize, b.reads as usize, b.readers as usize) as u128;
+                    if group > 0 && group + bound > budget {
+                        group_max = group_max.max(group);
+                        group = 0;
+                    }
+                    group += bound;
                     matrix_jobs += (1u128 << self.m(a)).div_ceil(2048);
                     weight_count += b.readers;
                 }
             }
         }
-        counts.readers_build_scratch = edge_scratch
-            + max_csr_scratch
-            + self.arrays.len() as u128 * size_of::<Vec<Vec<(u32, u32, u32)>>>() as u128;
-        counts.m_plans += growing::<MPlan<F>>(plans);
+        counts.m_plan_group = group_max.max(group);
+        counts.m_plans += growing::<MBlock>(plans);
+        // Per group: its plan list, jobs, weights and sum-row constants.
         counts.matrix_scratch = growing::<(usize, usize)>(matrix_jobs)
             + plans * size_of::<Vec<F>>() as u128
-            + weight_count * field;
+            + weight_count * field
+            + plans * field;
         let helper_slots = self
             .lookup_arrays
             .iter()
@@ -366,6 +333,72 @@ impl<F: Scalar> UniformCircuit<F> {
                 .iter()
                 .map(|(_, wa, _, _)| self.instances(*wa) as u128)
                 .sum::<u128>();
+        // Rows the prover writes: masks, the link phase, the second phase.
+        let cols = 1usize << self.shape.col_bits;
+        let mut owned = vec![false; self.shape.rows()];
+        let written_rows = self.p1_rows..(self.p1_rows + self.pl_rows + self.p2_rows);
+        for row in owned
+            [written_rows.start.min(self.shape.rows())..written_rows.end.min(self.shape.rows())]
+            .iter_mut()
+        {
+            *row = true;
+        }
+        for &(array, cells, instance) in &self.product_masks {
+            for cell in cells {
+                owned[self.cell_index(array, cell, instance) / cols] = true;
+            }
+        }
+        counts.owned_rows = owned.iter().filter(|x| **x).count() as u128;
+        // Pages of M(r_x, .)'s dense half that the flat plans write.
+        let half = 1usize << self.shape.sw();
+        let per_page = (M_PAGE / size_of::<F>()).max(1);
+        let mut pages = vec![0u64; half.div_ceil(per_page).div_ceil(64)];
+        for (a2, arr2) in self.arrays.iter().enumerate() {
+            if self.is_io(a2) {
+                continue;
+            }
+            for k2 in (0..arr2.cells()).filter(|k| self.moved[a2][*k].is_none()) {
+                let block = &self.blocks[a2][k2];
+                for i2 in (0..1usize << self.m(a2)).filter(|i2| self.present(a2, *i2)) {
+                    let pos = block.index(i2);
+                    if pos < half {
+                        let page = pos / per_page;
+                        pages[page / 64] |= 1 << (page % 64);
+                    }
+                }
+            }
+        }
+        counts.m_pages = pages.iter().map(|w| w.count_ones() as u128).sum();
+        // The job index: each job in every chunk of rows its block spans.
+        let bits = crate::kern::CHUNK.trailing_zeros();
+        let chunks = (1u128 << self.shape.sx).div_ceil(1 << bits);
+        let mut spans = 0u128;
+        let mut summed = 0u128;
+        for (a, arr) in self.arrays.iter().enumerate() {
+            let len = (self.counts[arr.family] as u128) << arr.rho;
+            for j in 0..arr.rows.len() {
+                let base = self.row_base[a][j] as u128;
+                if len > 0 {
+                    spans += 3 * (((base + len - 1) >> bits) - (base >> bits) + 1);
+                }
+                let sums = match replacements.get(&(a, j)) {
+                    None => arr.rows[j]
+                        .iter()
+                        .filter(|lin| lin.iter().any(|t| matches!(t.src, Src::All { .. })))
+                        .count(),
+                    Some(Replacement::Challenge(index)) => self.ch_rows[*index]
+                        .2
+                        .iter()
+                        .filter(|lin| lin.iter().any(|(t, _)| matches!(t.src, Src::All { .. })))
+                        .count(),
+                    Some(_) => 0,
+                };
+                summed += sums as u128;
+            }
+        }
+        counts.gather_index = chunks * (size_of::<Vec<u32>>() as u128 + 16)
+            + 2 * spans * size_of::<u32>() as u128
+            + 2 * summed * (size_of::<u32>() + size_of::<F>() + size_of::<u64>()) as u128;
         counts.helpers = growing::<(usize, F, F)>(helper_slots)
             + helper_slots * field
             + helper_slots.min(workers * 4096) * field;

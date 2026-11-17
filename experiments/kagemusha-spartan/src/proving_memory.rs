@@ -62,31 +62,45 @@ mod tests {
         );
         let _ = c.readers();
         let _ = c.m_plans();
-        assert_eq!(
-            counts.edge_count,
-            c.readers()
-                .at
-                .iter()
-                .flatten()
-                .map(|(_, pairs)| pairs.len() as u128)
-                .sum::<u128>(),
-            "exact CSR edges"
-        );
+        // The flat plans themselves are built per proof, a group at a time:
+        // each within its block's bound, the largest group within the count.
+        let plans: Vec<_> = c
+            .m_plans()
+            .iter()
+            .map(|b| (b, c.m_plan(b.a2, b.k2)))
+            .collect();
         assert_eq!(
             counts.entry_count,
-            c.m_plans()
+            plans
                 .iter()
-                .map(|p| p.entries.len() as u128)
+                .map(|(_, p)| p.entries.len() as u128)
                 .sum::<u128>(),
             "exact present nonzero M entries"
         );
         assert_eq!(
             counts.coefficient_count,
-            c.m_plans()
+            plans
                 .iter()
-                .map(|p| p.coefs.len() as u128)
+                .map(|(_, p)| p.coefs.len() as u128)
                 .sum::<u128>(),
             "exact non-unit M coefficients"
+        );
+        for (b, p) in &plans {
+            let actual = size_of::<MPlan<F>>() as u128
+                + bytes(&p.offsets)
+                + bytes(&p.entries)
+                + bytes(&p.coefs)
+                + bytes(&p.readers);
+            assert!(actual <= b.bytes as u128, "block plan within its bound");
+            assert!(b.bytes as u128 <= counts.m_plan_group.max(b.bytes as u128));
+        }
+        assert!(
+            plans
+                .iter()
+                .map(|(b, _)| b.bytes as u128)
+                .max()
+                .unwrap_or(0)
+                <= counts.m_plan_group
         );
         let planned = c.proving_memory_accounting();
         assert!(
@@ -221,23 +235,8 @@ fn lin_heap<F>(v: &Lin<F>) -> u128 {
 fn tuple_heap<F>(v: &Vec<Lin<F>>) -> u128 {
     bytes(v) + v.iter().map(lin_heap).sum::<u128>()
 }
-fn symbolic_heap<F>(rows: &SymbolicRows<F>) -> u128 {
-    bytes(rows)
-        + rows
-            .iter()
-            .map(|rs| {
-                bytes(rs)
-                    + rs.iter()
-                        .map(|r| {
-                            r.iter()
-                                .map(|lin| {
-                                    bytes(lin) + lin.iter().map(|(t, _)| term_heap(t)).sum::<u128>()
-                                })
-                                .sum::<u128>()
-                        })
-                        .sum::<u128>()
-            })
-            .sum::<u128>()
+fn symbolic_heap(rows: &SymbolicRows) -> u128 {
+    nested(rows)
 }
 fn cap(x: u128) -> u64 {
     x.min(u64::MAX as u128) as u64
@@ -314,38 +313,22 @@ impl<F: Scalar> UniformCircuit<F> {
         let start = retained;
         if let Some(jobs) = self.gather.get() {
             retained += bytes(jobs);
-            for j in jobs {
-                retained += bytes(&j.targets) + bytes(&j.rs) + bytes(&j.factors) + bytes(&j.sums);
-            }
         }
         let gather_bytes = retained - start;
         let start = retained;
         if let Some(rd) = self.readers.get() {
-            retained += bytes(&rd.readers)
-                + bytes(&rd.at)
-                + bytes(&rd.all_readers)
-                + bytes(&rd.one_readers);
+            retained += bytes(&rd.readers) + bytes(&rd.all_readers) + bytes(&rd.one_readers);
             for row in &rd.readers {
                 retained += nested(row);
             }
             for row in &rd.all_readers {
                 retained += nested(row);
             }
-            for row in &rd.at {
-                retained += bytes(row);
-                for (offsets, pairs) in row {
-                    retained += bytes(offsets) + bytes(pairs);
-                }
-            }
         }
         let readers_bytes = retained - start;
         let start = retained;
-        if let Some(plans) = self.m_plans.get() {
-            retained += bytes(plans);
-            for p in plans {
-                retained +=
-                    bytes(&p.offsets) + bytes(&p.entries) + bytes(&p.coefs) + bytes(&p.readers);
-            }
+        if let Some(blocks) = self.m_plans.get() {
+            retained += bytes(blocks);
         }
         let m_plan_bytes = retained - start;
         let start = retained;
@@ -366,6 +349,36 @@ impl<F: Scalar> UniformCircuit<F> {
             additional_peak_bytes: cap(additional),
             accounted_peak_bytes: cap(retained.saturating_add(additional)),
         }
+    }
+
+    /// Construction storage by kind (measurement lines): private array
+    /// values, fixed array values, template rows and lookups, and the dense
+    /// fixed tail.
+    pub fn construction_breakdown(&self) -> [u64; 4] {
+        let (mut private, mut fixed, mut templates) = (0u128, 0u128, 0u128);
+        for a in &self.arrays {
+            let v = nested(&a.values);
+            if a.fixed {
+                fixed += v;
+            } else {
+                private += v;
+            }
+            templates += bytes(&a.rows) + bytes(&a.lookups);
+            for r in &a.rows {
+                for lin in r {
+                    templates += lin_heap(lin);
+                }
+            }
+            for (_, tuple) in &a.lookups {
+                templates += tuple_heap(tuple);
+            }
+        }
+        [
+            cap(private),
+            cap(fixed),
+            cap(templates),
+            cap(self.fixed_values.heap_bytes()),
+        ]
     }
 
     /// Workspace for `instantiate(..., Some(w))`, then `z_vector` and `abc`.
@@ -390,11 +403,6 @@ impl<F: Scalar> UniformCircuit<F> {
         } else {
             0
         };
-        let symbolic_scratch = if self.symbolic.get().is_none() {
-            p.symbolic_build_scratch
-        } else {
-            0
-        };
         let gather = if self.gather.get().is_none() {
             p.gather
         } else {
@@ -405,11 +413,6 @@ impl<F: Scalar> UniformCircuit<F> {
         } else {
             0
         };
-        let reader_scratch = if self.readers.get().is_none() {
-            p.readers_build_scratch
-        } else {
-            0
-        };
         let m_plans = if self.m_plans.get().is_none() {
             p.m_plans
         } else {
@@ -417,47 +420,70 @@ impl<F: Scalar> UniformCircuit<F> {
         };
         let before_outer = symbolic + gather;
         let all_plans = before_outer + readers + m_plans;
-        // z_vector's public half is never written beyond the io
-        // (`kern::zeroed`), so z holds w field elements while abc builds the
-        // symbolic rows and then the gather plan.
+        // Preparation (the engine's relation check): z_vector's public half
+        // is never written beyond the io (`kern::zeroed`), so z holds w field
+        // elements while abc's three tables are written.
         let preparation = p
             .helpers
-            .max((w + 3 * x) * field + before_outer + p.gather_scratch)
-            .max(w * field + symbolic + symbolic_scratch);
-        // The full prover's z = (w || io) holds its only witness copy; z's
-        // public half is written only at the io (`kern::zeroed`), so z holds
-        // w field elements until the inner rounds. Its caller's witness is
-        // resident before admission. Helper buffers die before z/A/B/C exist.
-        let phase1 = w * field
+            .max((w + 3 * x) * field + before_outer + p.gather_scratch);
+        // The prover reads its caller's witness in place and copies only the
+        // rows it writes (`kern::Rows`): product masks, the link phase, the
+        // second phase.
+        let owned = p.owned_rows * cols * field;
+        let phase1 = owned
             + self.bounds.len() as u128 * size_of::<usize>() as u128
             + self.shape.rows() as u128 * field;
-        let helper = phase1 + p.helpers;
+        // Plans, once built, stay with the circuit: every later phase counts
+        // all of them (those not built yet at their projection).
+        let helper = phase1 + p.helpers + all_plans;
+        // Outer: the first round and its fold stream Az, Bz, Cz a chunk of
+        // rows at a time (per worker: three tables of 2^k corners of a
+        // chunk); the folded tables and eq_low remain, and each later fold
+        // allocates its replacements.
         let outer_k = self.shape.outer_blocks().first().copied().unwrap_or(0);
         let outer_low = x >> outer_k;
-        // eq_low is alive while each A/B/C fold allocates its replacement.
-        let outer = (w + 3 * x + 2 * outer_low) * field + before_outer + p.gather_scratch + phase1
-            - w * field;
-        let outer = outer.max(w * field + symbolic + symbolic_scratch);
-        // readers() precedes the M output; its temporary edge buckets are
-        // released before m_plans() is built. Equality ex is alive in both.
-        // M(r_x, .) is built split: its dense witness half only.
-        let matrix_readers = (w + x) * field + before_outer + readers + reader_scratch;
-        let matrix_values = (2 * w + x) * field + all_plans + p.matrix_scratch;
-        let matrix = matrix_readers.max(matrix_values);
+        let chunk = (crate::kern::CHUNK as u128).min(outer_low.max(1));
+        let tasks = (rayon::current_num_threads() as u128).min(outer_low.div_ceil(chunk));
+        let chunk_tables = tasks * 3 * (1u128 << outer_k) * chunk * field;
+        let outer = phase1
+            + (3 * outer_low + outer_low) * field
+            + chunk_tables
+            + p.gather_index
+            + all_plans
+            + p.gather_scratch;
+        // Matrix: equality ex as its high and low tables (the low one over
+        // the largest row block), the pages of M's dense half its plans write
+        // and its written-run bitmap, the plans a group at a time.
+        let block_bits = self
+            .arrays
+            .iter()
+            .enumerate()
+            .filter(|(_, arr)| !arr.rows.is_empty())
+            .map(|(a, _)| self.m(a))
+            .max()
+            .unwrap_or(0)
+            .min(self.shape.sx);
+        let eq_tables = (1u128 << block_bits) + (x >> block_bits);
+        let half_runs = w.div_ceil(crate::kern::SEGMENT as u128);
+        let m_dense = p.m_pages * memory_plan_counts::M_PAGE as u128;
+        let matrix = phase1
+            + eq_tables * field
+            + m_dense
+            + half_runs.div_ceil(8)
+            + all_plans
+            + p.m_plan_group
+            + p.matrix_scratch;
+        // Inner: M's written pages while its first fold and z's are
+        // allocated (the caller's rows are read in place).
         let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
         let inner_low = (2 * w) >> inner_k;
         let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 4;
-        // z's and M's dense halves while M's first fold is allocated; M's
-        // split table is released before z folds.
-        let inner = (2 * w + inner_low) * field + all_plans + support;
-        // At opening only folded m/z/A/B/C remain; z's witness half, IPA x/b,
-        // generator copy and two L/R scalar/base buffers overlap. Pasta affine
-        // points contain two base-field elements on both supported curves.
-        let tape_scratch = self
-            .plan
-            .get()
-            .map_or(0, |t| (t.inputs + t.ops.len()) as u128 * field);
-        let opening = w * field + all_plans + (7 * cols) * field + tape_scratch;
+        let inner = phase1 + m_dense + 2 * inner_low * field + all_plans + support;
+        // At opening only the folded tables remain; IPA x/b, generator copy
+        // and two L/R scalar/base buffers overlap. Pasta affine points contain
+        // two base-field elements on both supported curves. The matrix value
+        // is the folded M table's (no program run).
+        let opening = phase1 + all_plans + (7 * cols) * field;
         let additional = phase1
             .max(helper)
             .max(outer)
