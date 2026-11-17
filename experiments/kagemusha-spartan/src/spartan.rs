@@ -1408,14 +1408,24 @@ fn prove_inner<C: PastaCurve>(
     let mut timings = Timings::default();
     let mut t = Transcript::<C>::new(shape.label.as_bytes());
     header(&mut t, shape, &inst.io);
-    let mut w = crate::prof::time("c.wclone", || wit.w.clone());
-    circuit.randomize_masks(&mut w, rng);
+    // z = (w || io), padded to 2^sz, holds the prover's only copy of the
+    // masked witness. Its public half is written only at the io, so it holds
+    // no memory beyond that (`kern::zeroed`).
+    let half = 1usize << shape.sw();
+    assert_eq!(wit.w.len(), half, "witness length");
+    let mut z_full = crate::prof::time("c.wclone", || {
+        let mut z = crate::kern::zeroed::<F<C>>(2 * half);
+        z[..half].copy_from_slice(&wit.w);
+        z
+    });
+    circuit.randomize_masks(&mut z_full[..half], rng);
 
     // Hyrax rows: phase 1, then (after its challenges) phase 2.
     let clock = Instant::now();
     *COMMIT_SPLIT.lock().unwrap() = [0.0; 3];
     assert_eq!(fixed.len(), circuit.fixed_rows(shape));
-    let (row_blinds, bounds, mut rows) = commit_first_phase(shape, gens, &w, rng, circuit);
+    let (row_blinds, bounds, mut rows) =
+        commit_first_phase(shape, gens, &z_full[..half], rng, circuit);
     let commit = |w: &[F<C>], range: std::ops::Range<usize>, helpers: bool| -> Vec<Aff<C>> {
         match &bounds {
             Some(b) => commit_rows_lanes(gens, shape, w, range, b, &row_blinds, helpers),
@@ -1448,16 +1458,16 @@ fn prove_inner<C: PastaCurve>(
         None => Vec::new(),
         Some((_, rho)) => {
             if pl > 0 {
-                circuit.fill_link(&rho, &mut w);
+                circuit.fill_link(&rho, &mut z_full[..half]);
             }
-            let r = link_value(link, &rho, circuit.binding_r(&w));
+            let r = link_value(link, &rho, circuit.binding_r(&z_full[..half]));
             r_link = Some(r);
             circuit.link_io(&rho, &r)
         }
     };
     if pl > 0 {
         assert!(word.is_some(), "a link phase needs a link");
-        let rows_l = commit(&w, p1..p1 + pl, false);
+        let rows_l = commit(&z_full[..half], p1..p1 + pl, false);
         for row in &rows_l {
             t.point(b"row", row);
         }
@@ -1468,10 +1478,10 @@ fn prove_inner<C: PastaCurve>(
         .collect();
     *crate::sparse::LAST_BUILD.lock().unwrap() = (0.0, 0.0);
     let clock_rel = Instant::now();
-    let rel = circuit.instantiate(shape, &ch2, Some(&mut w));
+    let rel = circuit.instantiate(shape, &ch2, Some(&mut z_full[..half]));
     timings.instantiate = clock_rel.elapsed().as_secs_f64();
     // Late io: fixed by the second phase, absorbed before its rows.
-    let late = circuit.late_values(&w);
+    let late = circuit.late_values(&z_full[..half]);
     if !late.is_empty() {
         t.scalar(b"late", &crate::fs::io_digest(&late));
     }
@@ -1485,7 +1495,11 @@ fn prove_inner<C: PastaCurve>(
     let inst = &inst_full;
     (timings.helpers, timings.matrices) = *crate::sparse::LAST_BUILD.lock().unwrap();
     let rows2 = crate::prof::time("c.phase2", || {
-        commit(&w, p1 + pl..rows_c, circuit.phase2_challenges() > 0)
+        commit(
+            &z_full[..half],
+            p1 + pl..rows_c,
+            circuit.phase2_challenges() > 0,
+        )
     });
     for row in rows2.iter().chain(fixed) {
         t.point(b"row", row);
@@ -1502,18 +1516,15 @@ fn prove_inner<C: PastaCurve>(
     // AdaptiveWitness: after tau, shift one witness column in every row by J
     // so that the tau-weighted error vanishes; carry J G[col] in round 0.
     let mut adaptive: Option<(usize, F<C>)> = None;
-    let opened: Witness<F<C>> = match cheat {
-        Cheat::AdaptiveWitness => {
-            let (col, shift) = adaptive_shift(shape, &w, &tau);
-            adaptive = Some((col, shift));
-            Witness {
-                w: shifted(shape, &w, col, shift),
-            }
-        }
-        _ => Witness { w },
-    };
-    let wit = &opened;
-    let z_full = crate::prof::time("o.zvec", || r1cs::z_vector(shape, inst, wit));
+    if cheat == Cheat::AdaptiveWitness {
+        let (col, shift) = adaptive_shift(shape, &z_full[..half], &tau);
+        adaptive = Some((col, shift));
+        let opened = shifted(shape, &z_full[..half], col, shift);
+        z_full[..half].copy_from_slice(&opened);
+    }
+    crate::prof::time("o.zvec", || {
+        z_full[half..half + inst.io.len()].copy_from_slice(&inst.io)
+    });
     let (mut a, mut b, mut c) = crate::prof::time("o.abc", || rel.abc(shape, &z_full));
     let mut cancel_d0: Option<C> = None;
     let mut tail_values: Vec<Vec<F<C>>> = Vec::new();
@@ -1589,29 +1600,36 @@ fn prove_inner<C: PastaCurve>(
     // Inner sumcheck over z, committed rounds.
     let clock = Instant::now();
     let ex = crate::prof::time("i.eq", || eq_table(&rx.concat()));
-    let mut m = crate::prof::time("i.mtable", || {
-        rel.m_table(shape, &ex, rabc[0], rabc[1], rabc[2])
-    });
+    // M(r_x, .) and z enter the first round split: dense witness halves and
+    // public halves kept only up to their last nonzero entry. z's dense half
+    // is the masked witness the opening reads.
+    let mut m_first = Some(crate::prof::time("i.mtable", || {
+        rel.m_table_split(shape, &ex, rabc[0], rabc[1], rabc[2])
+    }));
     drop(ex);
-    let mut z = z_full;
+    let z_tail = z_full[half..half + inst.io.len()].to_vec();
+    z_full.truncate(half);
+    let z_split = crate::kern::Split::new(z_full, z_tail);
+    let (mut m, mut z): (Vec<F<C>>, Vec<F<C>>) = (Vec::new(), Vec::new());
+    if old_kernels {
+        m = m_first.take().expect("first M table").to_full();
+        z = z_split.to_full();
+    }
     let mut inner = Vec::new();
     let mut ry = Vec::new();
     let mut start = 0;
     for (i, &k) in shape.inner_blocks().iter().enumerate() {
         let extender = Extender::new(k);
         let basis = crate::kern::Basis::new(k);
-        // Which corners of this round's variables hold anything: the public
-        // half of z is zero beyond the public inputs, and a padded witness
-        // has empty rows.
-        let support = (!old_kernels && m.len() >> k >= crate::kern::SEGMENT)
-            .then(|| crate::prof::time("i.support", || crate::kern::support(k, &m, &z)));
-        let values = crate::prof::time("i.round", || {
-            if old_kernels {
-                round_values(&extender, &m, &z, None, None)
-            } else {
-                crate::kern::inner_round(&basis, &m, &z, support.as_ref())
-            }
-        });
+        let (values, support) = if old_kernels {
+            let values =
+                crate::prof::time("i.round", || round_values(&extender, &m, &z, None, None));
+            (values, None)
+        } else if let Some(m_split) = &m_first {
+            inner_values(&basis, k, m_split, &z_split)
+        } else {
+            inner_values(&basis, k, &m, &z)
+        };
         let blind: F<C> = rng.scalar();
         let commitment = crate::prof::time("i.commit", || {
             commit_values(gens, inner_off[i], &values, blind).to_affine()
@@ -1623,6 +1641,10 @@ fn prove_inner<C: PastaCurve>(
         if old_kernels {
             m = fold_top(&m, &r);
             z = fold_top(&z, &r);
+        } else if let Some(m_split) = m_first.take() {
+            m = crate::kern::fold_top(&m_split, &r, support.as_ref());
+            drop(m_split);
+            z = crate::kern::fold_top(&z_split, &r, support.as_ref());
         } else {
             m = crate::kern::fold_top(&m, &r, support.as_ref());
             z = crate::kern::fold_top(&z, &r, support.as_ref());
@@ -1661,7 +1683,7 @@ fn prove_inner<C: PastaCurve>(
             *value = eq_row
                 .iter()
                 .enumerate()
-                .map(|(r, e)| *e * wit.w[r * cols + col])
+                .map(|(r, e)| *e * z_split.dense[r * cols + col])
                 .sum();
         });
     crate::prof::add("p.xrow", x_clock.elapsed().as_secs_f64());
@@ -1707,6 +1729,23 @@ fn prove_inner<C: PastaCurve>(
         timings,
         link_out,
     )
+}
+
+/// One inner round over `(m, z)`: its values, and the support (which corners
+/// of the round's variables hold anything) its fold reuses. The public half of
+/// z is zero beyond the public inputs, and a padded witness has empty rows.
+fn inner_values<S: Field, M: crate::kern::Table<S> + ?Sized, Z: crate::kern::Table<S> + ?Sized>(
+    basis: &crate::kern::Basis,
+    k: usize,
+    m: &M,
+    z: &Z,
+) -> (Vec<S>, Option<crate::kern::Support>) {
+    let support = (m.len() >> k >= crate::kern::SEGMENT)
+        .then(|| crate::prof::time("i.support", || crate::kern::support(k, m, z)));
+    let values = crate::prof::time("i.round", || {
+        crate::kern::inner_round(basis, m, z, support.as_ref())
+    });
+    (values, support)
 }
 
 /// Honest-prover sanity check of the batched relation (used by tests).

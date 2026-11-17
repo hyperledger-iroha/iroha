@@ -73,10 +73,17 @@ impl AuthenticatedParameters {
         let ws = count(program.secondary.shape.sw())?;
         let cp = count(program.primary.shape.sx)?;
         let cs = count(program.secondary.shape.sx)?;
+        // The caller's witness and z's witness half, then either A, B, C
+        // (outer rounds) or M(r_x, .)'s dense half and eq(r_x) (inner).
         let phase = |w: u64, other: u64, constraints: u64| {
-            w.checked_mul(4)
+            let outer = w
+                .checked_mul(2)
+                .and_then(|n| constraints.checked_mul(3).and_then(|c| n.checked_add(c)));
+            let inner = w.checked_mul(3).and_then(|n| n.checked_add(constraints));
+            outer
+                .zip(inner)
+                .map(|(o, i)| o.max(i))
                 .and_then(|n| n.checked_add(other))
-                .and_then(|n| constraints.checked_mul(3).and_then(|c| n.checked_add(c)))
                 .and_then(|n| n.checked_mul(32))
                 .ok_or(Error::ResourceLimit)
         };
@@ -652,6 +659,15 @@ fn build<S: Scalar>(
         Some(target.layout()),
     )
 }
+/// A vector whose first `.1` entries are secret, zeroized on drop. The rest
+/// is zero and never written, and stays untouched.
+struct ZeroizedPrefix<S: zeroize::Zeroize>(Vec<S>, usize);
+impl<S: zeroize::Zeroize> Drop for ZeroizedPrefix<S> {
+    fn drop(&mut self) {
+        let n = self.1.min(self.0.len());
+        self.0[..n].iter_mut().for_each(zeroize::Zeroize::zeroize);
+    }
+}
 struct PrivateCircuit<S: Scalar + zeroize::Zeroize>(UniformCircuit<S>);
 impl<S: Scalar + zeroize::Zeroize> std::ops::Deref for PrivateCircuit<S> {
     type Target = UniformCircuit<S>;
@@ -703,8 +719,11 @@ fn check_constraints(
     let mut rng = entropy.stream(b"preparation relation check");
     let ch = [rng.scalar(), rng.scalar()];
     let rel = c.instantiate(&c.shape, &ch, Some(&mut wit.w));
-    let z = zeroize::Zeroizing::new(crate::r1cs::z_vector(&c.shape, &i, &wit));
-    let (a, b, products) = rel.abc(&c.shape, &z);
+    // z's public half is zero beyond the io and never written (its pages
+    // stay unallocated); only the witness and io are zeroized.
+    let written = (1usize << c.shape.sw()) + i.io.len();
+    let z = ZeroizedPrefix(crate::r1cs::z_vector(&c.shape, &i, &wit), written);
+    let (a, b, products) = rel.abc(&c.shape, &z.0);
     let a = zeroize::Zeroizing::new(a);
     let b = zeroize::Zeroizing::new(b);
     let products = zeroize::Zeroizing::new(products);

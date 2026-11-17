@@ -36,7 +36,7 @@ mod tests {
         let phases = c.phase_memory_accounting();
         let w = 1u64 << c.shape.sw();
         let x = 1u64 << c.shape.sx;
-        assert!(phases.preparation_bytes >= (2 * w + 3 * x) * size_of::<F>() as u64);
+        assert!(phases.preparation_bytes >= (w + 3 * x) * size_of::<F>() as u64);
         assert!(c.symbolic.get().is_none() && c.gather.get().is_none());
         assert!(c.readers.get().is_none() && c.m_plans.get().is_none());
         let _ = c.symbolic();
@@ -417,11 +417,16 @@ impl<F: Scalar> UniformCircuit<F> {
         };
         let before_outer = symbolic + gather;
         let all_plans = before_outer + readers + m_plans;
+        // z_vector's public half is never written beyond the io
+        // (`kern::zeroed`), so z holds w field elements while abc builds the
+        // symbolic rows and then the gather plan.
         let preparation = p
             .helpers
-            .max((2 * w + 3 * x) * field + before_outer + p.gather_scratch)
-            .max(2 * w * field + symbolic + symbolic_scratch);
-        // The full prover owns one cloned witness. Its caller's witness is
+            .max((w + 3 * x) * field + before_outer + p.gather_scratch)
+            .max(w * field + symbolic + symbolic_scratch);
+        // The full prover's z = (w || io) holds its only witness copy; z's
+        // public half is written only at the io (`kern::zeroed`), so z holds
+        // w field elements until the inner rounds. Its caller's witness is
         // resident before admission. Helper buffers die before z/A/B/C exist.
         let phase1 = w * field
             + self.bounds.len() as u128 * size_of::<usize>() as u128
@@ -430,20 +435,22 @@ impl<F: Scalar> UniformCircuit<F> {
         let outer_k = self.shape.outer_blocks().first().copied().unwrap_or(0);
         let outer_low = x >> outer_k;
         // eq_low is alive while each A/B/C fold allocates its replacement.
-        let outer =
-            (3 * w + 3 * x + 2 * outer_low) * field + before_outer + p.gather_scratch + phase1
-                - w * field;
-        let outer = outer.max((3 * w) * field + symbolic + symbolic_scratch);
+        let outer = (w + 3 * x + 2 * outer_low) * field + before_outer + p.gather_scratch + phase1
+            - w * field;
+        let outer = outer.max(w * field + symbolic + symbolic_scratch);
         // readers() precedes the M output; its temporary edge buckets are
         // released before m_plans() is built. Equality ex is alive in both.
-        let matrix_readers = (3 * w + x) * field + before_outer + readers + reader_scratch;
-        let matrix_values = (5 * w + x) * field + all_plans + p.matrix_scratch;
+        // M(r_x, .) is built split: its dense witness half only.
+        let matrix_readers = (w + x) * field + before_outer + readers + reader_scratch;
+        let matrix_values = (2 * w + x) * field + all_plans + p.matrix_scratch;
         let matrix = matrix_readers.max(matrix_values);
         let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
         let inner_low = (2 * w) >> inner_k;
         let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 4;
-        let inner = (5 * w + inner_low) * field + all_plans + support;
-        // At opening only folded m/z/A/B/C remain; witness clone, IPA x/b,
+        // z's and M's dense halves while M's first fold is allocated; M's
+        // split table is released before z folds.
+        let inner = (2 * w + inner_low) * field + all_plans + support;
+        // At opening only folded m/z/A/B/C remain; z's witness half, IPA x/b,
         // generator copy and two L/R scalar/base buffers overlap. Pasta affine
         // points contain two base-field elements on both supported curves.
         let tape_scratch = self

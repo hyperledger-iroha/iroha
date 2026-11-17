@@ -4517,6 +4517,32 @@ impl<F> OutPtr<F> {
     }
 }
 
+/// Writes of a [`crate::kern::Split`] table under construction: indices
+/// below `half` into its dense half, the rest into its tail.
+struct SplitOut<F> {
+    dense: OutPtr<F>,
+    tail: OutPtr<F>,
+    half: usize,
+    tail_len: usize,
+}
+impl<F> SplitOut<F> {
+    /// Caller guarantees no concurrent access to the same element; the index
+    /// lies below `half + tail_len` (checked).
+    unsafe fn write(&self, index: usize, value: F) {
+        unsafe {
+            if index < self.half {
+                self.dense.write(index, value);
+            } else {
+                assert!(
+                    index - self.half < self.tail_len,
+                    "public M entry past its tail"
+                );
+                self.tail.write(index - self.half, value);
+            }
+        }
+    }
+}
+
 /// Montgomery batch inversion in parallel chunks.
 pub(crate) fn batch_invert<F: Field>(v: &mut [F]) {
     v.par_chunks_mut(4096).for_each(|chunk| {
@@ -5115,6 +5141,10 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
     }
 
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F> {
+        self.m_table_split(shape, ex, ra, rb, rc).to_full()
+    }
+
+    fn m_table_split(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> crate::kern::Split<F> {
         let c = self.c;
         let rm = [ra, rb, rc];
         // The symbolic rows with each term's factor value: no row is
@@ -5124,11 +5154,27 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
             UniformCircuit::<F>::factor_value(&self.ch, rows[a][j][mat][t].1)
                 .map_or(rm[mat], |f| rm[mat] * f)
         };
-        let mut out = vec![F::ZERO; 1 << shape.sz()];
         // One job per placed block, large blocks in ranges of instances; the
         // rows that read each instance come from the circuit's flat plan.
         const SPAN: usize = 2048;
         let plans = c.m_plans();
+        // The witness half is dense. The public half holds only the io
+        // arrays' blocks and the constant slot (its first entry), so it ends
+        // at their last index.
+        let half = 1usize << shape.sw();
+        let tail_len = plans
+            .iter()
+            .filter(|plan| c.is_io(plan.a2))
+            .flat_map(|plan| {
+                let block = &c.blocks[plan.a2][plan.k2];
+                (0..1usize << c.m(plan.a2))
+                    .filter(move |i2| c.present(plan.a2, *i2))
+                    .map(move |i2| block.index(i2) + 1)
+            })
+            .fold(half + 1, usize::max)
+            - half;
+        let mut dense = crate::kern::zeroed::<F>(half);
+        let mut tail = vec![F::ZERO; tail_len];
         let jobs: Vec<(usize, usize)> = plans
             .iter()
             .enumerate()
@@ -5146,7 +5192,12 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
                     .collect()
             })
             .collect();
-        let output = OutPtr(out.as_mut_ptr());
+        let output = SplitOut {
+            dense: OutPtr(dense.as_mut_ptr()),
+            tail: OutPtr(tail.as_mut_ptr()),
+            half,
+            tail_len,
+        };
         let write_job = |&(b, start): &(usize, usize)| {
             let (plan, weights) = (&plans[b], &weights[b]);
             let (a2, k2) = (plan.a2, plan.k2);
@@ -5219,8 +5270,9 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
                     * weight(a, j, mat, t)
             })
             .sum();
-        out[1 << shape.sw()] += one;
-        out
+        // The constant slot opens the public half.
+        tail[0] += one;
+        crate::kern::Split::new(dense, tail)
     }
 
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F) {

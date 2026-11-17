@@ -32,6 +32,132 @@ use crate::grid::{boolean_positions, pow3};
 /// Longest leaf of a parallel pass, in rows of the folded table.
 const LEAF: usize = 1 << 10;
 
+/// A table the inner rounds read: a plain slice, or a [`Split`] table whose
+/// upper half is zero beyond a short prefix.
+pub trait Table<F>: Sync {
+    fn len(&self) -> usize;
+    fn at(&self, i: usize) -> F;
+    /// Whether every entry in `range` is zero.
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool;
+}
+
+impl<F: Field> Table<F> for [F] {
+    #[inline]
+    fn len(&self) -> usize {
+        <[F]>::len(self)
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        self[i]
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        self[range].iter().all(|x| x.is_zero_vartime())
+    }
+}
+
+impl<F: Field> Table<F> for Vec<F> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        self[i]
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        self.as_slice().zero_run(range)
+    }
+}
+
+/// `(dense || tail || 0...)` of length `2 * dense.len()`: `z = (w || io)` and
+/// `M(r_x, .)` before the first inner fold. Their upper (public) half is zero
+/// beyond the public inputs, so it is never allocated.
+pub struct Split<F> {
+    pub dense: Vec<F>,
+    pub tail: Vec<F>,
+}
+
+impl<F: Field> Split<F> {
+    pub fn new(dense: Vec<F>, tail: Vec<F>) -> Self {
+        assert!(tail.len() <= dense.len(), "the tail lies in the upper half");
+        Split { dense, tail }
+    }
+    /// The upper half's nonzero prefix becomes the tail.
+    pub fn from_full(mut full: Vec<F>) -> Self {
+        assert!(full.len().is_power_of_two() && full.len() >= 2);
+        let half = full.len() / 2;
+        let used = full[half..]
+            .iter()
+            .rposition(|x| !x.is_zero_vartime())
+            .map_or(0, |i| i + 1);
+        let tail = full[half..half + used].to_vec();
+        full.truncate(half);
+        full.shrink_to_fit();
+        Split { dense: full, tail }
+    }
+    pub fn to_full(&self) -> Vec<F> {
+        let half = self.dense.len();
+        let mut full = zeroed(2 * half);
+        full[..half].copy_from_slice(&self.dense);
+        full[half..half + self.tail.len()].copy_from_slice(&self.tail);
+        full
+    }
+}
+
+impl<F: Field> Table<F> for Split<F> {
+    #[inline]
+    fn len(&self) -> usize {
+        2 * self.dense.len()
+    }
+    #[inline]
+    fn at(&self, i: usize) -> F {
+        let half = self.dense.len();
+        if i < half {
+            self.dense[i]
+        } else {
+            self.tail.get(i - half).copied().unwrap_or(F::ZERO)
+        }
+    }
+    fn zero_run(&self, range: std::ops::Range<usize>) -> bool {
+        let half = self.dense.len();
+        let low = range.start.min(half)..range.end.min(half);
+        let tail_end = half + self.tail.len();
+        let high = range.start.clamp(half, tail_end)..range.end.clamp(half, tail_end);
+        self.dense[low].iter().all(|x| x.is_zero_vartime())
+            && self.tail[high.start - half..high.end - half]
+                .iter()
+                .all(|x| x.is_zero_vartime())
+    }
+}
+
+/// A zero vector whose pages the operating system supplies on first write
+/// (large allocations are fresh mappings), so a table written only in part
+/// holds memory only where written. Falls back to writing zeros for a field
+/// whose zero is not the all-zero bit pattern.
+pub fn zeroed<F: Field>(n: usize) -> Vec<F> {
+    let zero = F::ZERO;
+    // SAFETY: reads the bytes of one field element (Pasta field elements are
+    // plain arrays of limbs, without padding).
+    let zero_bits =
+        unsafe { std::slice::from_raw_parts((&zero as *const F).cast::<u8>(), size_of::<F>()) }
+            .iter()
+            .all(|b| *b == 0);
+    if !zero_bits || n == 0 || size_of::<F>() == 0 {
+        return vec![F::ZERO; n];
+    }
+    let layout = std::alloc::Layout::array::<F>(n).expect("table size");
+    // SAFETY: the layout has nonzero size; the allocation is zeroed and the
+    // all-zero bit pattern is `F::ZERO` (checked above), so all `n` elements
+    // are initialized; `Vec` frees it with the same layout.
+    unsafe {
+        let ptr = std::alloc::alloc_zeroed(layout).cast::<F>();
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        Vec::from_raw_parts(ptr, n, n)
+    }
+}
+
 /// Grid bookkeeping for `k` variables: indices are base 3, coordinate 0 most
 /// significant; digit 2 is "infinity" while accumulating and the node 2 after
 /// [`Basis::to_grid`].
@@ -192,7 +318,11 @@ pub struct Support {
 }
 
 /// Scans both tables (a run stops at its first nonzero entry).
-pub fn support<F: Field>(k: usize, m: &[F], z: &[F]) -> Support {
+pub fn support<F: Field, M: Table<F> + ?Sized, Z: Table<F> + ?Sized>(
+    k: usize,
+    m: &M,
+    z: &Z,
+) -> Support {
     assert!(k <= 5 && z.len() == m.len());
     let low = m.len() >> k;
     let seg = SEGMENT.min(low).max(1);
@@ -203,8 +333,7 @@ pub fn support<F: Field>(k: usize, m: &[F], z: &[F]) -> Support {
             let (j0, j1) = (s * seg, ((s + 1) * seg).min(low));
             (0..1usize << k).fold(0u32, |mask, hi| {
                 let run = hi * low + j0..hi * low + j1;
-                let any = m[run.clone()].iter().any(|x| !x.is_zero_vartime())
-                    || z[run].iter().any(|x| !x.is_zero_vartime());
+                let any = !m.zero_run(run.clone()) || !z.zero_run(run);
                 mask | (u32::from(any) << hi)
             })
         })
@@ -313,7 +442,12 @@ fn reductions(support: &Support) -> (Vec<(u32, Reduction)>, Vec<u16>) {
 ///
 /// With a [`Support`] every run of rows works on the sub-cube its corners
 /// span; without one every row uses the whole cube.
-pub fn inner_round<F: Field>(basis: &Basis, m: &[F], z: &[F], support: Option<&Support>) -> Vec<F> {
+pub fn inner_round<F: Field, M: Table<F> + ?Sized, Z: Table<F> + ?Sized>(
+    basis: &Basis,
+    m: &M,
+    z: &Z,
+    support: Option<&Support>,
+) -> Vec<F> {
     let (k, cube, grid) = (basis.k, basis.cube, basis.grid);
     let low = m.len() >> k;
     assert_eq!(z.len(), m.len());
@@ -333,8 +467,8 @@ pub fn inner_round<F: Field>(basis: &Basis, m: &[F], z: &[F], support: Option<&S
                 |(mut acc, mut corners, mut ext), j| {
                     let (cm, cz) = corners.split_at_mut(cube);
                     for hi in 0..cube {
-                        cm[hi] = m[hi * low + j];
-                        cz[hi] = z[hi * low + j];
+                        cm[hi] = m.at(hi * low + j);
+                        cz[hi] = z.at(hi * low + j);
                     }
                     let (gm, gz) = ext.split_at_mut(grid);
                     basis.extend(cm, gm);
@@ -376,8 +510,8 @@ pub fn inner_round<F: Field>(basis: &Basis, m: &[F], z: &[F], support: Option<&S
             for j in s * support.seg..((s + 1) * support.seg).min(low) {
                 let (cm, cz) = corners.split_at_mut(cube);
                 for (c, hi) in reduction.corners.iter().enumerate() {
-                    cm[c] = m[hi * low + j];
-                    cz[c] = z[hi * low + j];
+                    cm[c] = m.at(hi * low + j);
+                    cz[c] = z.at(hi * low + j);
                 }
                 let (gm, gz) = ext.split_at_mut(grid);
                 sub.extend(&cm[..n], &mut gm[..sgrid]);
@@ -423,7 +557,11 @@ fn fold_corners<F: Field>(corners: &mut [F], r: &[F]) -> F {
 /// With a [`Support`] (of this table and its partner) a run folds its
 /// sub-cube and multiplies by `1 - r` (or `r`) for every variable whose
 /// upper (or lower) half is empty; an empty run folds to zero unread.
-pub fn fold_top<F: Field>(table: &[F], r: &[F], support: Option<&Support>) -> Vec<F> {
+pub fn fold_top<F: Field, T: Table<F> + ?Sized>(
+    table: &T,
+    r: &[F],
+    support: Option<&Support>,
+) -> Vec<F> {
     let k = r.len();
     let cube = 1usize << k;
     let low = table.len() >> k;
@@ -436,7 +574,7 @@ pub fn fold_top<F: Field>(table: &[F], r: &[F], support: Option<&Support>) -> Ve
                 || vec![F::ZERO; cube],
                 |corners, j| {
                     for hi in 0..cube {
-                        corners[hi] = table[hi * low + j];
+                        corners[hi] = table.at(hi * low + j);
                     }
                     fold_corners(corners, r)
                 },
@@ -475,7 +613,7 @@ pub fn fold_top<F: Field>(table: &[F], r: &[F], support: Option<&Support>) -> Ve
                 }
                 let (reduction, (free, factor)) = (&list[run as usize].1, &bound[run as usize]);
                 for (c, hi) in reduction.corners.iter().enumerate() {
-                    corners[c] = table[hi * low + j];
+                    corners[c] = table.at(hi * low + j);
                 }
                 let value = fold_corners(&mut corners[..reduction.corners.len()], free);
                 factor.map_or(value, |f| f * value)

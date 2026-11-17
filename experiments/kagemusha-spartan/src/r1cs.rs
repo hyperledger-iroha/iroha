@@ -122,6 +122,11 @@ impl<F: zeroize::Zeroize> zeroize::Zeroize for Witness<F> {
 pub trait Rel<F: Scalar>: Sync {
     fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>);
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F>;
+    /// `M(r_x, .)` as the prover holds it: the witness half dense, the public
+    /// half only up to its last nonzero entry.
+    fn m_table_split(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> crate::kern::Split<F> {
+        crate::kern::Split::from_full(self.m_table(shape, ex, ra, rb, rc))
+    }
     fn matrix_evals(&self, shape: &Shape, rx: &[F], ry: &[F]) -> (F, F, F);
     /// Nonzero entries of A, B and C (0 when the relation is structured).
     fn nnz(&self) -> [usize; 3] {
@@ -282,7 +287,8 @@ pub fn sample<F: Scalar>(shape: &Shape, rng: &mut SpikeRng) -> (Instance<F>, Wit
 /// `z = (w || io)` padded to `2^sz`.
 pub fn z_vector<F: Scalar>(shape: &Shape, inst: &Instance<F>, wit: &Witness<F>) -> Vec<F> {
     let half = 1 << shape.sw();
-    let mut z = vec![F::ZERO; 2 * half];
+    // The public half is zero beyond the io: its pages are never written.
+    let mut z = crate::kern::zeroed(2 * half);
     z[..half].copy_from_slice(&wit.w);
     z[half..half + inst.io.len()].copy_from_slice(&inst.io);
     z

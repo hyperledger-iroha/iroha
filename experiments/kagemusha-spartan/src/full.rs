@@ -2341,9 +2341,7 @@ mod tests {
             let (x, y) = (x.to_repr(), y.to_repr());
             let mut v: Vec<crate::ipa::F<C>> = [&x[..16], &x[16..], &y[..16], &y[16..]]
                 .into_iter()
-                .map(|h| {
-                    crate::ipa::F::<C>::from_u128(u128::from_le_bytes(h.try_into().unwrap()))
-                })
+                .map(|h| crate::ipa::F::<C>::from_u128(u128::from_le_bytes(h.try_into().unwrap())))
                 .collect();
             v.resize(4 + gens.g.len().ilog2() as usize, crate::ipa::F::<C>::ZERO);
             v
