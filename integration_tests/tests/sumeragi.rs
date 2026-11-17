@@ -324,13 +324,24 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
                 Register::account(Account::new(warm.clone())),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
-        let baseline = network.validators()[0]
-            .client()
-            .with_request_deadline(warm_deadline)?
-            .client()
-            .get_sumeragi_status()?
-            .applied_height;
-        ensure!(baseline > 1, "warmup must execute nonempty paid work");
+        // The status snapshot can trail the Applied finality the submission waited for, so
+        // read it until it shows the warmup block, within the same deadline.
+        let baseline = loop {
+            let applied = network.validators()[0]
+                .client()
+                .with_request_deadline(warm_deadline)?
+                .client()
+                .get_sumeragi_status()?
+                .applied_height;
+            if applied > 1 {
+                break applied;
+            }
+            ensure!(
+                Instant::now() < warm_deadline,
+                "warmup must execute nonempty paid work"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
         wait_applied(&network, baseline, warm_deadline, true)?;
         let before = balances(&network, &fee_ids, warm_deadline)?;
         let supply_before = supply(&network, fee_ids[0].definition(), warm_deadline)?;
