@@ -61,9 +61,10 @@ pub(super) fn encode(request: ArgumentEncodingRequest<'_>) -> Result<Option<Vec<
     let expected_abi = exact_hash(request.expected_abi_hash_hex, "expected_abi_hash_hex")?;
 
     // The selected presentation context applies to artifact literals as well as
-    // arguments. The verifier authenticates the embedded schema and full image.
+    // arguments. The verifier authenticates the embedded schema and full image under
+    // the artifact's declared host profile, as every other offline encoder does.
     let _guard = ChainDiscriminantGuard::enter(request.chain_discriminant);
-    let verified = ivm::verify_contract_artifact(request.artifact)
+    let verified = ivm::verify_contract_artifact_with_declared_profile(request.artifact)
         .map_err(|error| format!("invalid contract artifact: {error}"))?;
     if verified.code_hash.as_ref() != &expected_code {
         return Err("contract artifact does not match expected_code_hash_hex".into());

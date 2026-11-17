@@ -22,7 +22,7 @@ fn fixture() -> &'static Fixture {
                 }",
             )
             .expect("compile actual parameterized artifact");
-        let verified = ivm::verify_contract_artifact(&artifact).unwrap();
+        let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact).unwrap();
         Fixture {
             code_hash: hex::encode(verified.code_hash.as_ref()),
             abi_hash: hex::encode(verified.abi_hash.as_ref()),
@@ -61,7 +61,8 @@ fn request(payload_json: Option<&str>) -> ArgumentEncodingRequest<'_> {
 fn contract_argument_encoding_matches_native_schema_and_distinguishes_payment_fields() {
     let text = payload(31, 369, "12.5");
     let encoded = encode(request(Some(&text))).unwrap().unwrap();
-    let verified = ivm::verify_contract_artifact(&fixture().artifact).unwrap();
+    let verified =
+        ivm::verify_contract_artifact_with_declared_profile(&fixture().artifact).unwrap();
     let schema = verified
         .contract_interface
         .entrypoints
@@ -401,7 +402,7 @@ fn contract_argument_encoder_is_registered_on_the_native_module() {
 fn emit_installed_encoder_fixture() {
     let _context = ChainDiscriminantGuard::enter(369);
     let original = fixture();
-    let verified = ivm::verify_contract_artifact(&original.artifact).unwrap();
+    let verified = ivm::verify_contract_artifact_with_declared_profile(&original.artifact).unwrap();
     let schema = verified
         .contract_interface
         .entrypoints
