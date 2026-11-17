@@ -245,6 +245,12 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
   - Every P circuit uses one label (`P-uniform`) and every S circuit another (`S-uniform`), so a circuit's key does not
     depend on which kind of proof it verifies. The kind stays bound through the io.
 - **Endoscalars:** challenges that multiply points are Halo endoscalars.
+- **Challenge distributions:** each squeeze yields two 126-bit challenges from one state word; raw ones are the
+  126-bit integers, point-multiplying ones their endoscalars, and τ and the pair-link ρ are whole words. Transcript
+  tags are ignored, so domain separation is the fixed positional schedule. Soundness bounds are taken over these
+  distributions, including the correlation between the two halves of one squeeze, not over `|F|`
+  ([research/SOUNDNESS.md](research/SOUNDNESS.md) §5). The local lemmas alone do not give prefix knowledge or
+  recursive Fiat-Shamir security (§11).
 - **Sizes:** a proof is its row commitments, round commitments, masked evaluations, IPA L/R pairs, folded generator,
   Schnorr final and late io.
 
@@ -341,9 +347,12 @@ The pair link makes P and S two halves of one statement.
    that does not end at the link's R fails its own circuit.
 4. Each verifier circuit ties every verified proof's link io to the pair's shared values.
 
-μ is committed before ρ, so if P's and S's vectors `(μ, v)` differ, the two chains agree with probability at most
-about `n/2^126`, since ρ is a 126-bit challenge. The native engine draws μ from fresh OS entropy; the research fixtures derive it deterministically. A
-swapped partner (P-recv linked with S-send) is refused.
+μ and the shared values are committed before ρ, so if P's and S's vectors `(μ, v)` differ, the two chains agree with
+probability at most about `n/p`: ρ is the whole canonical Fp word squeezed by S's transcript (`spartan.rs`
+`link_word`), embedded injectively into Fq, not a 126-bit challenge ([research/SOUNDNESS.md](research/SOUNDNESS.md)
+§6.7). n is 783 shared words for Send and Load and 1,539 for Receive. The native engine draws μ from fresh OS entropy
+(Bootstrap's mask is deterministic); the research fixtures derive it deterministically. A swapped partner (P-recv
+linked with S-send) is refused.
 
 ### 7.3 Deferred matrix claims
 
@@ -362,14 +371,17 @@ swapped partner (P-recv linked with S-send) is refused.
 **The fold.** A step folds four claims (two incoming accumulators and two fresh claims) into its own accumulator.
 
 1. Take the cubic curve γ through the four points at t = 0..3.
-2. Commit `q = P∘γ` in the first phase. Its degree is `3·(selector bits + X + Y) + 9 + 3·(challenge degrees)`, 165
-   for P in the 64-row layout.
+2. Commit `q = P∘γ` in the first phase. Its degree is `3·(selector bits + X + Y) + 9 + 3·(challenge degrees)`: 186
+   for P and 174 for S at the 11-17 complete p18-s17 layout (SOUNDNESS.md §7.3); 165 belonged to the 64-row research
+   layout.
 3. Check `q(t) = v_t` at t = 0..3.
 4. The new claim is `(γ(β), q(β))`, with β the second-phase challenge. It is published as late io.
 
-A step with one input proof (Send, Load) repeats its two claims, which is sound. A false input claim makes the
-folded claim false, except with probability about `deg q/2^126`: β is a raw 126-bit challenge. That is before
-Fiat-Shamir, grinding and composition losses.
+A step with one input proof (Send, Load) repeats its two claims, which is sound. `q` is committed before β, and the
+four input equalities make any false input imply a nonzero `q − P∘γ`, so one fold fails with probability at most
+`deg q · λ_β`, with no factor four; β is a raw 126-bit challenge, so `λ_β ≈ 2^-126` (SOUNDNESS.md §5.2, §6.6). That
+is before Fiat-Shamir, grinding and composition losses. Declared challenge degrees are program metadata: native
+import has to verify them or rely on authenticated compiler output (TODO G5).
 
 **Native decision.** An accumulated claim is checked by running each kind's matrix program once at its point: about
 0.2 ms per uniform kind on the Mac.
@@ -668,16 +680,29 @@ None of these has been timed on a phone.
 
 - discrete log on Pallas and Vesta;
 - Fiat-Shamir with the Poseidon sponge as a random oracle;
-- for unbounded recursion, a PCD composition theorem checked against this construction, or an explicitly stated
-  recursive Fiat-Shamir assumption, as today's spec has.
+- for the recursion, the explicit recursive knowledge / Fiat-Shamir assumption **P2-RKFS**
+  ([research/SOUNDNESS.md](research/SOUNDNESS.md) §4.2). No PCD composition theorem is imported, and nothing here is
+  a DL-only theorem.
+
+**The written argument (TODO G1/G2, 2026-11-18, Codex astra; independent review G3 pending):** SOUNDNESS.md gives a
+conditional recursive argument by induction over the extracted history, which is a DAG (a Receive joins its own
+history and the payer's), and written local lemmas with bounds over the real challenge distributions (raw 126-bit
+words, endoscalars from 126 bits, full-width words). At the 11-17 complete layout the conservative local algebraic
+bound per operation is about **104.0 bits for Bootstrap, 101.6 for Load, 101.4 for Send and 100.7 for Receive**,
+dominated by the compiler's LogUp terms; without LogUp the main proofs, folds and link give about 115.3 bits. These
+numbers are conditional on P2-RKFS and the compiler's phase invariants, and they have to be multiplied by a finite
+history and query budget: with an illustrative `Q ≤ 2^40` adversary queries and `N ≤ 2^36` extracted nodes the
+algebraic term is about `2^-60.6`. **None of this is an overall 128-bit claim**; a production target needs chosen
+budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 
 **Arguments by mechanism:**
 
 | Mechanism | Argument |
 |---|---|
-| γ separation | A rewinding argument over a Laurent polynomial in γ: off-slot terms land on nonzero exponents, so a forgery needs γ to hit one of `2m+1` roots. γ is an endoscalar from 126 challenge bits, so the bound must be taken over that distribution, not `|F|`. Written proof pending. |
-| Deferred matrix claims | A false input claim survives the fold with probability about `deg q/2^126` (β is a raw 126-bit challenge), and native decision is mandatory. |
-| Pair link | μ is committed before ρ, so two different chains agree with probability about `n/2^126`. |
+| γ separation | A rewinding argument over a Laurent polynomial in γ: off-slot terms land on nonzero exponents, so a forgery needs γ to hit a root of a degree-`2m` Laurent polynomial, with the bound taken over γ's endoscalar distribution, conditional on consistent opening extraction (SOUNDNESS.md §6.1). α batches `m + 2` equations of degree at most `m + 1`. |
+| Committed sumcheck rounds | Each block has individual degree at most two; with the three-variable Kronecker schedule its univariate error polynomial has degree at most 26; the initial equality test has degree at most `2^sx − 1`; the matrix combination is a degree-3 test (SOUNDNESS.md §6.2-§6.4). |
+| Deferred matrix claims | `q` is committed before β; a false input claim survives one fold with probability at most `deg q · λ_β` (186 on P, 174 on S at p18-s17; β raw 126-bit), and native decision is mandatory (§7.3). |
+| Pair link | μ and the shared values are committed before ρ, the whole squeezed Fp word; two different chains agree with probability about `n/p`, n = 783 (Send, Load) or 1,539 (Receive) (§7.2). |
 | Curve arithmetic | Exception-free: complete additions wherever inputs may coincide. |
 | Encodings | Canonical: byte ranges, and comparisons against the modulus. |
 
@@ -708,12 +733,14 @@ None of these has been timed on a phone.
 
 **Known gaps:**
 
-- the recursive soundness theorem for Path 2 is not stated or proved: extraction through joined histories (a Receive
-  has two parents), accumulated claims, and recursive Fiat-Shamir;
-
-- an independent soundness review ([research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md) is the
-  checklist);
-- written proofs for γ separation and the deferral;
+- the recursion rests on the explicit P2-RKFS assumption, not a proved theorem; incoming-payer edges have no
+  authenticated rank, so causal extraction through a Receive's second parent is part of that assumption
+  (SOUNDNESS.md §4, §9);
+- no finite lifetime or query budget is enforced (the sequence counter is unsigned 128-bit), so the bounds above
+  hold only under chosen budgets;
+- an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
+  is the checklist), and the open items in SOUNDNESS.md §9 and §11 (imported degree declarations, generator-profile
+  binding, LogUp phase invariants, a frozen candidate equal to HEAD);
 - secret MSMs are not constant-time, as in today's prover;
 - the deterministic `SpikeRng` is for tests only.
 

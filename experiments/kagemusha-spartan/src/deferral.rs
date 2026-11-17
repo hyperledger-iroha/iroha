@@ -29,7 +29,8 @@
 //! `t = 0..3`, and the new claim `(gamma(beta), q(beta))` at the second-phase
 //! challenge `beta` (the LogUp challenge). If an input claim is false, the
 //! committed `q` differs from `P(gamma(t))`, and `q(beta)` is false except
-//! with probability `deg q / |F|`, `deg q = 3 (b + X + Y) + 9` with `b`
+//! with probability about `deg q / 2^126` (`beta` is a raw 126-bit challenge,
+//! not uniform in `F`; research/SOUNDNESS.md §6.6), `deg q = 3 (b + X + Y) + 9` with `b`
 //! selector bits (plus the challenges' degrees for uniform kinds). The fresh
 //! claims' points are fixed by the verified proof's transcript before the
 //! first phase; so is `r`, which ties the claim to the value the check uses.

@@ -2112,7 +2112,8 @@ pub fn shared_values<C: PastaCurve>(
 // squeezes its phase-1 digest d, S absorbs d and its rows and squeezes rho, P
 // absorbs rho; both then absorb R. Whoever verifies the pair (the next
 // operation's circuits, or the payee natively) replays both transcripts with
-// one R. Differing copies give differing R except with probability n / q;
+// one R. Differing copies give differing R except with probability n / p
+// (rho is S's whole squeezed Fp word, embedded into Fq);
 // a rho known before the copies are committed lets a forger fix two copies
 // with a short lattice vector (shown in the tests).
 

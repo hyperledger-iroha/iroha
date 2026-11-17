@@ -17,11 +17,17 @@ claim before item E5 measures it.
   matrix and generator claims, recursive Fiat-Shamir, well-founded state progression and a finite lifetime/query
   budget. "Only Bootstrap has no predecessor" is not the argument.
   *Done when:* a written argument in `research/` covers every recursive kind, and G3's reviewer accepts it.
+  *2026-11-18:* written by Codex astra: [research/SOUNDNESS.md](research/SOUNDNESS.md) §4 (explicit assumption
+  P2-RKFS, induction over the extracted DAG, well-foundedness from the implemented state, finite budgets in §8). It
+  is conditional and says so; it waits for G3.
 - [ ] **G2. Written proofs and exact bounds.** Prove γ separation (CancelRound/AdaptiveWitness must stay refused) and
   the deferred matrix claims. Take each bound over the challenge's real distribution (β is a raw 126-bit integer; γ is
   an endoscalar from 126 bits; the pair-link challenge comes from S's Fp transcript), include the lean schedule's
   ~3-4-bit loss, and state the total bits of soundness per operation.
   *Done when:* the proofs are written and DESIGN.md §5/§7.3/§11 quote the corrected bounds.
+  *2026-11-18:* written in SOUNDNESS.md §5-§7 (per-operation local algebraic bounds 104.0 / 101.6 / 101.4 / 100.7 bits
+  for Bootstrap / Load / Send / Receive, LogUp-dominated, conditional); DESIGN.md §5, §7.2, §7.3 and §11 now quote
+  them (the link ρ is a whole Fp word: `n/p`, not `n/2^126`). Closes with G3.
 - [ ] **G3. Independent cryptographic review.** A reviewer outside this lane, working from
   research/REPORT-b04a57-soundness.md, the written G1/G2 arguments and the code.
   *Done when:* every finding is fixed or explicitly accepted by the owner.
@@ -66,6 +72,9 @@ claim before item E5 measures it.
   4 GB phones. *Done when:* every kind proves within the admission, measured.
 - [ ] **E4. Shrink P-boot's matrix program** (53,964 products, about 72% of the three P programs). Taking Bootstrap out
   of the per-step polynomial needs an authenticated discharge of its matrix obligation, not a one-time native check.
+  *2026-11-18:* construction chosen in [research/E4-F1-F2-DESIGN.md](research/E4-F1-F2-DESIGN.md) §3 (Codex astra):
+  discharge Bootstrap's fresh matrix claims inside the first successor's circuits under pinned Bootstrap keys, then
+  drop Bootstrap from the recurring polynomial. Not implemented; its cost is unmeasured.
 - [ ] **E5. One complete Pixel 6 Receive**: retained incoming bytes to a verified, durable, releasable output, with
   phase timings, carrier bytes and peak RSS from the same run; then Send, Load and Bootstrap. The Pixel operator runs
   it only with the owner's go typed in the operator's own chat. *Done when:* the 3 s target is judged on these
@@ -79,7 +88,11 @@ claim before item E5 measures it.
 
 - [ ] **F1. Unload** (offline to online) as a recursive kind with its Core path. The proof-before-payout hold on
   suffix-Unload stays.
+  *2026-11-18:* relation, Core acceptance and exactly-once storage specified in E4-F1-F2-DESIGN.md §4. Not
+  implemented; the Core side is future-generation code and ships with D4.
 - [ ] **F2. RefreshTimeAnchor** as a recursive kind (only statement tags exist in `statement.rs`).
+  *2026-11-18:* E4-F1-F2-DESIGN.md §5 puts it in one Control program shared with Load (no fifth kind; ten programs
+  in all with E4 and F1). Not implemented.
 - [ ] **F3. The remaining policy signer roles**, including the fee-schedule signer check.
 - [ ] **F4. Production codecs**: the 532-byte credential and the 30-field Core, per the credential-continuity and
   key-table spec changes (iroha 00fc09fcea, 2180d7956b).
@@ -99,9 +112,9 @@ claim before item E5 measures it.
 
 ## Records to correct
 
-- [ ] **R1. DESIGN.md corrections** from astra's 11-13 review: challenge bounds (G2), native burn status (G4), the
+- [x] **R1. DESIGN.md corrections** from astra's 11-13 review: challenge bounds (G2), native burn status (G4), the
   "total from exact bytes" domain (within an admitted transport profile), burn accounting (Core credit plus adjusted
   burned value), the measured native q (196.6 / 32.2 / 179.9 / 48.9 ms, three-kind Mac), "sampled" rather than
   "identical" matrices, and research-checkpoint numbers labelled as such.
-  *2026-11-18:* all but the challenge bounds are now in DESIGN.md (burn status corrected in §4.3, §11, §12; the other
-  items were already fixed). The bounds wait for G2.
+  *2026-11-18:* done. Burn status corrected in §4.3, §11, §12; challenge bounds from SOUNDNESS.md in §5, §7.2, §7.3,
+  §11; the other items were already fixed.
