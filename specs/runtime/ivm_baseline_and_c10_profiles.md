@@ -1,6 +1,6 @@
 # IVM baseline and C10 host profiles
 
-Status: owner decision recorded 2026-11-16; implementation in progress (phases 1–4 done: `AbiV1` runs the frozen baseline engine and Kotodama targets it by default; C10 public families are phase 5). This record
+Status: owner decision recorded 2026-11-16; implementation in progress (phases 1–4 done: `AbiV1` runs the frozen baseline engine and Kotodama targets it by default; phase 5 partly done: profile threading, the C10 result families, the mixed-profile call refusal, the `koto` C10 target and the declared C10 ABI hash; the addition `iroha.runtime.ivm_c10.v1` itself is open, see the Phase 5 record). This record
 couples to `specs/live_runtime_upgrades.md` (immutable definitions, selection-based dispatch,
 governed retirement) and `specs/runtime_baseline_catalog.json`.
 
@@ -597,7 +597,9 @@ only as the explicit `IvmProfileId::C10_ABI_V1`, which no root selects until pha
   history test, and Taira's genesis refused at `--check-config`). The slot is frozen under its
   V1 name again (`push_frozen_quarantine_tx_budget_v1`) and binds the gas cap's u64 value, so
   a signed genesis keeps its digest. The anchor's quarantine-lane cycle budget is not restored;
-  both engines keep the gas cap.
+  both engines keep the gas cap. Restoring the anchor's aggregate cycle budget is a forward
+  release addition: a new typed parameter definition and selected execution-services
+  implementation that reinstates the source-bound cycle owner without changing the digest.
 - World import (`runtime_amx_captures`, `parliament_anonymous_attempts`, `runtime_retirements`)
   is untouched; phase 4 does not change that picture.
 - The Core lib failures that were not this phase's now pass on `optimizations` (2026-11-17):
@@ -646,8 +648,9 @@ binary ran alone from its package directory.
 ### Not done in phase 4, and what remains
 
 - Owner decisions, unchanged: `AbiV1RuntimeLifecycle` stays on C10 (both reconstruction tests
-  pass with it there); mixed-profile nested calls; retirement and the activation
-  bootstrap authority.
+  pass with it there); mixed-profile nested calls; retirement and the activation bootstrap
+  authority. (The quarantine-lane cycle budget is a forward addition, not a digest term: see the
+  corrected finding above.)
 - Phase 5: `*C10V1` wire families for the C10 faults and admission errors that the baseline
   enums cannot name (`ControlFlowViolation`, `RegisterIntegerOverflow`, `MaxCyclesWithoutZk`;
   today `None` or the VM's text), the `iroha.runtime.ivm_c10.v1` addition, a `koto` host
@@ -677,3 +680,149 @@ binary ran alone from its package directory.
 - Documentation outside the files listed under As built (for example `specs/kotodama_grammar.md`,
   `specs/runtime_upgrades.md`, `crates/ivm/docs/kotodama_gap_analysis.md`) was scanned for header,
   register, syscall-encoding and budget claims but not reviewed line by line.
+
+## Phase 5 record (2026-11-17)
+
+Phase 5 is partly done. What is built is a coherent subset that changes no installed definition,
+selection, layout, golden or digest: the phase-4 test follow-through, profile threading, the C10
+result families and their projections, the mixed-profile call refusal, the `koto` C10 target and
+the declared C10 ABI hash. The release addition `iroha.runtime.ivm_c10.v1` itself (its storage,
+selected dispatch, catalog entry, draft route and activation tests) is not published yet; see
+"Not done in phase 5". C10's own ABI V1 surface therefore stays unselectable:
+`IvmProfileId::C10_ABI_V1` is still outside `IvmProfileId::IMPLEMENTED`.
+
+### As built
+
+| Area | Files | Change |
+|---|---|---|
+| Phase-4 follow-through | `iroha_core/tests/{contract_code_bytes, contract_execution_header_binding, contract_manifest_triggers, executor_migration_introspect, ivm_admission_unknown_syscall, ivm_codec_helpers, ivm_event_ordering, ivm_host_mapping, ivm_host_shadow_execute, ivm_manifest_abi_reject, ivm_pointer_abi_apply, ivm_syscall_policy, runtime_change_sets}.rs`; `integration_tests/tests/{subscriptions, support/parliament_submission}.rs`; `iroha_torii/src/{test_utils, routing}.rs` (validation-fee ingress tests); `irohad/src/soracloud_runtime/tests/{part_01, part_04}.rs` | Every fixture a live ABI V1 path admits (stateless admission, raw `Executable::Ivm`, contract registration, triggers, the executor upgrade, the Soracloud runtime) is a baseline artifact: the 49-byte header with a positive `max_cycles`, the baseline encodings, the register form of `JALR`, the 8-bit `SCALL` (24-bit `SYSTEM` above `0xFF`). Only fixture construction changed; no expectation. Raw-code tests that drive a C10 VM directly (`IVM::load_code`) stay C10. Soracloud fixtures use the canonical baseline opcodes and encoding helpers re-exported by `ivm::baseline`; the duplicate test-only encoder is deleted. |
+| Warm and cold caches agree | `iroha_core/src/smartcontracts/ivm/cache.rs`, `state.rs`, `smartcontracts/ivm/host.rs` | `PreparedContractCache::get_in_world` and `IvmCache::cached_program_summary_in_world` no longer answer a root that does not select the resident entry's profile with that entry's ABI hash mismatch: they report a miss, so the caller prepares the stored bytes under the profile the root resolves and returns exactly the refusal a cold cache returns. Before, a warm node reported `ArtifactAbiHashMismatch` where a cold node's baseline parser reported, for example, `UnsupportedAbiVersion`: two different admission results for the same transaction depending on node-local cache state. Tested warm against cold for both lookups. |
+| Profile threading | `iroha_core/src/smartcontracts/ivm.rs`, `ivm/{cache, profile, host_profile, host}.rs`, `ivm/cache/profile_key_tests.rs`, `executor.rs`, `executor_contract_dispatch_tests.rs`, `state.rs`, `pipeline/overlay.rs`, `smartcontracts/isi/{world, triggers/mod}.rs`; `iroha_torii/src/{routing, gov}.rs`; `iroha_cli/src/contracts.rs`; `ivm/src/{lib, contract_artifact}.rs` | No reader collapses a resolved, prepared or VM profile to its `SyscallPolicy` any more (C10's own ABI V1 surface shares `AbiV1` with the baseline). `artifact_profile` (returns `IvmProfileId`) replaces `artifact_policy`; `verify_contract_in_world` verifies under the resolved profile; the prepared-contract and summary caches take profiles (`*_for_profile`, `require_prepared_profile` compares the exact profile and reports the two profiles' ABI hashes); `host_profile::{ensure_at_height, ensure_in_transaction}` and `ensure_host_profile` check the exact profile, so a C10 ABI V1 object is not admitted as the implicit baseline; trigger registration, the stateless raw-IVM overlay, the executor upgrade, raw contract dispatch and trigger callback validation parse and load under the profile; Torii's contract-state schema, multisig contract-call and governed-contract readers and the CLI's program summary use the resolved or declared profile. `ivm` re-exports `verify_contract_artifact{,_with_memory_budget}_for_profile`. The interface is still bound before any header byte is parsed (`profile::resolve_artifact`). |
+| C10 result families | `iroha_data_model/src/ivm_c10.rs` (new module `ivm_c10`) | New definitions with their own nominal schema names; every existing type, tag and layout is byte-identical. `NumericFaultC10V1` (the baseline tags 1–13 plus `RegisterIntegerOverflow` 14), `IvmFaultKindC10V1` (C10's tags 0–27, `ControlFlowViolation` 27, exactly the `fault_layout` C10's descriptor binds), `IvmFaultC10V1`, `IvmAdmissionErrorC10V1` (C10's tags 0–16, `MaxCyclesWithoutZk` 6), and the rejection parents `ValidationFailC10V1`, `TransactionRejectionReasonC10V1`, `TransactionStatusC10V1`. Unchanged leaves are shared. Framed and bare Norito roundtrips, JSON roundtrips and tag pins for each. |
+| Projections | `ivm_abi/src/profile.rs` (`c10_wire_fault_kind`), `iroha_core/src/smartcontracts/ivm/projection.rs` (`c10_admission_error_v1`) | The complete C10 projections onto the C10 families: no C10 fault returns `None` or text (`ControlFlowViolation`, `RegisterIntegerOverflow`, `MaxCyclesWithoutZk` are structured). Tested against the independent projection table of every `VMError` variant. Not yet called by dispatch (TODO). |
+| Mixed-profile calls | `iroha_core/src/smartcontracts/ivm/host/contract_calls.rs`, `host/nested_profile_tests.rs` | `CALL_CONTRACT` compares the exact `IvmProfileId` of the authenticated prepared callee with the caller VM's, immediately after callee preparation and the cache-independent boundary charge, before argument capture, runtime checkout, attachments, host-context mutation or child execution, and refuses a mismatch with a metered `VMError::PermissionDenied` that the caller's engine projects onto its own `PermissionDenied` fault. Same-profile calls are unchanged. Before this change a mixed call ran: Core installs no shared cycle allowance on any root run (`run_with_host_and_cycle_budget` has no Core caller), so the `HostUnavailable` refusal of a C10 child under an active baseline allowance was unreachable, and a baseline contract could call a runtime-lifecycle contract and the reverse (see Findings). Tests: baseline caller with a runtime-lifecycle (C10) callee, the reverse, both with a cold and a warm cache (identical metered refusal, no State, no return value), and same-profile calls of both engines. |
+| `koto` | `kotodama_toolchain/src/bin/koto.rs`, `kotodama_toolchain/tests/cli_smoke.rs` | `--host-profile iroha.ivm.c10.v1` builds C10's own ABI V1 surface (`IvmProfileId::C10_ABI_V1`); `abi-v1` (the baseline) stays the default. The name-to-profile map is `host_profile_target`; a unit test builds and verifies each of the three targets. Three `koto` tests that phase 4's default flip broke now select their engine: the C10 header assertions of `koto_build_meta_header_smoke` build with `--host-profile iroha.ivm.c10.v1` (and the default baseline build is checked for its 1 000 000-cycle header), `offline_upgrade_verification_accepts_only_exact_compiled_host_profiles` builds each policy for the engine that implements it and corrupts the hash at that engine's header position, and `koto_build_named_runtime_profile_smoke` again asserts that C10's ABI V1 verifier refuses the lifecycle artifact (phase 4 had turned it into a self-contradicting pair of assertions). |
+| History inventory | `specs/first_release_history_cutover.{json,md}`, `scripts/check_first_release_history.py`, `pytests/scripts/first_release_history_guard_test.py`, `ivm_abi/tests/runtime_upgrade_abi_fixture.rs` | `declared_profile_abi_hashes` declares C10's hash `bdd5188f…` (golden `C10_ABI_V1_HASH_GOLDEN`, checked against `IvmProfileId::C10_ABI_V1.abi_hash()`) with its carriers: the five Kotodama emission captures (`ivm_hex_rows`) and the `predecoder` rows of `scripts/ivm_artifacts.tsv`. The guard reads a profile's hash at its engine's header position (16..48 for C10), requires every artifact-map row to carry exactly one declared hash, and refuses a profile hash in the pinned history. |
+| Pre-existing Clippy failure | `iroha_core/src/block.rs` | Upstream `e3c0409106` left an orphaned doc line and a second `#[expect(clippy::result_large_err)]` above `parent_creation_time`; the unfulfilled expectation failed strict Clippy for `iroha_core` and every crate that depends on it. Both removed (attributes and documentation only; no code changed). |
+| Documentation | `crates/ivm/docs/syscalls.md`, `crates/ivm/README.md`, this record | The mixed-profile refusal, the `koto` target and the profile status; the phase-4 quarantine finding is corrected above. |
+
+### Findings
+
+- C10's ABI descriptor (`compute_c10_abi_hash`, `bdd5188f…`) binds its fault frame by the
+  nominal name `IvmFaultV1` (`frame_hash` hashes the name) with C10's tag layout text. The new
+  wire family has its own name, `IvmFaultC10V1`; the descriptor is unchanged here, because
+  renaming its frame changes C10's hash, which every C10 artifact and capture carries and which
+  the runtime-lifecycle descriptor embeds. This must be decided before the addition publishes
+  C10's host profile.
+- `ValidationFail::InternalError` carries `#[codec(skip)]`, which Norito does not read: the
+  internal error text is encoded, contrary to its doc comment. The frozen type is unchanged; the
+  C10 family mirrors the actual encoding (a test pins the identical bare bytes).
+- The runtime-lifecycle profile runs C10 but still reports through the baseline families
+  (`IvmEngine::fault_kind`, `projection::admission_error`), where `ControlFlowViolation`,
+  `RegisterIntegerOverflow` and `MaxCyclesWithoutZk` have no structured value. Moving it to the
+  C10 families changes the result contract of a published (dormant) definition.
+- In this release the only C10 profile a root can select is the runtime-lifecycle profile, so the
+  mixed-call refusal applies today to calls between baseline and lifecycle contracts, and those
+  calls ran before it: the brief's premise that a C10 child under a baseline parent returns
+  `HostUnavailable` holds only under an active shared cycle allowance, which Core never installs.
+  The refusal is therefore a behaviour change for a root that selects the runtime-lifecycle
+  profile (no installed selection does). Relatedly, the anchor's shared nested cycle allowance is
+  restored in the engine but not wired by Core: baseline nested calls draw only on gas. Restoring
+  it belongs with the quarantine cycle-budget addition (phase-4 correction above).
+- A warm and a cold node could reject the same transaction with different admission errors
+  when a cached artifact's profile was not selected by the executing root (phase 2's
+  `require_prepared_policy` fallback). Fixed here (As built, "Warm and cold caches agree"); it was
+  reachable only with the runtime-lifecycle profile selected in one root and not in another.
+- `koto test --trace` (`TraceMode::DeltaRegisters`) on a default (baseline) build is refused
+  locally (`ExecutionDeferred(TraceOwnerUnavailable)`): the baseline engine does not reconstruct
+  the proof-trace and step-recorder producers (phase 3). `kotodama_toolchain`'s
+  `coverage_and_trace_attribute_runtime_and_test_steps_separately` fails on this since phase 4; it
+  is left failing and visible (a fix compiles traced test runs for C10 or reconstructs the
+  baseline producers).
+- The guard's artifact-map rule is stricter: a row the ABI V1 carrier leaves out must carry a
+  declared profile hash. `test_artifact_map_carrier_owners_exclude_other_engine_rows` now
+  declares the other engine's profile instead of leaving its row undeclared.
+- Step 0 behaviour notes: in `contract_execution_header_binding` the `max_cycles` mutation no
+  longer fails header admission (the baseline admits a cycle bound without the ZK bit) and is
+  refused later by the manifest signature check; the mutation list does not cover the baseline
+  header's vector-length byte (offset 7), so the test's "every fixed-header field" claim has a
+  gap (left for review: closing it changes the asserted mutation count).
+
+### Owner decisions flagged
+
+- The successor result/event contract and its kernel and commitment scope: the C10 families stop
+  at `TransactionStatusC10V1`. Pipeline events, event filters, trigger descriptors, manifests and
+  certified execution outputs (`TransactionResult` in block execution outputs) of C10 executions
+  need new enclosing definitions whose commitment scope is the owner's to approve.
+- Whether C10's descriptor names its own fault frame (`IvmFaultC10V1`), which changes `bdd5188f…`.
+- Whether the runtime-lifecycle profile moves to the C10 result families.
+- Whether the mixed-call refusal also covers baseline and runtime-lifecycle contracts, which
+  could call each other before this change (it does here, following settled default 3).
+- Unchanged: permitting mixed-profile calls (refused by default here), bundled lifecycle and C10
+  activation, the activation-bootstrap authority, baseline retirement.
+
+### Gates
+
+Run in the frozen copy `r-phase5` on 2026-11-17 (base: `4e121e77e9` with the merge-reconcile
+patch). Every cargo step went through `artifacts/continuation-20261114/r-phase5/cargo_step.sh`
+(`scripts/cargo_fast.sh --jobs 4` under `nice -n 5` after the shared-host resource gate): Core
+builds with the default flags in `<copy>/target`, `ivm`-family builds and Clippy with
+`--no-incremental --stable-local-metadata` in `<copy>/target-ivm` and `<copy>/target-clippy`.
+Test binaries ran from their package directories. Logs: `artifacts/continuation-20261114/r-phase5/runs/`.
+
+| Gate | Command | Result |
+|---|---|---|
+| Step 0, before | `test --locked --offline --no-run -p iroha_core --features iroha-core-tests --test iroha_core_group_01 --test iroha_core_group_03 --test iroha_core_group_04`, each binary `--test-threads 6` | 61/16, 117/17 (2 ignored), 62/1 passed/failed: the 34 failures were C10 fixtures on live ABI V1 paths (`runs/s0-failures.txt`) |
+| Step 0, after | same, after the fixture conversion (build before the warm/cold cache fix and the `block.rs` attribute fix) | 77/0, 134/0 (2 ignored), 63/0 |
+| Core lib, final binary | `test --locked --offline --no-run -p iroha_data_model -p ivm_abi -p iroha_core --lib`; `iroha_core-895d13dd3bd3f1df` (sha256 `e7490fa8…`), all 15 868 tests, `--test-threads 8` | 15 823 passed, 3 failed, 42 ignored (8 272 s). Failures: `lifecycle_compact_wire_identity_and_unchanged_ivm_abi` and `pinned_history_of_an_earlier_build_replays_to_its_pinned_state` (both known, unchanged) and `state::world_journals::tests::publication_tests::detached_world_activates_original_prepaid_control_on_publication_thread`, which passed alone twice on the same binary (a shared allocation-budget count under parallel load). The 16 portable-transfer and replay failures recorded in phase 4 pass. The binary was linked before the attribute-only `block.rs` fix. |
+| Core focused (earlier binary) | same build before the warm/cold cache fix: `smartcontracts::ivm::`, `smartcontracts::isi::triggers`, `executor::`, `pipeline::overlay`, `runtime::taira_activation`, `runtime::ironwood`, `state::trigger_lifecycle`, `history_cutover_tests`, `snapshot_accounting_keeps_release_wire_and_abi_pins`, `smartcontracts::code::` | 1 744 passed, 2 failed (the two known), 7 ignored; `runtime::taira_activation` 12/12 with both reconstruction tests, `PINNED_CHANGE_SET_IDS` and the release wire and ABI pins (`9d96f872…`, `7531b45d…`) pass |
+| `iroha_data_model` | `test --locked --offline --no-fail-fast -p iroha_data_model -p ivm_abi -p ivm -p ivm_artifact_admission -p kotodama_lang -p kotodama_toolchain --tests` (target-ivm) | lib 6 233 passed, 145 ignored (includes `baseline_instruction_layouts_stay_frozen`, every roundtrip and the 7 `ivm_c10` tests); groups 88 and 214 (8 ignored); the other 20 test binaries pass |
+| `ivm_abi` | same run | lib 301; `axt_policy_vectors` 6 (1 ignored), `call_schema_allocations` 3, `norito_pointer_abi_roundtrip` 2, `runtime_upgrade_abi_fixture` 2 (with the C10 golden); 0 failed |
+| `ivm` | same run | lib 1 574 (6 ignored); `ivm_group_01` … `_10`: 136, 79, 86, 152, 244, 108, 88, 129, 66, 29; custody 1, 9; 0 failed |
+| `ivm_artifact_admission` | same run | lib 60, `current_artifact` 16, `preparation_error_custody` 3; 0 failed |
+| `kotodama_lang` | same run | lib 1 575 (6 ignored), `kotodama_integration` 104; 0 failed |
+| `kotodama_toolchain` | same run | lib 140/1, `koto` 39/1 (the new `host_profile_names_select_their_compiled_profiles` passes), `cli_smoke` 12/2. The lib failure is the `koto test --trace` regression under Findings; the other three were fixed afterwards (test fixtures only, strict Clippy clean) but not rerun: the shared host's free-disk gate refused the rebuild. |
+| Torii, `irohad`, CLI (earlier binaries) | `test --locked --offline --no-run -p iroha_torii -p irohad_lib -p iroha_cli_lib --lib` before the warm/cold cache fix; filters below | `irohad` `soracloud_runtime` 287 (1 ignored), CLI `contracts::` 58, Torii `validation_fee contract gov test_utils multisig` 637; 0 failed |
+| Strict Clippy | `clippy --locked --offline --all-targets -p iroha_data_model -p ivm_abi -p ivm -p ivm_artifact_admission -p kotodama_lang -p kotodama_toolchain -p iroha_core -p iroha_torii -p irohad_lib -p iroha_cli_lib -p integration_tests --keep-going -- -D warnings`; then `clippy --locked --offline --all-targets -p iroha_core -- -D warnings` | the first pass stopped on the pre-existing `block.rs` expectation; after its fix both exit 0 (warnings only in vendored crates and `zk-spartan`) |
+| Format | `rustfmt --edition 2024 --check` over the 45 changed Rust files | clean; the only reported diff is the unchanged, pre-existing `iroha_data_model/src/sumeragi_finality.rs`, reached through `lib.rs` |
+| Script tests | `pytest -q -p no:cacheprovider -n 4 pytests/scripts/first_release_history_guard_test.py pytests/scripts/regenerate_kotodama_goldens_test.py scripts/tests/regenerate_current_rust_contract_artifact_test.py scripts/tests/kotodama_fixture_asset_source_test.py scripts/tests/regenerate_kotodama_goldens_test.py` | 441 passed, 147 subtests passed |
+| History guard | `python3 scripts/check_first_release_history.py` | matches the source |
+| Kotodama goldens | `python3 scripts/regenerate_kotodama_goldens.py --check --koto <target-ivm>/debug/koto --admission-tool <target-ivm>/debug/ivm_artifact_admit` | 58 mappings, no change. `koto` was built from the copy (its non-test source is final); `ivm_artifact_admit` is the phase-4 build inherited by the target, because the free-disk gate refused its rebuild (phase 5 changes no admission behaviour; only an unused function was deleted) |
+| JS current artifact | `python3 scripts/regenerate_current_rust_contract_artifact.py --check --koto … --cache-root <owner-only>` | the artifact and its semantics are unchanged; only `source_provenance` differs (closure `c2d9e594…` over 4 588 files → `53cbd738…` over 4 593: the copy's added files). Not rewritten in the copy, because the closure is the landed tree's: regenerate after landing |
+| After hand-back, final copy (2026-11-17 05:38–06:10) | `test --locked --offline --no-run -p iroha_core --features iroha-core-tests --test iroha_core_group_01` … `_05`; `test --locked --offline --no-run -p iroha_torii -p irohad_lib -p iroha_cli_lib --lib`; `test --locked --offline --no-run -p kotodama_toolchain` | Core groups 01–05: 77, 26, 134 (2 ignored), 63, 5, all 0 failed; `irohad` `soracloud_runtime` 287/0, CLI `contracts::` 58/0, Torii focused set 637/0; `kotodama_toolchain` lib 140/1 (the `--trace` regression), `koto` 40/0, `cli_smoke` 14/0 |
+| After landing, live tree | the JS current artifact regenerated with `--write` from the final copy's `koto`, then `--check`; `regenerate_kotodama_goldens.py --check` with tools rebuilt from the final copy; `check_first_release_history.py` | fixture verified (only `source_provenance` changed: closure `53cbd738…`, 4 593 files); 58 mappings, no change; history guard matches |
+
+### Not done in phase 5, and what remains
+
+- Step 2 remainder: the event-filter, trigger-descriptor, manifest and trigger parents and the
+  registrations `RegisterSmartContractCodeC10V1` (`iroha.smart_contract.code.c10.register.v1`)
+  and `RegisterTriggerC10V1` (`iroha.trigger.c10.register.v1`). A tolerant wire ID must be
+  claimed by a catalog addition (`exactly_the_added_instructions_decode_tolerantly`), so they land
+  with the addition. `ExecuteIvmC10V1` stays deferred; raw `Executable::Ivm` stays baseline-bound.
+- Step 3: storage definitions for the C10 manifest, trigger and profile bindings (the baseline
+  `ContractManifest` storage is not widened).
+- Step 4: selected dispatch of admission, execution, trigger scheduling and completion, metering,
+  queries, event projection, snapshots and replay by the selected or captured profile, using
+  `c10_wire_fault_kind` and `c10_admission_error_v1`, and the JSON forms of the C10 rejection
+  parents that events and Torii need (the baseline `TransactionRejectionReason` has a base64 JSON
+  form; `TransactionRejectionReasonC10V1` has none yet). Host-syscall metering is keyed by the
+  named policy (`require_host_syscall_metering_spec`); if C10's schedule prices a host call
+  differently from the baseline's, that key must become the profile.
+- Step 6: the independent addition `iroha.runtime.ivm_c10.v1` (C10 host profile with
+  `abi_version = 1`, its descriptor and the C10 gas schedule `46aa31d8…`; `C10_ABI_V1` joins
+  `IvmProfileId::IMPLEMENTED`), its explicit dependencies outside the ordered chain and a draft
+  that activates its complete closure (host profile, services, result families, interfaces)
+  through the existing draft route.
+- Step 9: activation in a test-only governed change set, typed refusal of C10 registrations
+  before activation, and the assertion that publishing the addition leaves the baseline, the
+  Time, Ironwood and repaired selections, `PINNED_CHANGE_SET_IDS`, the frozen layouts, the ABI,
+  gas and host-profile goldens and every `taira_activation` expectation unchanged.
+- Integration: the `integration_tests` targets that use the converted fixtures
+  (`events_and_triggers`' subscriptions, the Parliament smoke and committee-transition tests)
+  pass strict Clippy but were neither built as test binaries nor run on a network.
+- Verification the shared host's free-disk gate (40 GiB) refused after the final changes: the
+  grouped Core binaries and the Torii, `irohad` and CLI suites were not rebuilt against the final
+  Core (their results above predate the warm/cold cache fix), `kotodama_toolchain` was not rerun
+  after its three test fixes, and `ivm_artifact_admit` was not rebuilt. Rerun them on the landed
+  tree. The JS current-artifact fixture records the copy's source closure and is regenerated
+  after landing (`scripts/regenerate_current_rust_contract_artifact.py --write`, then `--check`).

@@ -46,9 +46,16 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-/// A contract of the interface profile: ABI V1 on the frozen baseline engine (its 49-byte
-/// header with a positive cycle limit, its encodings and its ABI hash).
+/// A contract whose entrypoints each return Unit, with its verified manifest.
+///
+/// Contract registration and trigger dispatch are live ABI V1 paths, which admit only baseline
+/// artifacts: the 49-byte baseline header with a positive cycle bound and the baseline
+/// instruction encodings.
 fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, ContractManifest) {
+    use ivm_abi::baseline::{
+        encoding::wide,
+        instruction::wide::{arithmetic, control, memory},
+    };
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -111,31 +118,11 @@ fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, Contract
     let mut code = Vec::new();
     for _ in entrypoints {
         for instruction in [
-            ivm_abi::baseline::encoding::wide::encode_store(
-                ivm_abi::baseline::instruction::wide::memory::STORE64,
-                12,
-                0,
-                0,
-            ),
-            ivm_abi::baseline::encoding::wide::encode_ri(
-                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
-                10,
-                12,
-                0,
-            ),
-            ivm_abi::baseline::encoding::wide::encode_ri(
-                ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
-                11,
-                0,
-                1,
-            ),
-            // The protected return is the register form of the baseline `JALR`.
-            ivm_abi::baseline::encoding::wide::encode_rr(
-                ivm_abi::baseline::instruction::wide::control::JALR,
-                0,
-                1,
-                0,
-            ),
+            wide::encode_store(memory::STORE64, 12, 0, 0),
+            wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
+            wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+            // The baseline protected return is the register form of `JALR`.
+            wide::encode_rr(control::JALR, 0, 1, 0),
         ] {
             code.extend_from_slice(&instruction.to_le_bytes());
         }

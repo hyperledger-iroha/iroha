@@ -679,16 +679,17 @@ mod tests {
     }
 }
 
-/// Select only the exact named profile advertised by the artifact and active in this root.
-/// This is a policy choice, not header admission: the explicit parser still authenticates every
+/// Select only the exact profile advertised by the artifact and active in this root.
+/// This is a profile choice, not header admission: the explicit parser still authenticates every
 /// header field in its original order. Unselected/unknown hashes retain baseline rejection.
 ///
-/// [`profile::resolve_artifact`] decides; this accessor returns the named policy of its result.
-/// Readers outside Core (Torii) parse, verify and prepare stored artifacts under this policy,
-/// whose engine [`ivm::IvmProfileId::of_policy`] fixes.
+/// [`profile::resolve_artifact`] decides; this accessor returns the compiled identity of its
+/// result, engine included. Readers outside Core (Torii) parse, verify and prepare stored
+/// artifacts under this profile. A named policy alone does not name a profile: C10's own ABI V1
+/// surface and the frozen baseline share `SyscallPolicy::AbiV1`.
 #[must_use]
-pub fn artifact_policy(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::SyscallPolicy {
-    profile::resolve_artifact(world, bytes).policy()
+pub fn artifact_profile(world: &impl WorldReadOnly, bytes: &[u8]) -> ivm::IvmProfileId {
+    profile::resolve_artifact(world, bytes).id()
 }
 /// Preserve baseline hash acceptance and admit only an exact compiled named profile selected
 /// by this root. Runtime execution still enforces the effective restrictions at its block height.
@@ -702,9 +703,9 @@ pub(crate) fn verify_contract_in_world(
     bytes: &[u8],
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<ivm::VerifiedContractArtifact, ivm::ContractArtifactError> {
-    ivm::verify_contract_artifact_with_memory_budget_for_policy(
+    ivm::verify_contract_artifact_with_memory_budget_for_profile(
         bytes,
         budget,
-        profile::resolve_artifact(world, bytes).policy(),
+        profile::resolve_artifact(world, bytes).id(),
     )
 }

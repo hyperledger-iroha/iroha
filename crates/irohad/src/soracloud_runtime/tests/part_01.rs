@@ -2573,6 +2573,8 @@ fn soracloud_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDes
 fn soracloud_contract_artifact_with_functions(
     functions: Vec<(ivm::EmbeddedEntrypointDescriptor, Vec<u32>)>,
 ) -> Vec<u8> {
+    // The Soracloud runtime prepares ABI V1 artifacts on the frozen baseline engine: baseline
+    // header (with a positive cycle limit), baseline CNTR ABI hash and baseline encodings.
     let metadata = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -2619,22 +2621,22 @@ fn soracloud_contract_artifact_with_functions(
         enum_types: Vec::new(),
         states: Vec::new(),
     };
-    // ABI V1 artifacts run on the frozen baseline engine: its header and encodings.
-    let mut bytes =
-        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+    let mut bytes = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     bytes.extend_from_slice(&contract_interface.encode_section());
     for word in code_words {
         bytes.extend_from_slice(&word.to_le_bytes());
     }
     bytes
 }
+/// Unit return in the frozen baseline encoding the Soracloud runtime prepares.
 fn soracloud_unit_return_words() -> Vec<u32> {
     use ivm::baseline::{encoding::wide as enc, instruction::wide};
     vec![
         enc::encode_store(wide::memory::STORE64, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_ri(wide::control::JALR, 0, 1, 0),
+        // The baseline protected return is the register form of `JALR`.
+        enc::encode_rr(wide::control::JALR, 0, 1, 0),
     ]
 }
 fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
@@ -2682,6 +2684,7 @@ fn soracloud_typed_entrypoint(
     entrypoint.return_schema = Some(result);
     entrypoint
 }
+/// Echo one argument in the frozen baseline encoding the Soracloud runtime prepares.
 fn soracloud_echo_return_words(argument_index: u8) -> Vec<u32> {
     use ivm::baseline::{encoding::wide as enc, instruction::wide};
     vec![
@@ -2694,7 +2697,8 @@ fn soracloud_echo_return_words(argument_index: u8) -> Vec<u32> {
         enc::encode_store(wide::memory::STORE64, 12, 5, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_ri(wide::control::JALR, 0, 1, 0),
+        // The baseline protected return is the register form of `JALR`.
+        enc::encode_rr(wide::control::JALR, 0, 1, 0),
     ]
 }
 fn soracloud_query_echo_artifact(name: &str, metadata: bool) -> Vec<u8> {

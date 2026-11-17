@@ -755,10 +755,10 @@ pub mod isi {
         metadata: &Metadata,
         code_bytes: &[u8],
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
-        crate::executor::validate_trigger_call_execution_context_for_policy(
+        crate::executor::validate_trigger_call_execution_context_for_profile(
             metadata,
             code_bytes,
-            crate::smartcontracts::ivm::artifact_policy(world, code_bytes),
+            crate::smartcontracts::ivm::artifact_profile(world, code_bytes),
         )
         .map_err(|error| {
             error.map_rejection(|err| {

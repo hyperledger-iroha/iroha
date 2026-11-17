@@ -74,8 +74,8 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let original_data_model = state_transaction.world.executor_data_model().clone();
     let mut executor = RuntimeExecutor::Initial;
     {
-        // An executor upgrade runs under the interface profile: ABI V1 on the frozen baseline
-        // engine, whose header requires a positive cycle limit.
+        // An executor upgrade is a live ABI V1 path, which admits only baseline artifacts: the
+        // 49-byte baseline header with a positive cycle bound and the baseline encodings.
         let mut bytecode = ivm::ProgramMetadata {
             max_cycles: 1_000,
             ..ivm::ProgramMetadata::default()

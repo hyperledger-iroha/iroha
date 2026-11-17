@@ -47,16 +47,16 @@ fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     (start, start_ms)
 }
 fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
-    // One syscall and HALT for the frozen baseline engine that ABI V1 trigger programs run on:
-    // its header with a declared cycle ceiling, and its 8-bit `SCALL` or 24-bit `SYSTEM` form.
-    use ivm::baseline::{encoding::wide, instruction::wide::system};
+    // ABI V1 triggers use the baseline header with a positive cycle limit, one syscall
+    // (8-bit SCALL or 24-bit SYSTEM), and HALT.
+    use ivm_abi::baseline::{encoding::wide, instruction::wide::system};
     let mut blob = ProgramMetadata {
         max_cycles: 1_000,
         ..ProgramMetadata::default()
     }
-    .encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     let call = match u8::try_from(syscall) {
-        Ok(short) => wide::encode_sys(system::SCALL, short),
+        Ok(number) => wide::encode_sys(system::SCALL, number),
         Err(_) => wide::encode_syscallx(syscall),
     };
     blob.extend_from_slice(&call.to_le_bytes());

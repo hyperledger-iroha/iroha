@@ -99,11 +99,6 @@ impl ResolvedIvmProfile {
         self.id
     }
 
-    /// Named host policy.
-    pub(crate) const fn policy(&self) -> SyscallPolicy {
-        self.id.policy()
-    }
-
     /// Engine that admits and executes the profile.
     pub(crate) const fn engine(&self) -> IvmEngine {
         self.id.engine()
@@ -262,7 +257,7 @@ mod tests {
     #[test]
     fn interfaces_resolve_the_frozen_baseline_profile() {
         let interface = ResolvedIvmProfile::interface_default();
-        assert_eq!(interface.policy(), SyscallPolicy::AbiV1);
+        assert_eq!(interface.id().policy(), SyscallPolicy::AbiV1);
         assert_eq!(interface.engine(), IvmEngine::Baseline);
         assert_eq!(interface.id(), IvmProfileId::BASELINE_ABI_V1);
         assert_eq!(
@@ -379,9 +374,9 @@ mod tests {
             assert_eq!(resolve_artifact(&selected.view(), bytes), in_selected);
             for world in [&baseline, &selected] {
                 assert_eq!(
-                    super::super::artifact_policy(&world.view(), bytes),
-                    resolve_artifact(&world.view(), bytes).policy(),
-                    "the retained wrapper is this resolver"
+                    super::super::artifact_profile(&world.view(), bytes),
+                    resolve_artifact(&world.view(), bytes).id(),
+                    "the retained wrapper is this resolver, engine included"
                 );
             }
         }

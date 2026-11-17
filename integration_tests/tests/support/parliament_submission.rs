@@ -104,7 +104,9 @@ pub fn minimal_contract_artifact_with_identity(
     seiyaku_name: &str,
     compiler_fingerprint: &str,
 ) -> Vec<u8> {
-    use ivm::baseline::{encoding::wide as enc, instruction::wide};
+    // ABI V1 registration admits the baseline header and encodings, with a positive cycle
+    // limit and a protected return through the register form of JALR.
+    use ivm_abi::baseline::{encoding::wide as enc, instruction::wide};
     let metadata = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -149,16 +151,14 @@ pub fn minimal_contract_artifact_with_identity(
         error_messages: Vec::new(),
         states: Vec::new(),
     };
-    // ABI V1 artifacts run on the frozen baseline engine: its header and encodings.
-    let mut artifact =
-        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+    let mut artifact = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     artifact.extend_from_slice(&interface.encode_section());
     // Return Unit through the caller-owned result table required by this ABI.
     for word in [
         enc::encode_store(wide::memory::STORE64, 12, 0, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
         enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
-        enc::encode_ri(wide::control::JALR, 0, 1, 0),
+        enc::encode_rr(wide::control::JALR, 0, 1, 0),
     ] {
         artifact.extend_from_slice(&word.to_le_bytes());
     }
@@ -189,6 +189,7 @@ mod tests {
         let verified = ivm::verify_contract_artifact_with_declared_profile(&original)
             .expect("canonical fixture artifact");
         assert_eq!(verified.metadata.abi_version, 1);
+        assert_eq!(verified.profile, ivm::IvmProfileId::BASELINE_ABI_V1);
         assert_eq!(
             verified.contract_interface.callables,
             [ivm::call::EmbeddedCallableV1 {

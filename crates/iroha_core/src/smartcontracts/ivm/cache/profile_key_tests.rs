@@ -2,18 +2,18 @@
 //! profile reaches the object of another, whatever the code hash.
 
 use super::*;
-use ivm::{IvmEngine, IvmProfileId, SyscallPolicy};
+use ivm::{IvmEngine, IvmProfileId};
 
-const BASELINE: SyscallPolicy = SyscallPolicy::AbiV1;
-const NAMED: SyscallPolicy = SyscallPolicy::AbiV1RuntimeLifecycle;
+const BASELINE: IvmProfileId = IvmProfileId::BASELINE_ABI_V1;
+const NAMED: IvmProfileId = IvmProfileId::C10_RUNTIME_LIFECYCLE;
 const GAS: u64 = 10_000;
 const HEAP: u64 = ivm::Memory::HEAP_MAX_SIZE;
 
-fn abi(policy: SyscallPolicy) -> [u8; 32] {
-    IvmProfileId::of_policy(policy).abi_hash()
+fn abi(profile: IvmProfileId) -> [u8; 32] {
+    profile.abi_hash()
 }
 
-fn is_mismatch(error: &ivm::VMError, requested: SyscallPolicy, bound: SyscallPolicy) -> bool {
+fn is_mismatch(error: &ivm::VMError, requested: IvmProfileId, bound: IvmProfileId) -> bool {
     matches!(
         error,
         ivm::VMError::ArtifactAbiHashMismatch { expected, actual }
@@ -24,18 +24,15 @@ fn is_mismatch(error: &ivm::VMError, requested: SyscallPolicy, bound: SyscallPol
 #[test]
 fn keys_of_one_code_hash_differ_by_profile_and_engine_scope() {
     let hash = Hash::new(b"one artifact");
-    let baseline = SummaryKey::for_policy(BASELINE, hash);
-    let named = SummaryKey::for_policy(NAMED, hash);
+    let baseline = SummaryKey::for_profile(BASELINE, hash);
+    let named = SummaryKey::for_profile(NAMED, hash);
     assert_ne!(baseline, named);
     assert_eq!(
         baseline,
         SummaryKey::new(hash),
         "tests address baseline keys"
     );
-    assert_eq!(
-        baseline,
-        SummaryKey::for_profile(IvmProfileId::of_policy(BASELINE), hash)
-    );
+    assert_eq!(baseline, SummaryKey::for_profile(BASELINE, hash));
     assert_eq!(
         SummaryKey::every_profile(hash).collect::<Vec<_>>(),
         vec![baseline, named]
@@ -55,7 +52,7 @@ fn keys_of_one_code_hash_differ_by_profile_and_engine_scope() {
     assert_eq!(other.summary_key(), named);
     assert_eq!(
         generic_program_profile(),
-        IvmProfileId::of_policy(BASELINE),
+        BASELINE,
         "contract-less programs exist only under the interface profile"
     );
 }
@@ -106,28 +103,28 @@ fn a_prepared_contract_is_resident_and_served_only_under_its_own_profile() {
     let hash = ivm::contract_code_hash(&bytes);
     let cache = PreparedContractCache::with_capacity(4);
     let prepared = cache
-        .get_or_prepare_for_policy(hash, &bytes, BASELINE)
+        .get_or_prepare_for_profile(hash, &bytes, BASELINE)
         .expect("prepare under the interface profile");
-    assert_eq!(prepared.profile_id(), IvmProfileId::of_policy(BASELINE));
+    assert_eq!(prepared.profile_id(), BASELINE);
     cache.with_store(|store| {
         assert_eq!(
             store.entries.keys().copied().collect::<Vec<_>>(),
-            [SummaryKey::for_policy(BASELINE, hash)]
+            [SummaryKey::for_profile(BASELINE, hash)]
         );
     });
 
     // A lookup under another profile finds nothing and is not counted as a hit.
     let before = cache.stats();
-    assert!(cache.get_for_policy(hash, NAMED).is_none());
+    assert!(cache.get_for_profile(hash, NAMED).is_none());
     assert_eq!(cache.stats(), before);
 
     // The named policy runs the other engine, whose header check refuses the baseline bytes;
     // the warm refusal is the one a cold cache reports from the bytes themselves.
     let warm = cache
-        .get_or_prepare_for_policy(hash, &bytes, NAMED)
+        .get_or_prepare_for_profile(hash, &bytes, NAMED)
         .expect_err("the resident object belongs to another profile");
     let cold = PreparedContractCache::with_capacity(4)
-        .get_or_prepare_for_policy(hash, &bytes, NAMED)
+        .get_or_prepare_for_profile(hash, &bytes, NAMED)
         .expect_err("the header declares another profile");
     assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
     cache.with_store(|store| {
@@ -138,7 +135,7 @@ fn a_prepared_contract_is_resident_and_served_only_under_its_own_profile() {
 
     // The entry still serves exactly its own profile.
     let again = cache
-        .get_for_policy(hash, BASELINE)
+        .get_for_profile(hash, BASELINE)
         .expect("the baseline entry is resident");
     assert_eq!(again.code_hash(), hash);
     assert_eq!(again.profile_id(), prepared.profile_id());
@@ -151,22 +148,22 @@ fn an_entry_filed_under_a_foreign_profile_key_is_never_served() {
     let hash = ivm::contract_code_hash(&bytes);
     let cache = PreparedContractCache::with_capacity(4);
     let prepared = cache
-        .get_or_prepare_for_policy(hash, &bytes, BASELINE)
+        .get_or_prepare_for_profile(hash, &bytes, BASELINE)
         .expect("prepare under the interface profile");
     // Simulate a defect that files the baseline object under the named profile's key.
-    let forged = SummaryKey::for_policy(NAMED, hash);
+    let forged = SummaryKey::for_profile(NAMED, hash);
     cache.with_store(|store| {
         store.entries.insert(forged, prepared.clone());
     });
     assert!(
-        cache.get_for_policy(hash, NAMED).is_none(),
+        cache.get_for_profile(hash, NAMED).is_none(),
         "the object's own profile is checked against the key"
     );
     let refusal = cache
-        .get_or_prepare_for_policy(hash, &bytes, NAMED)
+        .get_or_prepare_for_profile(hash, &bytes, NAMED)
         .expect_err("a forged residency is not a preparation");
     assert!(is_mismatch(&refusal, NAMED, BASELINE), "{refusal:?}");
-    assert!(cache.get_for_policy(hash, BASELINE).is_some());
+    assert!(cache.get_for_profile(hash, BASELINE).is_some());
 }
 
 #[test]
@@ -176,15 +173,15 @@ fn summaries_analyses_and_runtimes_are_keyed_by_the_summary_profile() {
     let hash = ivm::contract_code_hash(&bytes);
     let mut cache = IvmCache::with_capacity(4);
     let summary = cache
-        .summarize_program_with_hash_for_policy(hash, &bytes, BASELINE)
+        .summarize_program_with_hash_for_profile(hash, &bytes, BASELINE)
         .expect("summarize under the interface profile");
-    assert_eq!(summary.profile().policy(), BASELINE);
+    assert_eq!(summary.profile().id(), BASELINE);
     assert_eq!(
         summary.profile().id(),
         summary.prepared_contract().profile_id()
     );
-    let baseline = SummaryKey::for_policy(BASELINE, hash);
-    let named = SummaryKey::for_policy(NAMED, hash);
+    let baseline = SummaryKey::for_profile(BASELINE, hash);
+    let named = SummaryKey::for_profile(NAMED, hash);
     cache.with_local(|local| {
         assert!(local.summaries.contains_key(&baseline));
         assert!(!local.summaries.contains_key(&named));
@@ -194,13 +191,13 @@ fn summaries_analyses_and_runtimes_are_keyed_by_the_summary_profile() {
     // and a summary filed under a foreign key is refused by its own profile.
     assert!(
         cache
-            .cached_program_summary_for_policy(hash, BASELINE)
+            .cached_program_summary_for_profile(hash, BASELINE)
             .expect("own profile")
             .is_some()
     );
     assert!(
         cache
-            .cached_program_summary_for_policy(hash, NAMED)
+            .cached_program_summary_for_profile(hash, NAMED)
             .expect("another engine's summary is not consulted")
             .is_none()
     );
@@ -208,7 +205,7 @@ fn summaries_analyses_and_runtimes_are_keyed_by_the_summary_profile() {
         local.summaries.insert(named, summary.clone());
     });
     let refusal = cache
-        .cached_program_summary_for_policy(hash, NAMED)
+        .cached_program_summary_for_profile(hash, NAMED)
         .expect_err("a forged summary is not served");
     assert!(is_mismatch(&refusal, NAMED, BASELINE), "{refusal:?}");
     cache.with_local(|local| {
@@ -296,7 +293,7 @@ fn generic_programs_are_summarized_and_run_under_the_interface_profile() {
     // A named profile requires a self-describing contract: a generic program is refused.
     assert!(
         cache
-            .summarize_executable_for_policy(&program, NAMED)
+            .summarize_executable_for_profile(&program, NAMED)
             .is_err()
     );
 }

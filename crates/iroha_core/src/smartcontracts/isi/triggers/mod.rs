@@ -481,7 +481,7 @@ pub mod isi {
             0,
             prepared_contracts,
         )
-        .summarize_executable_for_policy(bytecode, profile.policy())
+        .summarize_executable_for_profile(bytecode, profile.id())
         .map_err(|error| {
             match crate::execution_attempt::ExecutionDeferred::try_from_vm_error(error) {
                 Ok(original) => crate::execution_attempt::ExecutionAttemptError::Deferred(original),

@@ -91,8 +91,11 @@ ABI V1, as every root selects it, runs the frozen baseline engine
 (`ivm::IvmProfileId::BASELINE_ABI_V1`): the 49-byte program header, 256 general-purpose registers,
 8-bit `SCALL` plus the 24-bit `SYSTEM`/`SCALLX` form, the vector, cryptographic and zero-knowledge
 opcodes, and a header `max_cycles` budget converted into gas. The instruction-set, register and
-gas descriptions in this section are those of the C10 profile, which is selected separately (the
-runtime lifecycle profile now; its own ABI V1 addition `iroha.runtime.ivm_c10.v1` in phase 5); see
+gas descriptions in this section are those of the C10 profiles, which are selected separately:
+the runtime lifecycle profile, and C10's own ABI V1 surface (`iroha.ivm.c10.v1`, the
+`koto --host-profile iroha.ivm.c10.v1` target), which no root selects until a governed change set
+activates the release addition `iroha.runtime.ivm_c10.v1` (not yet published). A nested contract
+call never crosses profiles: `CALL_CONTRACT` refuses a callee of another profile; see
 [`docs/opcodes.md`](docs/opcodes.md) and
 [`specs/runtime/ivm_baseline_and_c10_profiles.md`](../../specs/runtime/ivm_baseline_and_c10_profiles.md).
 

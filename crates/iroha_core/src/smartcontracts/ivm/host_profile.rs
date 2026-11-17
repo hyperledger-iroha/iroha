@@ -29,21 +29,21 @@ use crate::{
 /// Baseline ABI V1 retains its original admission rules.
 pub(crate) fn ensure_at_height(
     world: &impl WorldReadOnly,
-    policy: ivm::SyscallPolicy,
+    profile: ivm::IvmProfileId,
     height: u64,
 ) -> Result<(), ValidationFail> {
-    ensure(world, policy, height, |_| None)
+    ensure(world, profile, height, |_| None)
 }
 
 /// Check one mutable invocation using only its actual scoped obligation custody.
 /// Deferred bodies cannot borrow an enclosing completion's restriction exemption.
 pub(crate) fn ensure_in_transaction(
     transaction: &StateTransaction<'_, '_>,
-    policy: ivm::SyscallPolicy,
+    profile: ivm::IvmProfileId,
 ) -> Result<(), ValidationFail> {
     ensure(
         transaction.world(),
-        policy,
+        profile,
         transaction.block_height(),
         |profile| captured_step(transaction, profile),
     )
@@ -101,13 +101,15 @@ fn captured_step(transaction: &StateTransaction<'_, '_>, profile: DefinitionId) 
         })
 }
 
+/// The profile is the exact compiled identity of the prepared object or VM, engine included: a
+/// named policy alone would let C10's own ABI V1 surface pass as the implicit baseline.
 fn ensure(
     world: &impl WorldReadOnly,
-    policy: ivm::SyscallPolicy,
+    profile: ivm::IvmProfileId,
     height: u64,
     step: impl Fn(DefinitionId) -> Option<Step>,
 ) -> Result<(), ValidationFail> {
-    let resolved = ResolvedIvmProfile::of_policy(policy);
+    let resolved = ResolvedIvmProfile::of_id(profile);
     if resolved.is_implicit() {
         return Ok(());
     }
@@ -168,7 +170,7 @@ mod tests {
         runtime::{definition::RestrictionEntryV1, obligation::CompletionCaptureV1},
     };
 
-    const NAMED: ivm::SyscallPolicy = ivm::SyscallPolicy::AbiV1RuntimeLifecycle;
+    const NAMED: ivm::IvmProfileId = ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE;
 
     fn state() -> crate::state::State {
         let state = crate::state::State::new_for_testing(
@@ -186,7 +188,7 @@ mod tests {
     }
 
     fn profile(world: &impl WorldReadOnly) -> DefinitionId {
-        let hash = ivm::syscalls::compute_abi_hash(NAMED);
+        let hash = NAMED.abi_hash();
         *world
             .runtime_selection()
             .active
@@ -222,11 +224,31 @@ mod tests {
             assert!(ensure_at_height(transaction.world(), NAMED, 4).is_ok());
             assert!(ensure_at_height(transaction.world(), NAMED, 5).is_err());
             assert!(ensure_in_transaction(&transaction, NAMED).is_err());
-            assert!(ensure_at_height(transaction.world(), ivm::SyscallPolicy::AbiV1, 5).is_ok());
+            assert!(
+                ensure_at_height(transaction.world(), ivm::IvmProfileId::BASELINE_ABI_V1, 5)
+                    .is_ok()
+            );
         }
         restrict(&mut transaction, RestrictionV1::Deprecated(5));
         assert!(ensure_at_height(transaction.world(), NAMED, 5).is_ok());
         assert!(ensure_at_height(&crate::state::World::new().view(), NAMED, 5).is_err());
+    }
+
+    #[test]
+    fn a_profile_sharing_the_interface_policy_is_not_the_implicit_baseline() {
+        // C10's own ABI V1 surface shares `SyscallPolicy::AbiV1` with the frozen baseline but is
+        // a profile of its own: a root that selects no definition for it refuses it.
+        let world = crate::state::World::new();
+        let c10 = ivm::IvmProfileId::C10_ABI_V1;
+        assert_eq!(c10.policy(), ivm::IvmProfileId::BASELINE_ABI_V1.policy());
+        assert!(ensure_at_height(&world.view(), c10, 5).is_err());
+        assert!(ensure_at_height(&world.view(), ivm::IvmProfileId::BASELINE_ABI_V1, 5).is_ok());
+        let state = state();
+        let header = BlockHeader::new(std::num::NonZeroU64::new(5).unwrap(), None, None, 1_000, 0);
+        let mut block = state.block(header);
+        let transaction = block.transaction();
+        assert!(ensure_in_transaction(&transaction, c10).is_err());
+        assert!(ensure_in_transaction(&transaction, NAMED).is_ok());
     }
 
     #[test]

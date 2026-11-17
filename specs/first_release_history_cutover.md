@@ -218,6 +218,21 @@ declaration says no fresh genesis is needed. It compares bytes: it computes no
 ABI hash and admits no contract, which `abi_hash_versions` and the admission
 tests do.
 
+Fixtures of another engine profile carry that profile's hash, never the ABI V1
+hash. Each such hash is declared in `declared_profile_abi_hashes` with its
+golden, its engine (which fixes where the hash sits in the program header: bytes
+17..49 for the baseline, 16..48 for C10) and every carrier. C10's own ABI V1
+surface (`iroha.ivm.c10.v1`, the host profile of the release addition
+`iroha.runtime.ivm_c10.v1`) is declared with
+`bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849`, its golden in
+`crates/ivm_abi/tests/runtime_upgrade_abi_fixture.rs`; its carriers are the five
+Kotodama emission captures (`fixtures/kotodama/*/native_v1.tsv`, whose tests
+select the C10 target) and the `predecoder` rows of the artifact map. Every row
+of an artifact map carries exactly one declared hash: the ABI V1 carrier names
+its `carrier_owners`, and a profile carrier names the rest. A profile hash never
+sits in the pinned history, and declaring one is not an activation: no root
+selects C10 until a governed change set activates the addition.
+
 Declared ABI cutover: surface `abi`, cutover `contract_redeployment`. ABI V1 is
 the interface profile, the frozen baseline engine
 ([IVM baseline and C10 host profiles](runtime/ivm_baseline_and_c10_profiles.md)).

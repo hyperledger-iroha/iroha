@@ -11072,8 +11072,8 @@ fn collect_contract_state_schemas(
         let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
         };
-        let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code_bytes.as_slice());
-        let Ok(parsed) = ivm::ProgramMetadata::parse_for_policy(code_bytes.as_slice(), policy) else {
+        let profile = iroha_core::smartcontracts::ivm::artifact_profile(world, code_bytes.as_slice());
+        let Ok(parsed) = ivm::ProgramMetadata::parse_for_profile(code_bytes.as_slice(), profile) else {
             return Ok(());
         };
         let Some(contract_interface) = parsed.contract_interface else {
@@ -18656,8 +18656,8 @@ fn exact_multisig_contract_call_target_with_world<W: iroha_core::state::WorldRea
     }
     let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&invocation.contract_address, *binding).ok()?;
     let code = world.contract_code().get(&artifact_id)?;
-    let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code.as_ref());
-    let prepared = ivm::prepare_contract_for_policy(Arc::<[u8]>::from(code.as_ref()), policy).ok()?;
+    let profile = iroha_core::smartcontracts::ivm::artifact_profile(world, code.as_ref());
+    let prepared = ivm::prepare_contract_for_profile(Arc::<[u8]>::from(code.as_ref()), profile).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
@@ -18948,8 +18948,8 @@ fn strict_multisig_contract_call_intent_with_world<W: iroha_core::state::WorldRe
     let binding = world.contract_instances().get(&parsed.contract_address)?;
     let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(&parsed.contract_address, *binding).ok()?;
     let code = world.contract_code().get(&artifact_id)?;
-    let policy = iroha_core::smartcontracts::ivm::artifact_policy(world, code.as_ref());
-    let prepared = ivm::prepare_contract_for_policy(Arc::<[u8]>::from(code.as_ref()), policy).ok()?;
+    let profile = iroha_core::smartcontracts::ivm::artifact_profile(world, code.as_ref());
+    let prepared = ivm::prepare_contract_for_profile(Arc::<[u8]>::from(code.as_ref()), profile).ok()?;
     let stored_manifest = world.contract_manifests().get(&artifact_id)?;
     if !stored_manifest.same_signed_content(prepared.manifest()) {
         return None;
@@ -43817,7 +43817,8 @@ pub mod validation_fee_torii_ingress_tests {
         ContractAddress::derive(state.network_id_ref(), user, 1, DataSpaceId::UNIVERSAL)
             .expect("derive original network pool address")
     }
-    /// The protected unit return in the frozen baseline encoding that ABI V1 artifacts run.
+    /// Unit return in the frozen baseline encoding: genesis admits these ABI V1 fixture
+    /// contracts on the baseline engine.
     fn unit_return_code() -> Vec<u8> {
         use ivm_abi::baseline::{
             encoding::wide,
@@ -43827,7 +43828,8 @@ pub mod validation_fee_torii_ingress_tests {
             wide::encode_store(memory::STORE64, 12, 0, 0),
             wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
             wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
-            wide::encode_ri(control::JALR, 0, 1, 0),
+            // The baseline protected return is the register form of `JALR`.
+            wide::encode_rr(control::JALR, 0, 1, 0),
         ]
         .into_iter()
         .flat_map(u32::to_le_bytes)
@@ -43849,11 +43851,13 @@ pub mod validation_fee_torii_ingress_tests {
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     ) {
+        // Genesis admits ABI V1 contracts on the frozen baseline engine, whose header declares a
+        // positive cycle limit.
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 1_000,
+            max_cycles: 10_000,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -43919,8 +43923,7 @@ pub mod validation_fee_torii_ingress_tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact =
-            metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+        let mut artifact = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
         let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)
@@ -43931,11 +43934,13 @@ pub mod validation_fee_torii_ingress_tests {
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     ) {
+        // Genesis admits ABI V1 contracts on the frozen baseline engine, whose header declares a
+        // positive cycle limit.
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode: 0,
-            max_cycles: 1_000,
+            max_cycles: 10_000,
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -43989,8 +43994,7 @@ pub mod validation_fee_torii_ingress_tests {
             error_types: Vec::new(),
             states: Vec::new(),
         };
-        let mut artifact =
-            metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
+        let mut artifact = metadata.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&unit_return_code());
         let verified = ivm::verify_contract_artifact_with_declared_profile(&artifact)

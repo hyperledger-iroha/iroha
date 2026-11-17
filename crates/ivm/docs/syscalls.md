@@ -134,6 +134,12 @@ Gas enforcement (CoreHost)
 - Contract administration bridge syscalls charge `G_contract_admin + bytes`.
 - `CALL_CONTRACT` charges `G_call_contract + request bytes + return bytes` in
   the parent VM; child execution gas is consumed by the child VM.
+- A nested call stays within the caller's exact execution profile (engine and named host
+  policy). When the callee's authenticated prepared artifact runs another profile (the frozen
+  baseline and a C10 profile in either direction, or two C10 profiles), `CALL_CONTRACT` refuses
+  it with `PermissionDenied`, projected onto the caller profile's fault, after the boundary charge
+  and before any argument copy, runtime checkout, attachment or child execution. The charge does
+  not depend on whether the callee was already prepared.
 - Native asset escrow bridge syscalls charge `G_escrow + bytes`.
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
 - ZK verification uses the immutable `ZkGasScheduleV1` snapshot selected when

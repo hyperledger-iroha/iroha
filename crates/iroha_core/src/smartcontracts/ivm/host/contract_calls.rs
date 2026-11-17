@@ -108,6 +108,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if prepared.artifact().len() != artifact_bytes {
             return Err(meter(boundary_gas, ivm::VMError::InvalidMetadata));
         }
+        // A nested call stays within the caller's exact profile (engine and named policy). A
+        // mixed-profile call is refused here, at the authenticated callee-preparation boundary:
+        // before any argument is copied, a runtime is checked out, an attachment is opened or
+        // the host context changes. The charge above does not depend on cache warmth, and the
+        // caller's engine projects the refusal onto its own `PermissionDenied` fault.
+        // TODO(owner decision, `specs/runtime/ivm_baseline_and_c10_profiles.md` "Open owner
+        // questions"): permitting mixed-profile calls needs a gas escrow and refund, cycle
+        // ownership across the two engines and profile-preserving fault propagation.
+        if prepared.profile_id() != vm.profile_id() {
+            return Err(meter(boundary_gas, ivm::VMError::PermissionDenied));
+        }
         let descriptor = prepared
             .contract_interface()
             .entrypoints

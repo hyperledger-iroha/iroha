@@ -14,7 +14,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
 use ivm::ProgramMetadata;
-use ivm_abi::baseline::{encoding, instruction};
+use ivm_abi::baseline::{encoding, instruction::wide::system};
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {
@@ -55,14 +55,14 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
     let network_id = *state.network_id_ref();
-    // Build a tiny program of the interface profile (ABI V1 on the frozen baseline engine: its
-    // header with a positive cycle limit and its 8-bit `SCALL`) with an unknown syscall followed
-    // by HALT.
+    // Build a tiny program with an unknown syscall followed by HALT. Transaction admission is a
+    // live ABI V1 path, which parses only baseline artifacts: the 49-byte baseline header with a
+    // positive cycle bound and the baseline syscall and HALT encodings.
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
+            system::SCALL,
             u8::try_from(unknown_syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
         )
         .to_le_bytes(),

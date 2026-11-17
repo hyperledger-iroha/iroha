@@ -241,8 +241,16 @@ struct BuildArgs {
     /// `ivm_max_cycles_upper_bound`. A non-ZK artifact carries no bound: gas is its only budget.
     #[arg(long, value_name = "COUNT", requires = "zk")]
     zk_trace_cycles: Option<std::num::NonZeroU64>,
-    /// Exact named ABI V1 host profile required by the produced contract.
-    #[arg(long, value_parser = ["abi-v1", "iroha.ivm.runtime_lifecycle.v1"], default_value = "abi-v1")]
+    /// Exact named ABI V1 host profile required by the produced contract: `abi-v1`, the frozen
+    /// baseline every root runs (the default); `iroha.ivm.c10.v1`, C10's own ABI V1 surface, which
+    /// a root runs only after a governed change set activates the `iroha.runtime.ivm_c10.v1`
+    /// release addition; or `iroha.ivm.runtime_lifecycle.v1`, the runtime-lifecycle profile on
+    /// the C10 engine.
+    #[arg(
+        long,
+        value_parser = [BASELINE_HOST_PROFILE, C10_HOST_PROFILE, ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE],
+        default_value = BASELINE_HOST_PROFILE
+    )]
     host_profile: String,
     /// Check durable-state compatibility with the previous complete `.to` artifact before
     /// publishing one replacement. Runtime migration must still initialize newly added scalars.
@@ -1026,6 +1034,29 @@ fn check_paths(
     }
     (checked, DiagnosticBundle::new(diagnostics))
 }
+/// `--host-profile` name of the frozen baseline profile, the default build target.
+const BASELINE_HOST_PROFILE: &str = "abi-v1";
+/// `--host-profile` name of C10's own ABI V1 surface, the host profile of the
+/// `iroha.runtime.ivm_c10.v1` release addition.
+const C10_HOST_PROFILE: &str = "iroha.ivm.c10.v1";
+
+/// The compiled profile a `--host-profile` name builds for, `None` for an unknown name.
+///
+/// `abi-v1` builds for the engine the interface policy runs (the frozen baseline); C10's own ABI
+/// V1 surface and the runtime-lifecycle profile run on the C10 engine. Building for a profile
+/// does not authorize deploying it: a root admits an artifact only under a profile its
+/// committed selection activates.
+fn host_profile_target(name: &str) -> Option<ivm::IvmProfileId> {
+    match name {
+        BASELINE_HOST_PROFILE => Some(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1)),
+        C10_HOST_PROFILE => Some(ivm::IvmProfileId::C10_ABI_V1),
+        ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE => {
+            Some(ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE)
+        }
+        _ => None,
+    }
+}
+
 /// Offline upgrade comparison selects only a compiled, exact authenticated profile. This does
 /// not authorize deployment: node admission separately requires the root's committed selection.
 fn verify_build_contract_artifact(
@@ -1093,20 +1124,9 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         })
         .transpose()?;
     let mut compiler_options = CompilerOptions::default();
-    // `abi-v1` builds for the engine the interface policy runs (the frozen baseline); the
-    // runtime-lifecycle profile exists only on the C10 engine.
-    // TODO: phase 5 names C10's own ABI V1 surface as a separate host profile here.
-    (compiler_options.host_policy, compiler_options.engine) = match host_profile.as_str() {
-        "iroha.ivm.runtime_lifecycle.v1" => (
-            ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
-            ivm::IvmEngine::C10,
-        ),
-        "abi-v1" => (
-            ivm::SyscallPolicy::AbiV1,
-            ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1).engine(),
-        ),
-        _ => unreachable!("clap validates the exact named host profile"),
-    };
+    let target = host_profile_target(&host_profile)
+        .unwrap_or_else(|| unreachable!("clap validates the exact named host profile"));
+    (compiler_options.host_policy, compiler_options.engine) = (target.policy(), target.engine());
     if let Some(zk_trace_cycles) = zk_trace_cycles {
         compiler_options.zk_trace_cycles = zk_trace_cycles;
     }
@@ -3227,13 +3247,50 @@ mod tests {
         assert!(parse_cli(&["build", "--max-cycles", "1000000", "a.ko"]).is_err());
     }
     #[test]
+    fn host_profile_names_select_their_compiled_profiles() {
+        assert_eq!(build_args(&["a.ko"]).host_profile, BASELINE_HOST_PROFILE);
+        for (name, profile) in [
+            (BASELINE_HOST_PROFILE, ivm::IvmProfileId::BASELINE_ABI_V1),
+            (C10_HOST_PROFILE, ivm::IvmProfileId::C10_ABI_V1),
+            (
+                ivm::syscalls::RUNTIME_LIFECYCLE_HOST_PROFILE,
+                ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE,
+            ),
+        ] {
+            assert_eq!(
+                build_args(&["--host-profile", name, "a.ko"]).host_profile,
+                name
+            );
+            assert_eq!(host_profile_target(name), Some(profile));
+            let session = CompilerSession::new(CompilerOptions {
+                host_policy: profile.policy(),
+                engine: profile.engine(),
+                ..CompilerOptions::default()
+            });
+            let output = session
+                .build(CompileRequest {
+                    source: "seiyaku Profile { view fn read() authorize(anyone) -> int { 1 } }",
+                    source_name: Some("profile.ko"),
+                })
+                .unwrap();
+            assert_eq!(ivm::IvmProfileId::declared(&output.artifact), Some(profile));
+            let verified = verify_build_contract_artifact(&output.artifact).unwrap();
+            assert_eq!(verified.profile, profile);
+        }
+        assert!(parse_cli(&["build", "--host-profile", "iroha.ivm.c11.v1", "a.ko"]).is_err());
+        assert_eq!(host_profile_target("C10"), None);
+    }
+    #[test]
     fn offline_upgrade_verification_accepts_only_exact_compiled_host_profiles() {
         for policy in [
             ivm::SyscallPolicy::AbiV1,
             ivm::SyscallPolicy::AbiV1RuntimeLifecycle,
         ] {
+            // Each named policy is built for the engine that implements it: the baseline for
+            // ABI V1, C10 for the runtime-lifecycle profile.
             let session = CompilerSession::new(CompilerOptions {
                 host_policy: policy,
+                engine: ivm::IvmProfileId::of_policy(policy).engine(),
                 ..CompilerOptions::default()
             });
             let output = session
@@ -3244,8 +3301,9 @@ mod tests {
                 .unwrap();
             let verified = verify_build_contract_artifact(&output.artifact).unwrap();
             assert_eq!(verified.syscall_policy, policy);
+            let layout = verified.profile.engine().header_layout();
             let mut unknown = output.artifact;
-            unknown[ivm::HEADER_ABI_HASH_OFFSET..ivm::HEADER_SIZE].fill(0xA5);
+            unknown[layout.abi_hash_offset..layout.size].fill(0xA5);
             assert!(verify_build_contract_artifact(&unknown).is_err());
         }
         assert!(verify_build_contract_artifact(b"truncated").is_err());

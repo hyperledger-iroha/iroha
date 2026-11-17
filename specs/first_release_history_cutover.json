@@ -1196,6 +1196,47 @@
     "fresh_genesis": false,
     "fresh_genesis_reason": "The pinned history holds no contract and no runtime-ABI record: none of its frames contains the ABI hash, which the guard re-checks on every run. A history that holds either needs a fresh genesis with this cutover."
   },
+  "declared_profile_abi_hashes": [
+    {
+      "profile": "iroha.ivm.c10.v1",
+      "engine": "c10",
+      "abi_hash": "bdd5188fba28f664a4c672746934450ef1aa4a2e53fe3f3a5433ea0ff73dd849",
+      "golden": {
+        "path": "crates/ivm_abi/tests/runtime_upgrade_abi_fixture.rs",
+        "prefix": "const C10_ABI_V1_HASH_GOLDEN: &str =\n    \""
+      },
+      "change": "C10's own ABI V1 surface (`IvmProfileId::C10_ABI_V1`), the host profile of the release addition iroha.runtime.ivm_c10.v1 (specs/runtime/ivm_baseline_and_c10_profiles.md). Its descriptor binds the 48-byte C10 program header (a max_cycles trace bound only for ZK artifacts), the C10 instruction encodings and the C10 fault layout. No root selects it until a governed change set activates the addition; every live ABI V1 path admits only the frozen baseline (`declared_abi_cutover`). Its carriers are the fixtures whose tests select the C10 target explicitly: the five Kotodama emission captures and the predecoder rows of the artifact map.",
+      "carriers": [
+        {
+          "artifact": "fixtures/kotodama/compact_emission/native_v1.tsv",
+          "carries": "ivm_hex_rows"
+        },
+        {
+          "artifact": "fixtures/kotodama/frame_emission/native_v1.tsv",
+          "carries": "ivm_hex_rows"
+        },
+        {
+          "artifact": "fixtures/kotodama/local_emission/native_v1.tsv",
+          "carries": "ivm_hex_rows"
+        },
+        {
+          "artifact": "fixtures/kotodama/numeric_zero/native_v1.tsv",
+          "carries": "ivm_hex_rows"
+        },
+        {
+          "artifact": "fixtures/kotodama/private_single_use/native_v1.tsv",
+          "carries": "ivm_hex_rows"
+        },
+        {
+          "artifact": "scripts/ivm_artifacts.tsv",
+          "carries": "artifact_map",
+          "carrier_owners": [
+            "predecoder"
+          ]
+        }
+      ]
+    }
+  ],
   "obsolete_history_evidence": {
     "tool": "scripts/first_release_history_evidence.py",
     "tool_test": "pytests/scripts/first_release_history_evidence_test.py",

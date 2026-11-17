@@ -22,9 +22,15 @@ fn assert_smart_contract_error(error: &InstructionExecutionError, expected_messa
         format!("Invalid smart contract: {expected_message}")
     );
 }
-/// A minimal contract of the interface profile: ABI V1 on the frozen baseline engine (its
-/// 49-byte header with a positive cycle limit, its encodings and its ABI hash).
+/// A minimal self-describing contract returning Unit from its single entrypoint.
+///
+/// Contract registration is a live ABI V1 path, which admits only baseline artifacts: the
+/// 49-byte baseline header with a positive cycle bound and the baseline instruction encodings.
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+    use ivm_abi::baseline::{
+        encoding::wide,
+        instruction::wide::{arithmetic, control, memory},
+    };
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -71,31 +77,11 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     };
     let mut code = Vec::new();
     for instruction in [
-        ivm_abi::baseline::encoding::wide::encode_store(
-            ivm_abi::baseline::instruction::wide::memory::STORE64,
-            12,
-            0,
-            0,
-        ),
-        ivm_abi::baseline::encoding::wide::encode_ri(
-            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
-            10,
-            12,
-            0,
-        ),
-        ivm_abi::baseline::encoding::wide::encode_ri(
-            ivm_abi::baseline::instruction::wide::arithmetic::ADDI,
-            11,
-            0,
-            1,
-        ),
-        // The protected return is the register form of the baseline `JALR`.
-        ivm_abi::baseline::encoding::wide::encode_rr(
-            ivm_abi::baseline::instruction::wide::control::JALR,
-            0,
-            1,
-            0,
-        ),
+        wide::encode_store(memory::STORE64, 12, 0, 0),
+        wide::encode_ri(arithmetic::ADDI, 10, 12, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+        // The baseline protected return is the register form of `JALR`.
+        wide::encode_rr(control::JALR, 0, 1, 0),
     ] {
         code.extend_from_slice(&instruction.to_le_bytes());
     }

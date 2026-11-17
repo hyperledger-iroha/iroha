@@ -1369,7 +1369,8 @@ fn failed_ordered_mailbox_execution_returns_the_warmed_runtime() -> Result<()> {
     let state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let mut body = vec![
-        // Admission succeeds before the deterministic guest trap.
+        // Admission succeeds before the deterministic guest trap. The Soracloud runtime prepares
+        // ABI V1 artifacts on the frozen baseline engine, whose `DIVU` by zero traps.
         ivm::baseline::encoding::wide::encode_rr(
             ivm::baseline::instruction::wide::arithmetic::DIVU,
             3,

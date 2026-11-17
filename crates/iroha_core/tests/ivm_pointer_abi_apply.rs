@@ -15,6 +15,9 @@ use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
+// Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
+// engine: programs carry the 49-byte baseline header and the baseline instruction encodings, and
+// the direct `CoreHost` runs read them under the same profile.
 use ivm_abi::baseline::{encoding, instruction};
 use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
@@ -53,19 +56,27 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
-/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
-///
-/// It is a program of the interface profile: ABI V1 on the frozen baseline engine, whose header
-/// requires a positive cycle limit.
-fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
-    let mut program = ProgramMetadata {
+/// The baseline fixed header of a generic program, with its positive cycle bound.
+fn baseline_header() -> Vec<u8> {
+    ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
         max_cycles: 1_000,
         abi_version: 1,
     }
-    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
+    .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
+}
+/// The baseline 8-bit `SCALL` of a syscall number up to `0xFF`.
+fn baseline_scall(syscall: u32) -> u32 {
+    encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        u8::try_from(syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+    )
+}
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
+    let mut program = baseline_header();
     let data_offset = 16 + literals.len() * 8;
     let data_len: usize = literals.iter().map(Vec::len).sum();
     let pad = (4 - (data_offset + data_len) % 4) % 4;
@@ -168,12 +179,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
-            // The baseline 8-bit `SCALL`.
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
-                    .expect("the 8-bit SCALL carries numbers up to 0xFF"),
-            ),
+            baseline_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
         ],
     );
     // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
@@ -315,20 +321,11 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-    // This helper loads a C10 program (C10 header and encodings) directly into the VM.
+    // This helper uses the same baseline header and encodings as the signed transaction test.
     let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    };
-    let mut program = meta.encode();
+    code.extend_from_slice(&baseline_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut program = baseline_header();
     program.extend_from_slice(&code);
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(from.clone()));

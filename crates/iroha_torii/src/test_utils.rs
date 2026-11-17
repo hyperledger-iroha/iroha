@@ -244,12 +244,15 @@ pub fn finalize_committed_block(
     )
 }
 /// Build a minimal self-describing contract artifact containing a single HALT.
+///
+/// ABI V1 artifacts are stored and read on the frozen baseline engine, so the header, the CNTR
+/// ABI hash and the HALT all use the baseline profile; its header declares a positive cycle limit.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 10_000,
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -284,9 +287,9 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         error_types: Vec::new(),
         states: Vec::new(),
     };
-    let mut out = meta.encode();
+    let mut out = meta.encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
     out.extend_from_slice(&interface.encode_section());
-    out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    out.extend_from_slice(&ivm_abi::baseline::encoding::encode_halt().to_le_bytes());
     out
 }
 /// Compute the hex-encoded contract code hash for a `.to` program.
