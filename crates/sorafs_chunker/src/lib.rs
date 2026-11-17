@@ -487,7 +487,7 @@ pub mod fixtures {
         pub chunk_offsets: Vec<usize>,
         /// BLAKE3 digest per chunk.
         pub chunk_digests_blake3: Vec<[u8; 32]>,
-        /// SHA3-256 digest of the `(offset, length)` pairs.
+        /// SHA3-256 chunk-plan digest over each `(offset, length, BLAKE3 digest)` triple.
         pub chunk_digest_sha3_256: [u8; 32],
     }
     impl FixtureVectors {

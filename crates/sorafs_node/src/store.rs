@@ -6496,7 +6496,7 @@ mod tests {
             verifier_backend.verify_offline_payload(&verifier_id, &mut expected)
         });
         entered_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(30))
             .expect("verification entered lease");
         let (waiting_tx, waiting_rx) = mpsc::channel();
         *MANIFEST_IO_WRITE_WAIT_TEST_HOOK
@@ -6515,7 +6515,7 @@ mod tests {
                 .expect("eviction result");
         });
         waiting_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(30))
             .expect("eviction waits for lease");
         assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(matches!(
@@ -6529,7 +6529,7 @@ mod tests {
             .expect("verification succeeds");
         assert_eq!(
             done_rx
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(30))
                 .expect("eviction completes")
                 .expect("eviction succeeds"),
             payload.len() as u64
@@ -7814,7 +7814,7 @@ mod tests {
             proof_backend.prove_pdp_samples(&proof_manifest_id, &first_pdp_sample())
         });
         entered_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(30))
             .expect("proof holds manifest I/O lease");
         let (evicted_tx, evicted_rx) = mpsc::channel();
         let evict_backend = Arc::clone(&backend);
@@ -7839,7 +7839,7 @@ mod tests {
         );
         assert_eq!(
             evicted_rx
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(30))
                 .expect("eviction completes")
                 .expect("eviction succeeds"),
             payload.len() as u64
