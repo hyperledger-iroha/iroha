@@ -43,6 +43,11 @@ claim before item E5 measures it.
   4 major, 5 minor, 2 editorial; the §7 ledger recomputed without error. Code findings 4 (unbound io-fold leaves let
   a receiver force burn), 7 and 9 are being fixed; finding 5 waits for the prover-memory work in `uniform.rs`; the
   document findings go back to its author. Owner decisions listed at the end of the review.
+  *Later 2026-11-18:* document findings resolved in SOUNDNESS.md revision 2 (8672d5ee88; re-check accepts G1 and G2
+  conditionally). Code findings 4, 7 and 9 fixed in 6c345ed8d0 (finding 4 confirmed by test first; every unbound
+  io-fold leaf pinned to zero, no rows added); re-check item R4 in 740b30764f. Open: finding 5 (LogUp phase invariant
+  enforced at build time, after the prover-memory work leaves `uniform.rs`), a fresh chain on the new programs, and
+  the owner's decisions.
 - [x] **G4. Native burn, end to end** — done 2026-11-18. `engine.rs` derives `valid` from parsing plus the exact
   full verifier; OQ-3 is applied in `specs/kagemusha_lambda_omega_v1.md` §2.7. `authenticated_native_containment_from_bundle`
   passed on the 11-17 bundle (`output/r26/containment-20261117T175154Z.log`): 15 independently corrupted cases each
@@ -127,6 +132,12 @@ claim before item E5 measures it.
 - [ ] **F2. RefreshTimeAnchor** as a recursive kind (only statement tags exist in `statement.rs`).
   *2026-11-18:* E4-F1-F2-DESIGN.md §5 puts it in one Control program shared with Load (no fifth kind; ten programs
   in all with E4 and F1). Not implemented.
+  *2026-11-18 (32245ce8ae):* `src/time_anchor.rs` and `src/control.rs` hold the standalone Control relation (Load in
+  mode 0, exactly Load's constraints; RefreshTimeAnchor in mode 1 with a root-certified TimeAnchor-role signer and the
+  floor as the exact maximum). Cost: 2^20 constraints against 2^18 for Load alone, almost all TimeAnchor signature
+  work. Levers need a decision: check the anchor signature hard against a public dummy signer in Load mode (about
+  −80k rows, departs from the design's total predicate), or certify a table commitment for TimeAnchor keys (spec
+  change, about −50k rows). Integration needs E4 and the geometry census.
 - [ ] **F3. The remaining policy signer roles**, including the fee-schedule signer check.
   *2026-11-18 (a96dd1f3f4):* certificates authenticate exactly one role; manifests are signed by a root-certified
   Artifact-role key (wire spec §1, §3.1); the fee-schedule check (RegulatoryPolicy role) exists but no transition
