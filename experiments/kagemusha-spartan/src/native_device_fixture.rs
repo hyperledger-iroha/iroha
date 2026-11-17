@@ -493,7 +493,11 @@ mod tests {
             assert_ne!(a_wallet, b_wallet, "two distinct wallets");
             assert_eq!(&payment.request().body[66..98], a_wallet, "A pays");
             assert_eq!(&payment.request().body[130..162], b_wallet, "B is paid");
-            assert_eq!(payment.payer().body[34..66], [0xa1; 32], "A's enrolled asset");
+            assert_eq!(
+                payment.payer().body[34..66],
+                [0xa1; 32],
+                "A's enrolled asset"
+            );
             assert_eq!(sent_step.after_core[9], Fp::from(90), "A keeps 90");
             assert_eq!(received_step.after_core[9], Fp::from(10), "B holds 10");
             let lineage = crate::bootstrap_context::LINEAGE_IO;
@@ -691,7 +695,9 @@ pub fn send10_from(
         iroha_pasta::poseidon::hash_with_domain(crate::send_maps::PENDING_DOMAIN, &fields[17..24]);
     let (pending, pending_root) = crate::indexed_map::empty_insert(terms.credit, pending_value);
     if pending.old_root != before[18] {
-        return Err(Error::Malformed("fixture Send requires an empty pending map"));
+        return Err(Error::Malformed(
+            "fixture Send requires an empty pending map",
+        ));
     }
     let fee_value = iroha_pasta::poseidon::hash_with_domain(
         crate::send_maps::FEE_DOMAIN,
@@ -923,6 +929,10 @@ impl Counterparty {
     /// B's stand-in hardware signature over an operation the engine prepared
     /// for B. The caller finalizes with the returned receipt.
     pub fn sign(&self, prepared: &PreparedOperation) -> Result<HardwareAdvanceReceipt> {
-        sign_selected(prepared, &self.key.d, "isolated fixture counterparty receipt")
+        sign_selected(
+            prepared,
+            &self.key.d,
+            "isolated fixture counterparty receipt",
+        )
     }
 }

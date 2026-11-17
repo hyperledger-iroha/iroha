@@ -45,7 +45,7 @@ fn contract_artifact() -> Vec<u8> {
         instruction::wide::{arithmetic, control, memory},
     };
     let metadata = ivm::ProgramMetadata {
-        max_cycles: 10_000,
+        max_cycles: 1_000,
         ..ivm::ProgramMetadata::default()
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -99,11 +99,12 @@ fn contract_artifact() -> Vec<u8> {
     ivm::verify_contract_artifact_with_declared_profile(&artifact).expect("valid contract fixture");
     artifact
 }
-/// Single-field mutations of the fixture's fixed header, located in the baseline header layout
-/// the fixture is encoded in.
+/// Mutations of the baseline fixed header: every magic and ABI-hash byte and one value of each
+/// scalar field, in header order.
 fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     use ivm_abi::baseline::{
         HEADER_ABI_HASH_OFFSET, HEADER_ABI_VERSION_OFFSET, HEADER_BUDGET_OFFSET, HEADER_SIZE,
+        HEADER_VECTOR_LENGTH_OFFSET,
     };
     assert!(
         original.len() >= HEADER_SIZE,
@@ -122,8 +123,11 @@ fn execution_header_mutations(original: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
     version_minor[5] = 0;
     mutations.push(("version_minor", version_minor));
     let mut mode = original.to_vec();
-    mode[6] = ivm::ivm_mode::ZK;
+    mode[6] = ivm_abi::baseline::mode::ZK;
     mutations.push(("mode", mode));
+    let mut vector_length = original.to_vec();
+    vector_length[HEADER_VECTOR_LENGTH_OFFSET] = 8;
+    mutations.push(("vector_length", vector_length));
     let mut max_cycles = original.to_vec();
     max_cycles[HEADER_BUDGET_OFFSET..HEADER_ABI_VERSION_OFFSET]
         .copy_from_slice(&2_u64.to_le_bytes());
@@ -207,7 +211,7 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     let mutations = execution_header_mutations(&original);
     assert_eq!(
         mutations.len(),
-        ivm::METADATA_MAGIC.len() + 5 + ivm_abi::baseline::HEADER_SIZE
+        ivm::METADATA_MAGIC.len() + 6 + ivm_abi::baseline::HEADER_SIZE
             - ivm_abi::baseline::HEADER_ABI_HASH_OFFSET,
         "cover every fixed-header field and every physical ABI-digest byte"
     );

@@ -28,14 +28,6 @@ fn unknown_syscall_fixture_uses_checked_randomness() {
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
-/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
-/// `SYSTEM` form above.
-fn baseline_syscall(number: u32) -> u32 {
-    match u8::try_from(number) {
-        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
-        Err(_) => encoding::wide::encode_syscallx(number),
-    }
-}
 fn unlisted_syscall_number() -> u32 {
     (0u32..=0xff)
         .find(|number| !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, *number))
@@ -68,8 +60,14 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     // positive cycle bound and the baseline syscall and HALT encodings.
     let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
-    code.extend_from_slice(&baseline_syscall(unknown_syscall).to_le_bytes());
-    code.extend_from_slice(&encoding::encode_halt().to_le_bytes());
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            system::SCALL,
+            u8::try_from(unknown_syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,

@@ -89,7 +89,8 @@ fn config(fixture: &Fixture) -> (tempfile::TempDir, actual::SorafsStorage) {
                 Vec::new(),
                 None,
             ),
-            timeout_ms: 10_000,
+            // A hang guard: every native phase commits on the wall clock.
+            timeout_ms: 60_000,
         }),
         runtime_handle: policy.binding.runtime_handle.clone(),
         key_handle: policy.binding.key_handle.clone(),
@@ -166,8 +167,11 @@ fn native_check_signing_and_submission_use_original_absolute_deadline() {
     assert_eq!(queue.queued_len(), 0);
 }
 
+/// A source whose timeout only guards against a hang: the native test chain commits each
+/// phase on the wall clock, which takes seconds on a loaded host. Tests of expiry pass their
+/// own deadline or timeout.
 fn source(fixture: &Fixture, queue: Arc<Queue>) -> NativeStreamTokenSourceV1 {
-    source_with_timeout(fixture, queue, Duration::from_secs(1))
+    source_with_timeout(fixture, queue, Duration::from_secs(60))
 }
 
 fn source_with_timeout(

@@ -7,9 +7,9 @@ mod bootstrap;
 mod bootstrap_context;
 mod bootstrap_layout;
 mod carrier;
-mod chain_fixture;
 mod census;
 mod certificate;
+mod chain_fixture;
 mod credential;
 mod credential_policy;
 mod deferral;
@@ -2703,7 +2703,8 @@ fn run_uniform_full() {
     let (entries, reads) = c.copy_counts();
     println!(
         "  copies: {sites_e} export sites with {entries} entries, {sites_i} read sites with {reads} reads; {} permutations in the pool; {} shared values; stage A P-recv: 355,637 constraints in 2^19, witness 23 + 9 rows",
-        idx.own.as_ref().expect("census benchmark").pool.perms, idx.values,
+        idx.own.as_ref().expect("census benchmark").pool.perms,
+        idx.values,
     );
     let late_p = {
         let g = Gens::<Vesta>::new(c.shape.cols());
@@ -3316,14 +3317,7 @@ fn prove_linked_pair(
     let rlc = |rho: &[u8; 32]| verifier::rlc_value(rho, Fq::from(3), &[1, 2, 3]).to_repr();
     let rng_p = SpikeRng::new(&[format!("{seed} P/").as_bytes(), &[hop as u8]].concat());
     let mut rng_s = SpikeRng::new(&[format!("{seed} S/").as_bytes(), &[hop as u8]].concat());
-    let d = spartan::prepare_linked_phase1(
-        &cp.shape,
-        &gp,
-        ip,
-        wp,
-        &mut rng_p.clone(),
-        cp,
-    );
+    let d = spartan::prepare_linked_phase1(&cp.shape, &gp, ip, wp, &mut rng_p.clone(), cp);
     let (ps, rho, r) = spartan::prove_linked_circuit(
         &cs.shape,
         &gs,
@@ -3868,7 +3862,14 @@ fn wallet_chains(
         let ((cp, ip, wp), (cs, is, ws), kind_at, coords, tables, head_context) =
             if kind == full::RECEIVE {
                 let (w, idx) = full::p_recv(gens, inputs, key);
-                let head_context = idx.own.as_ref().expect("census benchmark").head.as_ref().expect("Receive's head").context;
+                let head_context = idx
+                    .own
+                    .as_ref()
+                    .expect("census benchmark")
+                    .head
+                    .as_ref()
+                    .expect("Receive's head")
+                    .context;
                 let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform", pl);
                 let (w, sidx) = full::s_recv(gens, inputs);
                 let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform", sl);
@@ -3882,7 +3883,14 @@ fn wallet_chains(
                 )
             } else {
                 let (w, idx) = full::p_send(gens, &inputs[0], key);
-                let head_context = idx.own.as_ref().expect("census benchmark").head.as_ref().expect("Send's head").context;
+                let head_context = idx
+                    .own
+                    .as_ref()
+                    .expect("census benchmark")
+                    .head
+                    .as_ref()
+                    .expect("Send's head")
+                    .context;
                 let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform", pl);
                 let (w, sidx) = full::s_send(gens, &inputs[0]);
                 let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform", sl);

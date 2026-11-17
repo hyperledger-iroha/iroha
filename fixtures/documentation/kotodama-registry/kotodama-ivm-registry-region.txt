@@ -24,7 +24,7 @@ enum CaseCompiler {
 impl CaseCompiler {
     fn build(self) -> Compiler {
         match self {
-            Self::Production => Compiler::new(),
+            Self::Production => Compiler::new_c10(),
             Self::Test => test_compiler(),
         }
     }
@@ -405,7 +405,7 @@ fn run_semantic_rejection_cases(cases: &[SemanticRejectionCase]) {
 
 fn run_vm_result_cases(cases: &[VmResultCase]) {
     for case in cases {
-        let code = Compiler::new()
+        let code = Compiler::new_c10()
             .compile_source(case.source.text(case.id))
             .unwrap_or_else(|error| panic!("{} should compile: {error}", case.id));
         let mut vm = ivm::IVM::new(u64::MAX);

@@ -240,6 +240,9 @@ pub use iroha_crypto::{MerkleProof, MerkleTree};
 pub use ivm_abi::SyscallPolicy;
 /// Canonical Kotodama V1 dynamic state-access hint validation.
 pub use ivm_abi::access_hints;
+/// Frozen header, instruction and encoding definitions of the baseline engine that ABI V1
+/// artifacts run on.
+pub use ivm_abi::baseline;
 /// Canonical V1 function call-table descriptors and limits.
 pub use ivm_abi::call;
 /// Canonical Norito framing helpers shared by ABI producers and consumers.

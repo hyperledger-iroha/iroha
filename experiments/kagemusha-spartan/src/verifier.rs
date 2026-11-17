@@ -1033,8 +1033,8 @@ fn trace_with<C: PastaCurve>(
     let c = ch(&mut t, Kind::Endo);
     let lhs = (C::from(proof.ipa.g_final) + u_point * b_final) * proof.ipa.z1
         + C::from(gens.h) * proof.ipa.z2;
-    let accepts = !bool::from(C::from(proof.ipa.a).is_identity())
-        && lhs == C::from(proof.ipa.a) + folded * c;
+    let accepts =
+        !bool::from(C::from(proof.ipa.a).is_identity()) && lhs == C::from(proof.ipa.a) + folded * c;
     Trace {
         challenges: log,
         header,

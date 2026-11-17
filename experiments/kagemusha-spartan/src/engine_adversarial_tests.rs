@@ -577,7 +577,9 @@ fn receive_and_successors(
             &chain.send.credential,
             &chain.sender_key,
         )?;
-        let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
+        let ExactOperationWitness::Send(step) = &successor else {
+            unreachable!()
+        };
         let after = step.after_core;
         let next = finish(
             &format!("{label} -> Send10"),
@@ -642,12 +644,8 @@ fn post_burn_send(
     };
     // Software stand-in for the payer's hardware boundary. It signs the body
     // of the statement the fixture built and changes no monetary field.
-    step.receipt = crate::chain_fixture::own_receipt(
-        key,
-        &step.credential,
-        &step.statement,
-        Fp::ZERO,
-    );
+    step.receipt =
+        crate::chain_fixture::own_receipt(key, &step.credential, &step.statement, Fp::ZERO);
     Ok(successor)
 }
 
@@ -658,19 +656,29 @@ fn violated_rows(w: &full::Wiring<Fp>) -> Vec<(usize, &'static str, usize, usize
     for (a, array) in w.arrays.iter().enumerate() {
         let evaluate = |lin: &crate::uniform::Lin<Fp>, i: usize| {
             let (p, r) = (i >> array.rho, i & ((1 << array.rho) - 1));
-            lin.iter().map(|term| {
-                use crate::uniform::Src;
-                let value = match &term.src {
-                    Src::One => Fp::ONE,
-                    Src::Own(cell) => array.values[*cell][i],
-                    Src::Link { array: target, cell, map } => match map[r] {
-                        Some(rr) => { let target = &w.arrays[*target]; let pp = if w.pi[target.family] == 0 { 0 } else { p }; target.values[*cell][(pp << target.rho) | rr] },
-                        None => Fp::ZERO,
-                    },
-                    Src::All { .. } => panic!("no pre-instantiation sum rows"),
-                };
-                term.coef[r] * value
-            }).sum::<Fp>()
+            lin.iter()
+                .map(|term| {
+                    use crate::uniform::Src;
+                    let value = match &term.src {
+                        Src::One => Fp::ONE,
+                        Src::Own(cell) => array.values[*cell][i],
+                        Src::Link {
+                            array: target,
+                            cell,
+                            map,
+                        } => match map[r] {
+                            Some(rr) => {
+                                let target = &w.arrays[*target];
+                                let pp = if w.pi[target.family] == 0 { 0 } else { p };
+                                target.values[*cell][(pp << target.rho) | rr]
+                            }
+                            None => Fp::ZERO,
+                        },
+                        Src::All { .. } => panic!("no pre-instantiation sum rows"),
+                    };
+                    term.coef[r] * value
+                })
+                .sum::<Fp>()
         };
         for (row, relation) in array.rows.iter().enumerate() {
             for p in 0..w.counts[array.family] {
@@ -701,21 +709,33 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
         input: chain.receiver_bootstrap.clone(),
     }));
     let loaded = super::super::device_fixture::load100(&origin).unwrap();
-    let ExactOperationWitness::Load { step, .. } = &loaded else { unreachable!() };
+    let ExactOperationWitness::Load { step, .. } = &loaded else {
+        unreachable!()
+    };
     let mut receiver = chain.receiver_bootstrap.clone();
     receiver.core = step.after_core;
     receiver.rest = step.after_rest;
     receiver.statement = step.statement;
-    let mut profile = crate::bootstrap::public_profile(&chain.receiver_context, &chain.receiver_bootstrap);
+    let mut profile =
+        crate::bootstrap::public_profile(&chain.receiver_context, &chain.receiver_bootstrap);
     profile[full::HEAD_IO] = step.statement[15];
     let received = crate::receive_fixture::from_send_with_validity(
-        &receiver, &chain.receiver_key, &chain.send, b"relation-only incoming pair", profile, false,
-    ).unwrap();
+        &receiver,
+        &chain.receiver_key,
+        &chain.send,
+        b"relation-only incoming pair",
+        profile,
+        false,
+    )
+    .unwrap();
     profile[full::HEAD_IO] = received.statement[15];
     profile[full::STATEMENT_IO] = crate::statement::digest(&received.statement);
     profile[full::RECEIPT_IO] = crate::receipt::digest(&received.receipt);
     profile[35] = Fp::from(10);
-    let (_, credit_root) = crate::indexed_map::empty_insert::<32>(received.maps.credit_insert.key, received.maps.credit_insert.value);
+    let (_, credit_root) = crate::indexed_map::empty_insert::<32>(
+        received.maps.credit_insert.key,
+        received.maps.credit_insert.value,
+    );
     profile[37] = credit_root;
     // The relation always reads the actual verified predecessor `profile`.
     // `fixture_head` is the head the successor's builder is given.
@@ -728,17 +748,23 @@ fn post_burn_successor_preparation_preserves_adjusted_lineage() {
             &chain.sender_key,
         )
         .unwrap();
-        let ExactOperationWitness::Send(step) = &successor else { unreachable!() };
+        let ExactOperationWitness::Send(step) = &successor else {
+            unreachable!()
+        };
         let mut w = full::Wiring::default();
         let family = w.family(0, 1);
         let predecessor = full::VerifiedPredecessor::fixture(&mut w, family, profile);
-        let prepared = crate::send::append_preparation(&mut w, family, step, &predecessor).map(|_| ());
+        let prepared =
+            crate::send::append_preparation(&mut w, family, step, &predecessor).map(|_| ());
         ((**step).clone(), prepared, w)
     };
     let (step, prepared, w) = prepare(&profile);
     prepared.unwrap();
     let violated = violated_rows(&w);
-    assert!(violated.is_empty(), "violated rows (array, name, row, instance): {violated:?}");
+    assert!(
+        violated.is_empty(),
+        "violated rows (array, name, row, instance): {violated:?}"
+    );
     check_constraints(w, 18, None).unwrap();
     // The Burn credited 10 into the Core balance and the lineage alone records
     // it as burned: the Core's own burn field is still the stale zero.

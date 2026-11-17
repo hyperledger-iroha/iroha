@@ -18,10 +18,7 @@ use ivm::{IVM, PointerType, ProgramMetadata, syscalls as ivm_sys};
 // Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
 // engine: programs carry the 49-byte baseline header and the baseline instruction encodings, and
 // the direct `CoreHost` runs read them under the same profile.
-use ivm_abi::baseline::{
-    encoding,
-    instruction::{self, wide::system},
-};
+use ivm_abi::baseline::{encoding, instruction};
 use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
@@ -65,18 +62,17 @@ fn baseline_header() -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 1_000,
         abi_version: 1,
     }
     .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
 }
-/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
-/// `SYSTEM` form above.
-fn baseline_syscall(number: u32) -> u32 {
-    match u8::try_from(number) {
-        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
-        Err(_) => encoding::wide::encode_syscallx(number),
-    }
+/// The baseline 8-bit `SCALL` of a syscall number up to `0xFF`.
+fn baseline_scall(syscall: u32) -> u32 {
+    encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        u8::try_from(syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+    )
 }
 /// Generic program whose pointer arguments are its authenticated literal-table TLVs.
 fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
@@ -183,7 +179,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
-            baseline_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
+            baseline_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED),
         ],
     );
     // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
@@ -325,8 +321,9 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
+    // This helper uses the same baseline header and encodings as the signed transaction test.
     let mut code = Vec::new();
-    code.extend_from_slice(&baseline_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes());
+    code.extend_from_slice(&baseline_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut program = baseline_header();
     program.extend_from_slice(&code);

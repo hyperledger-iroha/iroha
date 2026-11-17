@@ -695,9 +695,9 @@ fn tamper<C: PastaCurve>() {
             &challenge,
             expected_challenge,
             if C::ScalarExt::MODULUS == Fp::MODULUS {
-                (163, 227)
+                (65, 109)
             } else {
-                (66, 84)
+                (49, 66)
             },
         ),
         (
@@ -705,9 +705,9 @@ fn tamper<C: PastaCurve>() {
             &small_challenge,
             vec![C::Base::ONE, C::Base::ONE, C::Base::ZERO],
             if C::ScalarExt::MODULUS == Fp::MODULUS {
-                (163, 227)
+                (65, 109)
             } else {
-                (66, 84)
+                (49, 66)
             },
         ),
     ] {

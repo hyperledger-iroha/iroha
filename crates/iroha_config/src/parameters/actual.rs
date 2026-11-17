@@ -4119,6 +4119,14 @@ impl ExecutionPolicyFieldsV1 {
             &0_u64,
         );
     }
+
+    /// Bind the quarantine lane's per-transaction budget under its signed V1 slot name.
+    /// The budget is now a gas cap, but every genesis signed before that rename, Taira's
+    /// included, binds it as `pipeline.quarantine_tx_max_cycles`; the value keeps its u64
+    /// encoding, so the same budget yields the same digest.
+    fn push_frozen_quarantine_tx_budget_v1(&mut self, budget: u64) {
+        self.push("pipeline.quarantine_tx_max_cycles", &budget);
+    }
 }
 fn execution_policy_usize(value: usize) -> u64 {
     u64::try_from(value)
@@ -4229,10 +4237,7 @@ pub fn execution_policy_digest_v1(
         "pipeline.quarantine_max_txs_per_block",
         &execution_policy_usize(pipeline.quarantine_max_txs_per_block),
     );
-    policy.push(
-        "pipeline.quarantine_tx_max_gas",
-        &pipeline.quarantine_tx_max_gas,
-    );
+    policy.push_frozen_quarantine_tx_budget_v1(pipeline.quarantine_tx_max_gas);
     policy.push(
         "pipeline.query_max_fetch_size",
         &pipeline.query_max_fetch_size,

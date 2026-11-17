@@ -1371,7 +1371,12 @@ fn failed_ordered_mailbox_execution_returns_the_warmed_runtime() -> Result<()> {
     let mut body = vec![
         // Admission succeeds before the deterministic guest trap. The Soracloud runtime prepares
         // ABI V1 artifacts on the frozen baseline engine, whose `DIVU` by zero traps.
-        baseline_wide::encode_rr(baseline_wide::DIVU, 3, 0, 0),
+        ivm::baseline::encoding::wide::encode_rr(
+            ivm::baseline::instruction::wide::arithmetic::DIVU,
+            3,
+            0,
+            0,
+        ),
     ];
     body.extend(soracloud_unit_return_words());
     let artifact_bytes = soracloud_contract_artifact_with_functions(vec![(

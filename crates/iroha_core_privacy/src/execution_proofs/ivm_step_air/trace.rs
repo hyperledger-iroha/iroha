@@ -494,7 +494,7 @@ impl ScalarSegment {
             || self.words.len() > MAX_WORDS
             || self.contract.metadata().abi_version != 1
             || self.contract.contract_interface().abi_hash
-                != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+                != ivm::IvmProfileId::C10_ABI_V1.abi_hash()
             || executable.len() != self.words.len() * 4
             || executable
                 .as_chunks::<4>()

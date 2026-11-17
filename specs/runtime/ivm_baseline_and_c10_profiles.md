@@ -584,37 +584,34 @@ only as the explicit `IvmProfileId::C10_ABI_V1`, which no root selects until pha
   had re-pinned them to ids derived from the C10 baseline; the anchor pins are restored.
 - `release_identity::wire_schema_hash` binds the ABI V1 hash, so it moves from `b2d6d37f…`
   to `9d96f872…` (not the anchor's `072924c3…`: covered wire roots changed after the anchor,
-  outside C10). Taira runs `8c6e5380…`; the cutover does not make this release's frames
+  outside C10). Taira runs `072924c3…` (`a34b1e7a60`); the cutover does not make this release's frames
   readable by Taira's binary, which the decoder-rollout gate of
   `ironwood_runtime_transition.md` already requires.
 - Frozen pins that C10 had re-derived from its own baseline are restored to the anchor values
   rather than re-pinned: `specs/runtime_ironwood_catalog.json` (predecessor `56c23286…`,
   selection `001a52cd…`) and the Ironwood change-set ids above.
-- `execution_policy_digest_v1` is unchanged: the pinned first-release history test reports the
-  same signed-genesis execution digest mismatch (`67502f37…` ≠ `ed32e924…`) as the live tree's own
-  Core run before this phase. `e562d91f81` renamed
-  `pipeline.quarantine_tx_max_cycles` to `quarantine_tx_max_gas` in its preimage before this
-  phase; the anchor's quarantine-lane cycle budget is therefore not restored; both engines keep
-  the gas cap. (Corrected in phase 5: restoring the anchor's aggregate cycle budget does not need
-  the digest term. It is a forward release addition, a new typed parameter definition plus a
-  selected execution-services implementation that reinstates the source-bound cycle owner, and
-  it neither changes `execution_policy_digest_v1` nor repairs the existing digest mismatch.)
+- `execution_policy_digest_v1` keeps its signed V1 preimage (owner decision 2026-11-16: keep
+  Taira's digest). `e562d91f81` had renamed the quarantine slot
+  `pipeline.quarantine_tx_max_cycles` to `pipeline.quarantine_tx_max_gas`, which moved every
+  signed genesis's execution digest (`67502f37…` ≠ `ed32e924…` in the pinned first-release
+  history test, and Taira's genesis refused at `--check-config`). The slot is frozen under its
+  V1 name again (`push_frozen_quarantine_tx_budget_v1`) and binds the gas cap's u64 value, so
+  a signed genesis keeps its digest. The anchor's quarantine-lane cycle budget is not restored;
+  both engines keep the gas cap. Restoring the anchor's aggregate cycle budget is a forward
+  release addition: a new typed parameter definition and selected execution-services
+  implementation that reinstates the source-bound cycle owner without changing the digest.
 - World import (`runtime_amx_captures`, `parliament_anonymous_attempts`, `runtime_retirements`)
   is untouched; phase 4 does not change that picture.
-- Core lib failures that are not this phase's, each failing identically in the live tree's own
-  Core runs of 2026-11-15/16 (`artifacts/continuation-20261114/core-repair`): the seven
-  `snapshot` portable-transfer tests, `sumeragi::node::portable_resume_tests::…`, the four
-  `sumeragi::certified_chain` portable tests (the portable restore cannot read the native lane
-  evidence source),
-  `sumeragi::node::replay::check::tests::whole_store_copy_replays_from_an_authenticated_snapshot_without_touching_the_source`
-  (`NativeExecutionReplayRequired`),
-  `sumeragi::node::tests::history_cutover_tests::pinned_history_of_an_earlier_build_replays_to_its_pinned_state`
-  (the execution-digest mismatch above),
-  `smartcontracts::ivm::host::tests::runtime_obligation_host_gas_refusal_publishes_no_effect_or_return`
-  (`DecodeError`), and
-  `state::trigger_lifecycle::tests::lifecycle_compact_wire_identity_and_unchanged_ivm_abi`, which
-  pins Taira's wire identity `8c6e5380…` (it was failing on `b2d6d37f…`; its ABI half,
-  `7531b45d…`, now passes). None is re-pinned.
+- The Core lib failures that were not this phase's now pass on `optimizations` (2026-11-17):
+  the seven `snapshot` portable-transfer tests, `sumeragi::node::portable_resume_tests::…`,
+  the four `sumeragi::certified_chain` portable tests and the whole-store-copy replay check
+  (portable checkpoint stores, `e3c0409106`);
+  `history_cutover_tests::pinned_history_of_an_earlier_build_replays_to_its_pinned_state`
+  (the original fixture replays with the frozen quarantine slot, `5f99f31cff`, `d57abe2b78`);
+  `smartcontracts::ivm::host::tests::runtime_obligation_host_gas_refusal_publishes_no_effect_or_return`;
+  and `state::trigger_lifecycle::tests::lifecycle_compact_wire_identity_and_unchanged_ivm_abi`,
+  which pins the release wire identity `9d96f872…` and ABI V1 `7531b45d…`, the identities byte
+  accounting pins.
 - `iroha_core_privacy`'s step AIR models C10 only; a baseline run that requests proof-trace
   collection is refused locally (phase 3), and consensus requests none.
 
@@ -698,7 +695,7 @@ selected dispatch, catalog entry, draft route and activation tests) is not publi
 
 | Area | Files | Change |
 |---|---|---|
-| Phase-4 follow-through | `iroha_core/tests/{contract_code_bytes, contract_execution_header_binding, contract_manifest_triggers, executor_migration_introspect, ivm_admission_unknown_syscall, ivm_codec_helpers, ivm_event_ordering, ivm_host_mapping, ivm_host_shadow_execute, ivm_manifest_abi_reject, ivm_pointer_abi_apply, ivm_syscall_policy, runtime_change_sets}.rs`; `integration_tests/tests/{subscriptions, support/parliament_submission}.rs`; `iroha_torii/src/{test_utils, routing}.rs` (validation-fee ingress tests); `irohad/src/soracloud_runtime/tests/{part_01, part_04}.rs` | Every fixture a live ABI V1 path admits (stateless admission, raw `Executable::Ivm`, contract registration, triggers, the executor upgrade, the Soracloud runtime) is a baseline artifact: the 49-byte header with a positive `max_cycles`, the baseline encodings, the register form of `JALR`, the 8-bit `SCALL` (24-bit `SYSTEM` above `0xFF`). Only fixture construction changed; no expectation. Raw-code tests that drive a C10 VM directly (`IVM::load_code`) stay C10. `irohad` has no `ivm_abi` dependency, so its Soracloud fixtures carry a test-only mirror of the five frozen baseline opcodes and the frozen operand layout they use. |
+| Phase-4 follow-through | `iroha_core/tests/{contract_code_bytes, contract_execution_header_binding, contract_manifest_triggers, executor_migration_introspect, ivm_admission_unknown_syscall, ivm_codec_helpers, ivm_event_ordering, ivm_host_mapping, ivm_host_shadow_execute, ivm_manifest_abi_reject, ivm_pointer_abi_apply, ivm_syscall_policy, runtime_change_sets}.rs`; `integration_tests/tests/{subscriptions, support/parliament_submission}.rs`; `iroha_torii/src/{test_utils, routing}.rs` (validation-fee ingress tests); `irohad/src/soracloud_runtime/tests/{part_01, part_04}.rs` | Every fixture a live ABI V1 path admits (stateless admission, raw `Executable::Ivm`, contract registration, triggers, the executor upgrade, the Soracloud runtime) is a baseline artifact: the 49-byte header with a positive `max_cycles`, the baseline encodings, the register form of `JALR`, the 8-bit `SCALL` (24-bit `SYSTEM` above `0xFF`). Only fixture construction changed; no expectation. Raw-code tests that drive a C10 VM directly (`IVM::load_code`) stay C10. Soracloud fixtures use the canonical baseline opcodes and encoding helpers re-exported by `ivm::baseline`; the duplicate test-only encoder is deleted. |
 | Warm and cold caches agree | `iroha_core/src/smartcontracts/ivm/cache.rs`, `state.rs`, `smartcontracts/ivm/host.rs` | `PreparedContractCache::get_in_world` and `IvmCache::cached_program_summary_in_world` no longer answer a root that does not select the resident entry's profile with that entry's ABI hash mismatch: they report a miss, so the caller prepares the stored bytes under the profile the root resolves and returns exactly the refusal a cold cache returns. Before, a warm node reported `ArtifactAbiHashMismatch` where a cold node's baseline parser reported, for example, `UnsupportedAbiVersion`: two different admission results for the same transaction depending on node-local cache state. Tested warm against cold for both lookups. |
 | Profile threading | `iroha_core/src/smartcontracts/ivm.rs`, `ivm/{cache, profile, host_profile, host}.rs`, `ivm/cache/profile_key_tests.rs`, `executor.rs`, `executor_contract_dispatch_tests.rs`, `state.rs`, `pipeline/overlay.rs`, `smartcontracts/isi/{world, triggers/mod}.rs`; `iroha_torii/src/{routing, gov}.rs`; `iroha_cli/src/contracts.rs`; `ivm/src/{lib, contract_artifact}.rs` | No reader collapses a resolved, prepared or VM profile to its `SyscallPolicy` any more (C10's own ABI V1 surface shares `AbiV1` with the baseline). `artifact_profile` (returns `IvmProfileId`) replaces `artifact_policy`; `verify_contract_in_world` verifies under the resolved profile; the prepared-contract and summary caches take profiles (`*_for_profile`, `require_prepared_profile` compares the exact profile and reports the two profiles' ABI hashes); `host_profile::{ensure_at_height, ensure_in_transaction}` and `ensure_host_profile` check the exact profile, so a C10 ABI V1 object is not admitted as the implicit baseline; trigger registration, the stateless raw-IVM overlay, the executor upgrade, raw contract dispatch and trigger callback validation parse and load under the profile; Torii's contract-state schema, multisig contract-call and governed-contract readers and the CLI's program summary use the resolved or declared profile. `ivm` re-exports `verify_contract_artifact{,_with_memory_budget}_for_profile`. The interface is still bound before any header byte is parsed (`profile::resolve_artifact`). |
 | C10 result families | `iroha_data_model/src/ivm_c10.rs` (new module `ivm_c10`) | New definitions with their own nominal schema names; every existing type, tag and layout is byte-identical. `NumericFaultC10V1` (the baseline tags 1–13 plus `RegisterIntegerOverflow` 14), `IvmFaultKindC10V1` (C10's tags 0–27, `ControlFlowViolation` 27, exactly the `fault_layout` C10's descriptor binds), `IvmFaultC10V1`, `IvmAdmissionErrorC10V1` (C10's tags 0–16, `MaxCyclesWithoutZk` 6), and the rejection parents `ValidationFailC10V1`, `TransactionRejectionReasonC10V1`, `TransactionStatusC10V1`. Unchanged leaves are shared. Framed and bare Norito roundtrips, JSON roundtrips and tag pins for each. |

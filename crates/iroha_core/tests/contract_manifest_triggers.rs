@@ -60,7 +60,7 @@ fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, Contract
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 1_000,
         abi_version: 1,
     };
     let embedded_entrypoints = entrypoints

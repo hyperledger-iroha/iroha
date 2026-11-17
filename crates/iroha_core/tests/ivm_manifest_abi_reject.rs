@@ -78,7 +78,7 @@ fn baseline_header(abi_version: u8) -> Vec<u8> {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 1_000,
         abi_version,
     }
     .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0)
@@ -93,14 +93,6 @@ fn baseline_unit_return() -> [u32; 4] {
         wide::encode_rr(control::JALR, 0, 1, 0),
     ]
 }
-/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
-/// `SYSTEM` form above.
-fn baseline_syscall(number: u32) -> u32 {
-    match u8::try_from(number) {
-        Ok(short) => wide::encode_sys(system::SCALL, short),
-        Err(_) => wide::encode_syscallx(number),
-    }
-}
 fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractManifest) {
     let mut artifact = baseline_header(abi_version);
     artifact.extend_from_slice(&minimal_contract_interface().encode_section());
@@ -111,9 +103,17 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         .expect("canonical manifest test contract");
     (artifact, verified.manifest)
 }
+/// [`minimal_contract_artifact`] whose body first invokes `syscall` through the baseline 8-bit
+/// `SCALL`.
 fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
-    code.extend_from_slice(&baseline_syscall(syscall).to_le_bytes());
+    code.extend_from_slice(
+        &wide::encode_sys(
+            system::SCALL,
+            u8::try_from(syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+        )
+        .to_le_bytes(),
+    );
     for instruction in baseline_unit_return() {
         code.extend_from_slice(&instruction.to_le_bytes());
     }

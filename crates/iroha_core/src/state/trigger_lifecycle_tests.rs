@@ -561,8 +561,9 @@ fn lifecycle_callback_failure_removes_already_executed_business_effects_from_tra
 
 #[test]
 fn lifecycle_compact_wire_identity_and_unchanged_ivm_abi() {
-    // Compact frames live in existing opaque bytes under a selected service;
-    // the original covered wire graph and baseline identities stay unchanged.
+    // Compact frames live in existing opaque bytes under a selected service; they leave
+    // the release wire graph and ABI V1 identities (pinned with their history in
+    // `snapshot_accounting_keeps_release_wire_and_abi_pins`) unchanged.
     let wire = crate::release_identity::wire_schema_hash();
     let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     println!("wire_schema_hash={}", iroha_crypto::Hash::prehashed(wire));
@@ -570,9 +571,9 @@ fn lifecycle_compact_wire_identity_and_unchanged_ivm_abi() {
     assert_eq!(
         wire,
         [
-            0x8c, 0x6e, 0x53, 0x80, 0x04, 0xb1, 0x5b, 0x52, 0xa6, 0xb6, 0xca, 0x43, 0x0b, 0x5c,
-            0x9d, 0x6c, 0x32, 0xa8, 0x79, 0x8e, 0x03, 0x9a, 0x70, 0x3b, 0x79, 0x8d, 0x71, 0x20,
-            0x4c, 0xf0, 0x8d, 0xf3
+            0x9d, 0x96, 0xf8, 0x72, 0x66, 0x32, 0x04, 0x75, 0x14, 0x90, 0xb9, 0xf2, 0x2a, 0x67,
+            0xf1, 0xa7, 0xf0, 0xf2, 0x3b, 0x04, 0x92, 0xee, 0xcd, 0x5f, 0x7c, 0xa0, 0xac, 0x42,
+            0x91, 0x5a, 0x04, 0x5d
         ]
     );
     assert_eq!(

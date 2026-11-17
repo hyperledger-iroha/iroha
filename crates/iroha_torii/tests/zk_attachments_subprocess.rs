@@ -125,6 +125,31 @@ fn write_executable_script(dir: &Path, name: &str, script: &str) -> PathBuf {
     fs::set_permissions(&path, permissions).expect("script permissions");
     path
 }
+/// A fake sanitizer under the one name the node admits (`attachment_sanitizer`). macOS's
+/// sandbox profile lets the child execute only that exact file, never an interpreter, so
+/// there the fake is a native program compiled here from `rust_main`; elsewhere `script`.
+#[cfg(unix)]
+fn fake_sanitizer(dir: &Path, script: &str, rust_main: &str) -> PathBuf {
+    if !cfg!(target_os = "macos") {
+        return write_executable_script(dir, "attachment_sanitizer", script);
+    }
+    let path = dir.join("attachment_sanitizer");
+    let source = dir.join("fake_sanitizer.rs");
+    fs::write(&source, format!("fn main() {{ {rust_main} }}\n")).expect("write fake source");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let output = Command::new(rustc)
+        .args(["--edition", "2024", "-O", "-o"])
+        .arg(&path)
+        .arg(&source)
+        .output()
+        .expect("run rustc for the fake sanitizer");
+    assert!(
+        output.status.success(),
+        "compile fake sanitizer: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    path
+}
 #[tokio::test]
 async fn attachments_sanitize_via_subprocess() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
@@ -184,10 +209,10 @@ async fn attachments_sanitize_compressed_payload_via_subprocess() {
 async fn attachments_sanitize_via_subprocess_rejects_invalid_child_output() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let temp = tempfile::tempdir().expect("temp dir");
-    let sanitizer_path = write_executable_script(
+    let sanitizer_path = fake_sanitizer(
         temp.path(),
-        "invalid-sanitizer.sh",
         "#!/bin/sh\nprintf 'not-a-valid-norito-response'\n",
+        r#"print!("not-a-valid-norito-response");"#,
     );
     configure_subprocess_sanitizer(sanitizer_path, 5_000);
     let (status, response_body) = post_attachment(
@@ -209,7 +234,7 @@ async fn attachments_sanitize_via_subprocess_rejects_nonzero_exit() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let temp = tempfile::tempdir().expect("temp dir");
     let sanitizer_path =
-        write_executable_script(temp.path(), "failing-sanitizer.sh", "#!/bin/sh\nexit 7\n");
+        fake_sanitizer(temp.path(), "#!/bin/sh\nexit 7\n", "std::process::exit(7);");
     configure_subprocess_sanitizer(sanitizer_path, 5_000);
     let (status, response_body) = post_attachment(
         Bytes::from_static(br#"{"hello":"world"}"#),
@@ -246,8 +271,11 @@ async fn attachments_sanitize_via_subprocess_rejects_spawn_failure() {
 async fn attachments_sanitize_via_subprocess_times_out_slow_child() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let temp = tempfile::tempdir().expect("temp dir");
-    let sanitizer_path =
-        write_executable_script(temp.path(), "slow-sanitizer.sh", "#!/bin/sh\nsleep 1\n");
+    let sanitizer_path = fake_sanitizer(
+        temp.path(),
+        "#!/bin/sh\nsleep 1\n",
+        "std::thread::sleep(std::time::Duration::from_secs(1));",
+    );
     configure_subprocess_sanitizer(sanitizer_path, 25);
     let (status, response_body) = post_attachment(
         Bytes::from_static(br#"{"hello":"world"}"#),
@@ -261,14 +289,16 @@ async fn attachments_sanitize_via_subprocess_times_out_slow_child() {
         String::from_utf8_lossy(&response_body)
     );
 }
-#[cfg(unix)]
+// macOS's sandbox profile denies fork, so a sandboxed sanitizer there cannot leave a
+// descendant holding its stdout open; the case exists only where the child may fork.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]
 async fn attachments_sanitize_via_subprocess_times_out_after_child_exit_when_stdout_stays_open() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let temp = tempfile::tempdir().expect("temp dir");
     let sanitizer_path = write_executable_script(
         temp.path(),
-        "output-timeout-sanitizer.sh",
+        "attachment_sanitizer",
         "#!/bin/sh\n(sleep 1) &\nexit 0\n",
     );
     configure_subprocess_sanitizer(sanitizer_path, 25);

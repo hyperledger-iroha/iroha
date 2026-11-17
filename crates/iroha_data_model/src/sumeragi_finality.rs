@@ -63,15 +63,15 @@ pub use checkpoint::{
 };
 mod compact;
 mod portable_prefix;
-pub use portable_prefix::{
-    MAX_PORTABLE_PREFIX_FRAME_BYTES, PortableCertifiedBlockV1, PortablePrefixAcquisitionV1,
-    PortablePrefixFrameV1, PortablePrefixRowV1, PortablePrefixVerifierV1,
-    VerifiedPortableCheckpointV1,
-};
 pub use compact::{
     CertifiedTransactionInclusionV1, MAX_COMMIT_CERTIFICATE_BYTES_V1, MAX_COMMIT_CHECKPOINT_BYTES,
     SumeragiCommitCertificateV1, SumeragiCommitCheckpointV1, SumeragiCommitVerifierV1,
     VerifiedSumeragiCommitV1,
+};
+pub use portable_prefix::{
+    MAX_PORTABLE_PREFIX_FRAME_BYTES, PortableCertifiedBlockV1, PortablePrefixAcquisitionV1,
+    PortablePrefixFrameV1, PortablePrefixRowV1, PortablePrefixVerifierV1,
+    VerifiedPortableCheckpointV1,
 };
 mod page;
 pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoint_page};

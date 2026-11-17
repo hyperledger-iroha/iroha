@@ -2810,6 +2810,10 @@
     {
       "path": "crates/iroha_execution_stark/src/field.rs",
       "engine": "iroha-execution-stark"
+    },
+    {
+      "path": "crates/ivm/src/ivm/baseline/field.rs",
+      "note": "frozen baseline engine's FADD/FSUB/FMUL/FINV opcode arithmetic, restored from the pre-C10 anchor 77600a4840; no proof engine"
     }
   ],
   "retained_utilities": [

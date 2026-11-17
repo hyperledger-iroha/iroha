@@ -619,9 +619,11 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
         let policies = &original.policies;
         for _ in 0..2 {
             let mut owner = ManagedServiceBootstrap::open(prepared).unwrap();
+            // A hang guard for recovery and the advance together, well inside the original
+            // signing deadline; a loaded host spends seconds in each.
             let fresh = original
                 .fees
-                .options(Instant::now() + Duration::from_secs(30));
+                .options(Instant::now() + Duration::from_secs(120));
             let recovery_started = Instant::now();
             assert_eq!(finalities(owner.recover(fresh.deadline).unwrap()), expected);
             eprintln!(

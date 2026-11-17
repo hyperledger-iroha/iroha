@@ -352,7 +352,9 @@ capture in `e93b3f9d7f`, without regenerating history to make a replay pass.
 The original V1 signing schema retains its atomic-private-settlement record in
 the nested SORA Nexus policy digest and its five named provenance fields in the
 execution-policy digest. Their removal in `e1f137143e` and `3b47f8a49f` changed the
-preimage of that retained history. The single canonical encoder restores their
+preimage of that retained history. Likewise the quarantine budget keeps its V1
+slot name `pipeline.quarantine_tx_max_cycles` after `e562d91f81` renamed the
+field to the gas cap `quarantine_tx_max_gas`. The single canonical encoder restores their
 original positions, types and frozen baseline values. They are immutable signing
 slots: neither current private-payment limits nor local sidecar capacities alter
 them, and deleted node-local provenance controls remain deleted. Independent byte

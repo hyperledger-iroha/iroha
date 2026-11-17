@@ -8,30 +8,29 @@ use axum::{
 };
 use http_body_util::BodyExt as _;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use std::{convert::TryFrom, sync::Once};
+use std::convert::TryFrom;
 use tower::ServiceExt as _;
+/// Install the in-process attachment configuration. Every call reinstalls it: the subprocess
+/// tests in the same binary install their own sanitizer, and the data-directory guard each
+/// test holds first serializes them.
 fn ensure_quota_config() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let mut allowed =
-            iroha_config::parameters::defaults::torii::attachments_allowed_mime_types();
-        allowed.push("application/octet-stream".to_string());
-        iroha_torii::zk_attachments::configure(
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_TTL_SECS,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
-            8 * 1024 * 1024, // tighten per-tenant bytes to keep tests lightweight
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
-            allowed,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
-            iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
-            iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
-            None,
-            iroha_torii::MaybeTelemetry::disabled(),
-        );
-    });
+    let mut allowed = iroha_config::parameters::defaults::torii::attachments_allowed_mime_types();
+    allowed.push("application/octet-stream".to_string());
+    iroha_torii::zk_attachments::configure(
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_TTL_SECS,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
+        8 * 1024 * 1024, // tighten per-tenant bytes to keep tests lightweight
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
+        allowed,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
+        iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
+        None,
+        iroha_torii::MaybeTelemetry::disabled(),
+    );
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

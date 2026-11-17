@@ -16,12 +16,7 @@ use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use ivm::{PointerType, ProgramMetadata, syscalls as ivm_sys};
-// Signed generic transactions are a live ABI V1 path, which parses and runs only the baseline
-// engine: programs carry the 49-byte baseline header and the baseline instruction encodings.
-use ivm_abi::baseline::{
-    encoding,
-    instruction::{self, wide::system},
-};
+use ivm_abi::baseline::{encoding, instruction};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -39,22 +34,16 @@ fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
     ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
-/// A baseline syscall instruction: the 8-bit `SCALL` for numbers up to `0xFF`, the 24-bit
-/// `SYSTEM` form above.
-fn baseline_syscall(number: u32) -> u32 {
-    match u8::try_from(number) {
-        Ok(short) => encoding::wide::encode_sys(system::SCALL, short),
-        Err(_) => encoding::wide::encode_syscallx(number),
-    }
-}
-/// Generic program whose pointer arguments are its authenticated literal-table TLVs, under the
-/// baseline fixed header with its positive cycle bound.
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+///
+/// It is a program of the interface profile: ABI V1 on the frozen baseline engine, whose header
+/// requires a positive cycle limit.
 fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     let mut program = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 10_000,
+        max_cycles: 1_000,
         abi_version: 1,
     }
     .encode_for_profile(ivm::IvmProfileId::BASELINE_ABI_V1, 0);
@@ -88,6 +77,13 @@ fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     }
     program
 }
+/// The baseline 8-bit `SCALL` of a syscall number up to `0xFF`.
+fn baseline_scall(syscall: u32) -> u32 {
+    encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        u8::try_from(syscall).expect("the 8-bit SCALL carries numbers up to 0xFF"),
+    )
+}
 /// Load each `(register, literal)` pointer argument, then invoke `syscall`.
 fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
     arguments
@@ -95,7 +91,7 @@ fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
         .map(|&(register, literal)| {
             encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
         })
-        .chain([baseline_syscall(syscall)])
+        .chain([baseline_scall(syscall)])
         .collect()
 }
 fn setup_state(

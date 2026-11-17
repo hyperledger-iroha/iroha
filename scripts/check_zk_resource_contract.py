@@ -4220,20 +4220,31 @@ def _policy_push_fields(body: str, where: str) -> list:
     """Field names of every `policy.push(name, ..)` call, in source order.
 
     A name is a string literal, or the first element of the tuples of the literal
-    table a `for (name, ..) in [..] { .. }` loop around the call iterates. Any other
-    call fails: a field the checker cannot name is a field it cannot classify.
+    table a `for (name, ..) in [..] { .. }` loop around the call iterates. A
+    `policy.push_frozen_*(owner.field)` helper keeps a signed slot name for the
+    field it is given, so it binds that field; one without an argument binds no
+    node field. Any other call fails: a field the checker cannot name is a field it
+    cannot classify.
     """
     fields = []
-    for call in re.finditer(r"policy\s*\.\s*push\s*\(\s*", body):
+    for call in re.finditer(r"policy\s*\.\s*push(_frozen_[a-z0-9_]+)?\s*\(\s*", body):
         rest = body[call.end() :]
-        literal = re.match(r"\"([^\"]+)\"", rest)
-        if literal:
-            fields.append(literal.group(1))
-            continue
         unreadable = ContractError(
             f"{where}: a `policy.push(` call binds a field whose name the checker cannot "
             f"read (`{' '.join(rest[:48].split())}`)"
         )
+        if call.group(1):
+            if rest.startswith(")"):
+                continue
+            argument = re.match(r"([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)+)\s*\)", rest)
+            if argument is None:
+                raise unreadable
+            fields.append(argument.group(1))
+            continue
+        literal = re.match(r"\"([^\"]+)\"", rest)
+        if literal:
+            fields.append(literal.group(1))
+            continue
         variable = re.match(r"([a-z_][a-z0-9_]*)\s*,", rest)
         if variable is None:
             raise unreadable

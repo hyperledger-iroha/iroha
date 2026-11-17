@@ -176,18 +176,31 @@ fn public(
 /// Compose private authentication ports and bind the externally supplied scheme
 /// and relation to compact public context. No fixed issuer or scheme VK exists.
 pub fn prepare(context: &Context, input: &Inputs) -> Result<Prepared, &'static str> {
-    prepare_mode(context,input,true)
+    prepare_mode(context, input, true)
 }
 
-pub fn prepare_unsigned(context:&Context,input:&Inputs)->Result<UnsignedPrepared,&'static str>{
-    let mut unsigned=input.clone();
-    unsigned.receipt.signature=[0;64];
-    let prepared=prepare_mode(context,&unsigned,false)?;
-    Ok(UnsignedPrepared{wiring:prepared.wiring,gfam:prepared.gfam,local:prepared.local,
-        state_cell:prepared.state_cell,statement_cell:prepared.statement_cell,receipt_body:input.receipt.body})
+pub fn prepare_unsigned(
+    context: &Context,
+    input: &Inputs,
+) -> Result<UnsignedPrepared, &'static str> {
+    let mut unsigned = input.clone();
+    unsigned.receipt.signature = [0; 64];
+    let prepared = prepare_mode(context, &unsigned, false)?;
+    Ok(UnsignedPrepared {
+        wiring: prepared.wiring,
+        gfam: prepared.gfam,
+        local: prepared.local,
+        state_cell: prepared.state_cell,
+        statement_cell: prepared.statement_cell,
+        receipt_body: input.receipt.body,
+    })
 }
 
-fn prepare_mode(context:&Context,input:&Inputs,authenticate_own:bool)->Result<Prepared,&'static str>{
+fn prepare_mode(
+    context: &Context,
+    input: &Inputs,
+    authenticate_own: bool,
+) -> Result<Prepared, &'static str> {
     if context.relation == [0; 32] {
         return Err("zero trusted relation");
     }
@@ -204,14 +217,16 @@ fn prepare_mode(context:&Context,input:&Inputs,authenticate_own:bool)->Result<Pr
     let z = BigUint::from_bytes_be(&p256::sha256_one_block(mb.as_ref()));
     let r = BigUint::from_bytes_be(&input.receipt.signature[..32]);
     let s = BigUint::from_bytes_be(&input.receipt.signature[32..]);
-    if authenticate_own && !p256::verify(
-        &q,
-        &z,
-        &p256::Signature {
-            r: r.clone(),
-            s: s.clone(),
-        },
-    ) {
+    if authenticate_own
+        && !p256::verify(
+            &q,
+            &z,
+            &p256::Signature {
+                r: r.clone(),
+                s: s.clone(),
+            },
+        )
+    {
         return Err("receipt signature has no ECDSA witness");
     }
     let prepared = credential::prepare(&context.root, &input.certificate, cred)?;
@@ -439,25 +454,33 @@ fn prepare_mode(context:&Context,input:&Inputs,authenticate_own:bool)->Result<Pr
     }
     let comb = if authenticate_own {
         let (_, comb) = certificate::add_signature(
-        &mut w,
-        gfam,
-        local,
-        MESSAGE,
-        m,
-        (q, z, r, s),
-        [rlimbs, slimbs],
-        KeyTable::Witness {
-            id: nonnative::WALLET_TABLE,
-        },
+            &mut w,
+            gfam,
+            local,
+            MESSAGE,
+            m,
+            (q, z, r, s),
+            [rlimbs, slimbs],
+            KeyTable::Witness {
+                id: nonnative::WALLET_TABLE,
+            },
         );
         w.wallet = Some((comb + nonnative::A_WTABLE, full::TABLE_IO));
         comb
     } else {
-        let row=w.push(crate::uniform::Array{name:"unsigned Bootstrap certified wallet table",family:gfam,
-            rho:9,r_count:512,fixed:false,lookups:Vec::new(),widths:vec![9,88,88,80,88,88,80],rows:Vec::new(),
-            values:nonnative::wallet_table_values(&q)});
-        w.tables.push((row,nonnative::WALLET_TABLE));
-        w.wallet=Some((row,full::TABLE_IO));
+        let row = w.push(crate::uniform::Array {
+            name: "unsigned Bootstrap certified wallet table",
+            family: gfam,
+            rho: 9,
+            r_count: 512,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![9, 88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: nonnative::wallet_table_values(&q),
+        });
+        w.tables.push((row, nonnative::WALLET_TABLE));
+        w.wallet = Some((row, full::TABLE_IO));
         // This private intermediate is consumed only by prepare_unsigned,
         // which deliberately has no authenticated comb/receipt field.
         usize::MAX
