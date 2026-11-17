@@ -724,12 +724,15 @@ pub(super) fn sandboxed_sanitizer_command_for_search_path(
     {
         if let Some(sandbox_exec) = find_executable_in_search_path(search_path, "sandbox-exec") {
             let executable_literal = macos_sandbox_literal(exe)?;
+            // Process start on macOS 27 reads the root directory itself (a listing, never a
+            // file under it); without `(literal "/")` every child aborts before main.
             let profile = format!(
                 r#"(version 1)
 (deny default)
 (allow process-exec (literal "{executable_literal}"))
 (allow file-read-metadata)
 (allow file-read-data
+    (literal "/")
     (literal "{executable_literal}")
     (subpath "/System/Library")
     (subpath "/usr/lib")

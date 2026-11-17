@@ -4864,7 +4864,12 @@ fn apply_sanitizer_limits(max_expanded_bytes: u64, timeout: Duration) -> Result<
         let cpu_limit = sanitizer_cpu_limit_secs(timeout);
         let mem_limit = sanitizer_memory_limit_bytes(max_expanded_bytes);
         set_rlimit(libc::RLIMIT_CPU, cpu_limit)?;
-        set_rlimit(libc::RLIMIT_AS, mem_limit)?;
+        // Linux enforces the address-space bound. macOS never enforced RLIMIT_AS, and
+        // macOS 27 refuses one below the address space every process reserves at start
+        // (EINVAL), so there the in-process expansion bound and the OS sandbox carry it.
+        if !cfg!(target_os = "macos") {
+            set_rlimit(libc::RLIMIT_AS, mem_limit)?;
+        }
     }
     Ok(())
 }
