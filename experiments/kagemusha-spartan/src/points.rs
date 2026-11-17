@@ -165,6 +165,10 @@ pub struct PointsBuilder<C: PastaCurve> {
     v_from: Vec<(usize, ChRef)>,
     /// (input point, binding indices of x lo, x hi, y lo, y hi).
     claim_limbs: Vec<(usize, [usize; 4])>,
+    /// Full-width values that cross between the two fields as two shared
+    /// 128-bit limbs: (binding index of the low limb, the value's modulus).
+    /// Each pair must be the value's canonical encoding (`canonical_limbs`).
+    full_limbs: Vec<(usize, num_bigint::BigUint)>,
     embeds: Vec<usize>,
     headers: Vec<[C::Base; 3]>,
     /// Inputs that are constants (a circuit proof's fixed rows: the key's
@@ -220,6 +224,7 @@ where
             total: false,
             v_from: Vec::new(),
             claim_limbs: Vec::new(),
+            full_limbs: Vec::new(),
             embeds: Vec::new(),
             headers: Vec::new(),
             consts: Vec::new(),
@@ -432,6 +437,27 @@ where
         }
         let full_base = at;
         let claims_base = full_base + 18;
+        // The proof's full-width scalars (io digest, v_A, v_B, v_C, kappa',
+        // kappa' zeta, c(z1), z1 b_final zeta, z2), a circuit proof's late io
+        // digest, and the pair link's R (once per pair, in its first proof):
+        // their shared limbs must be the canonical encodings the native
+        // transcript absorbs, or this side would absorb (and multiply by) an
+        // alias value + modulus that the scalar side cannot tell apart.
+        let scalar_modulus = modulus::<F<C>>();
+        for i in 0..9 {
+            self.full_limbs
+                .push((full_base + 2 * i, scalar_modulus.clone()));
+        }
+        if tr.circuit.as_ref().is_some_and(|c| c.late_digest.is_some()) {
+            self.full_limbs
+                .push((claims_base + 4 * claims.len(), scalar_modulus));
+        }
+        if let Some((true, _, _, _)) = tr.link {
+            let rl = sm.r.expect("R's limbs");
+            assert_eq!(rl[1], rl[0] + 1, "R's limbs are adjacent");
+            self.full_limbs
+                .push((rl[0], modulus::<crate::verifier::Fq>()));
+        }
         let k_header = self.headers.len();
         self.headers.push(tr.header.0);
         let mut sp = Sp {
@@ -906,6 +932,99 @@ fn neg<Fb: PrimeField>(l: &Lin<Fb>) -> Lin<Fb> {
     scaled(l, -Fb::ONE)
 }
 
+/// Canonical full-width limb pairs. For each `(lo, m)`, the shared values
+/// `lo` and `lo + 1` (128-bit limbs: P's binding chain range-checks every
+/// shared value, and the linked chains make S's the same integers) encode an
+/// integer `x = lo + 2^128 hi` below `m`, as the native transcript's
+/// canonical encodings do. With `m - 1 = P_lo + 2^128
+/// P_hi`, one instance per pair holds `e_lo` (128-bit chunks), `e_hi`
+/// (127-bit chunks) and a Boolean borrow `b` with `lo + e_lo = P_lo + 2^128 b`
+/// and `hi + e_hi + b = P_hi`, so `x = m - 1 - e_lo - 2^128 e_hi`. Every
+/// quantity is below 2^130, so these field equations are integer equations:
+/// an alias `x + m` (any `x >= m`) would need `e_lo + 2^128 e_hi < 0`.
+pub(crate) fn canonical_limbs<Fb: Scalar>(
+    w: &mut Wiring<Fb>,
+    gfam: usize,
+    shared: usize,
+    pairs: &[(usize, num_bigint::BigUint)],
+) {
+    use num_bigint::BigUint;
+    if pairs.is_empty() {
+        return;
+    }
+    let count = pairs.len();
+    let rho = bits_for(count);
+    let n = 1usize << rho;
+    let (lo_w, hi_w) = (chunk_ws(128), chunk_ws(127));
+    let (lo_at, hi_at) = (0, lo_w.len());
+    let b_at = hi_at + hi_w.len();
+    let mut values = vec![vec![Fb::ZERO; n]; b_at + 1];
+    let low_mask = (BigUint::from(1u32) << 128) - 1u32;
+    let wide = BigUint::from(1u32) << 256;
+    let (mut p_lo, mut p_hi) = (vec![Fb::ZERO; n], vec![Fb::ZERO; n]);
+    let (mut lo_map, mut hi_map) = (vec![None; n], vec![None; n]);
+    for (i, (lo, m)) in pairs.iter().enumerate() {
+        let pm1 = m - 1u32;
+        assert!(pm1.bits() <= 255, "a modulus below 2^255");
+        p_lo[i] = big(&(&pm1 & &low_mask));
+        p_hi[i] = big(&(&pm1 >> 128));
+        let limb = |k: usize| to_big(w.arrays[shared].values[0][lo + k]);
+        let (l, h) = (limb(0), limb(1));
+        // A canonical x gives the honest difference; any other wraps, and no
+        // witness holds its rows.
+        let d = (&wide + &pm1 - (&l + (&h << 128))) % &wide;
+        let (e_lo, e_hi) = (&d & &low_mask, &d >> 128);
+        for (c, v) in chunk_vals::<Fb>(&e_lo, &lo_w).into_iter().enumerate() {
+            values[lo_at + c][i] = v;
+        }
+        for (c, v) in chunk_vals::<Fb>(&e_hi, &hi_w).into_iter().enumerate() {
+            values[hi_at + c][i] = v;
+        }
+        values[b_at][i] = big(&((&l + &e_lo) >> 128));
+        lo_map[i] = Some(*lo);
+        hi_map[i] = Some(lo + 1);
+    }
+    let one = Fb::ONE;
+    let b = own::<Fb>(b_at, n);
+    let rows = vec![
+        lin_row(
+            plus(
+                &plus(&link(shared, 0, lo_map, one), &rec(lo_at, &lo_w, n)),
+                &plus(&neg(&constant(p_lo)), &scaled(&b, -p2::<Fb>(128))),
+            ),
+            n,
+        ),
+        lin_row(
+            plus(
+                &plus(&link(shared, 0, hi_map, one), &rec(hi_at, &hi_w, n)),
+                &plus(&b, &neg(&constant(p_hi))),
+            ),
+            n,
+        ),
+        [b.clone(), b.clone(), b],
+    ];
+    let mut lookups = Vec::new();
+    let mut widths = Vec::new();
+    for (start, ws) in [(lo_at, &lo_w), (hi_at, &hi_w)] {
+        for (j, width) in ws.iter().enumerate() {
+            range_lk(&mut lookups, start + j, *width, n);
+            widths.push(*width as u16);
+        }
+    }
+    widths.push(1);
+    w.push(Array {
+        name: "canonical full-width limbs",
+        family: gfam,
+        rho,
+        r_count: count,
+        fixed: false,
+        lookups,
+        widths,
+        rows,
+        values,
+    });
+}
+
 /// A global array with no cells and one export of per-instance tuples.
 fn link_entries<Fb: Scalar>(
     w: &mut Wiring<Fb>,
@@ -1163,6 +1282,14 @@ where
             .collect();
         w.import(points, vec![o(0), o(1)], back);
         self.build_claim_canonical(w, gfam, shared_a);
+        for (lo, m) in &self.full_limbs {
+            let limb = |k: usize| to_big(w.arrays[shared_a].values[0][lo + k]);
+            assert!(
+                limb(0) + (limb(1) << 128) < *m,
+                "a full-width value's shared limbs are its canonical encoding"
+            );
+        }
+        canonical_limbs(w, gfam, shared_a, &self.full_limbs);
         // Additions.
         let na = self.adds.len();
         let rho_a = bits_for(na);

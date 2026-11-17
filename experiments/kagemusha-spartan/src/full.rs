@@ -34,6 +34,9 @@ use crate::sha::{self, Sha};
 #[cfg(test)]
 #[path = "backend_chain_tests.rs"]
 mod backend_chain_tests;
+#[cfg(test)]
+#[path = "io_binding_tests.rs"]
+mod io_binding_tests;
 use crate::uniform::{
     self, Array, ChallengeRows, Copies, Export, Import, Lin, RP_FULL, RP_INPUT, constant, link,
     own, plus, scaled,
@@ -3919,6 +3922,9 @@ fn p_circuit_impl(
             v
         })
         .collect();
+    for (pr, sc) in pairs.iter().zip(&scalars) {
+        assert_io_bound(&pr.inst_p, &pr.tr_p, &items, sc.io, true);
+    }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
     // The verified P proofs' matrix claims, deferred: folded into the
     // circuit's accumulator (no in-circuit matrix evaluation).
@@ -4163,6 +4169,43 @@ fn link_ties<S: Scalar>(
             }
         }
     }
+}
+
+/// The io slots `link_ties` binds in a linked proof's io fold: rho's and R's
+/// limbs (`split`, P) or their values (S).
+fn link_tie_slots(split: bool) -> Vec<usize> {
+    if split {
+        vec![LINK_RHO_IO, LINK_RHO_IO + 1, LINK_R_IO, LINK_R_IO + 1]
+    } else {
+        vec![LINK_RHO_IO, LINK_R_IO]
+    }
+}
+
+/// Every io fold leaf of a verified proof that its scalar side leaves
+/// unpinned (`scalar::bound_io_slots`) is bound by this circuit: by the
+/// proof's io digests (`items` reading `fold`) or by its link ties. Any other
+/// leaf the native verifier reads as zero, and so does the scalar side.
+fn assert_io_bound<C: iroha_pasta::PastaCurve>(
+    inst: &crate::r1cs::Instance<crate::ipa::F<C>>,
+    tr: &crate::verifier::Trace<C>,
+    items: &[IoDigest<crate::ipa::F<C>>],
+    fold: usize,
+    split: bool,
+) {
+    let mut covered: Vec<usize> = items
+        .iter()
+        .filter(|it| it.fold == fold)
+        .flat_map(|it| it.slots.iter().copied())
+        .collect();
+    if has_link_io(tr) {
+        covered.extend(link_tie_slots(split));
+    }
+    covered.sort_unstable();
+    assert_eq!(
+        covered,
+        crate::scalar::bound_io_slots(inst, tr),
+        "the io digests and link ties bind exactly the unpinned io fold leaves"
+    );
 }
 
 /// The deferred matrix claims of the verified proofs whose scalar sides a
@@ -5516,6 +5559,9 @@ fn s_circuit_impl(
             v
         })
         .collect();
+    for (pr, sc) in pairs.iter().zip(&scalars) {
+        assert_io_bound(&pr.inst_s, &pr.tr_s, &items, sc.io, false);
+    }
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
     let proofs: Vec<_> = pairs
         .iter()

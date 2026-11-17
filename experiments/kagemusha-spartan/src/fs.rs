@@ -15,10 +15,19 @@ pub const CHALLENGE_BITS: usize = 126;
 /// Recursion-friendly transcript: an RP57 duplex sponge (rate 2) over the base
 /// field of the proof's points, so the circuit where those points are native
 /// hashes it directly.
-/// - Points are absorbed as (x, y); the identity is absorbed as (0, 0), which
-///   no circuit can allocate, so in-circuit verification rejects it.
+/// - Points are absorbed as (x, y); the identity (encoded as 32 zero bytes)
+///   as (0, 0), which lies on neither curve. One identity rule holds
+///   natively and in-circuit: every proof point may be the identity except
+///   the IPA's Schnorr commitment A. The canonical decoders (native and
+///   `proof_bytes::total_point`) and the total verifier's complete arithmetic
+///   implement it; a hard slot built on incomplete ladders (a Send or Load
+///   predecessor) cannot represent the identity and so refuses such a proof:
+///   stricter, never more accepting, and only on the wallet's own proofs,
+///   whose prover blinds every committed point.
 /// - Scalars are embedded when the scalar modulus is below the base modulus
 ///   (Vesta proofs: Fp into Fq), else absorbed as 128-bit low and high halves.
+///   The two 128-bit limbs that carry a full-width value between the circuits
+///   are its canonical encoding in both (`points::canonical_limbs`).
 /// - Each squeeze permutes and yields two 126-bit challenges from the
 ///   canonical bits of the first state word. Challenges that multiply points
 ///   in the verifier are Halo endoscalars of those bits (`endo_challenge`);

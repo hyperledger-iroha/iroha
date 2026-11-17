@@ -177,6 +177,25 @@ fn half<S: PrimeField>() -> S {
     S::from(2u64).invert().unwrap()
 }
 
+/// The io slots of a verified proof that the enclosing circuit binds to the
+/// proof's own transcript: its ordinary io (the io digest), a circuit
+/// proof's late io (the late digest) and the pair link's io (the link ties).
+/// Every other io fold leaf is pinned to zero, as the native verifier reads
+/// it (`scalar_side_with`). The slots come from the verified program (its io
+/// length, late slots and link slots), never from witness values.
+pub fn bound_io_slots<C: PastaCurve>(inst: &Instance<F<C>>, tr: &Trace<C>) -> Vec<usize> {
+    let mut slots: Vec<usize> = (0..inst.io.len()).collect();
+    if let Some(ct) = &tr.circuit {
+        if ct.late_digest.is_some() {
+            slots.extend(&ct.late_slots);
+        }
+        slots.extend(ct.link_io.iter().map(|(s, _)| *s));
+    }
+    slots.sort_unstable();
+    slots.dedup();
+    slots
+}
+
 /// Builds the scalar side of one proof's verification from its native
 /// trace: arrays from `first` on, all in family `fam` (global, p = 0).
 #[allow(clippy::too_many_arguments)]
@@ -746,9 +765,15 @@ pub fn scalar_side_with<C: PastaCurve>(
     }
 
     // ------------------------------------------------------------------ io fold
-    // Heap order: leaves 2^L + i hold io_i (zero padding enforced); node n in
-    // [1, 2^L) folds children 2n, 2n + 1 (io's bit L - 1 - level) with r_y's
-    // variable for that bit; node 1 is sum_i eq(r, i) io_i. Node 0 is idle.
+    // Heap order: leaves 2^L + i hold io_i; node n in [1, 2^L) folds children
+    // 2n, 2n + 1 (io's bit L - 1 - level) with r_y's variable for that bit;
+    // node 1 is sum_i eq(r, i) io_i. Node 0 is idle. Every leaf the enclosing
+    // circuit does not bind to the proof's transcript (`bound_io_slots`: the
+    // io digests and the link ties) is pinned to zero, as the native verifier
+    // reads it: the gaps between the ordinary, link and late io as well as the
+    // padding. A free leaf would change io(r_y) and so kappa, turning a valid
+    // proof's total verdict to 0 or letting a hard slot accept a proof over
+    // another io.
     let lv = io_bits;
     let n_io = 1usize << (lv + 1);
     let leaves = 1usize << lv;
@@ -776,15 +801,16 @@ pub fn scalar_side_with<C: PastaCurve>(
             lk(a(S_IO), 0, child(0), neg_c(&internal)),
         ]),
     ]];
-    if io_len < leaves {
-        rows_io.push([
-            lin(
-                Src::Own(0),
-                (0..n_io).map(|n| bit(n >= leaves + io_len)).collect(),
-            ),
-            constant(vec![one; n_io]),
-            Vec::new(),
-        ]);
+    let mut bound = vec![false; leaves];
+    for slot in bound_io_slots(inst, tr) {
+        assert!(slot < io_len, "a bound io slot lies within the io");
+        bound[slot] = true;
+    }
+    let pinned: Vec<F<C>> = (0..n_io)
+        .map(|n| bit(n >= leaves && !bound[n - leaves]))
+        .collect();
+    if pinned.iter().any(|c| !bool::from(c.is_zero())) {
+        rows_io.push([lin(Src::Own(0), pinned), constant(vec![one; n_io]), Vec::new()]);
     }
     let mut vio = vec![zero; n_io];
     vio[leaves..leaves + io_len].copy_from_slice(io_vals);

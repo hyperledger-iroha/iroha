@@ -265,3 +265,322 @@ fn total_pallas_points_prove_true_false_and_identity_with_one_vk() {
 fn total_vesta_points_prove_true_false_and_identity_with_one_vk() {
     run::<Vesta, Pallas>();
 }
+
+/// Whether a built circuit's witness holds at fixed second-phase challenges.
+fn holds_any<S: Scalar>((c, i, w): &(UniformCircuit<S>, Instance<S>, Witness<S>)) -> bool {
+    let mut v = w.w.clone();
+    let ch: Vec<S> = (0..c.phase2_challenges() as u64)
+        .map(|k| S::from(31 + 16 * k))
+        .collect();
+    let r = c.instantiate(&c.shape, &ch, Some(&mut v));
+    let z = crate::r1cs::z_vector(&c.shape, i, &Witness { w: v });
+    let (a, b, c) = r.abc(&c.shape, &z);
+    a.into_iter().zip(b).zip(c).all(|((a, b), c)| a * b == c)
+}
+
+/// Review finding 7 (identity): one identity rule on both sides. A proof
+/// point may be the identity (32 zero bytes, absorbed as (0, 0)) except the
+/// Schnorr commitment A. An all-identity proof of the zero io (rows, rounds,
+/// L and R the identity; v = z1 = 0; A = [z2] H; G the folded generator) is
+/// valid natively, and the total verifier derives verdict 1 for it; with A the
+/// identity both refuse.
+fn identity_rule<C, D>()
+where
+    C: PastaCurve,
+    D: PastaCurve<ScalarExt = C::Base>,
+    C::Base: Scalar + PoseidonField,
+    D::Base: Scalar + PoseidonField,
+{
+    use crate::ipa::IpaProof;
+    let shape = Shape {
+        label: "identity points",
+        sx: 12,
+        row_bits: 2,
+        col_bits: 10,
+        k: 3,
+    };
+    let gens = Gens::<C>::new(shape.cols());
+    let inst = Instance {
+        io: vec![F::<C>::ZERO; 8],
+    };
+    let id = C::identity().to_affine();
+    let z2 = F::<C>::from(0x5eed_u64);
+    let mut proof = Proof::<C> {
+        rows: vec![id; shape.rows()],
+        late: Vec::new(),
+        outer: vec![id; shape.outer_blocks().len()],
+        v: [F::<C>::ZERO; 3],
+        inner: vec![id; shape.inner_blocks().len()],
+        ipa: IpaProof {
+            lr: vec![(id, id); shape.col_bits],
+            g_final: id,
+            a: (C::from(gens.h) * z2).to_affine(),
+            z1: F::<C>::ZERO,
+            z2,
+        },
+    };
+    let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &[], &crate::spartan::Link::None);
+    proof.ipa.g_final = iroha_pasta::msm::msm_public::<C>(
+        &crate::ipa::s_vector(&tr.us),
+        &gens.g,
+        iroha_pasta::msm::MemoryBudget::DEFAULT,
+    )
+    .unwrap()
+    .to_affine();
+    let bytes = proof.to_bytes();
+    assert!(bytes[..32].iter().all(|b| *b == 0), "the identity encodes as zero bytes");
+    assert_eq!(
+        Proof::<C>::from_bytes(&shape, &bytes).map(|p| p.to_bytes()),
+        Some(bytes.clone()),
+        "and decodes back"
+    );
+    assert_eq!(
+        crate::spartan::verify(&shape, &gens, &inst, &bytes),
+        Ok(()),
+        "native verification accepts identity points other than A"
+    );
+    let built = build(&shape, &gens, &inst, &proof, &[]);
+    assert!(holds(&built));
+    assert_eq!(
+        built.1.io[4],
+        C::Base::ONE,
+        "the total verifier accepts the same proof"
+    );
+    let (c, mut i, w) = built;
+    i.io[4] = C::Base::ZERO;
+    assert!(!holds(&(c, i, w)), "verdict 0 cannot be claimed for it");
+    proof.ipa.a = id;
+    assert!(
+        crate::spartan::verify(&shape, &gens, &inst, &proof.to_bytes()).is_err(),
+        "native verification refuses an identity A"
+    );
+    let built = build(&shape, &gens, &inst, &proof, &[]);
+    assert!(holds(&built));
+    assert_eq!(built.1.io[4], C::Base::ZERO, "so does the total verifier");
+}
+#[test]
+fn identity_points_follow_one_rule_natively_and_in_the_total_verifier() {
+    identity_rule::<Pallas, Vesta>();
+    identity_rule::<Vesta, Pallas>();
+}
+
+/// Review finding 7 (limbs): the full-width values that cross between the
+/// fields as two 128-bit shared limbs. Natively they are canonical encodings
+/// (the proof decoder refuses `value + modulus`); in-circuit
+/// `canonical_limbs` holds exactly for `lo + 2^128 hi` below the modulus,
+/// for both scalar moduli in both circuit fields.
+fn canonical_limb_cases<S: Scalar + PoseidonField>() {
+    for m in [modulus::<Fp>(), modulus::<Fq>()] {
+        let wide = num_bigint::BigUint::from(1u32) << 256;
+        let mask = (num_bigint::BigUint::from(1u32) << 128) - 1u32;
+        for (x, canonical) in [
+            (num_bigint::BigUint::from(0u32), true),
+            (num_bigint::BigUint::from(1u32), true),
+            (&m - 1u32, true),
+            (m.clone(), false),
+            (&m + 1u32, false),
+            (&m + &m - 1u32, false),
+            (&wide - 1u32, false),
+        ] {
+            let mut w = Wiring::<S>::default();
+            let f = w.family(0, 1);
+            let shared = w.push(Array {
+                name: "canonical limbs test shared values",
+                family: f,
+                rho: 1,
+                r_count: 2,
+                fixed: false,
+                lookups: vec![],
+                widths: vec![128],
+                rows: vec![],
+                values: vec![vec![big::<S>(&(&x & &mask)), big::<S>(&(&x >> 128))]],
+            });
+            let t = w.push(Array {
+                name: "range table",
+                family: f,
+                rho: CH,
+                r_count: 1 << CH,
+                fixed: true,
+                lookups: Vec::new(),
+                widths: vec![CH as u16],
+                rows: Vec::new(),
+                values: vec![(0..1u64 << CH).map(S::from).collect()],
+            });
+            w.tables.push((t, crate::nonnative::RANGE_TABLE));
+            canonical_limbs(&mut w, f, shared, &[(0, m.clone())]);
+            let (a, p, n, t, c) = w.finish();
+            let built = UniformCircuit::build_with_copies(
+                "canonical limbs", a, p, n, t, c, 11, 4, b"canonical limbs",
+            );
+            assert_eq!(holds(&built), canonical, "limbs of {x} below {m}");
+        }
+    }
+}
+#[test]
+fn full_width_limbs_are_canonical_natively_and_in_circuit() {
+    canonical_limb_cases::<Fp>();
+    canonical_limb_cases::<Fq>();
+    // Native: the limbs are the canonical encodings and a scalar encoded as
+    // value + modulus does not decode.
+    let shape = Shape {
+        label: "canonical limbs native",
+        sx: 12,
+        row_bits: 2,
+        col_bits: 10,
+        k: 3,
+    };
+    let gens = Gens::<Vesta>::new(shape.cols());
+    let io_len = crate::census::STATEMENT_IO + 2 * (2 + shape.col_bits) - 6;
+    let (inst, witness, claims) =
+        crate::verifier::instance::<Vesta>(shape, &gens, 1, io_len, b"canonical limbs native");
+    let proof = crate::spartan::prove_with_claims(
+        &shape,
+        &gens,
+        &inst,
+        &witness,
+        &mut SpikeRng::new(b"canonical limbs native proof"),
+        &claims,
+    );
+    let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &claims, &crate::spartan::Link::None);
+    let values = crate::verifier::shared_values(&tr, &proof, &claims);
+    let full_base = tr
+        .challenges
+        .iter()
+        .map(|(_, k, _)| if *k == Kind::Full { 2 } else { 1 })
+        .sum::<usize>();
+    let sh = shared_scalars(&tr, &proof);
+    let wanted = [
+        sh.io_digest,
+        proof.v[0],
+        proof.v[1],
+        proof.v[2],
+        tr.kappa_claims,
+        sh.kappa_zeta,
+        sh.c_z1,
+        sh.z1_bf_zeta,
+        proof.ipa.z2,
+    ];
+    for (i, v) in wanted.iter().enumerate() {
+        let x = num_bigint::BigUint::from(values[full_base + 2 * i])
+            + (num_bigint::BigUint::from(values[full_base + 2 * i + 1]) << 128);
+        assert_eq!(x, to_big(*v), "full-width value {i} is its canonical encoding");
+        assert!(x < modulus::<F<Vesta>>());
+    }
+    let bytes = proof.to_bytes();
+    let at = 32 * (proof.rows.len() + proof.outer.len());
+    let aliased = to_big(proof.v[0]) + modulus::<F<Vesta>>();
+    if aliased.bits() <= 256 {
+        let mut raw = aliased.to_bytes_le();
+        raw.resize(32, 0);
+        let mut bad = bytes.clone();
+        bad[at..at + 32].copy_from_slice(&raw);
+        assert!(
+            Proof::<Vesta>::from_bytes(&shape, &bad).is_none(),
+            "native decoding refuses v_A + modulus"
+        );
+    }
+    assert!(Proof::<Vesta>::from_bytes(&shape, &bytes).is_some());
+}
+
+/// Review finding 9: the CancelRound and AdaptiveWitness forgeries, as
+/// verified proofs inside the uniform builders the complete circuits use.
+/// Native verification refuses each. The scalar side (its slot weights) holds
+/// and reproduces the native kappa', b_final and Schnorr scalars; the points
+/// side (its gamma-Horner over the round commitments) reproduces the native
+/// combined commitment. The total verifier then derives verdict 0, and verdict
+/// 1 (the hard verifier's equality) has no satisfying witness; the hard
+/// builder refuses outright.
+fn forgeries_refused<C, D>()
+where
+    C: PastaCurve,
+    D: PastaCurve<ScalarExt = C::Base>,
+    C::Base: Scalar + PoseidonField,
+    D::Base: Scalar + PoseidonField,
+    F<C>: Scalar + PoseidonField,
+{
+    let shape = Shape {
+        label: "uniform forgery refusal",
+        sx: 12,
+        row_bits: 2,
+        col_bits: 10,
+        k: 3,
+    };
+    let gens = Gens::<C>::new(shape.cols());
+    let mut rng = SpikeRng::new(b"uniform forgery refusal");
+    let (inst, wit) = crate::r1cs::sample::<F<C>>(&shape, &mut rng);
+    let mut bad = wit.w.clone();
+    bad[(3 * shape.rows() / 4) * shape.cols()] = F::<C>::from(2);
+    let bad = Witness { w: bad };
+    assert!(!crate::spartan::relation_holds::<C>(&shape, &inst, &bad));
+    for cheat in [
+        crate::spartan::Cheat::CancelRound,
+        crate::spartan::Cheat::AdaptiveWitness,
+    ] {
+        let (forged, _) = crate::spartan::prove_with(&shape, &gens, &inst, &bad, &mut rng, cheat);
+        assert!(
+            crate::spartan::verify(&shape, &gens, &inst, &forged.to_bytes()).is_err(),
+            "{cheat:?}: native verification refuses"
+        );
+        let tr = crate::verifier::trace(&shape, &gens, &inst, &forged, &[], &crate::spartan::Link::None);
+        assert!(!tr.accepts, "{cheat:?}: the native trace refuses");
+        // The scalar side: holds, with the native values asserted at build.
+        let side = crate::scalar::scalar_side::<C>(0, 0, &shape, lean_schedule(), &inst, &forged, &[], &tr);
+        let (sc, si, sw) = UniformCircuit::build(
+            "uniform forgery scalar side",
+            side.arrays,
+            vec![0],
+            vec![1],
+            Vec::new(),
+            12,
+            4,
+            b"uniform forgery scalar side",
+        );
+        assert!(holds_any(&(sc, si, sw)), "{cheat:?}: the scalar side holds");
+        // The total points side: verdict 0; verdict 1 is unsatisfiable.
+        let built = build(&shape, &gens, &inst, &forged, &[]);
+        assert!(holds(&built), "{cheat:?}: total verification holds");
+        assert_eq!(built.1.io[4], C::Base::ZERO, "{cheat:?}: verdict 0");
+        let (c, mut i, w) = built;
+        i.io[4] = C::Base::ONE;
+        assert!(!holds(&(c, i, w)), "{cheat:?}: acceptance cannot be claimed");
+        // The hard points side refuses to build a verification of it.
+        let hard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut w = Wiring::<C::Base>::default();
+            let f = w.family(0, 1);
+            let e_out = w.reserve();
+            let e_v = w.reserve();
+            let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
+            let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+            let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+            pb.verify_keyed(
+                &mut pool,
+                &shape,
+                &gens,
+                &forged,
+                &[],
+                &tr,
+                SharedMap {
+                    base: 0,
+                    other: None,
+                    r: None,
+                },
+                None,
+                None,
+            );
+        }));
+        let why = hard.expect_err("the hard verifier has no witness");
+        let why = why
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            why.contains("the final Schnorr check"),
+            "{cheat:?}: refused at the final Schnorr equality, not elsewhere: {why}"
+        );
+    }
+}
+#[test]
+fn uniform_builders_refuse_cancel_round_and_adaptive_witness() {
+    forgeries_refused::<Pallas, Vesta>();
+    forgeries_refused::<Vesta, Pallas>();
+}
