@@ -2,9 +2,9 @@
 use super::*;
 use iroha_core_zk::kagemusha_spartan_native::{FutureRuntime, native};
 
-mod session_state;
 #[cfg(feature = "spartan-device-fixture")]
 pub mod device_fixture;
+mod session_state;
 use session_state::{InstalledOriginals, ReviewCache};
 
 pub(crate) enum Action<'a> {

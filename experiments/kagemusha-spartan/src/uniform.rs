@@ -62,10 +62,14 @@ trait TemplateTerm<F> {
     fn term(&self) -> &Term<F>;
 }
 impl<F> TemplateTerm<F> for Term<F> {
-    fn term(&self) -> &Term<F> { self }
+    fn term(&self) -> &Term<F> {
+        self
+    }
 }
 impl<F> TemplateTerm<F> for (Term<F>, Factor) {
-    fn term(&self) -> &Term<F> { &self.0 }
+    fn term(&self) -> &Term<F> {
+        &self.0
+    }
 }
 
 pub struct Array<F> {
@@ -364,15 +368,15 @@ pub struct UniformCircuit<F> {
     plan: OnceLock<Tape<F>>,
 }
 
-#[path = "program_artifact.rs"]
-mod program_artifact;
 #[path = "fixed_values.rs"]
 mod fixed_values;
+#[path = "program_artifact.rs"]
+mod program_artifact;
 use fixed_values::FixedValues;
-#[path = "public_retention.rs"]
-mod public_retention;
 #[path = "proving_memory.rs"]
 mod proving_memory;
+#[path = "public_retention.rs"]
+mod public_retention;
 pub use proving_memory::{PhaseMemoryAccounting, ProvingMemoryAccounting};
 
 /// A linear combination's value at slot `i` of array `a`, from the arrays'
@@ -1213,7 +1217,9 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Erase retained construction values after the last prover use. Public
     /// program constants remain available for exact program authentication.
     pub fn zeroize_witness_values(&mut self)
-    where F: zeroize::Zeroize {
+    where
+        F: zeroize::Zeroize,
+    {
         for array in &mut self.arrays {
             if !array.fixed {
                 for values in &mut array.values {
@@ -1268,7 +1274,9 @@ impl<F: Scalar> UniformCircuit<F> {
     /// The matrices' degrees in the LogUp challenges: 1 in alpha if any row
     /// carries `alpha - t`, and the highest power of beta.
     pub fn challenge_degrees(&self) -> (usize, usize) {
-        if let Some((_, degrees)) = self.verifier_only { return degrees; }
+        if let Some((_, degrees)) = self.verifier_only {
+            return degrees;
+        }
         let (mut da, mut db) = (0, 0);
         for row in self.symbolic().iter().flatten() {
             for (_, f) in row.iter().flatten() {
@@ -1388,8 +1396,13 @@ impl<F: Scalar> UniformCircuit<F> {
             counts.push(2);
             let array = arrays.len();
             arrays.push(Array {
-                name: "independent opening masks", family, rho: 0, r_count: 1,
-                fixed: false, lookups: vec![], widths: vec![255; 3],
+                name: "independent opening masks",
+                family,
+                rho: 0,
+                r_count: 1,
+                fixed: false,
+                lookups: vec![],
+                widths: vec![255; 3],
                 rows: vec![[own(0, 1), own(1, 1), own(2, 1)]],
                 values: vec![vec![F::ZERO; 2]; 3],
             });
@@ -1398,26 +1411,34 @@ impl<F: Scalar> UniformCircuit<F> {
         let mut product_masks = Vec::new();
         for &(a, cells) in &copies.product_masks {
             let mask = &arrays[a];
-            assert!(!mask.fixed && mask.lookups.is_empty() && mask.cells() == 3,
-                "private masking is an independent three-cell product array");
+            assert!(
+                !mask.fixed && mask.lookups.is_empty() && mask.cells() == 3,
+                "private masking is an independent three-cell product array"
+            );
             assert_eq!(cells, [0, 1, 2]);
             assert_eq!(mask.rows.len(), 1);
             let n = 1usize << mask.rho;
             for k in 0..3 {
                 assert_eq!(mask.widths[k], 255);
                 let lin = &mask.rows[0][k];
-                assert!(lin.len() == 1 && lin[0].src == Src::Own(k)
-                    && lin[0].coef == vec![F::ONE; n], "exact private product gate");
+                assert!(
+                    lin.len() == 1 && lin[0].src == Src::Own(k) && lin[0].coef == vec![F::ONE; n],
+                    "exact private product gate"
+                );
             }
             assert!(!copies.io_arrays.iter().any(|(io, _)| *io == a));
             assert!(!copies.exports.iter().any(|e| e.array == a));
             assert!(!copies.imports.iter().any(|e| e.array == a));
             for (reader, array) in arrays.iter().enumerate() {
-                if reader == a { continue; }
+                if reader == a {
+                    continue;
+                }
                 for row in &array.rows {
                     for term in row.iter().flatten() {
-                        assert!(!matches!(term.src, Src::Link { array, .. } | Src::All { array, .. } if array == a),
-                            "a private product mask is not an application input");
+                        assert!(
+                            !matches!(term.src, Src::Link { array, .. } | Src::All { array, .. } if array == a),
+                            "a private product mask is not an application input"
+                        );
                     }
                 }
             }
@@ -1428,8 +1449,15 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         }
         let unique_masks: HashSet<_> = product_masks.iter().copied().collect();
-        assert_eq!(unique_masks.len(), product_masks.len(), "distinct private product mask cells");
-        assert!(product_masks.len() >= 2, "two independent private product masks");
+        assert_eq!(
+            unique_masks.len(),
+            product_masks.len(),
+            "distinct private product mask cells"
+        );
+        assert!(
+            product_masks.len() >= 2,
+            "two independent private product masks"
+        );
         let split_of = split_families(&mut arrays, &mut pi, &mut counts, &mut copies);
         let challenge = std::mem::take(&mut copies.challenge);
         let mut io_arrays = std::mem::take(&mut copies.io_arrays);
@@ -2286,7 +2314,8 @@ impl<F: Scalar> UniformCircuit<F> {
             );
             row[0] = F::ONE;
         }
-        let fixed_values = FixedValues::Dense(w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec());
+        let fixed_values =
+            FixedValues::Dense(w[(shape.rows() - fixed_rows + wallet_rows) * cols_n..].to_vec());
         let _ = n_user;
         let circuit = UniformCircuit {
             verifier_only: None,
@@ -2360,7 +2389,9 @@ impl<F: Scalar> UniformCircuit<F> {
 
     /// Whether the circuit runs LogUp (lookups or copy-table entries).
     fn logup(&self) -> bool {
-        if let Some((challenges, _)) = self.verifier_only { return challenges != 0; }
+        if let Some((challenges, _)) = self.verifier_only {
+            return challenges != 0;
+        }
         !self.lookup_arrays.is_empty() || !self.exports.is_empty() || !self.ch_rows.is_empty()
     }
 
@@ -2901,7 +2932,8 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Readers of every cell block (the prover's gather of `M(r_x, .)`).
     /// The readers, from the symbolic rows (the terms of every proof's rows).
     fn readers(&self) -> &Readers {
-        self.readers.get_or_init(|| self.readers_for(self.symbolic()))
+        self.readers
+            .get_or_init(|| self.readers_for(self.symbolic()))
     }
 
     fn readers_for<T: TemplateTerm<F>>(&self, rows: &[Vec<[Vec<T>; 3]>]) -> Readers {
@@ -2934,7 +2966,12 @@ impl<F: Scalar> UniformCircuit<F> {
                             Src::One => one_readers.push((a, j, mat, t)),
                             Src::Own(k) => {
                                 let ri = u32::try_from(readers[a][*k].len()).expect("reader index");
-                                readers[a][*k].push(Reader { array: a, row: j, mat, term: t });
+                                readers[a][*k].push(Reader {
+                                    array: a,
+                                    row: j,
+                                    mat,
+                                    term: t,
+                                });
                                 edges[a][*k].extend((0..1usize << arr.rho).map(|r| {
                                     let r = u32::try_from(r).expect("reader instance");
                                     (r, ri, r)
@@ -2945,8 +2982,10 @@ impl<F: Scalar> UniformCircuit<F> {
                                     .expect("reader index");
                                 for (r, target) in map.iter().enumerate() {
                                     if let Some(rr) = target {
-                                        assert!(*rr < 1usize << self.arrays[*array].rho,
-                                            "target instance in block");
+                                        assert!(
+                                            *rr < 1usize << self.arrays[*array].rho,
+                                            "target instance in block"
+                                        );
                                         edges[*array][*cell].push((
                                             u32::try_from(*rr).expect("target instance"),
                                             ri,
@@ -2985,10 +3024,12 @@ impl<F: Scalar> UniformCircuit<F> {
                         let mut offsets = vec![0u32; n2 + 1];
                         for &(target, _, _) in &list {
                             offsets[target as usize + 1] = offsets[target as usize + 1]
-                                .checked_add(1).expect("reads per target block");
+                                .checked_add(1)
+                                .expect("reads per target block");
                         }
                         for r2 in 0..n2 {
-                            offsets[r2 + 1] = offsets[r2 + 1].checked_add(offsets[r2])
+                            offsets[r2 + 1] = offsets[r2 + 1]
+                                .checked_add(offsets[r2])
                                 .expect("total reads per target block");
                         }
                         let mut next = offsets[..n2].to_vec();
@@ -3107,30 +3148,70 @@ impl<F: Scalar> UniformCircuit<F> {
     /// phase layout and verifier IO ABI. No witness value or sampled evaluation
     /// substitutes for a program instruction.
     pub fn program_digest(&self) -> [u8; 32] {
-        let mut h=blake3::Hasher::new();
+        let mut h = blake3::Hasher::new();
         h.update(b"kagemusha-spartan/program/v1\0");
-        let word=|h:&mut blake3::Hasher,v:usize|{h.update(&(v as u64).to_le_bytes());};
-        word(&mut h,self.shape.label.len());h.update(self.shape.label.as_bytes());
-        for v in [self.shape.sx,self.shape.row_bits,self.shape.col_bits,self.shape.k,self.io_len,self.constraints,
-            self.p1_rows,self.pl_rows,self.p2_rows,self.fixed_rows,self.wallet_rows,
-            self.wallet_io.unwrap_or(u32::MAX as usize)] {word(&mut h,v);}
-        let degree=self.challenge_degrees();
-        for v in [self.phase2_challenges(),degree.0,degree.1] {word(&mut h,v);}
-        let tape=self.plan();word(&mut h,tape.inputs);word(&mut h,tape.ops.len());word(&mut h,tape.pool.len());
-        for value in &tape.pool {h.update(&value.to_repr());}
-        for op in &tape.ops {
-            let(tag,a,b)=match *op {Op::Add(a,b)=>(0,a,b),Op::Sub(a,b)=>(1,a,b),Op::Mul(a,b)=>(2,a,b),Op::Scale(a,b)=>(3,a,b),Op::Const(a)=>(4,a,0)};
-            h.update(&[tag]);h.update(&a.to_le_bytes());h.update(&b.to_le_bytes());
+        let word = |h: &mut blake3::Hasher, v: usize| {
+            h.update(&(v as u64).to_le_bytes());
+        };
+        word(&mut h, self.shape.label.len());
+        h.update(self.shape.label.as_bytes());
+        for v in [
+            self.shape.sx,
+            self.shape.row_bits,
+            self.shape.col_bits,
+            self.shape.k,
+            self.io_len,
+            self.constraints,
+            self.p1_rows,
+            self.pl_rows,
+            self.p2_rows,
+            self.fixed_rows,
+            self.wallet_rows,
+            self.wallet_io.unwrap_or(u32::MAX as usize),
+        ] {
+            word(&mut h, v);
         }
-        for out in tape.out {h.update(&out.to_le_bytes());}
+        let degree = self.challenge_degrees();
+        for v in [self.phase2_challenges(), degree.0, degree.1] {
+            word(&mut h, v);
+        }
+        let tape = self.plan();
+        word(&mut h, tape.inputs);
+        word(&mut h, tape.ops.len());
+        word(&mut h, tape.pool.len());
+        for value in &tape.pool {
+            h.update(&value.to_repr());
+        }
+        for op in &tape.ops {
+            let (tag, a, b) = match *op {
+                Op::Add(a, b) => (0, a, b),
+                Op::Sub(a, b) => (1, a, b),
+                Op::Mul(a, b) => (2, a, b),
+                Op::Scale(a, b) => (3, a, b),
+                Op::Const(a) => (4, a, 0),
+            };
+            h.update(&[tag]);
+            h.update(&a.to_le_bytes());
+            h.update(&b.to_le_bytes());
+        }
+        for out in tape.out {
+            h.update(&out.to_le_bytes());
+        }
         // The wallet's omitted row is instance-owned and issuer-certified.
         // fixed_values contains only the trusted global tail.
-        word(&mut h,self.fixed_values.len());
+        word(&mut h, self.fixed_values.len());
         self.fixed_values.hash_into(&mut h);
-        word(&mut h,self.late_io.len());
-        for &(io,a,c,i) in &self.late_io {for v in [io,a,c,i]{word(&mut h,v);}}
-        word(&mut h,self.link_io.len());
-        for &(a,io) in &self.link_io {word(&mut h,a);word(&mut h,io);}
+        word(&mut h, self.late_io.len());
+        for &(io, a, c, i) in &self.late_io {
+            for v in [io, a, c, i] {
+                word(&mut h, v);
+            }
+        }
+        word(&mut h, self.link_io.len());
+        for &(a, io) in &self.link_io {
+            word(&mut h, a);
+            word(&mut h, io);
+        }
         *h.finalize().as_bytes()
     }
 
@@ -3750,8 +3831,10 @@ impl<F: Scalar> UniformCircuit<F> {
             let rmask = (1 << arr.rho) - 1;
             for (j, row) in rows[a].iter().enumerate() {
                 for (mat, lin) in row.iter().enumerate() {
-                    let factors: Vec<F> = lin.iter().map(|(_, f)|
-                        Self::factor_value(ch, *f).unwrap_or(F::ONE)).collect();
+                    let factors: Vec<F> = lin
+                        .iter()
+                        .map(|(_, f)| Self::factor_value(ch, *f).unwrap_or(F::ONE))
+                        .collect();
                     for i in (0..1 << self.m(a)).filter(|i| self.present(a, *i)) {
                         for ((term, _), factor) in lin.iter().zip(&factors) {
                             if let Src::All { array, cell } = &term.src {
@@ -3766,7 +3849,12 @@ impl<F: Scalar> UniformCircuit<F> {
                                     ));
                                 }
                             } else if let Some(y) = self.ypos(a, &term.src, i) {
-                                out.push((mat, self.row_base[a][j] + i, y, term.coef[i & rmask] * factor));
+                                out.push((
+                                    mat,
+                                    self.row_base[a][j] + i,
+                                    y,
+                                    term.coef[i & rmask] * factor,
+                                ));
                             }
                         }
                     }
@@ -4374,18 +4462,30 @@ impl GatherJob {
             for &r in &self.rs {
                 let mut acc = sums;
                 for (ti, ((term, _), target)) in lin.iter().zip(&self.targets).enumerate() {
-                    let Some(target) = target else { continue; };
+                    let Some(target) = target else {
+                        continue;
+                    };
                     let coef = term.coef[r];
-                    if bool::from(coef.is_zero()) { continue; }
+                    if bool::from(coef.is_zero()) {
+                        continue;
+                    }
                     let rr = match &term.src {
                         Src::One => Some(0),
                         Src::Own(_) => Some(r),
                         Src::Link { map, .. } => map[r],
                         Src::All { .. } => unreachable!("sum targets are absent"),
                     };
-                    let Some(rr) = rr else { continue; };
+                    let Some(rr) = rr else {
+                        continue;
+                    };
                     let v = z[pb[ti] + target.offset(rr)];
-                    let kind = if coef == F::ONE { 1 } else if coef == -F::ONE { 2 } else { 0 };
+                    let kind = if coef == F::ONE {
+                        1
+                    } else if coef == -F::ONE {
+                        2
+                    } else {
+                        0
+                    };
                     match (fv[ti], kind) {
                         (None, 1) => acc += v,
                         (None, 2) => acc -= v,
@@ -4411,7 +4511,9 @@ unsafe impl<F: Sync> Sync for OutPtr<F> {}
 impl<F> OutPtr<F> {
     /// Caller guarantees an in-bounds element with no concurrent access.
     unsafe fn write(&self, index: usize, value: F) {
-        unsafe { self.0.add(index).write(value); }
+        unsafe {
+            self.0.add(index).write(value);
+        }
     }
 }
 
@@ -5046,57 +5148,60 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
             .collect();
         let output = OutPtr(out.as_mut_ptr());
         let write_job = |&(b, start): &(usize, usize)| {
-                let (plan, weights) = (&plans[b], &weights[b]);
-                let (a2, k2) = (plan.a2, plan.k2);
-                let rho2 = c.arrays[a2].rho;
-                let block = &c.blocks[a2][k2];
-                // A sum row adds the same weight to every instance of its block.
-                let all: F = rd.all_readers[a2][k2]
-                    .iter()
-                    .map(|&(a, j, mat, t)| {
-                        ex[c.row_base[a][j]] * weight(a, j, mat, t) * rows[a][j][mat][t].0.coef[0]
-                    })
-                    .sum();
-                for i2 in (start..(start + SPAN).min(1usize << c.m(a2)))
-                    .filter(|i2| c.present(a2, *i2))
-                {
-                        let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
-                        let mut acc = all;
-                        let entries =
-                            &plan.entries[plan.offsets[r2] as usize..plan.offsets[r2 + 1] as usize];
-                        let mut at = 0;
-                        while at < entries.len() {
-                            // One reader's rows: their sum, then one product
-                            // by the reader's weight.
-                            let ri = entries[at].0;
-                            let reader = &plan.readers[ri as usize];
-                            let mut sum = F::ZERO;
-                            while at < entries.len() && entries[at].0 == ri {
-                                let (_, kind, row, index) = entries[at];
-                                let e = match reader.all_p {
-                                    None => ex[row as usize + (p << reader.rho)],
-                                    Some(count) => (0..count)
-                                        .map(|pp| ex[row as usize + (pp << reader.rho)])
-                                        .sum(),
-                                };
-                                match kind {
-                                    1 => sum += e,
-                                    2 => sum -= e,
-                                    _ => sum += plan.coefs[index as usize] * e,
-                                }
-                                at += 1;
-                            }
-                            acc += weights[ri as usize] * sum;
+            let (plan, weights) = (&plans[b], &weights[b]);
+            let (a2, k2) = (plan.a2, plan.k2);
+            let rho2 = c.arrays[a2].rho;
+            let block = &c.blocks[a2][k2];
+            // A sum row adds the same weight to every instance of its block.
+            let all: F = rd.all_readers[a2][k2]
+                .iter()
+                .map(|&(a, j, mat, t)| {
+                    ex[c.row_base[a][j]] * weight(a, j, mat, t) * rows[a][j][mat][t].0.coef[0]
+                })
+                .sum();
+            for i2 in (start..(start + SPAN).min(1usize << c.m(a2))).filter(|i2| c.present(a2, *i2))
+            {
+                let (p, r2) = (i2 >> rho2, i2 & ((1 << rho2) - 1));
+                let mut acc = all;
+                let entries =
+                    &plan.entries[plan.offsets[r2] as usize..plan.offsets[r2 + 1] as usize];
+                let mut at = 0;
+                while at < entries.len() {
+                    // One reader's rows: their sum, then one product
+                    // by the reader's weight.
+                    let ri = entries[at].0;
+                    let reader = &plan.readers[ri as usize];
+                    let mut sum = F::ZERO;
+                    while at < entries.len() && entries[at].0 == ri {
+                        let (_, kind, row, index) = entries[at];
+                        let e = match reader.all_p {
+                            None => ex[row as usize + (p << reader.rho)],
+                            Some(count) => (0..count)
+                                .map(|pp| ex[row as usize + (pp << reader.rho)])
+                                .sum(),
+                        };
+                        match kind {
+                            1 => sum += e,
+                            2 => sum -= e,
+                            _ => sum += plan.coefs[index as usize] * e,
                         }
-                        // SAFETY: each plan owns a distinct placed cell
-                        // block, and jobs partition that block's instances.
-                        // Public-IO jobs run serially below because separate
-                        // arrays can name the same IO slots. The constant slot
-                        // is updated only after all jobs have finished.
-                        unsafe { output.write(block.index(i2), acc); }
+                        at += 1;
+                    }
+                    acc += weights[ri as usize] * sum;
                 }
-            };
-        jobs.par_iter().filter(|(b, _)| !c.is_io(plans[*b].a2)).for_each(&write_job);
+                // SAFETY: each plan owns a distinct placed cell
+                // block, and jobs partition that block's instances.
+                // Public-IO jobs run serially below because separate
+                // arrays can name the same IO slots. The constant slot
+                // is updated only after all jobs have finished.
+                unsafe {
+                    output.write(block.index(i2), acc);
+                }
+            }
+        };
+        jobs.par_iter()
+            .filter(|(b, _)| !c.is_io(plans[*b].a2))
+            .for_each(&write_job);
         for job in jobs.iter().filter(|(b, _)| c.is_io(plans[*b].a2)) {
             write_job(job);
         }
@@ -5155,7 +5260,10 @@ impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
 
 impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     fn randomize_masks(&self, w: &mut [F], rng: &mut SpikeRng) {
-        assert!(self.verifier_only.is_none(), "an imported public program has no prover witness");
+        assert!(
+            self.verifier_only.is_none(),
+            "an imported public program has no prover witness"
+        );
         for &(array, cells, instance) in &self.product_masks {
             let a = rng.scalar();
             let b = rng.scalar();
@@ -5177,7 +5285,10 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
         if let Some(w) = w
             && self.logup()
         {
-            assert!(self.verifier_only.is_none(), "an imported public program cannot fill private witnesses");
+            assert!(
+                self.verifier_only.is_none(),
+                "an imported public program cannot fill private witnesses"
+            );
             self.fill_helpers(ch, w);
             if let Some(fill) = &self.ch_fill {
                 for (a, k, i, v) in fill(ch) {
@@ -5626,26 +5737,59 @@ mod tests {
     fn sparse_reader_csr_preserves_cross_family_and_repeated_maps() {
         let n = 1usize << 15;
         let target = Array {
-            name: "large sparse reader target", family: 0, rho: 15,
-            r_count: n, fixed: false, lookups: vec![], widths: vec![255], rows: vec![],
+            name: "large sparse reader target",
+            family: 0,
+            rho: 15,
+            r_count: n,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![],
             values: vec![(0..n).map(|i| Fv::from((i + 1) as u64)).collect()],
         };
         let mut readers = Array {
-            name: "many small cross-family readers", family: 1, rho: 2,
-            r_count: 3, fixed: false, lookups: vec![], widths: vec![255],
-            rows: vec![], values: vec![(0..16).map(|i| if i / 4 < 3 && i % 4 < 3 { Fv::ONE } else { Fv::ZERO }).collect()],
+            name: "many small cross-family readers",
+            family: 1,
+            rho: 2,
+            r_count: 3,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![],
+            values: vec![
+                (0..16)
+                    .map(|i| {
+                        if i / 4 < 3 && i % 4 < 3 {
+                            Fv::ONE
+                        } else {
+                            Fv::ZERO
+                        }
+                    })
+                    .collect(),
+            ],
         };
         for i in 0..128 {
             let repeated = (i * 127) % n;
             readers.rows.push([
-                link(0, 0, vec![Some(repeated), Some(repeated), None, Some(n - 1)], Fv::from((i + 1) as u64)),
+                link(
+                    0,
+                    0,
+                    vec![Some(repeated), Some(repeated), None, Some(n - 1)],
+                    Fv::from((i + 1) as u64),
+                ),
                 own(0, 4),
                 constant(vec![Fv::from(9); 4]),
             ]);
         }
         let (c, _, _) = UniformCircuit::build(
-            "sparse readers", vec![target, readers], vec![0, 2], vec![1, 3],
-            vec![], 12, 4, b"sparse readers",
+            "sparse readers",
+            vec![target, readers],
+            vec![0, 2],
+            vec![1, 3],
+            vec![],
+            12,
+            4,
+            b"sparse readers",
         );
         let rd = c.readers();
         let symbolic = c.symbolic();
@@ -5653,25 +5797,36 @@ mod tests {
             for (cell, list) in cells.iter().enumerate() {
                 let (offsets, pairs) = &rd.at[a][cell];
                 assert_eq!(offsets.len(), (1usize << c.arrays[a].rho) + 1);
-                let mut expected = std::collections::BTreeMap::<usize, Vec<(u32,u32)>>::new();
+                let mut expected = std::collections::BTreeMap::<usize, Vec<(u32, u32)>>::new();
                 for (ri, reader) in list.iter().enumerate() {
                     let term = &symbolic[reader.array][reader.row][reader.mat][reader.term].0;
                     match &term.src {
-                        Src::Own(_) => for r in 0..1usize << c.arrays[reader.array].rho {
-                            expected.entry(r).or_default().push((ri as u32,r as u32));
-                        },
-                        Src::Link { map, .. } => for (r, target) in map.iter().enumerate() {
-                            if let Some(target) = target {
-                                expected.entry(*target).or_default().push((ri as u32,r as u32));
+                        Src::Own(_) => {
+                            for r in 0..1usize << c.arrays[reader.array].rho {
+                                expected.entry(r).or_default().push((ri as u32, r as u32));
                             }
-                        },
+                        }
+                        Src::Link { map, .. } => {
+                            for (r, target) in map.iter().enumerate() {
+                                if let Some(target) = target {
+                                    expected
+                                        .entry(*target)
+                                        .or_default()
+                                        .push((ri as u32, r as u32));
+                                }
+                            }
+                        }
                         _ => unreachable!(),
                     }
                 }
                 assert_eq!(pairs.len(), expected.values().map(Vec::len).sum::<usize>());
-                for r in 0..offsets.len()-1 {
-                    let actual = &pairs[offsets[r] as usize..offsets[r+1] as usize];
-                    assert_eq!(actual, expected.get(&r).map_or(&[][..], Vec::as_slice), "block {a}:{cell}, target {r}");
+                for r in 0..offsets.len() - 1 {
+                    let actual = &pairs[offsets[r] as usize..offsets[r + 1] as usize];
+                    assert_eq!(
+                        actual,
+                        expected.get(&r).map_or(&[][..], Vec::as_slice),
+                        "block {a}:{cell}, target {r}"
+                    );
                 }
             }
         }
@@ -5680,15 +5835,15 @@ mod tests {
         let mut rng = SpikeRng::new(b"sparse reader m-table");
         let rx: Vec<Fv> = (0..c.shape.sx).map(|_| rng.scalar()).collect();
         let ex = eq_table(&rx);
-        let weights = [rng.scalar(),rng.scalar(),rng.scalar()];
+        let weights = [rng.scalar(), rng.scalar(), rng.scalar()];
         let ch = [Fv::from(31), Fv::from(47)];
-        let rel = c.instantiate(&c.shape,&ch,None);
-        let actual = rel.m_table(&c.shape,&ex,weights[0],weights[1],weights[2]);
-        let mut expected = vec![Fv::ZERO;1usize << c.shape.sz()];
-        for (matrix,row,col,value) in c.entries(&ch) {
+        let rel = c.instantiate(&c.shape, &ch, None);
+        let actual = rel.m_table(&c.shape, &ex, weights[0], weights[1], weights[2]);
+        let mut expected = vec![Fv::ZERO; 1usize << c.shape.sz()];
+        for (matrix, row, col, value) in c.entries(&ch) {
             expected[col] += weights[matrix] * ex[row] * value;
         }
-        assert_eq!(actual,expected);
+        assert_eq!(actual, expected);
     }
 
     fn small() -> (UniformCircuit<Fv>, Instance<Fv>, Witness<Fv>) {
@@ -5714,27 +5869,47 @@ mod tests {
         c.randomize_masks(&mut a, &mut SpikeRng::new(b"private mask proof A"));
         c.randomize_masks(&mut b, &mut SpikeRng::new(b"private mask proof B"));
         assert_ne!(a, b, "fresh entropy changes the actual relation witness");
-        let positions: std::collections::HashSet<_> = c.product_masks.iter()
+        let positions: std::collections::HashSet<_> = c
+            .product_masks
+            .iter()
             .flat_map(|(array, cells, i)| cells.iter().map(|cell| c.cell_index(*array, *cell, *i)))
             .collect();
         for i in 0..a.len() {
-            if !positions.contains(&i) { assert_eq!(a[i], wit.w[i], "application witness preserved"); }
+            if !positions.contains(&i) {
+                assert_eq!(a[i], wit.w[i], "application witness preserved");
+            }
         }
         for w in [a, b] {
             let z = crate::r1cs::z_vector(&c.shape, &inst, &Witness { w });
             let (aa, bb, cc) = c.instantiate(&c.shape, &[], None).abc(&c.shape, &z);
-            assert!(aa.into_iter().zip(bb).zip(cc).all(|((a,b),c)| a*b==c));
+            assert!(aa.into_iter().zip(bb).zip(cc).all(|((a, b), c)| a * b == c));
         }
         let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
-        let prove = |seed: &[u8]| crate::spartan::prove_circuit(
-            &c.shape, &gens, &inst, &wit, &mut SpikeRng::new(seed), &c).0;
+        let prove = |seed: &[u8]| {
+            crate::spartan::prove_circuit(
+                &c.shape,
+                &gens,
+                &inst,
+                &wit,
+                &mut SpikeRng::new(seed),
+                &c,
+            )
+            .0
+        };
         let pa = prove(b"private mask proof A");
         let pb = prove(b"private mask proof B");
         let replay = prove(b"private mask proof A");
         assert_ne!(pa.v, pb.v, "fresh masked scalar disclosures");
-        assert_eq!(pa.to_bytes(), replay.to_bytes(), "same-operation preview replay");
+        assert_eq!(
+            pa.to_bytes(),
+            replay.to_bytes(),
+            "same-operation preview replay"
+        );
         for proof in [pa, pb] {
-            assert!(crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok());
+            assert!(
+                crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c)
+                    .is_ok()
+            );
         }
     }
 
@@ -5751,8 +5926,13 @@ mod tests {
             assert_eq!(az[x] * bz[x], cz[x], "row {x} holds");
         }
         let entries = c.entries(&[]);
-        let by_array: Vec<_> = (0..c.arrays.len()).flat_map(|a| c.entries_of(&[], Some(a))).collect();
-        assert_eq!(entries, by_array, "per-array streaming preserves exact entry order");
+        let by_array: Vec<_> = (0..c.arrays.len())
+            .flat_map(|a| c.entries_of(&[], Some(a)))
+            .collect();
+        assert_eq!(
+            entries, by_array,
+            "per-array streaming preserves exact entry order"
+        );
         let mut abc = [
             vec![Fv::ZERO; 1 << shape.sx],
             vec![Fv::ZERO; 1 << shape.sx],
@@ -5788,19 +5968,28 @@ mod tests {
     #[test]
     fn proving_memory_projects_lazy_plans_without_building_them() {
         let (c, _, _) = small();
-        assert!(c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none());
+        assert!(
+            c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none()
+        );
         let before = c.proving_memory_accounting();
-        assert!(c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none());
+        assert!(
+            c.symbolic.get().is_none() && c.gather.get().is_none() && c.readers.get().is_none()
+        );
         assert!(before.retained_bytes > 0);
         let _ = c.gather_plan();
         let _ = c.m_plans();
         let after = c.proving_memory_accounting();
         assert!(after.retained_bytes > before.retained_bytes);
         assert!(after.additional_peak_bytes < before.additional_peak_bytes);
-        assert!(after.retained_bytes - before.retained_bytes
-            <= before.additional_peak_bytes - after.additional_peak_bytes,
-            "the structural projection covers the actual retained plans");
-        assert_eq!(after.accounted_peak_bytes, after.retained_bytes + after.additional_peak_bytes);
+        assert!(
+            after.retained_bytes - before.retained_bytes
+                <= before.additional_peak_bytes - after.additional_peak_bytes,
+            "the structural projection covers the actual retained plans"
+        );
+        assert_eq!(
+            after.accounted_peak_bytes,
+            after.retained_bytes + after.additional_peak_bytes
+        );
     }
 
     /// The interval closed forms (one, own, identity, broadcast, shifts by
