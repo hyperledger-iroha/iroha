@@ -31,6 +31,11 @@ claim before item E5 measures it.
 - [ ] **G3. Independent cryptographic review.** A reviewer outside this lane, working from
   research/REPORT-b04a57-soundness.md, the written G1/G2 arguments and the code.
   *Done when:* every finding is fixed or explicitly accepted by the owner.
+  *2026-11-18:* review done by an independent reviewer (Claude Opus 5.5, outside this lane's writers):
+  [research/SOUNDNESS-REVIEW.md](research/SOUNDNESS-REVIEW.md). G1 and G2: accept with required changes; 0 critical,
+  4 major, 5 minor, 2 editorial; the §7 ledger recomputed without error. Code findings 4 (unbound io-fold leaves let
+  a receiver force burn), 7 and 9 are being fixed; finding 5 waits for the prover-memory work in `uniform.rs`; the
+  document findings go back to its author. Owner decisions listed at the end of the review.
 - [x] **G4. Native burn, end to end** — done 2026-11-18. `engine.rs` derives `valid` from parsing plus the exact
   full verifier; OQ-3 is applied in `specs/kagemusha_lambda_omega_v1.md` §2.7. `authenticated_native_containment_from_bundle`
   passed on the 11-17 bundle (`output/r26/containment-20261117T175154Z.log`): 15 independently corrupted cases each

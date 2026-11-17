@@ -201,11 +201,15 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
 - **The verdict comes from the bytes.** Within an admitted transport profile, the receiver's Receive relation derives
   its verdict from the exact Payment bytes. A valid payment credits. An invalid one takes the burn branch: the Core
   balance is credited and the same amount is added to the adjusted burned value, so spendable value does not grow,
-  and the credit id stays consumed. Neither the receiver nor the host chooses the branch (spec
-  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3).
-- **Native admission derives the same verdict** (`engine.rs`, `valid` from parsing plus the exact full verifier;
-  resource and availability errors still return). Fifteen independently corrupted Payments each burn on the Mac
-  (2026-11-18, §0), and a valid Payment can neither be forced to burn nor fail to credit.
+  and the credit id stays consumed. Neither the receiver nor the host is meant to choose the branch (spec
+  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3). **Open defect (review finding 4, 2026-11-18):** inside the circuit, a
+  verified proof's io-fold leaves at slots no digest or link tie covers are unconstrained, so a receiver can turn a
+  valid incoming pair's soft acceptance bit to 0 and take the burn branch, and the hard predecessor slot accepts
+  proofs native verification rejects. No value is created (the amount stays burned), but the in-circuit and native
+  verdicts can differ until those leaves are pinned (fix in progress).
+- **Native admission derives the verdict from the bytes** (`engine.rs`, `valid` from parsing plus the exact full
+  verifier; resource and availability errors still return). Fifteen independently corrupted Payments each burn on
+  the Mac (2026-11-18, §0), and natively a valid Payment can neither be forced to burn nor fail to credit.
 - **Acceptance is native.** Before any pair's bytes are released, native code verifies both proofs, the link, both
   accumulated matrix claims and the own and inherited generator claims. A Spartan verifier accepting a proof is not,
   by itself, acceptance.
