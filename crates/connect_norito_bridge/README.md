@@ -243,6 +243,39 @@ before an immutable digest selection, and nothing is returned until both are dur
 selected original is refused. Recovery may complete a missing selection for a present valid
 original. This local mechanism does not establish protection against complete filesystem rollback.
 
+### Fee payout State evidence
+
+Wallet setup selector 25 takes three canonical Norito originals: selected State
+evidence (at most 32 MiB), the immutable payout record (at most 1,024 bytes), and
+`(RootSelectionV1, Vec<DefinitionDescriptorV1>)` (at most 16 MiB). The descriptors
+must be exactly the selection's installed storage definitions, identified by
+their content hashes. Swift and Kotlin expose these inputs as
+`acknowledgeFeePayout(creditId, state, payout, selection)`; the bridge transports
+the supplied bytes to the native owner and does not fetch payout evidence itself.
+
+The Rust SDK's `AccountClient::state_rows` signs the exact JSON POST for
+`LEDGER_STATE_ROWS_POST` and decodes its native `KeyedStateRowsV1` projection.
+`Kagemusha::fee_payout_rows` selects exactly these two ascending positions:
+
+| `CanReadStateRow.table` | `CanReadStateRow.key_hex` |
+| --- | --- |
+| `world.kagemusha_wallet_ledger` | Lowercase hex of the bare Norito encoding of `KagemushaWalletPayoutKeyV1::Fee(credit).ledger_key(scheme)`: ledger key components `(5, scheme, credit, [0; 32])`. |
+| `world.runtime_selection` | Empty string (the singleton cell). |
+
+Grant each permission directly to the wallet's canonical account; a full-ledger
+reader can also use this route. The row-read permission definition must be
+activated in committed runtime selection. The producer checks current grants,
+including revocation, and only serves its current certified Global tip.
+
+Native verifies the exact two rows with `KeyedStateRowsV1::verify` against its
+selected certified block and checks the selection cell against the supplied
+bundle before acknowledging a fee or releasing retained originals. An absent
+payout remains an error. The certified selection's commitment profile selects
+one evidence decoder: keyed blocks use keyed rows; retained pre-cutover LtHash
+blocks still require their authenticated `WorldStateSnapshotV1`. There is no
+try-one-then-the-other decoder. The schema bundle is caller-supplied;
+`/v1/runtime/release` only reports identities/support and cannot supply it.
+
 ### X.509 ownership-signing preparation
 
 `connect_norito_zk_x509_prepare_ownership_signing_v1` and its Kotlin JNI adapter accept

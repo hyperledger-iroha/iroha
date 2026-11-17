@@ -60,6 +60,7 @@ mod map_custody;
 mod map_tree;
 mod native_owner;
 mod native_worker;
+mod payout_state;
 pub use native_owner::{
     LEDGER_INSTRUCTION_MAX_BYTES_V1, LEDGER_PROOF_MAX_BYTES_V1, LedgerAttemptIngestV1,
     LedgerAttemptOutcomeV1, LedgerCommitV1, LedgerProgressV1, NativeEpochProgressV1,
@@ -107,6 +108,9 @@ pub use fold_metrics::{
 };
 pub use folding::{FoldJobV1, FoldStatus, FoldTurnStatusV1, LineageCache, ProvedFoldV1};
 pub use index::{IndexRoot, ObjectStore, ObjectWorkspace};
+pub use payout_state::{
+    FinalizedPayoutStateV1, PAYOUT_SELECTION_MAX_BYTES_V1, fee_payout_state_keys_v1,
+};
 mod object_workspace;
 pub(crate) use lifecycle::ArchiveIntentV1;
 pub use lifecycle::{

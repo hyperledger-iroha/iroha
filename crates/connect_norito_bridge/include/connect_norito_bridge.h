@@ -2111,7 +2111,8 @@ typedef struct {
 // ClaimPayment21/ClaimRequest22(first canonical pair <=21,092) return kind12 exact original DATA, not an admission verdict.
 // LedgerFinality23(first original SumeragiFinalityProof <=36MiB) verifies one contiguous native-rooted step;
 // LedgerStatus24(no inputs): kind33 sequence_low=u64 height, sequence_high/detail=0, bytes32 block hash, or kind34 absent.
-// FeePayout25(nonzero credit id, first World snapshot <=32MiB, second payout record <=1024) returns kind35 only after
+// FeePayout25(nonzero credit id, first selected State evidence <=32MiB, second payout record <=1024,
+// third canonical (RootSelectionV1, Vec<DefinitionDescriptorV1>) <=16MiB) returns kind35 only after
 // native selected-tip authentication and durable exact payout acknowledgement. No caller checkpoints/verdicts accepted.
 // FeeClaimTransport26(first retained pair <=21,092, second canonical beneficiary AccountId <=16,384)
 // returns kind36 canonical FeeClaim <=16,384 after exact schedule/beneficiary binding; DATA only, not payout confirmation.

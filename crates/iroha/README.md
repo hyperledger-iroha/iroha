@@ -55,6 +55,15 @@ retained intent, `verify_recovered` authenticates the original successful carrie
 and returns its hash through the same verifier. A replay outcome's block locator
 only selects evidence; it never grants receipt authority.
 
+`AccountClient::state_rows(height, rows)` signs one canonical-network POST to
+`/v1/ledger/state-proof/{height}` with exact ascending `(table, bare Norito key)`
+selectors. It returns the bounded native `KeyedStateRowsV1` projection; callers
+must run its shared `verify` method against their verified block and selected
+schema. `account.kagemusha().fee_payout_rows(height, scheme, credit)` requests
+exactly the payout row and runtime-selection cell needed by the native wallet.
+See the [bridge evidence contract](../connect_norito_bridge/README.md#fee-payout-state-evidence)
+for its exact grants and three-original acknowledgement inputs.
+
 `AccountClient::native_payment` composes that verification with submission and
 durable recovery. Supply a `NativePaymentRequest` with the complete intent and
 fee authorization, durable `WorkflowStorage`, an `Arc<FileNativePaymentFinality>`,

@@ -73,8 +73,9 @@ pub(crate) enum Setup {
     },
     FeePayout {
         credit: [u8; 32],
-        world: Vec<u8>,
+        state: Vec<u8>,
         payout: Vec<u8>,
+        selection: Vec<u8>,
     },
     BackgroundStatus,
     Activation,
@@ -196,9 +197,9 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
             0,
         ],
         25 => [
-            iroha_data_model::sumeragi_finality::MAX_WORLD_STATE_SNAPSHOT_BYTES_V1,
+            iroha_data_model::sumeragi_finality::MAX_STATE_ROWS_FRAME_BYTES_V1,
             state::PAYOUT_RECORD_MAX_BYTES_V1,
-            0,
+            state::PAYOUT_SELECTION_MAX_BYTES_V1,
         ],
         // The open Request has no first original: Native signs only its own terms.
         2 => [
@@ -309,10 +310,11 @@ pub(crate) fn request(
             original: first.to_vec(),
             beneficiary: second.to_vec(),
         },
-        25 if !first.is_empty() && !second.is_empty() => Setup::FeePayout {
+        25 if !first.is_empty() && !second.is_empty() && !third.is_empty() => Setup::FeePayout {
             credit: id,
-            world: first.to_vec(),
+            state: first.to_vec(),
             payout: second.to_vec(),
+            selection: third.to_vec(),
         },
         15 => Setup::Activation,
         18 => Setup::BackgroundStatus,
@@ -558,11 +560,12 @@ where
             }
             Setup::FeePayout {
                 credit,
-                world,
+                state,
                 payout,
+                selection,
             } => {
                 self.wallet
-                    .acknowledge_fee_payout_originals(credit, &world, &payout)?;
+                    .acknowledge_fee_payout_originals(credit, &state, &payout, &selection)?;
                 return Ok(Response {
                     kind: 35,
                     ..Response::default()
@@ -1111,8 +1114,22 @@ mod tests {
         assert!(request(&zero, 26, 0, 0, [&[1], &vec![0; 16_385], &[]]).is_err());
         assert_eq!(bounds(21).unwrap()[0], 21_092);
         assert_eq!(bounds(23).unwrap()[0], 36 * 1024 * 1024);
-        assert_eq!(bounds(25).unwrap(), [32 * 1024 * 1024, 1024, 0]);
-        assert!(request(&credit, 25, 0, 0, [&[1], &[2], &[]]).is_ok());
+        assert_eq!(
+            bounds(25).unwrap(),
+            [32 * 1024 * 1024, 1024, 16 * 1024 * 1024]
+        );
+        assert!(request(&credit, 25, 0, 0, [&[1], &[2], &[3]]).is_ok());
+        assert!(request(&credit, 25, 0, 0, [&[1], &[2], &[]]).is_err());
+        assert!(
+            request(
+                &credit,
+                25,
+                0,
+                0,
+                [&[1], &[2], &vec![0; 16 * 1024 * 1024 + 1]]
+            )
+            .is_err()
+        );
         assert!(request(&zero, 25, 0, 0, [&[1], &[2], &[]]).is_err());
         assert!(request(&credit, 25, 0, 0, [&[1], &[], &[]]).is_err());
         assert!(request(&credit, 25, 0, 1, [&[1], &[2], &[]]).is_err());

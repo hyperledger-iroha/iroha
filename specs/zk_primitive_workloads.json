@@ -4213,6 +4213,11 @@
      "note": "Typed ledger identity hashes of networks, blocks and test labels.",
      "roles": ["ledger.identity-hash"]
     },
+    "lthash": {
+     "class": "role",
+     "note": "The native-owner payout acknowledgement accepts World evidence only when the block's certified selection names the LtHash16 World State accumulator; keyed blocks authenticate exact keyed State rows instead.",
+     "roles": ["state.lthash16-accumulator"]
+    },
     "poseidon": {
      "class": "in-circuit",
      "note": "Paired field-native Poseidon commitments, native circuit gadgets and base-field recursion transcripts using pinned RP57 tables.",
@@ -5508,7 +5513,7 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/lifecycle/tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/activation/confirmation/tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/epochs/tests/later_epochs.rs": ["iroha-hash"],
-   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger/tests.rs": ["iroha-hash"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger.rs": ["lthash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger_producer.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/ledger_producer/tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/suffix_ledger.rs": ["sha2-256"],
@@ -5518,6 +5523,8 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs": ["blake2b", "poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/retention.rs": ["sha2-256"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/payout_state.rs": ["lthash"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/payout_state/tests.rs": ["iroha-hash", "lthash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kaigi_client_v1.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/lib.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],

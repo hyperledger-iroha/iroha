@@ -1,5 +1,6 @@
 //! Genuine native certificates and explicit mock custody exercise online-prefix publication.
 use super::*;
+use crate::kagemusha_wallet_state_v1::payout_state::tests::{historical_selection, keyed_cut};
 use crate::kagemusha_wallet_state_v1::tests::{Wallet, fixture, synthetic_payout_wallet};
 use iroha_data_model::sumeragi_finality::{
     MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
@@ -220,7 +221,7 @@ fn ledger_uncertain_publication_reconciles_selected_tip_and_bounds_cleanup() {
     }
 }
 #[test]
-fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_release() {
+fn payout_originals_require_selected_tip_exact_keyed_rows_before_custody_release() {
     let mut native = NativeFinalityFixture::start("wallet-ledger-payout");
     let genesis = native.verifier();
     let mut w = wallet(&native);
@@ -231,31 +232,19 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
         amount: 17,
         transaction: [5; 32],
     };
-    // Finalized fee payouts admit only a qualified native World schema; `wrong_world` below
-    // keeps the refusal of any other schema at the same certified cut.
-    let world = WorldStateSnapshotV1 {
-        schema_hash: iroha_data_model::sumeragi_finality::native_world_schema_family_v1()[0],
-        entries: vec![WorldStateSnapshotEntryV1 {
-            field_id: "world.kagemusha_wallet_ledger".into(),
-            kind: WorldStateElementKindV1::Table,
-            key_hash: Some(world_state_value_hash_v1(&payout.key.ledger_key(w.scheme_id)).unwrap()),
-            value_hash: world_state_value_hash_v1(&norito::to_bytes(&payout).unwrap()).unwrap(),
-        }],
-    };
-    let world_bytes = archive::encode(&world).unwrap();
+    let (proof, rows, bundle) = keyed_cut(&mut native, w.scheme_id, true);
+    let rows_bytes = archive::encode(&rows).unwrap();
     let payout_bytes = archive::encode(&payout).unwrap();
     assert!(
-        w.acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+        w.acknowledge_payout_originals(&genesis, [2; 32], &rows_bytes, &payout_bytes, &bundle)
             .is_err()
     );
-    let block = native.block_with_submitted_work(native.next_header());
-    let original =
-        archive::encode(&native.certify_with_world_root(block, world.root().unwrap())).unwrap();
+    let original = archive::encode(&proof).unwrap();
     w.ingest_ledger_original(&genesis, &original).unwrap();
     let limits =
         |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
-    // Fund the exact preceding payout decoder, then refuse the World read itself.
-    // A zero budget alone could stop before the repaired World reader is reached.
+    // Fund the exact preceding payout decoder, then refuse the selection-bundle read.
+    // A zero budget alone could stop before the new selection reader is reached.
     let (decoded, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
         payout_original(&payout_bytes)
     });
@@ -268,11 +257,11 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
     let claim_before = w.archive.get(ArchiveKey::FeeClaim([2; 32]), 128).unwrap();
     assert!(claim_before.is_some());
     let error = norito::with_decode_limits_scope(limits(limit), || {
-        w.acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+        w.acknowledge_payout_originals(&genesis, [2; 32], &rows_bytes, &payout_bytes, &bundle)
     })
     .unwrap_err();
     let Error::DecodeResource(cause) = error else {
-        panic!("unfinished World original cannot be an invalid payout");
+        panic!("unfinished selection original cannot be an invalid payout");
     };
     norito::with_decode_limits_scope(limits(limit), || {
         assert_eq!(
@@ -288,25 +277,70 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
         w.archive.get(ArchiveKey::FeeClaim([2; 32]), 128).unwrap(),
         claim_before
     );
+    // A declared profile selects exactly one decoder. Neither mismatched carrier is
+    // retried through the other reader, and no unauthenticated selection grants cleanup.
+    let historical_bundle = archive::encode(&historical_selection()).unwrap();
+    assert!(matches!(
+        w.acknowledge_payout_originals(
+            &genesis,
+            [2; 32],
+            &rows_bytes,
+            &payout_bytes,
+            &historical_bundle
+        ),
+        Err(Error::Invalid("payout World original"))
+    ));
+    let snapshot_bytes = archive::encode(&payout_boundary_world(w.scheme_id, 3, 21).0).unwrap();
+    assert!(matches!(
+        w.acknowledge_payout_originals(&genesis, [2; 32], &snapshot_bytes, &payout_bytes, &bundle),
+        Err(Error::Invalid("payout State rows original"))
+    ));
+    let (mut selection, definitions) =
+        crate::kagemusha_wallet_state_v1::payout_state::tests::selection();
+    selection.services_profile.0[0] ^= 1;
+    assert!(matches!(
+        w.acknowledge_payout_originals(
+            &genesis,
+            [2; 32],
+            &rows_bytes,
+            &payout_bytes,
+            &archive::encode(&(selection.clone(), definitions.clone())).unwrap()
+        ),
+        Err(Error::Invalid("payout certified selection"))
+    ));
+    selection.commitment_profile.0 = [0xff; 32];
+    assert!(matches!(
+        w.acknowledge_payout_originals(
+            &genesis,
+            [2; 32],
+            &rows_bytes,
+            &payout_bytes,
+            &archive::encode(&(selection, definitions)).unwrap()
+        ),
+        Err(Error::Invalid("payout commitment profile"))
+    ));
+    assert_eq!(w.custody.archive_checkpoint().unwrap(), custody_before);
     let mut foreign = payout;
     foreign.amount += 1;
     assert!(
         w.acknowledge_payout_originals(
             &genesis,
             [2; 32],
-            &world_bytes,
-            &archive::encode(&foreign).unwrap()
+            &rows_bytes,
+            &archive::encode(&foreign).unwrap(),
+            &bundle
         )
         .is_err()
     );
-    let mut wrong_world = world;
-    wrong_world.schema_hash = iroha_crypto::Hash::new(b"wrong");
+    let mut wrong_rows = rows;
+    wrong_rows.schema_hash = [8; 32];
     assert!(
         w.acknowledge_payout_originals(
             &genesis,
             [2; 32],
-            &archive::encode(&wrong_world).unwrap(),
-            &payout_bytes
+            &archive::encode(&wrong_rows).unwrap(),
+            &payout_bytes,
+            &bundle
         )
         .is_err()
     );
@@ -319,7 +353,7 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
     for after in [false, true] {
         w.custody.fail_publication = Some(after);
         assert!(
-            w.acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+            w.acknowledge_payout_originals(&genesis, [2; 32], &rows_bytes, &payout_bytes, &bundle)
                 .is_err()
         );
         assert!(
@@ -330,17 +364,17 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
         );
         w = restart(w);
     }
-    w.acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+    w.acknowledge_payout_originals(&genesis, [2; 32], &rows_bytes, &payout_bytes, &bundle)
         .unwrap();
     assert_eq!(
         w.archive.get(ArchiveKey::FeeClaim([2; 32]), 128).unwrap(),
         None
     );
     let mut w = restart(w);
-    w.acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+    w.acknowledge_payout_originals(&genesis, [2; 32], &rows_bytes, &payout_bytes, &bundle)
         .unwrap();
     assert!(
-        w.acknowledge_payout_originals(&genesis, [9; 32], &world_bytes, &payout_bytes)
+        w.acknowledge_payout_originals(&genesis, [9; 32], &rows_bytes, &payout_bytes, &bundle)
             .is_err()
     );
 }
@@ -361,7 +395,7 @@ fn payout_boundary_world(
         transaction: [5; 32],
     };
     let value_hash = world_state_value_hash_v1(&7_u64).unwrap();
-    let mut entries: Vec<_> = (0..count - 1)
+    let mut entries: Vec<_> = (0..count - 2)
         .map(|index| {
             // Fixed numeric prefixes preserve unique sorted identities when the
             // byte-boundary test extends only their legal underscore suffixes.
@@ -381,6 +415,12 @@ fn payout_boundary_world(
         key_hash: Some(world_state_value_hash_v1(&payout.key.ledger_key(scheme_id)).unwrap()),
         value_hash: world_state_value_hash_v1(&norito::to_bytes(&payout).unwrap()).unwrap(),
     });
+    entries.push(WorldStateSnapshotEntryV1 {
+        field_id: "world.runtime_selection".into(),
+        kind: WorldStateElementKindV1::Cell,
+        key_hash: None,
+        value_hash: world_state_value_hash_v1(&historical_selection().0).unwrap(),
+    });
     (
         WorldStateSnapshotV1 {
             schema_hash: iroha_data_model::sumeragi_finality::native_world_schema_family_v1()[0],
@@ -398,6 +438,7 @@ fn refuse_payout_world_then_retry(
     refused_original: &[u8],
 ) {
     let genesis = native.verifier();
+    let bundle = archive::encode(&historical_selection()).unwrap();
     crate::kagemusha_wallet_state_v1::fee_claims::tests::seed_ledger_acknowledgement(&mut wallet);
     let world_bytes = archive::encode(&world).unwrap();
     let payout_bytes = archive::encode(&payout).unwrap();
@@ -424,7 +465,13 @@ fn refuse_payout_world_then_retry(
     // Exercise the same native-owner method called by acknowledge_fee_payout_originals.
     // The exact error distinguishes a bounded World refusal from a later root mismatch.
     assert!(matches!(
-        wallet.acknowledge_payout_originals(&genesis, [2; 32], refused_original, &payout_bytes),
+        wallet.acknowledge_payout_originals(
+            &genesis,
+            [2; 32],
+            refused_original,
+            &payout_bytes,
+            &bundle
+        ),
         Err(Error::Invalid("payout World original"))
     ));
     assert_eq!(wallet.custody.archive_checkpoint().unwrap(), custody_before);
@@ -448,7 +495,7 @@ fn refuse_payout_world_then_retry(
     );
 
     wallet
-        .acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+        .acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes, &bundle)
         .unwrap();
     assert_eq!(
         wallet
@@ -475,9 +522,9 @@ fn payout_world_ingress_accepts_262144_entries_and_refuses_262145_without_releas
     let wallet = wallet(&native);
     let (mut world, payout) = payout_boundary_world(wallet.scheme_id, 262_144, 21);
     let mut extra = world.entries[0].clone();
-    extra.field_id = "world.boundary_262143_".into();
-    // The payout row remains last, and the new cell follows every prior numeric cell.
-    world.entries.insert(262_143, extra);
+    extra.field_id = "world.boundary_262142_".into();
+    // The payout row and selection cell remain last; the new cell follows numeric cells.
+    world.entries.insert(262_142, extra);
     assert_eq!(world.entries.len(), 262_145);
     let refused = archive::encode(&world).unwrap();
     assert!(refused.len() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
@@ -486,7 +533,7 @@ fn payout_world_ingress_accepts_262144_entries_and_refuses_262145_without_releas
     let decoded: WorldStateSnapshotV1 = norito::decode_canonical(&refused).unwrap();
     assert_eq!(decoded, world);
     drop(decoded);
-    world.entries.remove(262_143);
+    world.entries.remove(262_142);
     assert_eq!(world.entries.len(), 262_144);
     assert!(norito::canonical_frame_len(&world).unwrap() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
     refuse_payout_world_then_retry(&mut native, wallet, world, payout, &refused);
@@ -502,22 +549,22 @@ fn payout_world_ingress_accepts_32_mib_and_refuses_one_extra_canonical_byte_with
     // Measure the genuine native encoder with the payout row already included.
     // Padding stays in legal field identities; no framing bytes or junk are invented.
     let one =
-        norito::canonical_frame_len(&payout_boundary_world(wallet.scheme_id, 2, 128).0).unwrap();
-    let two =
         norito::canonical_frame_len(&payout_boundary_world(wallet.scheme_id, 3, 128).0).unwrap();
+    let two =
+        norito::canonical_frame_len(&payout_boundary_world(wallet.scheme_id, 4, 128).0).unwrap();
     let per_cell = two.checked_sub(one).unwrap();
     assert!(per_cell > 0);
-    let count = (maximum - one) / per_cell + 2;
+    let count = (maximum - one) / per_cell + 3;
     assert!(count < MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1);
     let (mut world, payout) = payout_boundary_world(wallet.scheme_id, count, 128);
     let mut length = norito::canonical_frame_len(&world).unwrap();
     while length > maximum {
-        // Preserve the real payout table row while native sequence prefixes grow.
-        world.entries.remove(world.entries.len() - 2);
+        // Preserve the payout row and selection cell while native sequence prefixes grow.
+        world.entries.remove(world.entries.len() - 3);
         length = norito::canonical_frame_len(&world).unwrap();
     }
     let mut remaining = maximum - length;
-    for entry in world.entries.iter_mut().rev().skip(1) {
+    for entry in world.entries.iter_mut().rev().skip(2) {
         let added = remaining.min(192 - entry.field_id.len());
         entry.field_id.extend(std::iter::repeat_n('_', added));
         remaining -= added;

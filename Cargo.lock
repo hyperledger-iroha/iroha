@@ -4567,6 +4567,7 @@ dependencies = [
  "fastpq_prover",
  "ff 0.14.0",
  "hex",
+ "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_fs",

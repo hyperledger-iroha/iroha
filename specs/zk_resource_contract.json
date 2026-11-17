@@ -24131,7 +24131,7 @@
         ]
       },
       {
-        "reason": "KAGEMUSHA offline-wallet component shapes: current enrollment policy, original evidence, carrier, journal, state storage, artifact inventory and custody records, with their own byte/count/depth bounds: among them the encoded transport of the artifact originals and the stored closure of one operation, the archived preparation plan, the staged preparation drafts of a wallet operation (one derivation of fixed geometry) and the durable archive-retirement journal cell. These are product-internal records and producer inputs; transaction.max_tx_bytes and the generic proof/frame bounds continue to limit submitted carriers. This classification does not certify these product-specific boundaries or change their enforcement. The suffix unload adds its header, anchor, step, chunk, finalize, recovery, review, progress, status, instruction and signed-wire frames, its per-chunk and per-suffix step and chunk counts and smallest stream entry, the node's begin, stage and final suffix rows with their segment record, and the wallet's suffix ledger, custody, frozen-execution and native frame bounds and its deferred-step counts; the per-chunk step count also keeps one Append's verification inside the block execution budget as a product bound beside the generic proof-call quota.",
+        "reason": "KAGEMUSHA offline-wallet component shapes: current enrollment policy, original evidence, carrier, journal, state storage, artifact inventory and custody records, with their own byte/count/depth bounds: among them the encoded transport of the artifact originals and the stored closure of one operation, the archived preparation plan, the staged preparation drafts of a wallet operation (one derivation of fixed geometry) and the durable archive-retirement journal cell. These are product-internal records and producer inputs; transaction.max_tx_bytes and the generic proof/frame bounds continue to limit submitted carriers. This classification does not certify these product-specific boundaries or change their enforcement. The suffix unload adds its header, anchor, step, chunk, finalize, recovery, review, progress, status, instruction and signed-wire frames, its per-chunk and per-suffix step and chunk counts and smallest stream entry, the node's begin, stage and final suffix rows with their segment record, and the wallet's suffix ledger, custody, frozen-execution and native frame bounds and its deferred-step counts; the per-chunk step count also keeps one Append's verification inside the block execution budget as a product bound beside the generic proof-call quota. The keyed payout acknowledgement adds the bound of its certified runtime-selection original.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality.rs",
@@ -24630,6 +24630,15 @@
             ],
             "exprs": {
               "ACTION_MAX": "KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 4096"
+            }
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/payout_state.rs",
+            "symbols": [
+              "PAYOUT_SELECTION_MAX_BYTES_V1"
+            ],
+            "exprs": {
+              "PAYOUT_SELECTION_MAX_BYTES_V1": "16 * 1024 * 1024"
             }
           },
           {

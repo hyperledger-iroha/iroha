@@ -1,8 +1,9 @@
 //! Online native finality progress and payout evidence under the selected wallet archive.
 use super::*;
 use iroha_data_model::sumeragi_finality::{
-    MAX_FINALITY_BLOCK_BYTES, MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
-    SumeragiFinalityProof, WorldStateSnapshotV1,
+    KeyedStateRowsV1, MAX_FINALITY_BLOCK_BYTES, MAX_FINALITY_CHECKPOINT_BYTES,
+    MAX_STATE_ROWS_FRAME_BYTES_V1, SelectedStateSchemaV1, SumeragiFinalityCheckpoint,
+    SumeragiFinalityProof, WorldStateSnapshotV1, lthash16_world_profile_v1,
 };
 
 /// One bounded original proof: maximum block plus bounded committee and framing overhead.
@@ -198,16 +199,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         &mut self,
         genesis: &SumeragiFinalityVerifier,
         credit: [u8; 32],
-        world: &[u8],
+        state: &[u8],
         payout: &[u8],
+        selection: &[u8],
     ) -> Result<(), Error> {
         let payout = payout_original(payout)?;
-        let world = WorldStateSnapshotV1::decode_bounded_canonical(world).map_err(|error| {
-            crate::kagemusha_wallet_state_v1::finality_read_error(
-                error,
-                Error::Invalid("payout World original"),
-            )
-        })?;
+        let (selection, definitions) = super::super::payout_state::selection_original(selection)?;
         let (selected, manifest) = self.sync_manifest()?;
         let (verifier, checkpoint) = self.selected_ledger(&manifest, genesis)?;
         let checkpoint = checkpoint.ok_or(Error::Invalid("no selected ledger tip"))?;
@@ -219,9 +216,45 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     Error::Proof("payout selected decision"),
                 )
             })?;
-        let world = world
-            .authenticate(&block)
-            .map_err(|_| Error::Proof("payout World root"))?;
+        // Dispatch is explicit. This claimed selection must also authenticate under the
+        // same certified root in verify_payout before any originals can be released.
+        let world;
+        let rows;
+        let schema;
+        let state = if selection.commitment_profile
+            == iroha_data_model::runtime::keyed_state::profile_id()
+        {
+            schema = SelectedStateSchemaV1::from_selection(&selection, &definitions)
+                .map_err(|_| Error::Invalid("payout State schema"))?;
+            if state.is_empty() || state.len() > MAX_STATE_ROWS_FRAME_BYTES_V1 {
+                return Err(Error::Invalid("payout State rows bound"));
+            }
+            rows = archive::decode::<KeyedStateRowsV1>(state).map_err(|error| match error {
+                Error::WitnessLost(_) => Error::Invalid("payout State rows original"),
+                original => original,
+            })?;
+            FinalizedPayoutStateV1::Keyed {
+                rows: &rows,
+                schema: &schema,
+                selection: &selection,
+            }
+        } else if selection.commitment_profile == lthash16_world_profile_v1() {
+            world = WorldStateSnapshotV1::decode_bounded_canonical(state)
+                .map_err(|error| {
+                    crate::kagemusha_wallet_state_v1::finality_read_error(
+                        error,
+                        Error::Invalid("payout World original"),
+                    )
+                })?
+                .authenticate(&block)
+                .map_err(|_| Error::Proof("payout World root"))?;
+            world
+                .verify_cell_value(super::super::payout_state::SELECTION_CELL, &selection)
+                .map_err(|_| Error::Invalid("payout certified selection"))?;
+            FinalizedPayoutStateV1::World { world: &world }
+        } else {
+            return Err(Error::Invalid("payout commitment profile"));
+        };
         // Reconcile the selected manifest immediately before the existing atomic publisher.
         if self.manifest()?.0 != selected {
             return Err(Error::WitnessLost("payout source changed"));
@@ -230,7 +263,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             credit,
             &FinalizedPayoutEvidence {
                 block: &block,
-                world: &world,
+                state,
                 payout,
             },
         )
@@ -254,18 +287,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let genesis = Arc::clone(&self.proofs.genesis);
         self.ledger_progress_selected(&genesis)
     }
-    /// Authenticate a World snapshot and payout row against the selected native tip before
+    /// Authenticate profile-selected State evidence and a payout against the selected native tip before
     /// acknowledging the exact fee payout and releasing its separately retained originals.
+    /// `selection` is the canonical `(RootSelectionV1, Vec<DefinitionDescriptorV1>)` bundle;
+    /// `state` is exactly KeyedStateRowsV1 for keyed blocks or WorldStateSnapshotV1 before cutover.
+    /// The committed selection cell authenticates dispatch; no fallback decoder is used.
     /// # Errors
     /// Unauthenticated/foreign/stale evidence, changed source, lost claim or storage uncertainty.
     pub fn acknowledge_fee_payout_originals(
         &mut self,
         credit: [u8; 32],
-        world: &[u8],
+        state: &[u8],
         payout: &[u8],
+        selection: &[u8],
     ) -> Result<(), Error> {
         let genesis = Arc::clone(&self.proofs.genesis);
-        self.acknowledge_payout_originals(&genesis, credit, world, payout)
+        self.acknowledge_payout_originals(&genesis, credit, state, payout, selection)
     }
 }
 

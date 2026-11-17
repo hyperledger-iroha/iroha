@@ -60,6 +60,7 @@ pub use native_worker::{
 };
 mod payment_inbox;
 mod payment_return;
+mod state_rows;
 pub mod status;
 #[cfg(test)]
 mod status_http_tests;

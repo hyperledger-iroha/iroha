@@ -497,7 +497,9 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     }
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 21, first: Data(repeating: 1, count: 21_093)))
     XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 24))
-    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 25, identity: id, first: Data([1]), second: Data([2])))
+    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 25, identity: id, first: Data([1]), second: Data([2]), third: Data([3])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 25, identity: id, first: Data([1]), second: Data([2])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 25, identity: id, first: Data([1]), second: Data([2]), third: Data(count: 16 * 1024 * 1024 + 1)))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 25, identity: id, first: Data([1])))
     for status in Int32(31)...35 {
       let bytes = status == 31 ? Data(repeating: 1, count: 21_092) : status == 33 ? id : Data()

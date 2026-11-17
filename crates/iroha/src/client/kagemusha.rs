@@ -2,6 +2,7 @@
 
 mod enrollment;
 mod finality;
+mod payout;
 pub use iroha_torii_shared::kagemusha_enrollment::{
     EnrollmentServiceActionV1, EnrollmentServiceRequestV1, EnrollmentServiceResponseV1,
 };
