@@ -1423,8 +1423,9 @@ def run_one(
         finally:
             net.kill_everything()
         if not options.keep_state:
-            for durable in ("state", "storage"):
-                shutil.rmtree(net.net_dir / durable, ignore_errors=True)
+            # Durable state only (each peer's `nodes/peerN/state`); configs, keys and logs stay.
+            for index in range(net.validators):
+                shutil.rmtree(net.state_dir(index), ignore_errors=True)
     record["finished_at_ms"] = soak.now_ms()
     finish_record(directory, record, options, load_window)
     write_bounded_json(directory / "run.json", record, selected.run.run_receipt.max_bytes)

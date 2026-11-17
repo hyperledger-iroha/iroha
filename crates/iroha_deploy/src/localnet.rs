@@ -3,7 +3,10 @@
 //! A localnet carries what local development needs and nothing else: an exact `3f + 1`
 //! validator committee, one funded client account that may deploy contracts and register
 //! accounts, the XOR fee asset, the verifying keys private Kaigi calls need, and peer
-//! configurations limited to node essentials plus a few developer conveniences. It never takes
+//! configurations limited to node essentials plus a few developer conveniences. Every validator
+//! owns one node data directory (`nodes/peerN`, the `data_dir` of `peerN.toml`): its keys are the
+//! owner-only files of `nodes/peerN/secrets/` and its state lives under `nodes/peerN/state/`, so
+//! no peer file holds a private key or a per-path state setting. It never takes
 //! a public chain identity, a Sora network profile or Taira policy; Nexus, Taira and the private
 //! dataspace presets come from [`crate::sora_network`]. No faucet, account onboarding, fee
 //! sponsorship, alias setup, VPN operator or peer telemetry polling is generated.
@@ -66,9 +69,9 @@ pub const GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
 /// Name of the optional sample asset definition registered by `--sample-asset`.
 pub const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 
-/// Deterministic key domain of the dedicated transport identity (`soranet_transport_*`).
+/// Deterministic key domain of the dedicated transport identity (`secrets/transport.key`).
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
-/// Deterministic key domain of the streaming identity.
+/// Deterministic key domain of the streaming identity (`secrets/streaming.key`).
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
 /// Seed suffix of the genesis signing key.
 const GENESIS_SEED: &[u8] = b"genesis";
@@ -478,14 +481,14 @@ impl<'a> Request<'a> {
     }
 }
 
-/// Every validator identity and its ports.
+/// Every validator identity and its ports. The three private keys become the fixed files of
+/// the validator's `<data_dir>/secrets/`; the transport and streaming identities are node-local,
+/// so no configuration names their public halves.
 struct Peer {
     public_key: PublicKey,
     private_key: ExposedPrivateKey,
     pop: Vec<u8>,
-    transport_public_key: PublicKey,
     transport_private_key: ExposedPrivateKey,
-    streaming_public_key: PublicKey,
     streaming_private_key: ExposedPrivateKey,
     api_port: u16,
     p2p_port: u16,
@@ -542,7 +545,7 @@ fn generate(request: &Request<'_>) -> Result<Generated> {
         operator_public_key: &operator.public_key,
         authorities: authorities.as_ref(),
     };
-    layout.prepare_directories(&out_dir)?;
+    layout.prepare_nodes(&out_dir)?;
     let bootstrap = layout.parse_bootstrap(&out_dir)?;
     let genesis = genesis::write(genesis::Inputs {
         request,
@@ -647,13 +650,15 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
                 ed25519_key_pair(seed, SORANET_TRANSPORT_SEED_DOMAIN, &index)?;
             let (streaming_public_key, streaming_private_key) =
                 ed25519_key_pair(seed, STREAMING_IDENTITY_SEED_DOMAIN, &index)?;
+            ensure!(
+                transport_public_key != streaming_public_key,
+                "localnet SoraNet transport and streaming identities must be distinct"
+            );
             Ok(Peer {
                 public_key,
                 private_key,
                 pop,
-                transport_public_key,
                 transport_private_key,
-                streaming_public_key,
                 streaming_private_key,
                 api_port: base_api + nth,
                 p2p_port: base_p2p + nth,

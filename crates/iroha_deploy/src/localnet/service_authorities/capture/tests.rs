@@ -43,15 +43,16 @@ fn complete_original_capture_rechecks_every_input_and_only_closed_static_names()
             .iter()
             .map(|entry| entry.inputs.len())
             .sum::<usize>(),
-        75
+        INPUT_COUNT
     );
+    assert_eq!(INPUT_COUNT, 87);
     let maximum = image
         .directories
         .iter()
         .flat_map(|entry| &entry.inputs)
         .map(|input| input.maximum)
         .sum::<usize>();
-    assert_eq!(maximum, 73_152_512);
+    assert_eq!(maximum, 73_155_584);
     assert!(maximum <= MAX_TOTAL);
     let ((), parses) = count_semantic_validations(|| {
         for directory in &image.directories {
@@ -142,6 +143,14 @@ fn captured_source_has_exact_transitive_paths_access_and_extent_without_disk_fal
         (GENERATION, "client.toml", ConfigFileAccess::Private),
         (GENERATION, "peer0.toml", ConfigFileAccess::Private),
         (TABLES, "rans_seed0.toml", ConfigFileAccess::Public),
+        // The keys a peer configuration reads from its `data_dir` are original inputs too.
+        (FIRST_NODE + 1, "validator.key", ConfigFileAccess::Private),
+        (FIRST_NODE + 3, "transport.key", ConfigFileAccess::Private),
+        (
+            FIRST_NODE + 2 * (PEER_COUNT - 1) + 1,
+            "streaming.key",
+            ConfigFileAccess::Private,
+        ),
     ] {
         let directory = &image.directories[slot];
         let input = directory
@@ -218,9 +227,35 @@ fn captured_source_has_exact_transitive_paths_access_and_extent_without_disk_fal
         .unwrap();
     assert!(ConfigFileSource::read(image, &unknown, request).is_err());
     // Both actual canonical parsers succeed using the one original image and its transitives.
-    image
-        .parse_peer(&fixture.prepared.peers[0].config_path, "peer0.toml")
+    for (index, peer) in fixture.prepared.peers.iter().enumerate() {
+        let name = format!("peer{index}.toml");
+        let text =
+            std::str::from_utf8(image.generation().read(&name, MAX_CONFIG).unwrap()).unwrap();
+        let table: toml::Table = text.parse().unwrap();
+        for inline in ["private_key", "soranet_transport_private_key"] {
+            assert!(
+                !table.contains_key(inline),
+                "{name} holds no inline {inline}"
+            );
+        }
+        let secrets = &image.directories[FIRST_NODE + 2 * index + 1];
+        assert_eq!(
+            Path::new(table["data_dir"].as_str().unwrap()).join(layout::SECRETS_DIR),
+            secrets.directory.path(),
+            "{name} reads its keys from the captured secrets directory"
+        );
+        let config = image.parse_peer(&peer.config_path, &name).unwrap();
+        let validator = decode_service_private_key(
+            secrets
+                .read(
+                    NodeSecretFile::Validator.relative_path(),
+                    MAX_ROLE_CREDENTIAL_BYTES,
+                )
+                .unwrap(),
+        )
         .unwrap();
+        assert_eq!(config.common.key_pair.public_key(), validator.public_key());
+    }
     let (client, _) = iroha::config::Config::load_bytes_with_musubi_publication_and_file_source(
         &fixture.prepared.context.client_config,
         image.client_bytes().unwrap(),

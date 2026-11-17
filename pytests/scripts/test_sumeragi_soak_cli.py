@@ -465,23 +465,19 @@ address = "127.0.0.1:18080"
         self.assertIn(f'public_address = "{soak.addr_literal("127.0.0.1", 11537)}"', text)
         self.assertIn('[torii]\naddress = "addr:0.0.0.0:18180#1826"', text)
 
-    def test_the_disk_peer_keeps_kura_under_its_state_root(self) -> None:
+    def test_a_peer_state_root_is_the_state_of_its_node_data_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             net = soak.Localnet(Path(tmp), {}, 4, 1, 18080, 11337)
-            (net.net_dir / "storage" / "peer3").mkdir(parents=True)
-            (net.net_dir / "storage" / "peer3" / "blocks").write_text("kura")
-            net.config(3).write_text(
-                f'a = 1\n\n[kura]\nstore_dir = "{net.net_dir}/storage/peer3"\nfsync_mode = "batched"\n\n[logger]\nformat = "compact"\n'
-            )
-            target = net.move_kura_into_state(3)
-            self.assertEqual(target, net.state_dir(3) / "kura")
-            self.assertEqual((target / "blocks").read_text(), "kura")
-            self.assertFalse((net.net_dir / "storage" / "peer3").exists())
-            text = net.config(3).read_text()
-            self.assertIn(f'[kura]\nstore_dir = "{target}"\nfsync_mode = "batched"', text)
-            net.config(2).write_text("[logger]\n")
-            with self.assertRaises(RuntimeError):
-                net.move_kura_into_state(2)
+            # `kagami localnet generate` names `nodes/peerN` as the peer's `data_dir`: the node
+            # derives the Kura store, its sibling body store, the safety records and the
+            # installation log under `state/`, so one volume there holds them all.
+            self.assertEqual(net.state_dir(3), net.net_dir / "nodes" / "peer3" / "state")
+            self.assertNotEqual(net.state_dir(2), net.state_dir(3))
+            # The peer's keys are outside the state root, so a full state volume or a state
+            # cleanup never touches them.
+            secrets = net.net_dir / "nodes" / "peer3" / "secrets"
+            self.assertNotIn(net.state_dir(3), secrets.parents)
+            self.assertFalse(hasattr(net, "move_kura_into_state"))
 
     def test_string_values_are_read_from_their_own_table(self) -> None:
         text = (

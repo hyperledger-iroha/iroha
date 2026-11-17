@@ -58,31 +58,38 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
     deterministic execution policy, and Nexus/AMX consensus context are
     unchanged. The launcher passes the projection's BLAKE3 digest to `irohad`,
     which reads, hashes, and parses the same bytes at startup.
-  - Projection rewrites durable paths to `/storage` and public auxiliary paths
-    to `/config/runtime`. Private Torii account-onboarding and faucet key files
-    are mounted as dedicated Compose secrets; their bytes never appear in
-    Compose YAML or environment variables. Byte-exact public policy assets,
-    including binary Norito inputs, are interned by digest, stored as base64
-    Compose configs, and decoded into `/config/runtime` before `iroha3d` starts.
-  - The source peer configs, bundle directory, source manifest, genesis private
-    signing key, and client credentials are never mounted. Prepared mode also
-    fails closed when a requested transport, CIDR filter, or helper-service
-    mode cannot be represented without changing the validated runtime
-    semantics.
+  - Projection of a flat peer config (Sora network bundles) rewrites durable
+    paths to `/storage` and public auxiliary paths to `/config/runtime`. Private
+    Torii account-onboarding and faucet key files are mounted as dedicated
+    Compose secrets; their bytes never appear in Compose YAML or environment
+    variables. Byte-exact public policy assets, including binary Norito inputs,
+    are interned by digest, stored as base64 Compose configs, and decoded into
+    `/config/runtime` before `iroha3d` starts.
+  - A peer config that sets `data_dir` (as `kagami localnet generate` writes
+    it) is rendered in container form instead. See
+    [Node data directories](#node-data-directories).
+  - The source peer configs, source manifest, genesis private signing key, and
+    client credentials are never mounted, and the bundle directory itself never
+    is: a `data_dir` validator mounts only its own node data directory. Prepared
+    mode also fails closed when a requested transport, CIDR filter, or
+    helper-service mode cannot be represented without changing the validated
+    runtime semantics.
 
 The generated Compose manifest is validator-only and contains no genesis
 signing key or signing service. In normal mode it reuses the exact validator
 identities from the prepared bundle and mounts read-only secrets for the
 validated content-addressed config projection, verifier key, independently
-approved exact hash, and signed body. Validator private keys remain inside the
-file-backed config secret and are not serialized into Compose YAML or
-environment variables. Each validator receives a named `/storage` volume.
-Prepared mode accepts fresh state only: it neither imports nor migrates an
-existing live validator state tree into those volumes. Fresh-state admission
-checks every effective path that the projection replaces; relative paths,
-including omitted defaults, are resolved against the prepared bundle directory
-instead of Kagami's ambient working directory. The generator cannot silently
-produce a roster different from the one signed into genesis:
+approved exact hash, and signed body. Validator private keys are never
+serialized into Compose YAML or environment variables: a flat config keeps
+them inside the file-backed config secret, and a `data_dir` config keeps them
+in the mounted node data directory. A validator with a flat config receives a
+named `/storage` volume. That form accepts fresh state only: it neither imports
+nor migrates an existing live validator state tree into those volumes.
+Fresh-state admission checks every effective path that the projection
+replaces; relative paths, including omitted defaults, are resolved against the
+prepared bundle directory instead of Kagami's ambient working directory. The
+generator cannot silently produce a roster different from the one signed into
+genesis:
 
 ```bash
 kagami localnet generate --peers 4 --out-dir ./localnet
@@ -104,6 +111,46 @@ launchers reject an empty
 body or anything other than the canonical identity plus one LF before invoking `iroha3d`;
 `iroha3d` parses the checked NetworkId and repeats body, signature, verifier-key,
 checksum, marker-bit, and exact-hash validation.
+
+### Node data directories
+
+`kagami localnet generate` gives every validator one node data directory,
+`nodes/peerN`, and names it as `data_dir` in `peerN.toml`. The validator,
+SoraNet transport and streaming keys are the owner-only files of
+`nodes/peerN/secrets/`; the node derives every state path, including its
+consensus safety records, under `nodes/peerN/state/`. Such a peer config holds
+no private key and no state path, and `kagami docker` renders it in container
+form:
+
+- The projected config sets `data_dir = "/var/lib/iroha"`, binds on `0.0.0.0`
+  and advertises the Compose service names. It names no key and no state path:
+  the node derives both from the mounted directory. Durable paths outside the
+  `data_dir` layout are placed under `/var/lib/iroha/state`.
+- Each service bind-mounts its validator's `nodes/peerN` at `/var/lib/iroha`
+  (read-write, for `state/`) and `nodes/peerN/secrets` again read-only at
+  `/var/lib/iroha/secrets`. Compose never creates a missing source. Keys are
+  the mounted files themselves: they are not copied into the projection and
+  never appear in the config, the Compose YAML or the environment.
+- The mounted files keep their host ownership and mode, and `iroha3d` applies
+  its key custody checks to them (owner-only, single link, owned by the daemon
+  user). The image daemon UID must therefore own the node data directory, as it
+  must own the projected `/config/peer.toml`.
+- State stays in `nodes/peerN/state/` beside the keys. There is no storage
+  volume and no fresh-state requirement: a validator that already has state
+  and safety records keeps them, and is never restarted on an empty volume.
+  Do not run the containers and the bundle's `start.sh` against one bundle at
+  the same time.
+- The launcher runs `iroha3d` from `/var/lib/iroha` with `umask 077` and passes
+  `--sumeragi-assert-fresh-key` exactly while
+  `/var/lib/iroha/state/kura-sumeragi-records` does not exist, the same rule
+  as the generated `start.sh`. Deriving that assertion from a missing
+  directory is for disposable developer networks only, so Kagami refuses a
+  `data_dir` bundle whose chain is a public chain identity.
+- Kagami refuses a `data_dir` config that sets an inline private key, an
+  explicit key file, or a state path the layout derives (such as
+  `kura.store_dir` or `sumeragi.records_dir`): keys and consensus state outside
+  the node data directory would not follow the validator into its container.
+  A config that selects a compiled `profile` is refused as well.
 
 The explicit `--seed` development mode is for relocatable samples such as the
 checked-in Compose fixtures. It requires source paths at evaluation time:

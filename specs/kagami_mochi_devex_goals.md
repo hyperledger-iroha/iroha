@@ -30,7 +30,12 @@ key and listeners and includes `network.toml`. `kagami network create` checks th
 `3f + 1` roster and proofs of possession, signs genesis with a fresh key and writes that
 shared file (chain, roster, genesis and the consensus-bound sections the genesis was signed
 with); every other node setting has a working default. Configuration and credentials are generated
-in private managed storage outside projects. Kagami is the CLI frontend; Mochi
+in private managed storage outside projects. Every generated validator configuration, managed or
+written by `kagami localnet generate`, names its node data directory (`nodes/peerN`) as `data_dir`:
+the validator, SoraNet transport and streaming keys are owner-only files of that directory's
+`secrets/`, state derives under its `state/`, and no configuration file holds a private key.
+`kagami docker` renders such a bundle as Docker Compose whose containers mount each validator's
+node data directory. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 
 The default localnet has four validators and a funded deployment-capable account.

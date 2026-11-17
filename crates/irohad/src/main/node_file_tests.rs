@@ -351,6 +351,179 @@ fn profile_node_secrets_resolve_and_fail_closed_on_custody() {
     assert_eq!(compatibility.status, "pending");
 }
 
+/// A developer localnet from `kagami localnet generate` (`iroha_deploy::localnet`) keeps every
+/// validator's keys in the fixed files of its `<data_dir>/secrets/` and names neither a private
+/// key nor a state path in its peer file. Every generated peer loads through the daemon's own
+/// configuration path, passes the key custody checks without creating anything, and completes
+/// `--check-config` against the generated signed genesis.
+#[test]
+fn generated_localnet_peers_pass_the_daemon_check_config_path() {
+    // Below the checkout, so every ancestor of the generated secrets is trusted.
+    let root = tempfile::Builder::new()
+        .prefix(".irohad-localnet-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .expect("localnet parent");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("mode");
+    let options = iroha_deploy::localnet::LocalnetOptions {
+        perf_profile: None,
+        peers: std::num::NonZeroU16::new(4).expect("non-zero"),
+        seed: Some("irohad-localnet-data-dir".to_owned()),
+        bind_host: "127.0.0.1".to_owned(),
+        public_host: "127.0.0.1".to_owned(),
+        base_api_port: 18_480,
+        base_p2p_port: 18_737,
+        out_dir: root.path().join("localnet"),
+        extra_accounts: 0,
+        assets: Vec::new(),
+        block_cadence_ms: None,
+        consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+    };
+    {
+        // Generation executes genesis. The guard is released before the daemon path runs: reading
+        // the configured genesis takes it again.
+        let _registry_guard = instruction_registry_test_guard();
+        iroha_genesis::init_instruction_registry();
+        iroha_deploy::localnet::generate_localnet(
+            &options,
+            &mut std::io::BufWriter::new(Vec::new()),
+        )
+        .expect("generate a developer localnet");
+    }
+    let out_dir = fs::canonicalize(&options.out_dir).expect("canonical localnet");
+    let check = |index: usize| {
+        let path = out_dir.join(format!("peer{index}.toml"));
+        let path = path.to_str().expect("UTF-8 path");
+        read_with_fixture_space(&parse_args_from(
+            test_build_metadata(),
+            ["iroha3d", "--config", path, "--check-config"],
+        ))
+    };
+    let node_keys = [
+        NodeSecretFile::Validator,
+        NodeSecretFile::Transport,
+        NodeSecretFile::Streaming,
+    ];
+    let mut identities = std::collections::BTreeSet::new();
+    for index in 0..4 {
+        let table: toml::Table = fs::read_to_string(out_dir.join(format!("peer{index}.toml")))
+            .expect("read generated peer file")
+            .parse()
+            .expect("parse generated peer file");
+        for absent in [
+            "private_key",
+            "soranet_transport_private_key",
+            "snapshot",
+            "tiered_state",
+        ] {
+            assert!(
+                !table.contains_key(absent),
+                "peer{index}.toml sets {absent}"
+            );
+        }
+        assert!(
+            !table["kura"]
+                .as_table()
+                .expect("kura section")
+                .contains_key("store_dir"),
+            "peer{index}.toml sets kura.store_dir"
+        );
+        let (config, genesis) = check(index).unwrap_or_else(|report| panic!("{report:?}"));
+        let data_dir = config.data_dir.clone().expect("generated data_dir");
+        assert_eq!(
+            data_dir.root(),
+            out_dir.join(format!("nodes/peer{index}")),
+            "the peer file names its own node data directory"
+        );
+        // The generator wrote all three keys owner-only: nothing is created, all pass custody.
+        for file in node_keys {
+            let mode = fs::metadata(data_dir.secret(file))
+                .expect("generated node key")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o7777, 0o600, "{file:?}");
+        }
+        assert!(
+            node_secrets::create_local_identities(&data_dir, &node_keys[1..])
+                .unwrap_or_else(|error| panic!("{error}"))
+                .is_empty(),
+            "the generated transport and streaming identities are kept"
+        );
+        node_secrets::verify_config_key_custody(&data_dir)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            Some(config.common.key_pair.public_key().to_string().as_str()),
+            table["public_key"].as_str()
+        );
+        assert!(identities.insert(config.common.key_pair.public_key().clone()));
+        assert!(
+            identities.insert(
+                config
+                    .common
+                    .soranet_transport_key_pair
+                    .public_key()
+                    .clone()
+            ),
+            "every validator has its own transport identity"
+        );
+        assert!(
+            identities.insert(
+                config
+                    .streaming
+                    .key_material
+                    .identity()
+                    .public_key()
+                    .clone()
+            ),
+            "every validator has its own streaming identity"
+        );
+        // State derives from the node data directory.
+        let state = data_dir.state_dir();
+        assert_eq!(
+            config.kura.store_dir.resolve_relative_path(),
+            state.join("kura")
+        );
+        assert_eq!(
+            config.sumeragi.records_dir,
+            state.join("kura-sumeragi-records")
+        );
+        assert!(!state.join("kura").exists(), "a check opens no storage");
+        // `--check-config`: static validation and offline execution of the signed genesis.
+        let genesis = genesis.expect("the generated signed genesis is read");
+        assert_eq!(genesis.0.hash(), config.genesis.expected_hash);
+        if index == 0 {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let authenticated =
+                validate_config_and_genesis_for_check(&config, Some(&genesis), None)
+                    .unwrap_or_else(|report| panic!("{report:?}"))
+                    .expect("available genesis is authenticated");
+            assert_eq!(
+                authenticated.network_id,
+                NetworkId::from_genesis_hash(config.genesis.expected_hash)
+            );
+        }
+    }
+    // The generated layout fails closed like any `data_dir` node.
+    let data_dir = DataDir::new(out_dir.join("nodes/peer2"));
+    let transport = data_dir.secret(NodeSecretFile::Transport);
+    fs::set_permissions(&transport, fs::Permissions::from_mode(0o640)).expect("group-readable");
+    let Err(error) = check(2) else {
+        panic!("a group-readable transport key is refused");
+    };
+    assert!(
+        format!("{error:?}").contains("secrets/transport.key"),
+        "{error:?}"
+    );
+    fs::set_permissions(&transport, fs::Permissions::from_mode(0o600)).expect("owner-only");
+    let validator = data_dir.secret(NodeSecretFile::Validator);
+    let aside = root.path().join("validator.key");
+    fs::rename(&validator, &aside).expect("move the validator key aside");
+    assert!(check(2).is_err(), "a missing validator key is refused");
+    assert!(!validator.exists(), "a validator key is never created");
+    fs::rename(&aside, &validator).expect("restore the validator key");
+    check(2).unwrap_or_else(|report| panic!("{report:?}"));
+}
+
 #[test]
 fn check_flags_parse_and_conflict() {
     let args = parse_args_from(

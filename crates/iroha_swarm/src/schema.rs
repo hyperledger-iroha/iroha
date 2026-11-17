@@ -1,7 +1,8 @@
 //! Docker Compose schema.
 use crate::{
-    GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
-    PreparedRuntimeSource, base64_standard, path, peer,
+    CONTAINER_DATA_DIR, CONTAINER_SECRETS_DIR, GenesisArtifactSettings, ImageSettings,
+    PeerSettings, PreparedDataDirSource, PreparedRuntimeConfig, PreparedRuntimeSource,
+    base64_standard, path, peer,
 };
 use norito::json::{self, Map, Value};
 use std::fmt::Write as _;
@@ -701,11 +702,41 @@ fn prepared_storage_mount(runtime: &PreparedRuntimeConfig) -> Value {
     mount.insert("target".into(), Value::String(CONTAINER_STORAGE.into()));
     Value::Object(mount)
 }
+/// Bind one directory of a validator's node data directory into its container.
+fn data_dir_bind(source: &path::RelativePath, target: &str, read_only: bool) -> Value {
+    let mut bind = Map::new();
+    // A missing source is an error: Compose must never create an empty key directory.
+    bind.insert("create_host_path".into(), Value::Bool(false));
+    let mut mount = Map::new();
+    mount.insert("bind".into(), Value::Object(bind));
+    mount.insert("type".into(), Value::String("bind".into()));
+    mount.insert(
+        "source".into(),
+        Value::String(compose_path_literal(&source.as_ref().display().to_string())),
+    );
+    mount.insert("target".into(), Value::String(target.to_owned()));
+    if read_only {
+        mount.insert("read_only".into(), Value::Bool(true));
+    }
+    Value::Object(mount)
+}
+/// The node data directory mounts of a `data_dir` validator: the whole directory read-write for
+/// its state, and its fixed secret files again read-only, so the container cannot change a key.
+fn data_dir_mounts(data_dir: &PreparedDataDirSource) -> [Value; 2] {
+    [
+        data_dir_bind(&data_dir.source, CONTAINER_DATA_DIR, false),
+        data_dir_bind(&data_dir.secrets, CONTAINER_SECRETS_DIR, true),
+    ]
+}
+/// Named `/storage` volumes of the validators that mount no node data directory.
 fn compose_volumes(
     prepared_runtime: &std::collections::BTreeMap<u16, PreparedRuntimeConfig>,
 ) -> Value {
     let mut volumes = Map::new();
-    for runtime in prepared_runtime.values() {
+    for runtime in prepared_runtime
+        .values()
+        .filter(|runtime| runtime.data_dir.is_none())
+    {
         volumes.insert(prepared_storage_name(runtime), Value::Object(Map::new()));
     }
     Value::Object(volumes)
@@ -813,11 +844,28 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
                     .expect("format runtime materialization command");
                 }
             }
+            // A `data_dir` validator runs like the generated localnet `start.sh` runs it: from
+            // its node data directory, so node defaults that name relative paths stay in it,
+            // creating owner-only state, and asserting fresh keys only before its safety
+            // records exist.
+            let (enter_data_dir, fresh_key) = runtime.data_dir.as_ref().map_or_else(
+                || (String::new(), ""),
+                |data_dir| {
+                    (
+                        format!(
+                            "umask 077 && cd {CONTAINER_DATA_DIR} && FRESH_KEY= && \
+                             if [ ! -d {} ]; then FRESH_KEY=--sumeragi-assert-fresh-key; fi && ",
+                            data_dir.records_dir
+                        ),
+                        " $$FRESH_KEY",
+                    )
+                },
+            );
             format!(
-                "{materialize}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
+                "{materialize}{enter_data_dir}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
                  HOME=/opt/iroha USER=iroha \
                  iroha3d{sora} --config /config/peer.toml \
-                 --config-blake3 {config_blake3}"
+                 --config-blake3 {config_blake3}{fresh_key}"
             )
         },
     );
@@ -913,7 +961,10 @@ where
         let mut volumes = vec![signed_genesis_mount(self.genesis)];
         volumes.extend(private_config_mounts(self.runtime, self.peer_index));
         if let Some(runtime) = self.runtime {
-            volumes.push(prepared_storage_mount(runtime));
+            match &runtime.data_dir {
+                Some(data_dir) => volumes.extend(data_dir_mounts(data_dir)),
+                None => volumes.push(prepared_storage_mount(runtime)),
+            }
         }
         map.insert("volumes".into(), Value::Array(volumes));
         map.insert(
@@ -1181,7 +1232,12 @@ impl<'a> DockerCompose<'a> {
             compose_secrets(self.genesis, self.prepared_runtime),
         );
         if let Some(prepared_runtime) = self.prepared_runtime {
-            root.insert("volumes".into(), compose_volumes(prepared_runtime));
+            let volumes = compose_volumes(prepared_runtime);
+            if let Value::Object(ref map) = volumes
+                && !map.is_empty()
+            {
+                root.insert("volumes".into(), volumes);
+            }
             let configs = prepared_compose_configs(prepared_runtime);
             if let Value::Object(ref map) = configs
                 && !map.is_empty()

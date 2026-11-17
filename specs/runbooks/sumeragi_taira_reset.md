@@ -160,7 +160,11 @@ validator, delete its `records_dir` and `installation_log` (nothing was signed) 
 first boot with the assertion.
 
 Generated `kagami localnet` and `kagami sora-network` start scripts pass the assertion only when a peer's
-`state/peer<i>/sumeragi-records` directory does not exist yet. That inference is for disposable
+safety-record directory does not exist yet: `nodes/peer<i>/state/kura-sumeragi-records` in a
+developer localnet, whose peers derive it from `data_dir`, and `state/peer<i>/sumeragi-records` in
+a Sora network bundle. The Compose launcher that `kagami docker` renders for a developer
+localnet applies the same rule to the mounted node data directory, and refuses a public chain
+identity. That inference is for disposable
 networks only: a production launcher must not derive the assertion from a missing directory,
 because a lost record store looks the same.
 

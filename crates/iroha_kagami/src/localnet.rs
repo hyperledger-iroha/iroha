@@ -45,6 +45,11 @@ impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
 }
 /// Generate a bare-metal developer localnet (no Docker): genesis, per-peer configs, start/stop scripts.
 ///
+/// Every validator owns the node data directory `nodes/peerN`, which `peerN.toml` names as
+/// `data_dir`: its keys are the owner-only files of `nodes/peerN/secrets/` and its state lives
+/// under `nodes/peerN/state/`, so no peer config holds a private key. `kagami docker
+/// --config-dir <DIR>` renders the same network as Docker Compose.
+///
 /// Sora networks, including the public Taira chain, come from `kagami sora-network generate`.
 #[derive(ClapArgs)]
 pub struct Args {
@@ -177,7 +182,7 @@ impl<T: Write> RunArgs<T> for Args {
 mod tests {
     use super::*;
     use clap::Parser as _;
-    use iroha_config::{base::toml::TomlSource, parameters::actual};
+    use iroha_config::node_config::{NodeConfigOptions, NodeFile, open_node_config};
     use iroha_data_model::prelude::NetworkId;
     use iroha_deploy::genesis::profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID};
     use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
@@ -352,21 +357,39 @@ mod tests {
                 peer.get("gov").is_none(),
                 "default governance accounts stay valid for every chain prefix"
             );
-            let config = actual::Root::from_toml_source(
-                TomlSource::from_file(&path).expect("read native peer config"),
-            )
-            .expect("native config accepts generated genesis and account prefix");
+            // The peer file names its node data directory and no private key; the node-file
+            // loader completes the keys and state paths exactly as `iroha3d --config` does.
+            let data_dir = output.join("nodes").join(format!("peer{index}"));
+            assert_eq!(peer["data_dir"].as_str(), data_dir.to_str());
+            assert!(!peer.contains_key("private_key"));
+            let _chain_discriminant =
+                iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+            let (user, _) = open_node_config(NodeFile::Path(path), NodeConfigOptions::default())
+                .expect("open native peer config")
+                .read()
+                .expect("read native peer config");
+            let config = user
+                .parse()
+                .expect("native config accepts generated genesis and account prefix");
             assert_eq!(config.genesis.expected_hash, signed.hash());
             assert_eq!(
                 config.gov.bond_escrow_account,
                 iroha_config::parameters::defaults::governance::bond_escrow_account_id()
             );
-            assert!(
-                !peer["soracloud_runtime"]
-                    .get("production_mode")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(false)
+            assert_eq!(
+                config.data_dir.as_ref().map(|data_dir| data_dir.root()),
+                Some(data_dir.as_path())
             );
+            assert_eq!(
+                Some(config.common.key_pair.public_key().to_string().as_str()),
+                peer["public_key"].as_str()
+            );
+            assert_eq!(
+                config.kura.store_dir.resolve_relative_path(),
+                data_dir.join("state/kura")
+            );
+            assert!(!config.soracloud_runtime.production_mode);
+            assert!(!peer.contains_key("soracloud_runtime"));
         }
     }
 }

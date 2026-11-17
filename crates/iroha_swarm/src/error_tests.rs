@@ -111,6 +111,21 @@ fn swarm_error_messages() {
             "Prepared validator 5 repeats secret target `/run/secrets/key`.",
         ),
         (
+            Error::InvalidPreparedRecordsDir {
+                index: 3,
+                path: "/storage/records".into(),
+            },
+            "Prepared validator 3 safety-record directory `/storage/records` must be a normalized portable path below the container data directory and outside its secrets.",
+        ),
+        (
+            Error::DuplicatePreparedDataDir { index: 2 },
+            "Prepared validator 2 shares its node data directory with another validator.",
+        ),
+        (
+            Error::PreparedDataDirWithSecretFiles { index: 1 },
+            "Prepared validator 1 mounts its node data directory and must not also mount separate secret files.",
+        ),
+        (
             Error::InvalidPeerPorts {
                 index: 4,
                 p2p_port: 0,

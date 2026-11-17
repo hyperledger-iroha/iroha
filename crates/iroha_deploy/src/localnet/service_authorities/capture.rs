@@ -1,6 +1,7 @@
 //! Complete original service bytes and native directory custody; no current-state authority.
 
 use super::*;
+use iroha_config::parameters::{actual::NodeSecretFile, defaults::data_dir as layout};
 use iroha_config_base::file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource};
 use iroha_fs::{PrivateDirectory, PrivateFileComparison, PrivateReadTreeScope};
 use std::{
@@ -12,8 +13,8 @@ const MAX_CONFIG: usize = 1024 * 1024;
 const MAX_IDENTITY: usize = 512;
 const MAX_RANS: usize = 64 * 1024;
 const MAX_TOTAL: usize = 70 * 1024 * 1024;
-const INPUT_COUNT: usize = 75;
-const DIRECTORY_COUNT: usize = 11;
+const INPUT_COUNT: usize = 87;
+const DIRECTORY_COUNT: usize = 20;
 const GENERATION: usize = 0;
 const RUNTIME: usize = 1;
 const AUTHORITY: usize = 2;
@@ -23,6 +24,17 @@ const FIRST_PROVIDER: usize = 5;
 const CODEC: usize = 8;
 const RANS: usize = 9;
 const TABLES: usize = 10;
+const NODES: usize = 11;
+/// First validator's node data directory; each validator adds that directory and its `secrets`.
+const FIRST_NODE: usize = 12;
+/// The four original validators, whose configurations and keys the image holds.
+const PEER_COUNT: usize = 4;
+/// Key files a validator configuration reads from its `<data_dir>/secrets/`.
+const NODE_KEY_FILES: [NodeSecretFile; 3] = [
+    NodeSecretFile::Validator,
+    NodeSecretFile::Transport,
+    NodeSecretFile::Streaming,
+];
 
 struct Input {
     name: &'static str,
@@ -176,7 +188,12 @@ impl ServiceKeySource for CapturedDirectory {
     }
 }
 
-/// The eleven original links share native ancestry, with only one transient file read at a time.
+/// The twenty original links share native ancestry, with only one transient file read at a time.
+///
+/// Peer configurations name no private key: each reads its validator, `SoraNet` transport and
+/// streaming keys from the fixed files of its `data_dir` (`nodes/peerN/secrets/`). Those twelve
+/// files are therefore inputs of the image, so the canonical parser resolves every key from the
+/// original captured bytes and never from the disk.
 pub(super) struct CapturedProfile {
     directories: Vec<CapturedDirectory>,
 }
@@ -246,6 +263,22 @@ impl CapturedProfile {
         append(GENERATION, "codec", None)?;
         append(CODEC, "rans", None)?;
         append(RANS, "tables", None)?;
+        // A validator writes its state beside `secrets`, so only the key directory is closed.
+        append(GENERATION, super::super::config::NODES_DIRECTORY, None)?;
+        for index in 0..PEER_COUNT {
+            let node = FIRST_NODE + 2 * index;
+            append(NODES, &format!("peer{index}"), None)?;
+            append(
+                node,
+                layout::SECRETS_DIR,
+                Some(
+                    NODE_KEY_FILES
+                        .into_iter()
+                        .map(|file| OsString::from(file.relative_path()))
+                        .collect(),
+                ),
+            )?;
+        }
         let mut total = 0;
         directories[GENERATION].capture(
             "genesis.signed.nrt",
@@ -321,6 +354,16 @@ impl CapturedProfile {
             ConfigFileAccess::Public,
             &mut total,
         )?;
+        for index in 0..PEER_COUNT {
+            for file in NODE_KEY_FILES {
+                directories[FIRST_NODE + 2 * index + 1].capture(
+                    file.relative_path(),
+                    MAX_ROLE_CREDENTIAL_BYTES,
+                    ConfigFileAccess::Private,
+                    &mut total,
+                )?;
+            }
+        }
         if directories.len() != DIRECTORY_COUNT
             || directories
                 .iter()

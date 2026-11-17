@@ -115,7 +115,10 @@ What exists so far:
   hold their own keys (`kagami network create`), with no Sora profile. `localnet` is the dedicated developer generator behind `kagami localnet generate`
   and `kagami localnet up`: it refuses public chain identities and Sora profiles, and emits
   peer configs limited to node essentials with no faucet, onboarding, fee sponsorship,
-  alias setup or SoraNet VPN operator. Its `service_authorities` module is the opt-in
+  alias setup or SoraNet VPN operator. Every peer config names its node data directory
+  `nodes/peerN` as `data_dir`: the validator, SoraNet transport and streaming keys are the
+  owner-only files of `nodes/peerN/secrets/` and state derives under `nodes/peerN/state/`,
+  so no peer config holds a private key or a per-path state setting. Its `service_authorities` module is the opt-in
   storage layer of managed networks (`kagami localnet up --with-storage`): three storage
   providers, their network services and the `dev.universal` publication namespace. CLI
   parsing stays in Kagami; generation and process ownership have no CLI or GUI dependency.

@@ -1,9 +1,13 @@
 //! Developer localnet generation tests.
 
 use super::*;
+use iroha_config::parameters::{
+    actual::{self, NodeSecretFile},
+    defaults::data_dir as layout,
+};
 use iroha_data_model::isi::staking::RegisterPublicLaneValidator;
 use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
-use std::fs;
+use std::{fs, str::FromStr as _};
 
 pub(super) fn private_parent() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::tempdir().expect("create temporary directory");
@@ -41,6 +45,179 @@ fn peer_table(out_dir: &Path, index: usize) -> toml::Table {
         .expect("read generated peer config")
         .parse()
         .expect("parse generated peer config")
+}
+
+/// The key pair of one fixed secret file, after checking its record and native custody: one
+/// canonical private multihash and a newline in an owner-only file of an owner-only directory.
+fn node_key(out_dir: &Path, index: usize, file: NodeSecretFile) -> KeyPair {
+    let data_dir = config::peer_data_dir(out_dir, index);
+    let path = data_dir.secret(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode =
+            |path: &Path| fs::metadata(path).expect("metadata").permissions().mode() & 0o7777;
+        assert_eq!(mode(&path), 0o600, "{} is owner-only", path.display());
+        for directory in [data_dir.root().to_path_buf(), data_dir.secrets_dir()] {
+            assert_eq!(
+                mode(&directory),
+                0o700,
+                "{} is private",
+                directory.display()
+            );
+        }
+    }
+    // The same private-file custody the node configuration parser and `iroha3d` apply.
+    let bytes = iroha_fs::read_private(&path, 4 * 1024).expect("private key file custody");
+    let text = std::str::from_utf8(&bytes).expect("UTF-8 key record");
+    let literal = text.strip_suffix('\n').expect("newline-terminated record");
+    let exposed = ExposedPrivateKey::from_str(literal).expect("private key literal");
+    assert_eq!(
+        exposed
+            .try_to_multihash_string()
+            .expect("canonical literal"),
+        literal,
+        "{} holds one canonical private multihash",
+        path.display()
+    );
+    KeyPair::from_private_key(exposed.0).expect("key pair")
+}
+
+/// A peer file names its node data directory and neither a private key nor a state path.
+fn assert_data_dir_form(out_dir: &Path, render_root: &Path, index: usize) -> toml::Table {
+    let rendered =
+        fs::read_to_string(out_dir.join(format!("peer{index}.toml"))).expect("read peer config");
+    let table: toml::Table = rendered.parse().expect("parse peer config");
+    let data_dir = config::peer_data_dir(render_root, index);
+    assert_eq!(table["data_dir"].as_str(), data_dir.root().to_str());
+    for inline in [
+        "private_key",
+        "private_key_file",
+        "soranet_transport_private_key",
+        "soranet_transport_private_key_file",
+        "soranet_transport_public_key",
+    ] {
+        assert!(
+            !table.contains_key(inline),
+            "peer{index}.toml sets {inline}"
+        );
+    }
+    assert_eq!(
+        table["streaming"]
+            .as_table()
+            .expect("streaming section")
+            .keys()
+            .collect::<Vec<_>>(),
+        ["codec"],
+        "the streaming identity and session store derive from data_dir"
+    );
+    // Every state path the layout derives, and the safety records beside the Kura store.
+    for (key, _) in layout::STATE_PATHS
+        .iter()
+        .chain(layout::ENABLED_SERVICE_STATE_PATHS)
+        .copied()
+        .chain([
+            (&["sumeragi", "records_dir"][..], ""),
+            (&["sumeragi", "installation_log"][..], ""),
+        ])
+    {
+        let root = toml::Value::Table(table.clone());
+        let explicit = key
+            .iter()
+            .try_fold(&root, |value, segment| value.get(*segment))
+            .is_some();
+        assert!(!explicit, "peer{index}.toml sets {}", key.join("."));
+    }
+    let keys = [
+        NodeSecretFile::Validator,
+        NodeSecretFile::Transport,
+        NodeSecretFile::Streaming,
+    ]
+    .map(|file| node_key(out_dir, index, file));
+    assert_eq!(
+        table["public_key"].as_str(),
+        Some(keys[0].public_key().to_string().as_str()),
+        "secrets/validator.key is the key of public_key"
+    );
+    for key in &keys {
+        let literal = ExposedPrivateKey(key.private_key().clone())
+            .try_to_multihash_string()
+            .expect("canonical literal");
+        assert!(
+            !rendered.contains(&literal),
+            "peer{index}.toml contains private key material"
+        );
+    }
+    assert_eq!(
+        keys[1].public_key().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+    assert_eq!(
+        keys[2].public_key().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+    assert_ne!(keys[1].public_key(), keys[2].public_key());
+    let mut entries = fs::read_dir(data_dir.secrets_dir())
+        .expect("read secrets")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect::<Vec<_>>();
+    entries.sort();
+    assert_eq!(
+        entries,
+        [
+            layout::STREAMING_KEY,
+            layout::TRANSPORT_KEY,
+            layout::VALIDATOR_KEY
+        ]
+    );
+    table
+}
+
+/// The loaded configuration takes its identities from `secrets/` and its state from `state/`.
+fn assert_loads_from_data_dir(out_dir: &Path, index: usize, parsed: &actual::Root) {
+    let data_dir = config::peer_data_dir(out_dir, index);
+    assert_eq!(parsed.data_dir.as_ref(), Some(&data_dir));
+    let key = |file| node_key(out_dir, index, file);
+    assert_eq!(
+        parsed.common.key_pair.public_key(),
+        key(NodeSecretFile::Validator).public_key()
+    );
+    assert_eq!(
+        parsed.common.soranet_transport_key_pair.public_key(),
+        key(NodeSecretFile::Transport).public_key()
+    );
+    assert_eq!(
+        parsed.streaming.key_material.identity().public_key(),
+        key(NodeSecretFile::Streaming).public_key()
+    );
+    let state = data_dir.state_dir();
+    assert_eq!(
+        parsed.kura.store_dir.resolve_relative_path(),
+        state.join("kura")
+    );
+    assert_eq!(
+        parsed.snapshot.store_dir.resolve_relative_path(),
+        state.join("snapshot")
+    );
+    assert_eq!(parsed.torii.data_dir, state.join("torii"));
+    assert_eq!(
+        parsed.torii.sorafs_storage.data_dir,
+        config::sorafs_storage_dir(out_dir, index)
+    );
+    assert_eq!(parsed.streaming.session_store_dir, state.join("streaming"));
+    assert_eq!(
+        parsed.soracloud_runtime.state_dir,
+        state.join("soracloud_runtime")
+    );
+    assert_eq!(
+        parsed.sumeragi.records_dir,
+        data_dir.root().join(config::records_dir_in_data_dir()),
+        "start.sh asserts fresh keys while exactly this directory is absent"
+    );
+    assert!(
+        parsed.sumeragi.installation_log.starts_with(&state),
+        "the installation log stays in the node state directory"
+    );
 }
 
 pub(super) fn assert_genesis_applies(out_dir: &Path) {
@@ -126,6 +303,13 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
     .expect("UTF-8 summary");
     assert!(summary.contains("consensus_mode: permissioned"));
     assert!(summary.contains("next_start: cd "));
+    assert!(
+        summary.contains(&format!(
+            "node_data_dirs: {}\n",
+            out_dir.join("nodes").display()
+        )),
+        "the summary names where validator keys and state live: {summary}"
+    );
     for present in [
         ".gitignore",
         "README.md",
@@ -151,11 +335,16 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
         "runtime/onboarding.token",
         "runtime/onboarding-signer.key",
         "runtime/ledger-signer.key",
-        "nodes",
     ] {
         assert!(
             !out_dir.join(production_only).exists(),
             "{production_only} belongs to Sora network bundles"
+        );
+    }
+    for retired in ["state", "storage"] {
+        assert!(
+            !out_dir.join(retired).exists(),
+            "validator state lives under nodes/peerN/state, not {retired}/"
         );
     }
     assert_genesis_applies(&out_dir);
@@ -167,7 +356,8 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
         let rendered = fs::read_to_string(&path).expect("read peer config");
         let parsed = config::parse_peer_config(&rendered, &path).expect("node accepts peer config");
         assert_eq!(parsed.genesis.expected_hash, signed_hash);
-        let table = peer_table(&out_dir, index);
+        assert_loads_from_data_dir(&out_dir, index, &parsed);
+        let table = assert_data_dir_form(&out_dir, &out_dir, index);
         let torii = table["torii"].as_table().expect("torii section");
         for absent in ["faucet", "account_onboarding", "peer_telemetry_urls", "mcp"] {
             assert!(
@@ -180,10 +370,6 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
                 .as_table()
                 .expect("network section")
                 .contains_key("soranet_vpn")
-        );
-        assert!(
-            !table.contains_key("data_dir"),
-            "bundles use explicit paths"
         );
         assert!(!table.contains_key("confidential"));
         assert_eq!(
@@ -198,10 +384,17 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
         "the launcher needs only a POSIX shell"
     );
     assert!(start.contains("--sumeragi-assert-fresh-key"));
+    assert!(start.contains(r#"NODE_DIR="$DIR/nodes/peer${i}""#));
     assert!(
-        start.contains(r#"(cd "$DIR/state/peer${i}" && exec nohup "$@""#),
-        "each validator runs from its own state directory"
+        start.contains(r#"if [ ! -d "$NODE_DIR/state/kura-sumeragi-records" ]; then"#),
+        "a fresh key is asserted only before the node's safety records exist: {start}"
     );
+    assert!(
+        start.contains(r#"(cd "$NODE_DIR" && exec nohup "$@""#),
+        "each validator runs from its own data directory"
+    );
+    let guide = fs::read_to_string(out_dir.join("README.md")).expect("read guide");
+    assert!(guide.contains("`nodes/peerN/secrets/`") && guide.contains("`nodes/peerN/state/`"));
     let client = fs::read_to_string(out_dir.join("client.toml"))
         .expect("read client config")
         .parse::<toml::Table>()
@@ -329,10 +522,14 @@ fn managed_localnet_prepares_a_standard_generation_the_engine_accepts() {
         .load_operator_key_pair()
         .expect("Mochi's operator signer binds every validator");
     assert_genesis_applies(&directory);
+    let directory = directory.canonicalize().expect("canonical generation");
     for index in 0..4 {
-        let table = peer_table(&directory, index);
-        assert!(table.contains_key("data_dir"));
+        let table = assert_data_dir_form(&directory, &directory, index);
         assert_eq!(table["torii"]["mcp"]["enabled"].as_bool(), Some(true));
+        let path = &prepared.peers[index].config_path;
+        let rendered = fs::read_to_string(path).expect("read managed peer config");
+        let parsed = config::parse_peer_config(&rendered, path).expect("node accepts peer config");
+        assert_loads_from_data_dir(&directory, index, &parsed);
     }
     assert!(!directory.join("start.sh").exists());
     let client = fs::read_to_string(directory.join("client.toml"))
@@ -456,6 +653,8 @@ fn storage_preparation_binds_four_native_configs_and_a_private_client() {
         );
         let node = root.join("nodes").join(format!("peer{index}"));
         assert_eq!(table["data_dir"].as_str(), node.to_str());
+        assert_data_dir_form(&root, &root, index);
+        assert_loads_from_data_dir(&root, index, &config);
         assert!(table["sumeragi"].get("mint_finality_seed_fd").is_none());
         assert_eq!(
             table["nexus"]["storage"]["local_budget_bytes"].as_integer(),
@@ -509,5 +708,92 @@ fn custom_chain_prefix_configs_leave_default_governance_accounts_implicit() {
     assert_eq!(
         parsed.gov.sorafs_pin_fee_treasury_account,
         iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id()
+    );
+}
+
+#[test]
+fn node_layout_paths_follow_the_data_dir_layout() {
+    let root = Path::new("/bundle");
+    let data_dir = config::peer_data_dir(root, 2);
+    assert_eq!(data_dir.root(), Path::new("/bundle/nodes/peer2"));
+    assert_eq!(
+        config::sorafs_storage_dir(root, 2),
+        Path::new("/bundle/nodes/peer2/state/sorafs")
+    );
+    assert_eq!(
+        config::records_dir_in_data_dir(),
+        Path::new("state/kura-sumeragi-records"),
+        "a sibling of the derived Kura store, outside it"
+    );
+}
+
+#[test]
+fn seeded_generations_reproduce_every_node_key_and_fresh_ones_do_not() {
+    let (_temporary, parent) = private_parent();
+    let keys = |out_dir: &Path| {
+        [
+            NodeSecretFile::Validator,
+            NodeSecretFile::Transport,
+            NodeSecretFile::Streaming,
+        ]
+        .map(|file| fs::read(config::peer_data_dir(out_dir, 3).secret(file)).expect("node key"))
+    };
+    let generated = ["first", "second", "fresh"].map(|name| {
+        let out_dir = parent.join(name);
+        let mut opts = options(out_dir.clone(), SumeragiConsensusMode::Permissioned);
+        if name == "fresh" {
+            opts.seed = None;
+        }
+        generate_into(&opts);
+        keys(&out_dir)
+    });
+    assert_eq!(generated[0], generated[1], "a seed fixes every node key");
+    for (seeded, fresh) in generated[0].iter().zip(&generated[2]) {
+        assert_ne!(seeded, fresh, "an unseeded generation draws fresh keys");
+    }
+}
+
+/// The generated layout fails closed exactly like a hand-written `data_dir` node: the parser
+/// reads the validator key only as an owner-only file and never falls back to another source.
+#[cfg(unix)]
+#[test]
+fn generated_peer_config_refuses_unsafe_or_missing_node_keys() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_temporary, parent) = private_parent();
+    let out_dir = parent.join("custody");
+    generate_into(&options(
+        out_dir.clone(),
+        SumeragiConsensusMode::Permissioned,
+    ));
+    let path = out_dir.join("peer1.toml");
+    let rendered = fs::read_to_string(&path).expect("read peer config");
+    let load = || config::parse_peer_config(&rendered, &path);
+    load().expect("the generated layout loads");
+    let validator = config::peer_data_dir(&out_dir, 1).secret(NodeSecretFile::Validator);
+    fs::set_permissions(&validator, fs::Permissions::from_mode(0o640)).expect("group-readable");
+    assert!(load().is_err(), "a group-readable validator key is refused");
+    fs::set_permissions(&validator, fs::Permissions::from_mode(0o600)).expect("owner-only");
+    load().expect("restored custody loads again");
+    let aside = validator.with_file_name("validator.key.aside");
+    fs::rename(&validator, &aside).expect("move the key aside");
+    assert!(load().is_err(), "a missing validator key is refused");
+    // Another validator's key cannot stand in: the peer file pins its public key.
+    fs::copy(
+        config::peer_data_dir(&out_dir, 2).secret(NodeSecretFile::Validator),
+        &validator,
+    )
+    .expect("substitute a foreign key");
+    assert!(load().is_err(), "a foreign validator key is refused");
+    fs::remove_file(&validator).expect("remove the substitute");
+    fs::rename(&aside, &validator).expect("restore the key");
+    load().expect("the original key loads again");
+    let without_data_dir = rendered
+        .lines()
+        .filter(|line| !line.starts_with("data_dir = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        config::parse_peer_config(&without_data_dir, &path).is_err(),
+        "a peer file without data_dir names no keys"
     );
 }

@@ -467,8 +467,12 @@ class Localnet:
         return self.net_dir / f"peer{index}.toml"
 
     def state_dir(self, index: int) -> Path:
-        """A peer's state root (Kura store, Sumeragi records, installation log)."""
-        return self.net_dir / "state" / f"peer{index}"
+        """A peer's state root: ``state/`` of the node data directory its config names as
+        ``data_dir``. It holds every durable consensus file of the peer (the Kura store with
+        its sibling Sumeragi body store, the safety records and the installation log), so one
+        volume mounted here covers them all. The peer's keys live beside it in ``secrets/``.
+        """
+        return self.net_dir / "nodes" / f"peer{index}" / "state"
 
     def generate(self) -> None:
         """Run ``kagami localnet generate`` (fresh genesis and node configurations)."""
@@ -526,26 +530,6 @@ class Localnet:
             if mapping:
                 text = rewrite_p2p_ports(text, mapping)
             path.write_text(text)
-
-    def move_kura_into_state(self, index: int) -> Path:
-        """Put a peer's Kura store (and with it the sibling Sumeragi body store) under its state
-        root, so that one volume holds every durable consensus file of the peer: blocks,
-        bodies, safety records and the installation log."""
-        path = self.config(index)
-        target = self.state_dir(index) / "kura"
-        text = path.read_text()
-        match = re.search(r'(?ms)^\[kura\]\s*$.*?^store_dir\s*=\s*"([^"]*)"', text)
-        if match is None:
-            raise RuntimeError(f"{path} has no [kura] store_dir")
-        source = Path(match.group(1))
-        if not source.is_absolute():
-            source = (path.parent / source).resolve()
-        text = set_toml_keys(text, "kura", {"store_dir": toml_string(str(target))})
-        path.write_text(text)
-        self.state_dir(index).mkdir(parents=True, exist_ok=True)
-        if source.exists():
-            shutil.move(str(source), str(target))
-        return target
 
     def client_config(self, index: int) -> Path:
         """A client config that talks to peer ``index``'s Torii.
@@ -1172,7 +1156,6 @@ def run_soak(args: argparse.Namespace, argv: Sequence[str]) -> int:
             netem.setup()
         net.patch_configs(proxy_ports, options.storage_budget_mb * 1024 * 1024)
         if options.disk_node is not None:
-            net.move_kura_into_state(options.disk_node)
             volume = faults.DiskVolume(net.state_dir(options.disk_node), run_dir, options.disk_size_mb)
             volume.mount()
         for index in range(options.validators):
@@ -1382,8 +1365,9 @@ def cleanup(
             volume.unmount()
     (run_dir / "run.json").write_text(json.dumps(run_record, indent=2))
     if not keep_state:
-        for durable in ("state", "storage"):
-            shutil.rmtree(net.net_dir / durable, ignore_errors=True)
+        # Durable state only: the peers' configs, keys and logs stay for inspection.
+        for index in range(net.validators):
+            shutil.rmtree(net.state_dir(index), ignore_errors=True)
 
 
 def judge(run_dir: Path) -> int:

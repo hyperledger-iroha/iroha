@@ -5,7 +5,14 @@ use crate::{
 };
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
-use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_config::{
+    base::toml::TomlSource,
+    node_config::{NodeConfigOptions, PROFILE_KEY, open_node_config_source},
+    parameters::{
+        actual::{self, DataDir},
+        defaults::data_dir as layout,
+    },
+};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     NetworkId,
@@ -26,8 +33,8 @@ use iroha_genesis::{
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 use iroha_swarm::{
-    PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
-    PreparedValidator,
+    CONTAINER_DATA_DIR, PeerOverride, PreparedDataDir, PreparedGenesisArtifacts,
+    PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
 };
 use std::{
     collections::BTreeSet,
@@ -65,7 +72,10 @@ pub struct Args {
     /// Normal mode requires `genesis.json`, `peer0.toml` through `peerN.toml`,
     /// `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`. Kagami validates
     /// their canonical wire, signer, semantic manifest binding, exact hash, validator roster, and
-    /// PoPs together. With `--seed`, only `genesis.json` is read and runtime artifact paths are
+    /// PoPs together. A peer config that sets `data_dir` (as `kagami localnet generate` writes)
+    /// is rendered for its container: the node data directory is mounted at `/var/lib/iroha`,
+    /// its keys stay the owner-only files of `secrets/` and its state stays in `state/`.
+    /// With `--seed`, only `genesis.json` is read and runtime artifact paths are
     /// supplied explicitly through the generated manifest's `IROHA_GENESIS_*_FILE` variables.
     /// Development mode additionally requires per-node `IROHA_PEER<N>_CONFIG_FILE` mount
     /// sources at Compose startup. These existing owner-0600 TOML files contain ordinary
@@ -156,6 +166,8 @@ struct AdmittedPreparedValidator {
     table: crate::secret_toml::Table,
     key_pair: iroha_crypto::KeyPair,
     pop: Vec<u8>,
+    /// Canonical node data directory of a `data_dir` configuration.
+    data_dir: Option<DataDir>,
 }
 struct PreparedRuntimePeer {
     service_name: String,
@@ -337,6 +349,13 @@ fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedP
         "prepared validator config {} must be flattened and cannot use `extends`",
         path.display()
     );
+    // TODO: project profile node files once `iroha network up --target container` renders them
+    // (specs/network_deployment.md §6.3). The projection below writes keys a profile owns.
+    ensure!(
+        !table.contains_key(PROFILE_KEY),
+        "prepared validator config {} selects a compiled profile; prepared Compose projects flat and `data_dir` validator configs only",
+        path.display()
+    );
     let chain_discriminant = table
         .get("chain_discriminant")
         .and_then(toml::Value::as_integer)
@@ -345,14 +364,169 @@ fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedP
     // Keep parsing and projection bound to the exact bytes read above. Reopening
     // the path here would leave a swap interval between the admitted table and
     // the table from which validator identity/policy is derived.
-    let source = TomlSource::new_sensitive(
-        path.to_path_buf(),
-        (*table).clone(),
-        crate::secret_toml::zeroize_table,
-    );
-    let actual = actual::Root::from_toml_source(source)
-        .map_err(|_| eyre!("prepared validator config {} is invalid", path.display()))?;
+    let actual = parse_prepared_table(path, &table)
+        .ok_or_else(|| eyre!("prepared validator config {} is invalid", path.display()))?;
     Ok(ParsedPreparedPeerConfig { actual, table })
+}
+/// Parse a validator table exactly as `iroha3d --config` loads it, without ambient overrides.
+///
+/// A table that sets `data_dir` goes through the node-file loader, which completes the state
+/// and secret paths of the fixed layout; the parser then reads the key files of
+/// `<data_dir>/secrets/` under private-file custody. A flat table is parsed directly. `None`
+/// for any failure: diagnostics of a validator configuration may carry private values.
+fn parse_prepared_table(path: &Path, table: &toml::Table) -> Option<actual::Root> {
+    if !table.contains_key("data_dir") {
+        return actual::Root::from_toml_source(TomlSource::new_sensitive(
+            path.to_path_buf(),
+            table.clone(),
+            crate::secret_toml::zeroize_table,
+        ))
+        .ok();
+    }
+    // The same retained, self-contained source entry as the flat form: no `extends`, no
+    // environment overlay, and the table is scrubbed whatever it turns out to hold.
+    let node = open_node_config_source(
+        TomlSource::new_sensitive(
+            path.to_path_buf(),
+            table.clone(),
+            crate::secret_toml::zeroize_table,
+        ),
+        NodeConfigOptions::default(),
+    )
+    .ok()?;
+    let (user, _) = node.read().ok()?;
+    user.parse().ok()
+}
+/// Keys a `data_dir` validator configuration must leave to its node data directory.
+///
+/// The container mounts that directory, so a private key outside its `secrets/` or durable state
+/// outside its `state/` (in particular the Kura store with its sibling safety records) would not
+/// follow the validator into the container.
+fn data_dir_owned_keys() -> impl Iterator<Item = &'static [&'static str]> {
+    const SECRETS: [&[&str]; 8] = [
+        &["private_key"],
+        &["private_key_file"],
+        &["soranet_transport_private_key"],
+        &["soranet_transport_private_key_file"],
+        &["streaming", "identity_private_key"],
+        &["streaming", "identity_private_key_file"],
+        &["torii", "faucet", "private_key_file"],
+        &["torii", "account_onboarding", "private_key_file"],
+    ];
+    const SAFETY_RECORDS: [&[&str]; 2] = [
+        &["sumeragi", "records_dir"],
+        &["sumeragi", "installation_log"],
+    ];
+    SECRETS.into_iter().chain(SAFETY_RECORDS).chain(
+        layout::STATE_PATHS
+            .iter()
+            .chain(layout::ENABLED_SERVICE_STATE_PATHS)
+            .map(|(key, _)| *key),
+    )
+}
+/// Whether `table` sets the dotted parameter `key`.
+fn toml_contains(table: &toml::Table, key: &[&str]) -> bool {
+    key.split_last().is_some_and(|(leaf, parent)| {
+        parent
+            .iter()
+            .try_fold(table, |table, segment| table.get(*segment)?.as_table())
+            .is_some_and(|table| table.contains_key(*leaf))
+    })
+}
+/// Whether the `data_dir` layout derives the durable path `table_path.key`.
+fn layout_derives(table_path: &[&str], key: &str) -> bool {
+    layout::STATE_PATHS
+        .iter()
+        .chain(layout::ENABLED_SERVICE_STATE_PATHS)
+        .any(|(derived, _)| {
+            derived
+                .split_last()
+                .is_some_and(|(leaf, parent)| *leaf == key && parent == table_path)
+        })
+}
+/// Require a developer chain identity for a bundle of `data_dir` validator configurations.
+///
+/// A `data_dir` validator is launched as the generated localnet `start.sh` launches it: fresh
+/// keys are asserted while its node data directory holds no safety records. That inference is
+/// for disposable developer networks only. A public chain identity, whose launcher must never
+/// derive the assertion from a missing directory, is therefore refused.
+fn ensure_disposable_data_dir_chain(chain: &ChainId) -> color_eyre::Result<()> {
+    iroha_deploy::localnet::resolve_localnet_chain_id(Some(chain.as_str()))
+        .map(drop)
+        .wrap_err(
+            "prepared `data_dir` validator configs are rendered as a disposable developer network",
+        )
+}
+/// Admit the node data directory of a `data_dir` validator configuration for mounting.
+///
+/// Returns its canonical location. The configuration must leave every key and durable path to
+/// the directory ([`data_dir_owned_keys`]), and the directory must be an owner-held real
+/// directory that is not shared with the Compose projection.
+fn admit_prepared_data_dir(
+    config: &actual::Root,
+    table: &toml::Table,
+    path: &Path,
+    projection_root: &Path,
+) -> color_eyre::Result<Option<DataDir>> {
+    let Some(data_dir) = config.data_dir.as_ref() else {
+        return Ok(None);
+    };
+    for key in data_dir_owned_keys() {
+        ensure!(
+            !toml_contains(table, key),
+            "prepared validator config {} sets `{}`, but a `data_dir` validator keeps its keys in `<data_dir>/{}` and its state in `<data_dir>/{}`",
+            path.display(),
+            key.join("."),
+            layout::SECRETS_DIR,
+            layout::STATE_DIR
+        );
+    }
+    let lexical = fs::symlink_metadata(data_dir.root()).wrap_err_with(|| {
+        format!(
+            "inspect node data directory {} of prepared validator config {}",
+            data_dir.root().display(),
+            path.display()
+        )
+    })?;
+    ensure!(
+        lexical.is_dir() && !lexical.file_type().is_symlink(),
+        "node data directory {} of prepared validator config {} is not a regular directory",
+        data_dir.root().display(),
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        ensure!(
+            lexical.uid() == rustix::process::geteuid().as_raw() && lexical.mode() & 0o022 == 0,
+            "node data directory {} of prepared validator config {} must be owner-held and not group/world writable",
+            data_dir.root().display(),
+            path.display()
+        );
+    }
+    let canonical = fs::canonicalize(data_dir.root()).wrap_err_with(|| {
+        format!(
+            "canonicalize node data directory {}",
+            data_dir.root().display()
+        )
+    })?;
+    // The projection root may not exist yet; compare it lexically from its existing parent.
+    let projection = projection_root
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .zip(projection_root.file_name())
+        .map_or_else(
+            || projection_root.to_path_buf(),
+            |(parent, name)| parent.join(name),
+        );
+    ensure!(
+        !projection.starts_with(&canonical) && !canonical.starts_with(&projection),
+        "node data directory {} of prepared validator config {} overlaps the Compose projection {}",
+        canonical.display(),
+        path.display(),
+        projection.display()
+    );
+    Ok(Some(DataDir::new(canonical)))
 }
 fn ensure_toml_table<'a>(
     root: &'a mut toml::Table,
@@ -1747,7 +1921,56 @@ type PreparedRuntimeProjection = (
     Vec<PreparedSecretFile>,
     bool,
     actual::Root,
+    Option<PreparedDataDir>,
 );
+/// Where a projected validator keeps its durable state inside its container.
+#[derive(Clone, Copy)]
+enum ContainerState {
+    /// A flat configuration: every durable path is rewritten below the named `/storage` volume.
+    Storage,
+    /// A `data_dir` configuration: the admitted host node data directory is mounted at
+    /// [`CONTAINER_DATA_DIR`], so the node derives the paths of the fixed layout itself.
+    DataDir,
+}
+impl ContainerState {
+    /// Project the durable path `table_path.key`, whose location below `/storage` is `storage`.
+    ///
+    /// A `data_dir` configuration never names a path its layout derives
+    /// ([`admit_prepared_data_dir`]), so only the remaining durable paths are rewritten, below
+    /// the container's node state directory.
+    fn set(
+        self,
+        table: &mut toml::Table,
+        table_path: &[&str],
+        key: &str,
+        storage: &str,
+    ) -> color_eyre::Result<()> {
+        match self {
+            Self::Storage => set_toml_string(table, table_path, key, format!("/storage/{storage}")),
+            Self::DataDir if layout_derives(table_path, key) => Ok(()),
+            Self::DataDir => set_toml_string(
+                table,
+                table_path,
+                key,
+                format!("{CONTAINER_DATA_DIR}/{}/{storage}", layout::STATE_DIR),
+            ),
+        }
+    }
+}
+/// The path of `host`, a path inside the node data directory `data_dir`, in the container that
+/// mounts that directory at [`CONTAINER_DATA_DIR`].
+fn container_data_dir_path(data_dir: &DataDir, host: &Path) -> Option<String> {
+    let relative = host.strip_prefix(data_dir.root()).ok()?;
+    let mut container = String::from(CONTAINER_DATA_DIR);
+    for component in relative.components() {
+        let std::path::Component::Normal(segment) = component else {
+            return None;
+        };
+        container.push('/');
+        container.push_str(segment.to_str()?);
+    }
+    (container != CONTAINER_DATA_DIR).then_some(container)
+}
 #[expect(
     clippy::too_many_arguments,
     reason = "runtime projection is one ordered security transformation from admitted host config to byte-exact container inputs"
@@ -1759,6 +1982,7 @@ fn project_prepared_runtime_config(
     index: usize,
     mut table: crate::secret_toml::Table,
     source: &actual::Root,
+    data_dir: Option<&DataDir>,
     metadata: &ConsensusHandshakeMetadata,
     original_fees: &iroha_data_model::block::consensus::RootFeePolicy,
     peers: &[PreparedRuntimePeer],
@@ -1775,13 +1999,24 @@ fn project_prepared_runtime_config(
     let (effective_source, source_requires_sora) =
         effective_runtime_config(source.clone(), &source_table);
     let source = &effective_source;
-    ensure_fresh_prepared_state(source, &config_dir.join(format!("peer{index}.toml")))?;
+    let state = match data_dir {
+        // The validator's state stays in its mounted node data directory, together with its
+        // keys and safety records: nothing is replaced by an empty volume.
+        Some(_) => {
+            set_toml_string(&mut table, &[], "data_dir", CONTAINER_DATA_DIR)?;
+            ContainerState::DataDir
+        }
+        None => {
+            ensure_fresh_prepared_state(source, &config_dir.join(format!("peer{index}.toml")))?;
+            ContainerState::Storage
+        }
+    };
     rewrite_container_network(&mut table, index, peers)?;
-    set_toml_string(
+    state.set(
         &mut table,
         &["network", "soranet_handshake", "pow"],
         "revocation_store_path",
-        "/storage/network/soranet-ticket-revocations.norito",
+        "network/soranet-ticket-revocations.norito",
     )?;
     let mut runtime_files = Vec::new();
     // Without a configured table the node uses the canonical tables compiled into `iroha3d`.
@@ -1818,200 +2053,180 @@ fn project_prepared_runtime_config(
         GENESIS_EXPECTED_HASH_RUNTIME_TARGET,
     )?;
     remove_toml_key(&mut table, &["genesis"], "manifest_json")?;
-    set_toml_string(&mut table, &["kura"], "store_dir", "/storage/kura")?;
-    set_toml_string(&mut table, &["snapshot"], "store_dir", "/storage/snapshot")?;
-    set_toml_string(&mut table, &["torii"], "data_dir", "/storage/torii")?;
-    set_toml_string(
+    state.set(&mut table, &["kura"], "store_dir", "kura")?;
+    state.set(&mut table, &["snapshot"], "store_dir", "snapshot")?;
+    state.set(&mut table, &["torii"], "data_dir", "torii")?;
+    state.set(
         &mut table,
         &["torii", "da_ingest"],
         "replay_cache_store_dir",
-        "/storage/torii/da-replay-cache",
+        "torii/da-replay-cache",
     )?;
-    set_toml_string(
+    state.set(
         &mut table,
         &["torii", "da_ingest"],
         "manifest_store_dir",
-        "/storage/torii/da-manifests",
+        "torii/da-manifests",
     )?;
-    set_toml_string(
-        &mut table,
-        &["sorafs", "storage"],
-        "data_dir",
-        "/storage/sorafs",
-    )?;
+    state.set(&mut table, &["sorafs", "storage"], "data_dir", "sorafs")?;
     let sorafs_storage = &source.torii.sorafs_storage;
     if sorafs_storage.pop_credentials.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "pop_credentials"],
             "issuer_state_dir",
-            "/storage/sorafs/pop-credentials/issuer",
+            "sorafs/pop-credentials/issuer",
         )?;
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "pop_credentials"],
             "wallet_state_dir",
-            "/storage/sorafs/pop-credentials/wallet",
+            "sorafs/pop-credentials/wallet",
         )?;
     }
     if sorafs_storage.moderation_orchestrator.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "moderation_orchestrator"],
             "checkpoint_path",
-            "/storage/sorafs/moderation/checkpoint.norito",
+            "sorafs/moderation/checkpoint.norito",
         )?;
     }
     if sorafs_storage.evidence_viewer.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "evidence_viewer"],
             "checkpoint_path",
-            "/storage/sorafs/evidence-viewer/checkpoint.norito",
+            "sorafs/evidence-viewer/checkpoint.norito",
         )?;
     }
     if sorafs_storage.reputation_runtime.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "reputation_runtime"],
             "state_dir",
-            "/storage/sorafs/reputation",
+            "sorafs/reputation",
         )?;
     }
     if sorafs_storage.hedging_billing_runtime.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "hedging_billing_runtime"],
             "state_dir",
-            "/storage/sorafs/hedging-billing",
+            "sorafs/hedging-billing",
         )?;
     }
     if sorafs_storage.governance_dag_dir.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage"],
             "governance_dag_dir",
-            "/storage/sorafs/governance-dag",
+            "sorafs/governance-dag",
         )?;
     }
     if sorafs_storage.governance_dag_service.state_dir.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "storage", "governance_dag_service"],
             "state_dir",
-            "/storage/sorafs/governance-dag-service",
+            "sorafs/governance-dag-service",
         )?;
     }
-    set_toml_string(
+    state.set(
         &mut table,
         &["sorafs", "discovery"],
         "replay_checkpoint_path",
-        "/storage/sorafs/discovery/replay-checkpoint.nrt",
+        "sorafs/discovery/replay-checkpoint.nrt",
     )?;
-    set_toml_string(
-        &mut table,
-        &["sorafs", "por"],
-        "state_dir",
-        "/storage/sorafs/por",
-    )?;
+    state.set(&mut table, &["sorafs", "por"], "state_dir", "sorafs/por")?;
     if source.torii.sorafs_gc.state_dir.is_some() {
-        set_toml_string(
-            &mut table,
-            &["sorafs", "gc"],
-            "state_dir",
-            "/storage/sorafs/gc",
-        )?;
+        state.set(&mut table, &["sorafs", "gc"], "state_dir", "sorafs/gc")?;
     }
     if source.torii.sorafs_gateway.compliance.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["sorafs", "gateway", "compliance"],
             "checkpoint_path",
-            "/storage/sorafs/gateway-compliance/checkpoint.norito",
+            "sorafs/gateway-compliance/checkpoint.norito",
         )?;
     }
     if source.torii.privacy_bootle_lantern_issuer.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["torii", "privacy_bootle_lantern_issuer"],
             "state_dir",
-            "/storage/torii/privacy-issuer",
+            "torii/privacy-issuer",
         )?;
     }
     if source.torii.iso_bridge.enabled {
         if source.torii.iso_bridge.store_dir.is_some() {
-            set_toml_string(
+            state.set(
                 &mut table,
                 &["torii", "iso_bridge"],
                 "store_dir",
-                "/storage/torii/iso-bridge",
+                "torii/iso-bridge",
             )?;
         }
         if source.torii.iso_bridge.audit_export_dir.is_some() {
-            set_toml_string(
+            state.set(
                 &mut table,
                 &["torii", "iso_bridge"],
                 "audit_export_dir",
-                "/storage/torii/iso-bridge-audit",
+                "torii/iso-bridge-audit",
             )?;
         }
         if source.torii.iso_bridge.reference_data.cache_dir.is_some() {
-            set_toml_string(
+            state.set(
                 &mut table,
                 &["torii", "iso_bridge", "reference_data"],
                 "cache_dir",
-                "/storage/torii/iso-reference-cache",
+                "torii/iso-reference-cache",
             )?;
         }
     }
-    set_toml_string(
+    state.set(
         &mut table,
         &["soracloud_runtime"],
         "state_dir",
-        "/storage/soracloud_runtime",
+        "soracloud_runtime",
     )?;
     if source.tiered_state.cold_store_root.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["tiered_state"],
             "cold_store_root",
-            "/storage/tiered_state",
+            "tiered_state",
         )?;
     } else {
         remove_toml_key(&mut table, &["tiered_state"], "cold_store_root")?;
     }
     if source.tiered_state.da_store_root.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["tiered_state"],
             "da_store_root",
-            "/storage/da_wsv_snapshots",
+            "da_wsv_snapshots",
         )?;
     } else {
         remove_toml_key(&mut table, &["tiered_state"], "da_store_root")?;
     }
     if source.telemetry_integrity.state_dir.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["telemetry_integrity"],
             "state_dir",
-            "/storage/telemetry-integrity",
+            "telemetry-integrity",
         )?;
     }
     if source.dev_telemetry.out_file.is_some() {
-        set_toml_string(
+        state.set(
             &mut table,
             &["dev_telemetry"],
             "out_file",
-            "/storage/telemetry/development.log",
+            "telemetry/development.log",
         )?;
     }
-    set_toml_string(
-        &mut table,
-        &["streaming"],
-        "session_store_dir",
-        "/storage/streaming",
-    )?;
+    state.set(&mut table, &["streaming"], "session_store_dir", "streaming")?;
     if captured_rans_source.is_some() {
         set_toml_string(
             &mut table,
@@ -2020,10 +2235,13 @@ fn project_prepared_runtime_config(
             RANS_TARGET,
         )?;
     }
+    // A `data_dir` validator reads its authority keys from the fixed files of its mounted
+    // `secrets/authority/`; only a flat configuration needs them as dedicated Compose secrets.
     let captured_onboarding_private_key = source
         .torii
         .account_onboarding
         .as_ref()
+        .filter(|_| data_dir.is_none())
         .map(|onboarding| -> color_eyre::Result<_> {
             let content = Zeroizing::new(read_owner_only_runtime_file_bounded(
                 &onboarding.private_key_file,
@@ -2054,6 +2272,7 @@ fn project_prepared_runtime_config(
         .torii
         .faucet
         .as_ref()
+        .filter(|_| data_dir.is_none())
         .map(|faucet| -> color_eyre::Result<_> {
             let content = Zeroizing::new(read_owner_only_runtime_file_bounded(
                 &faucet.private_key_file,
@@ -2399,14 +2618,32 @@ fn project_prepared_runtime_config(
     }
     let _chain_discriminant =
         ChainDiscriminantGuard::enter(*source.common.chain_discriminant.value());
-    let projected = actual::Root::from_toml_source(TomlSource::new_sensitive(
-        config_dir.join(format!("peer{index}.container-validation.toml")),
-        (*validation_table).clone(),
-        crate::secret_toml::zeroize_table,
-    ))
-    .map_err(|error| {
-        eyre!("container runtime projection for prepared validator {index} is invalid: {error:?}")
-    })?;
+    let validation_path = config_dir.join(format!("peer{index}.container-validation.toml"));
+    let projected = match data_dir {
+        // The container's node data directory is the admitted host directory, so the
+        // projection is validated against the keys and the layout the container will see.
+        Some(data_dir) => {
+            set_toml_string(
+                &mut validation_table,
+                &[],
+                "data_dir",
+                data_dir.root().to_string_lossy(),
+            )?;
+            parse_prepared_table(&validation_path, &validation_table).ok_or_else(|| {
+                eyre!("container runtime projection for prepared validator {index} is invalid")
+            })?
+        }
+        None => actual::Root::from_toml_source(TomlSource::new_sensitive(
+            validation_path,
+            (*validation_table).clone(),
+            crate::secret_toml::zeroize_table,
+        ))
+        .map_err(|error| {
+            eyre!(
+                "container runtime projection for prepared validator {index} is invalid: {error:?}"
+            )
+        })?,
+    };
     let (projected_effective, requires_sora_profile) =
         effective_runtime_config(projected, &validation_table);
     ensure!(
@@ -2414,6 +2651,35 @@ fn project_prepared_runtime_config(
         "container runtime projection changed Sora profile requirements"
     );
     validate_runtime_projection_policy(source, &projected_effective, metadata, original_fees)?;
+    let prepared_data_dir = data_dir
+        .map(|data_dir| -> color_eyre::Result<_> {
+            let state_dir = data_dir.state_dir();
+            let records_dir = &projected_effective.sumeragi.records_dir;
+            // The Kura store and the safety records of the validator's keys travel with the
+            // mounted directory: the launcher asserts fresh keys only while they do not exist.
+            ensure!(
+                projected_effective.data_dir.as_ref() == Some(data_dir)
+                    && projected_effective
+                        .kura
+                        .store_dir
+                        .resolve_relative_path()
+                        .starts_with(&state_dir)
+                    && records_dir.starts_with(&state_dir)
+                    && projected_effective
+                        .sumeragi
+                        .installation_log
+                        .starts_with(&state_dir),
+                "prepared validator {index} keeps consensus state outside its node data directory"
+            );
+            let records_dir = container_data_dir_path(data_dir, records_dir).ok_or_else(|| {
+                eyre!("prepared validator {index} safety-record directory has no container path")
+            })?;
+            Ok(PreparedDataDir {
+                source_path: data_dir.root().to_path_buf(),
+                records_dir,
+            })
+        })
+        .transpose()?;
     let mut content = Zeroizing::new(
         toml::to_string_pretty(&*table)
             .wrap_err("serialize container-safe prepared runtime projection")?,
@@ -2430,6 +2696,7 @@ fn project_prepared_runtime_config(
         secret_files,
         requires_sora_profile,
         projected_effective,
+        prepared_data_dir,
     ))
 }
 fn load_prepared_bundle(
@@ -2453,16 +2720,6 @@ fn load_prepared_bundle(
         &expected_hash_path,
         manifest,
     )?;
-    let expected_hash_record = format!(
-        "{}\n",
-        NetworkId::from_genesis_hash(validated.expected_hash())
-    );
-    let runtime_expected_hash = materialize_container_readable_file(
-        projection_root,
-        "genesis-hash",
-        iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE,
-        expected_hash_record.as_bytes(),
-    )?;
     let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
     let signed_fees = iroha_genesis::signed_genesis_root_fee_policy(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
@@ -2471,6 +2728,7 @@ fn load_prepared_bundle(
     let mut validator_keys = BTreeSet::new();
     let mut soranet_transport_keys = BTreeSet::new();
     let mut exposed_ports = BTreeSet::new();
+    let mut data_dirs = BTreeSet::new();
     for (index, path) in config_paths.iter().enumerate() {
         let ParsedPreparedPeerConfig {
             actual: config,
@@ -2500,6 +2758,15 @@ fn load_prepared_bundle(
             path.display()
         );
         validate_prepared_network_projection(&config, path)?;
+        let data_dir = admit_prepared_data_dir(&config, &table, path, projection_root)?;
+        if let Some(data_dir) = data_dir.as_ref() {
+            ensure!(
+                data_dirs.insert(data_dir.root().to_path_buf()),
+                "prepared validator config {} shares node data directory {} with another validator",
+                path.display(),
+                data_dir.root().display()
+            );
+        }
         ensure!(
             &config.genesis.public_key == validated.public_key(),
             "prepared validator config {} has a different genesis verifier key",
@@ -2619,6 +2886,7 @@ fn load_prepared_bundle(
             table,
             key_pair,
             pop,
+            data_dir,
         });
     }
     ensure!(
@@ -2631,6 +2899,9 @@ fn load_prepared_bundle(
         "prepared validator config identities differ from the signed genesis roster"
     );
     let chain = chain.expect("non-empty prepared bundle has a chain id");
+    if !data_dirs.is_empty() {
+        ensure_disposable_data_dir_chain(&chain)?;
+    }
     iroha_core::validate_genesis_block(
         validated.block(),
         &AccountId::new(validated.public_key().clone()),
@@ -2646,6 +2917,17 @@ fn load_prepared_bundle(
             public_key: admitted.key_pair.public_key().clone(),
         })
         .collect::<Vec<_>>();
+    // Nothing is materialized before every validator configuration has been admitted.
+    let expected_hash_record = format!(
+        "{}\n",
+        NetworkId::from_genesis_hash(validated.expected_hash())
+    );
+    let runtime_expected_hash = materialize_container_readable_file(
+        projection_root,
+        "genesis-hash",
+        iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE,
+        expected_hash_record.as_bytes(),
+    )?;
     let mut shared_execution_projection = None;
     let mut shared_nexus_projection = None;
     let mut shared_runtime_inputs = None;
@@ -2659,6 +2941,7 @@ fn load_prepared_bundle(
             secret_files,
             requires_sora_profile,
             effective_config,
+            data_dir,
         ) = project_prepared_runtime_config(
             config_dir,
             projection_root,
@@ -2666,6 +2949,7 @@ fn load_prepared_bundle(
             index,
             admitted.table,
             &admitted.config,
+            admitted.data_dir.as_ref(),
             &signed_metadata,
             &signed_fees,
             &runtime_peers,
@@ -2752,6 +3036,7 @@ fn load_prepared_bundle(
             runtime_config_blake3,
             runtime_files,
             secret_files,
+            data_dir,
         });
     }
     let runtime_signed_block = materialize_container_readable_file(
@@ -2849,6 +3134,7 @@ impl<T: Write> RunArgs<T> for Args {
         };
         tui::status("Composing Docker deployment manifest");
         let prepared_artifacts;
+        let mut mounted_data_dirs = 0;
         let swarm = if let Some(seed) = seed.as_deref() {
             prepared_artifacts = None;
             iroha_swarm::Swarm::deterministic_dev(
@@ -2875,6 +3161,10 @@ impl<T: Write> RunArgs<T> for Args {
                 public_key,
                 expected_hash,
             } = load_prepared_bundle(&args.config_dir, &projection_root, args.peers, &manifest)?;
+            mounted_data_dirs = validators
+                .iter()
+                .filter(|validator| validator.data_dir.is_some())
+                .count();
             let artifacts = PreparedGenesisArtifacts {
                 signed_block: &signed_block,
                 public_key: &public_key,
@@ -2930,6 +3220,13 @@ impl<T: Write> RunArgs<T> for Args {
                 writeln!(writer, "genesis_signed: {}", signed_block.display())?;
                 writeln!(writer, "genesis_public_key: {}", public_key.display())?;
                 writeln!(writer, "genesis_expected_hash: {}", expected_hash.display())?;
+                if mounted_data_dirs > 0 {
+                    // The containers use the validators' own keys and state in place.
+                    writeln!(
+                        writer,
+                        "node_data_dirs: {mounted_data_dirs} mounted at {CONTAINER_DATA_DIR}"
+                    )?;
+                }
             } else {
                 writeln!(
                     writer,
@@ -3020,6 +3317,7 @@ mod tests {
         validate_runtime_projection_policy,
     };
     use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _};
+    use iroha_config::parameters::defaults::data_dir as layout;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
@@ -3158,10 +3456,18 @@ mod tests {
             "stale capture bytes must fail, not overwrite"
         );
     }
-    #[test]
-    fn sora_prepared_bundle_mounts_onboarding_and_faucet_signers_as_secrets() {
-        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
-        let config_dir = temp_dir.path().join("sora-bundle");
+    /// The string at the dotted `path` of `table`.
+    fn toml_str<'a>(table: &'a toml::Table, path: &[&str]) -> Option<&'a str> {
+        let (leaf, parent) = path.split_last()?;
+        parent
+            .iter()
+            .try_fold(table, |table, segment| table.get(*segment)?.as_table())?
+            .get(*leaf)?
+            .as_str()
+    }
+    /// A Sora network bundle: flat validator configs with inline identities and explicit paths.
+    fn generate_sora_bundle(root: &Path) -> PathBuf {
+        let config_dir = root.join("sora-bundle");
         let options = iroha_deploy::sora_network::NetworkOptions {
             sora_profile: iroha_deploy::sora_network::SoraProfile::Nexus,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -3175,8 +3481,11 @@ mod tests {
         };
         iroha_deploy::sora_network::generate_network(&options, &mut BufWriter::new(Vec::new()))
             .expect("generate Sora network bundle");
-        let deployment_dir = temp_dir.path().join("deployment");
-        fs::create_dir_all(&deployment_dir).expect("create deployment directory");
+        config_dir
+    }
+    /// Render Compose for `config_dir` and return the YAML with peer 0's projected config.
+    fn render_prepared_compose(config_dir: PathBuf, deployment_dir: &Path) -> (String, String) {
+        fs::create_dir_all(deployment_dir).expect("create deployment directory");
         let args = Args {
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: None,
@@ -3193,7 +3502,7 @@ mod tests {
         };
         let mut output = Vec::new();
         let mut writer = BufWriter::new(&mut output);
-        args.run(&mut writer).expect("render Sora prepared bundle");
+        args.run(&mut writer).expect("render prepared bundle");
         writer.flush().expect("flush prepared Compose output");
         drop(writer);
         let output = String::from_utf8(output).expect("Compose output is UTF-8");
@@ -3207,8 +3516,24 @@ mod tests {
             })
             .find(|path| path.is_file())
             .expect("peer0 projection");
-        let projected = fs::read_to_string(peer0)
-            .expect("read peer0 projection")
+        let projected = fs::read_to_string(peer0).expect("read peer0 projection");
+        (output, projected)
+    }
+    #[test]
+    fn sora_prepared_bundle_mounts_onboarding_and_faucet_signers_as_secrets() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = generate_sora_bundle(temp_dir.path());
+        let source_peer0 = fs::read_to_string(config_dir.join("peer0.toml"))
+            .expect("read source peer0 config")
+            .parse::<toml::Table>()
+            .expect("parse source peer0 config");
+        assert!(
+            !source_peer0.contains_key("data_dir"),
+            "Sora network bundles keep flat validator configs"
+        );
+        let (output, projected_raw) =
+            render_prepared_compose(config_dir, &temp_dir.path().join("deployment"));
+        let projected = projected_raw
             .parse::<toml::Table>()
             .expect("parse peer0 projection");
         for (section, target) in [
@@ -3225,6 +3550,57 @@ mod tests {
             assert!(
                 output.contains(&format!("target: {target}")),
                 "prepared torii.{section} signer must be mounted as a Compose secret"
+            );
+        }
+        // A flat configuration keeps the `/storage` projection: every durable path is rewritten
+        // below one named volume per validator, and no node data directory is mounted.
+        assert!(!projected.contains_key("data_dir"));
+        for (path, expected) in [
+            (&["kura", "store_dir"][..], "/storage/kura"),
+            (&["snapshot", "store_dir"], "/storage/snapshot"),
+            (&["torii", "data_dir"], "/storage/torii"),
+            (
+                &["torii", "da_ingest", "manifest_store_dir"],
+                "/storage/torii/da-manifests",
+            ),
+            (&["sorafs", "storage", "data_dir"], "/storage/sorafs"),
+            (&["streaming", "session_store_dir"], "/storage/streaming"),
+            (
+                &[
+                    "network",
+                    "soranet_handshake",
+                    "pow",
+                    "revocation_store_path",
+                ],
+                "/storage/network/soranet-ticket-revocations.norito",
+            ),
+        ] {
+            assert_eq!(
+                toml_str(&projected, path),
+                Some(expected),
+                "projected {}",
+                path.join(".")
+            );
+        }
+        assert_eq!(output.matches("target: /storage").count(), 4);
+        assert!(!output.contains(super::CONTAINER_DATA_DIR));
+        assert!(!output.contains("--sumeragi-assert-fresh-key"));
+        // Its inline identities stay inside the owner-only projected config secret.
+        for private_key in [
+            source_peer0["private_key"]
+                .as_str()
+                .expect("source validator private key"),
+            source_peer0["streaming"]["identity_private_key"]
+                .as_str()
+                .expect("source streaming private key"),
+        ] {
+            assert!(
+                !output.contains(private_key),
+                "private key leaked into Compose YAML"
+            );
+            assert!(
+                projected_raw.contains(private_key),
+                "file-backed config secret lost an admitted private key"
             );
         }
     }
@@ -3528,37 +3904,35 @@ mod tests {
             "invalid output placement must not create a runtime projection inside the bundle"
         );
     }
+    /// The three node keys of one generated validator, as the literals of its secret files.
+    fn node_key_literals(config_dir: &Path, index: usize) -> Vec<String> {
+        [
+            layout::VALIDATOR_KEY,
+            layout::TRANSPORT_KEY,
+            layout::STREAMING_KEY,
+        ]
+        .map(|name| {
+            let path = config_dir
+                .join(format!("nodes/peer{index}"))
+                .join(layout::SECRETS_DIR)
+                .join(name);
+            let record = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read node key {}: {error}", path.display()));
+            let literal = record.trim_end().to_owned();
+            assert!(literal.len() >= 64, "{name} holds a private key literal");
+            literal
+        })
+        .into()
+    }
     #[test]
     fn prepared_bundle_renders_exact_read_only_runtime_inputs() {
         let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
         let deployment_dir = temp_dir.path().join("deployment");
-        fs::create_dir_all(&deployment_dir).expect("create deployment directory");
-        let args = Args {
-            peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: None,
-            healthcheck: false,
-            config_dir: config_dir.clone(),
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: deployment_dir.join("docker-compose.yml"),
-            print: true,
-            force: false,
-            no_banner: true,
-        };
-        let mut output = Vec::new();
-        let mut writer = BufWriter::new(&mut output);
-        args.run(&mut writer)
-            .expect("render prepared validator bundle");
-        writer.flush().expect("flush prepared Compose output");
-        drop(writer);
-        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+        let (output, projected_raw) = render_prepared_compose(config_dir.clone(), &deployment_dir);
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
-        assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
         assert_eq!(
             output
@@ -3566,7 +3940,6 @@ mod tests {
                 .count(),
             4
         );
-        assert_eq!(output.matches("target: /storage").count(), 4);
         assert!(output.contains(".kagami-compose"));
         for artifact in [
             "genesis.signed.nrt",
@@ -3583,97 +3956,107 @@ mod tests {
         assert!(!output.contains("streaming_private_key"));
         assert!(!output.contains("environment:"));
         assert!(!output.contains("PRIVATE_KEY:"));
-        let projection_root = deployment_dir.join(".kagami-compose");
-        let peer0_directory = fs::read_dir(&projection_root)
-            .expect("read projection root")
-            .map(|entry| entry.expect("read projection entry"))
-            .find(|entry| entry.path().join("peer0.toml").is_file())
-            .expect("peer0 projection directory")
-            .path();
-        let peer0_projection = peer0_directory.join("peer0.toml");
-        let projected_raw =
-            fs::read_to_string(&peer0_projection).expect("read peer0 config projection");
+        // Every container mounts exactly its validator's node data directory at the container
+        // `data_dir`, and that directory's secrets again read-only. No storage volume remains.
+        let lines = output.lines().map(str::trim).collect::<Vec<_>>();
+        let count = |line: &str| lines.iter().filter(|candidate| **candidate == line).count();
+        assert_eq!(count("target: /var/lib/iroha"), 4);
+        assert_eq!(count("target: /var/lib/iroha/secrets"), 4);
+        assert_eq!(count("create_host_path: false"), 8);
+        assert_eq!(
+            count("read_only: true"),
+            8,
+            "the signed genesis and the secrets are read-only; state stays writable"
+        );
+        for index in 0..4 {
+            for (suffix, label) in [("", "node data directory"), ("/secrets", "secrets")] {
+                let mounted = format!("/prepared-bundle/nodes/peer{index}{suffix}");
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter(|line| line.starts_with("source: ") && line.ends_with(&mounted))
+                        .count(),
+                    1,
+                    "validator {index} mounts its {label} once: {output}"
+                );
+            }
+        }
+        assert!(!output.contains("/storage"));
+        assert!(!output.lines().any(|line| line == "volumes:"));
+        // The launcher mirrors the generated `start.sh`: it runs from the node data directory
+        // and asserts fresh keys only before the validator's safety records exist.
+        assert_eq!(
+            output
+                .matches(
+                    "umask 077 && cd /var/lib/iroha && FRESH_KEY= && \
+                     if [ ! -d /var/lib/iroha/state/kura-sumeragi-records ]; \
+                     then FRESH_KEY=--sumeragi-assert-fresh-key; fi && exec env -i "
+                )
+                .count(),
+            4,
+            "{output}"
+        );
+        let start = fs::read_to_string(config_dir.join("start.sh")).expect("read start.sh");
+        assert!(
+            start.contains(r#"if [ ! -d "$NODE_DIR/state/kura-sumeragi-records" ]; then"#),
+            "Compose and start.sh assert fresh keys under the same condition"
+        );
         let projected = projected_raw
             .parse::<toml::Table>()
             .expect("parse peer0 config projection");
-        let table_at = |name: &str| {
-            projected
-                .get(name)
-                .and_then(toml::Value::as_table)
-                .unwrap_or_else(|| panic!("projection has [{name}]"))
-        };
+        // Container-correct paths: the node derives its state and reads its keys below the
+        // mounted data directory; the projection names none of them.
+        assert_eq!(toml_str(&projected, &["data_dir"]), Some("/var/lib/iroha"));
+        for derived in super::data_dir_owned_keys() {
+            assert!(
+                !super::toml_contains(&projected, derived),
+                "the projection sets {}",
+                derived.join(".")
+            );
+        }
         assert_eq!(
-            table_at("genesis")
-                .get("file")
-                .and_then(toml::Value::as_str),
+            toml_str(
+                &projected,
+                &["sorafs", "discovery", "replay_checkpoint_path"]
+            ),
+            Some("/var/lib/iroha/state/sorafs/discovery/replay-checkpoint.nrt"),
+            "durable paths outside the layout stay in the node state directory"
+        );
+        assert_eq!(
+            toml_str(&projected, &["genesis", "file"]),
             Some("/genesis/genesis.signed.nrt")
         );
+        let genesis = projected["genesis"].as_table().expect("genesis section");
         assert!(
-            !table_at("genesis").contains_key("expected_hash"),
+            !genesis.contains_key("expected_hash"),
             "the projected validator must not retain an inline trust root"
         );
         assert_eq!(
-            table_at("genesis")
-                .get("expected_hash_file")
-                .and_then(toml::Value::as_str),
+            toml_str(&projected, &["genesis", "expected_hash_file"]),
             Some(GENESIS_EXPECTED_HASH_RUNTIME_TARGET),
             "the mounted checked identity file must be the sole validator trust-root source"
         );
-        assert!(!table_at("genesis").contains_key("manifest_json"));
+        assert!(!genesis.contains_key("manifest_json"));
         assert!(!projected.contains_key("kagemusha_load_authorizer"));
-        assert_eq!(
-            table_at("kura")
-                .get("store_dir")
-                .and_then(toml::Value::as_str),
-            Some("/storage/kura")
-        );
-        assert_eq!(
-            table_at("snapshot")
-                .get("store_dir")
-                .and_then(toml::Value::as_str),
-            Some("/storage/snapshot")
-        );
-        let network = table_at("network");
         assert!(
-            network
-                .get("address")
-                .and_then(toml::Value::as_str)
+            toml_str(&projected, &["network", "address"])
                 .is_some_and(|address| address.contains("0.0.0.0:23337"))
         );
         assert!(
-            network
-                .get("public_address")
-                .and_then(toml::Value::as_str)
+            toml_str(&projected, &["network", "public_address"])
                 .is_some_and(|address| address.contains("irohad0:23337"))
         );
         assert!(
-            table_at("torii")
-                .get("address")
-                .and_then(toml::Value::as_str)
+            toml_str(&projected, &["torii", "address"])
                 .is_some_and(|address| address.contains("0.0.0.0:19080"))
         );
+        let torii = projected["torii"].as_table().expect("torii section");
         assert_eq!(
-            table_at("torii")
+            torii
                 .get("zk_prover_enabled")
                 .and_then(toml::Value::as_bool),
             Some(false),
             "prepared Compose validators must opt out until prover keys are projected"
-        );
-        assert_eq!(
-            table_at("torii")
-                .get("da_ingest")
-                .and_then(toml::Value::as_table)
-                .and_then(|da| da.get("manifest_store_dir"))
-                .and_then(toml::Value::as_str),
-            Some("/storage/torii/da-manifests")
-        );
-        assert_eq!(
-            table_at("sorafs")
-                .get("storage")
-                .and_then(toml::Value::as_table)
-                .and_then(|storage| storage.get("data_dir"))
-                .and_then(toml::Value::as_str),
-            Some("/storage/sorafs")
         );
         let trusted_peers = projected
             .get("trusted_peers")
@@ -3689,84 +4072,76 @@ mod tests {
                 "projected trusted roster lacks irohad{index}"
             );
         }
-        let streaming = table_at("streaming");
         assert_eq!(
-            streaming
-                .get("session_store_dir")
-                .and_then(toml::Value::as_str),
-            Some("/storage/streaming")
-        );
-        assert_eq!(
-            streaming
-                .get("codec")
-                .and_then(toml::Value::as_table)
-                .and_then(|codec| codec.get("rans_tables_path"))
-                .and_then(toml::Value::as_str),
+            toml_str(&projected, &["streaming", "codec", "rans_tables_path"]),
             Some("/config/runtime/rans_seed0.toml")
         );
         // Developer bundles carry no faucet or onboarding signer, so none is mounted.
         for absent in ["account_onboarding", "faucet"] {
             assert!(
-                !table_at("torii").contains_key(absent),
+                !torii.contains_key(absent),
                 "developer bundle projects no torii.{absent}"
             );
         }
         assert!(!output.contains("/run/secrets/iroha_peer0_onboarding_private_key"));
         assert!(!output.contains("/run/secrets/iroha_peer0_faucet_private_key"));
-        let original_peer0 =
-            fs::read_to_string(config_dir.join("peer0.toml")).expect("read source peer0 config");
-        let original_peer0 = original_peer0
-            .parse::<toml::Table>()
-            .expect("parse source peer0 config");
-        for private_key in [
-            original_peer0
-                .get("private_key")
-                .and_then(toml::Value::as_str)
-                .expect("source validator private key"),
-            original_peer0
-                .get("streaming")
-                .and_then(toml::Value::as_table)
-                .and_then(|streaming| streaming.get("identity_private_key"))
-                .and_then(toml::Value::as_str)
-                .expect("source streaming private key"),
-        ] {
-            assert!(
-                !output.contains(private_key),
-                "private key leaked into Compose YAML"
-            );
-            assert!(
-                projected_raw.contains(private_key),
-                "file-backed config secret lost an admitted private key"
-            );
+        // Secrets are files of the mounted directory, never inline: no key reaches the Compose
+        // YAML, the projected configuration or any other file of the projection.
+        let projection_root = deployment_dir.join(".kagami-compose");
+        let mut projected_files = Vec::new();
+        let mut pending = vec![projection_root.clone()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).expect("read projection directory") {
+                let path = entry.expect("read projection entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    projected_files.push(path);
+                }
+            }
         }
+        assert!(projected_files.len() >= 7, "{projected_files:?}");
+        for index in 0..4 {
+            for literal in node_key_literals(&config_dir, index) {
+                assert!(
+                    !output.contains(&literal),
+                    "a node key leaked into Compose YAML"
+                );
+                for path in &projected_files {
+                    let bytes = fs::read(path).expect("read projected file");
+                    assert!(
+                        !bytes
+                            .windows(literal.len())
+                            .any(|window| window == literal.as_bytes()),
+                        "a node key was copied into {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        let peer0_projection = projected_files
+            .iter()
+            .find(|path| path.ends_with("peer0.toml"))
+            .expect("peer0 projection");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
+            let mode =
+                |path: &Path| fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode(&projection_root), 0o700);
             assert_eq!(
-                fs::metadata(&projection_root)
-                    .expect("projection-root metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
+                mode(peer0_projection.parent().expect("projection directory")),
                 0o700
             );
             assert_eq!(
-                fs::metadata(&peer0_directory)
-                    .expect("peer projection metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-            assert_eq!(
-                fs::metadata(&peer0_projection)
-                    .expect("projected config metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
+                mode(peer0_projection),
                 0o600,
-                "secret-bearing projected TOML retains native private custody; runtime UID must match its owner"
+                "the projected TOML keeps native private custody; runtime UID must match its owner"
             );
+            // The generator's owner-only key custody is untouched by the projection.
+            let secrets = config_dir.join("nodes/peer0").join(layout::SECRETS_DIR);
+            assert_eq!(mode(&secrets), 0o700);
+            assert_eq!(mode(&secrets.join(layout::VALIDATOR_KEY)), 0o600);
         }
         for forbidden in [
             "${IROHA_GENESIS_",
@@ -3780,6 +4155,382 @@ mod tests {
                 "unexpected {forbidden}: {output}"
             );
         }
+    }
+    /// What the container reads is what Kagami admitted: the projected configuration, loaded
+    /// with the node data directory the container mounts, yields the generated identities and
+    /// the state paths of that directory.
+    #[test]
+    fn data_dir_projection_loads_with_the_mounted_node_data_dir() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let (_, projected_raw) =
+            render_prepared_compose(config_dir.clone(), &temp_dir.path().join("deployment"));
+        let source = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
+            .expect("parse source peer0 config")
+            .actual;
+        let host_data_dir = source.data_dir.clone().expect("generated data_dir");
+        let mut mounted = projected_raw
+            .parse::<toml::Table>()
+            .expect("parse peer0 config projection");
+        // Inside the container `/var/lib/iroha` is this directory and the genesis identity is a
+        // mounted secret; substitute the host locations of both.
+        mounted.insert(
+            "data_dir".to_owned(),
+            toml::Value::String(host_data_dir.root().display().to_string()),
+        );
+        mounted
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .expect("genesis section")
+            .insert(
+                "expected_hash_file".to_owned(),
+                toml::Value::String(
+                    config_dir
+                        .join(iroha_deploy::localnet::GENESIS_EXPECTED_HASH_FILE)
+                        .display()
+                        .to_string(),
+                ),
+            );
+        mounted
+            .get_mut("streaming")
+            .and_then(|streaming| streaming.get_mut("codec"))
+            .and_then(toml::Value::as_table_mut)
+            .expect("codec section")
+            .remove("rans_tables_path");
+        let loaded = super::parse_prepared_table(&config_dir.join("mounted.toml"), &mounted)
+            .expect("the projection loads with the mounted node data directory");
+        assert_eq!(loaded.data_dir.as_ref(), Some(&host_data_dir));
+        assert_eq!(
+            loaded.common.key_pair.public_key(),
+            source.common.key_pair.public_key()
+        );
+        assert_eq!(
+            loaded.common.soranet_transport_key_pair.public_key(),
+            source.common.soranet_transport_key_pair.public_key()
+        );
+        assert_eq!(
+            loaded.streaming.key_material.identity().public_key(),
+            source.streaming.key_material.identity().public_key()
+        );
+        assert_eq!(
+            loaded.kura.store_dir.resolve_relative_path(),
+            host_data_dir.state_dir().join("kura")
+        );
+        assert_eq!(
+            super::container_data_dir_path(&host_data_dir, &loaded.sumeragi.records_dir).as_deref(),
+            Some("/var/lib/iroha/state/kura-sumeragi-records")
+        );
+        assert_eq!(loaded.sumeragi.records_dir, source.sumeragi.records_dir);
+        assert_eq!(loaded.genesis.expected_hash, source.genesis.expected_hash);
+        // Without the mounted directory the projection names no key at all.
+        mounted.remove("data_dir");
+        assert!(
+            super::parse_prepared_table(&config_dir.join("mounted.toml"), &mounted).is_none(),
+            "a projection without its node data directory has no validator key"
+        );
+    }
+    #[test]
+    fn data_dir_projection_refuses_keys_and_state_outside_the_node_data_dir() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let count = NonZeroU16::new(4).expect("non-zero");
+        let peer1_path = config_dir.join("peer1.toml");
+        let original = fs::read_to_string(&peer1_path).expect("read peer1 fixture");
+        let validator_key = node_key_literals(&config_dir, 1).remove(0);
+        let outside = temp_dir.path().join("outside");
+        for (label, key, mutated) in [
+            ("an inline validator key", "private_key", {
+                let mut table = original.parse::<toml::Table>().expect("parse peer1");
+                table.insert(
+                    "private_key".to_owned(),
+                    toml::Value::String(validator_key.clone()),
+                );
+                table
+            }),
+            (
+                "a Kura store outside the node data directory",
+                "kura.store_dir",
+                {
+                    let mut table = original.parse::<toml::Table>().expect("parse peer1");
+                    table
+                        .get_mut("kura")
+                        .and_then(toml::Value::as_table_mut)
+                        .expect("kura section")
+                        .insert(
+                            "store_dir".to_owned(),
+                            toml::Value::String(outside.join("kura").display().to_string()),
+                        );
+                    table
+                },
+            ),
+            (
+                "safety records outside the node data directory",
+                "sumeragi.records_dir",
+                {
+                    let mut table = original.parse::<toml::Table>().expect("parse peer1");
+                    table
+                        .get_mut("sumeragi")
+                        .and_then(toml::Value::as_table_mut)
+                        .expect("sumeragi section")
+                        .insert(
+                            "records_dir".to_owned(),
+                            toml::Value::String(outside.join("records").display().to_string()),
+                        );
+                    table
+                },
+            ),
+        ] {
+            fs::write(
+                &peer1_path,
+                toml::to_string_pretty(&mutated).expect("serialize mutated peer1"),
+            )
+            .expect("write mutated peer1");
+            let error = load_test_prepared_bundle(
+                &config_dir,
+                &temp_dir.path().join("refused-projection"),
+                count,
+            )
+            .expect_err(label);
+            assert!(
+                error.to_string().contains(&format!("sets `{key}`")),
+                "unexpected refusal of {label}: {error:#}"
+            );
+        }
+        fs::write(&peer1_path, &original).expect("restore peer1 fixture");
+        // Two validators cannot share one node data directory.
+        let peer0 = fs::read_to_string(config_dir.join("peer0.toml"))
+            .expect("read peer0 fixture")
+            .parse::<toml::Table>()
+            .expect("parse peer0 fixture");
+        let mut shared = original.parse::<toml::Table>().expect("parse peer1");
+        shared.insert("data_dir".to_owned(), peer0["data_dir"].clone());
+        fs::write(
+            &peer1_path,
+            toml::to_string_pretty(&shared).expect("serialize shared peer1"),
+        )
+        .expect("write shared peer1");
+        let error = load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("shared-projection"),
+            count,
+        )
+        .expect_err("a shared node data directory must fail");
+        // Peer 1's public key no longer matches the validator key it would read, so the
+        // secret-redacting configuration refusal comes first.
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "prepared validator config {} is invalid",
+                peer1_path.display()
+            )
+        );
+        fs::write(&peer1_path, &original).expect("restore peer1 fixture");
+        // A compiled profile is not a prepared Compose input.
+        fs::write(
+            &peer1_path,
+            format!("profile = \"iroha-dev-v1\"\nvalidators = 4\n{original}"),
+        )
+        .expect("write profile peer1");
+        let error = load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("profile-projection"),
+            count,
+        )
+        .expect_err("a profile node file must fail");
+        assert!(
+            error.to_string().contains("selects a compiled profile"),
+            "{error:#}"
+        );
+        fs::write(&peer1_path, &original).expect("restore peer1 fixture");
+        // The projection must not live inside a node data directory it mounts.
+        let error = load_test_prepared_bundle(
+            &config_dir,
+            &config_dir.join("nodes/peer0/compose-projection"),
+            count,
+        )
+        .expect_err("a projection inside a mounted node data directory must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("overlaps the Compose projection"),
+            "{error:#}"
+        );
+        assert!(!config_dir.join("nodes/peer0/compose-projection").exists());
+        load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("restored-projection"),
+            count,
+        )
+        .expect("the restored bundle projects again");
+    }
+    #[test]
+    fn prepared_data_dir_bundle_writes_compose_and_reports_its_mounted_node_data_dirs() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let deployment_dir = temp_dir.path().join("deployment");
+        fs::create_dir_all(&deployment_dir).expect("create deployment directory");
+        let compose_path = deployment_dir.join("docker-compose.yml");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: true,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: compose_path.clone(),
+            print: false,
+            force: false,
+            no_banner: false,
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("write Compose manifest");
+        let summary = String::from_utf8(writer.into_inner().expect("flush summary"))
+            .expect("summary is UTF-8");
+        assert!(
+            summary.contains("node_data_dirs: 4 mounted at /var/lib/iroha\n"),
+            "{summary}"
+        );
+        assert!(summary.contains("next: docker compose -f "));
+        let compose = fs::read_to_string(&compose_path).expect("read Compose manifest");
+        assert!(compose.starts_with("# Generated by `kagami docker`.\n"));
+        assert_eq!(compose.matches("target: /var/lib/iroha/secrets").count(), 4);
+        assert_eq!(compose.matches("healthcheck:").count(), 4);
+        assert!(!compose.contains("/storage"));
+    }
+    #[test]
+    fn data_dir_projection_helpers_follow_the_node_data_dir_layout() {
+        use iroha_config::parameters::actual::DataDir;
+        // Paths the layout derives are left to the node; any other durable path is projected.
+        assert!(super::layout_derives(&["kura"], "store_dir"));
+        assert!(super::layout_derives(
+            &["network", "soranet_handshake", "pow"],
+            "revocation_store_path"
+        ));
+        assert!(super::layout_derives(
+            &["sorafs", "storage", "pop_credentials"],
+            "issuer_state_dir"
+        ));
+        assert!(!super::layout_derives(&["kura"], "fsync_mode"));
+        assert!(!super::layout_derives(
+            &["sorafs", "discovery"],
+            "replay_checkpoint_path"
+        ));
+        assert!(!super::layout_derives(&["store_dir"], "kura"));
+        let table: toml::Table =
+            "private_key = \"k\"\n[kura]\nstore_dir = \"/s\"\n[sumeragi]\nrole = \"validator\"\n"
+                .parse()
+                .expect("fixture table");
+        assert!(super::toml_contains(&table, &["private_key"]));
+        assert!(super::toml_contains(&table, &["kura", "store_dir"]));
+        assert!(!super::toml_contains(&table, &["sumeragi", "records_dir"]));
+        assert!(!super::toml_contains(&table, &["private_key", "nested"]));
+        assert!(!super::toml_contains(
+            &table,
+            &["torii", "faucet", "private_key_file"]
+        ));
+        assert!(!super::toml_contains(&table, &[]));
+        let owned = super::data_dir_owned_keys().collect::<Vec<_>>();
+        for key in [
+            &["private_key"][..],
+            &["streaming", "identity_private_key_file"],
+            &["sumeragi", "records_dir"],
+            &["kura", "store_dir"],
+            &["torii", "privacy_bootle_lantern_issuer", "state_dir"],
+        ] {
+            assert!(
+                owned.contains(&key),
+                "{} belongs to data_dir",
+                key.join(".")
+            );
+        }
+        // Only a path strictly inside the node data directory has a container path.
+        let data_dir = DataDir::new(PathBuf::from("/bundle/nodes/peer0"));
+        assert_eq!(
+            super::container_data_dir_path(
+                &data_dir,
+                Path::new("/bundle/nodes/peer0/state/kura-sumeragi-records")
+            )
+            .as_deref(),
+            Some("/var/lib/iroha/state/kura-sumeragi-records")
+        );
+        for outside in [
+            "/bundle/nodes/peer0",
+            "/bundle/nodes/peer1/state/kura-sumeragi-records",
+            "/bundle/nodes/peer0/state/../../peer1/state",
+            "state/kura-sumeragi-records",
+        ] {
+            assert_eq!(
+                super::container_data_dir_path(&data_dir, Path::new(outside)),
+                None,
+                "{outside} is not inside the node data directory"
+            );
+        }
+        assert_eq!(
+            super::CONTAINER_DATA_DIR,
+            "/var/lib/iroha",
+            "the container render mode of specs/network_deployment.md §6.3"
+        );
+    }
+    #[test]
+    fn data_dir_projection_is_limited_to_developer_chain_identities() {
+        use iroha_deploy::genesis::profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID};
+        super::ensure_disposable_data_dir_chain(&ChainId::from(
+            iroha_deploy::localnet::DEFAULT_CHAIN_ID,
+        ))
+        .expect("the default developer chain is disposable");
+        for public in [PUBLIC_TAIRA_CHAIN_ID, PUBLIC_NEXUS_CHAIN_ID] {
+            let error = super::ensure_disposable_data_dir_chain(&ChainId::from(public))
+                .expect_err("a public chain never infers fresh keys from a missing directory");
+            assert!(
+                format!("{error:#}").contains("disposable developer network"),
+                "{error:#}"
+            );
+        }
+    }
+    /// A node data directory keeps the validator's state with its keys, so an existing chain is
+    /// neither refused nor replaced by an empty volume.
+    #[test]
+    fn data_dir_projection_keeps_existing_validator_state_with_its_keys() {
+        let temp_dir = tempfile::tempdir().expect("prepared state temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let state = config_dir.join("nodes/peer0").join(layout::STATE_DIR);
+        for directory in ["kura", "kura-sumeragi-records"] {
+            fs::create_dir_all(state.join(directory)).expect("create existing state");
+            fs::write(state.join(directory).join("existing"), b"existing state")
+                .expect("write existing state");
+        }
+        let bundle = load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("state-projection"),
+            NonZeroU16::new(4).expect("non-zero"),
+        )
+        .expect("existing state stays in the mounted node data directory");
+        let peer0 = bundle.validators[0]
+            .data_dir
+            .as_ref()
+            .expect("peer0 mounts its node data directory");
+        assert_eq!(
+            peer0.source_path,
+            fs::canonicalize(config_dir.join("nodes/peer0")).expect("canonical data_dir")
+        );
+        assert_eq!(
+            peer0.records_dir,
+            "/var/lib/iroha/state/kura-sumeragi-records"
+        );
+        assert!(
+            bundle
+                .validators
+                .iter()
+                .all(|validator| validator.secret_files.is_empty()),
+            "node keys are never copied into the projection"
+        );
+        assert_eq!(
+            fs::read(state.join("kura/existing")).expect("existing state"),
+            b"existing state",
+            "projection leaves validator state untouched"
+        );
     }
     #[test]
     fn prepared_bundle_allows_loopback_but_rejects_bridge_trust_cidrs() {
@@ -3824,7 +4575,9 @@ mod tests {
     #[test]
     fn prepared_bundle_rejects_existing_default_projected_state() {
         let temp_dir = tempfile::tempdir().expect("prepared state temp dir");
-        let config_dir = generate_prepared_bundle(temp_dir.path());
+        // A flat configuration is projected onto empty `/storage` volumes, so state it already
+        // has on the host would be silently left behind.
+        let config_dir = generate_sora_bundle(temp_dir.path());
         let peer0: toml::Value = toml::from_str(
             &fs::read_to_string(config_dir.join("peer0.toml")).expect("read selected peer config"),
         )

@@ -45,14 +45,15 @@ fn complete_profile_tree_keeps_all_original_inputs_inventories_and_same_source_r
         count_semantic_validations(|| capture_retained(&prepared).unwrap().unwrap());
     assert_eq!(parses, 1);
     let image = &profile.retained.image;
-    assert_eq!(image.directories.len(), 11);
+    assert_eq!(image.directories.len(), DIRECTORY_COUNT);
+    assert_eq!(DIRECTORY_COUNT, 20);
     assert_eq!(
         image
             .directories
             .iter()
             .map(|directory| directory.inputs.len())
             .sum::<usize>(),
-        75
+        INPUT_COUNT
     );
     let ((), parses) = count_semantic_validations(|| {
         image.revalidate().unwrap();
