@@ -2446,6 +2446,12 @@ async fn handle_ws_inner(
                                 .relay_from_role_for_session(&bound_session, role, frame)
                                 .await
                             {
+                                // A refusal that terminated the session queued its terminal
+                                // Close for this endpoint; the writer half sends it and stops,
+                                // which ends both halves. Breaking here at once would drop the
+                                // writer first. A refusal that queued nothing ends after the
+                                // same bound.
+                                tokio::time::sleep(send_timeout).await;
                                 break;
                             }
                         }
