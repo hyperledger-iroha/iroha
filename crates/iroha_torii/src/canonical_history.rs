@@ -534,38 +534,75 @@ mod tests {
         assert!(calls[0].2.is_ok());
     }
 
-    #[test]
-    fn completion_records_keep_internal_call_identity_without_network_index() {
-        let block = with_outputs();
+    /// Every completion row of `block`, in the collection's descending order.
+    #[cfg(feature = "app_api")]
+    fn completion_rows(block: &SignedBlock) -> Vec<((u64, u64, u64), norito::json::Map)> {
         let mut rows = vec![];
         assert!(
-            crate::visit_trigger_completion_records_for_block(&block, 2, |row| {
-                rows.push(row);
-                true
-            })
-            .unwrap()
+            crate::routing::collection_sources::trigger_completions::visit_block_rows(
+                block,
+                2,
+                None,
+                |coordinate, row| {
+                    rows.push((coordinate, row));
+                    std::ops::ControlFlow::Continue(())
+                },
+            )
+            .unwrap(),
+            "an unstopped visit examines the whole block"
         );
+        rows
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn completion_records_keep_internal_call_identity_without_network_index() {
+        use norito::json::Value;
+        let block = with_outputs();
+        let rows = completion_rows(&block);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].entrypoint_index, None);
-        assert_eq!(rows[0].completion.step_index, 0);
+        let (coordinate, row) = &rows[0];
         assert_eq!(
-            rows[0].completion.trigger_execution_hash,
-            block.execution_outputs()[1]
-                .execution_call_hash(block.hash(), &block)
-                .unwrap()
-                .to_string()
+            *coordinate,
+            (2, 1, 0),
+            "block, Time output, sole completion"
+        );
+        assert_eq!(row["block_height"], Value::from(2_u64));
+        assert_eq!(row["output_index"], Value::from(1_u64));
+        assert_eq!(row["completion_index"], Value::from(0_u64));
+        assert_eq!(row["entrypoint_index"], Value::Null);
+        assert_eq!(row["step_index"], Value::from(0_u64));
+        assert_eq!(row["trigger_id"], Value::from("clock"));
+        assert_eq!(row["outcome"], Value::from("Success"));
+        assert_eq!(row["message"], Value::Null);
+        assert_eq!(
+            row["trigger_execution_hash"],
+            Value::from(
+                block.execution_outputs()[1]
+                    .execution_call_hash(block.hash(), &block)
+                    .unwrap()
+                    .to_string()
+            )
         );
         assert_ne!(
-            rows[0].completion.trigger_execution_hash,
-            block.network_entrypoint_at(0).unwrap().hash().to_string()
+            row["trigger_execution_hash"],
+            Value::from(block.network_entrypoint_at(0).unwrap().hash().to_string())
         );
-        assert_eq!(rows[0].source, "execution_output");
+        assert!(
+            !row.contains_key("source"),
+            "rows come only from execution outputs; the constant marker is retired"
+        );
         let mut visits = 0;
         assert!(
-            !crate::visit_trigger_completion_records_for_block(&block, 2, |_| {
-                visits += 1;
-                false
-            })
+            !crate::routing::collection_sources::trigger_completions::visit_block_rows(
+                &block,
+                2,
+                None,
+                |_, _| {
+                    visits += 1;
+                    std::ops::ControlFlow::Break(())
+                },
+            )
             .unwrap()
         );
         assert_eq!(visits, 1);
@@ -577,21 +614,33 @@ mod tests {
         let calls = signed_calls(&block).unwrap().collect::<Vec<_>>();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, block.network_entrypoint_at(0).unwrap().hash());
-        let mut records = Vec::new();
-        crate::visit_trigger_completion_records_for_block(&block, 2, |row| {
-            records.push(row);
-            true
-        })
-        .unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].entrypoint_index, Some(0));
-        assert_eq!(records[1].entrypoint_index, None);
-        assert_eq!(
-            records[0].completion.trigger_execution_hash,
-            calls[0].0.to_string()
-        );
         #[cfg(feature = "app_api")]
         {
+            use norito::json::Value;
+            // Newest first inside the block: the Time output, then the Network input.
+            let rows = completion_rows(&block);
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].0, (2, 1, 0));
+            assert_eq!(rows[1].0, (2, 0, 0));
+            assert_eq!(rows[0].1["entrypoint_index"], Value::Null);
+            assert_eq!(rows[1].1["entrypoint_index"], Value::from(0_u64));
+            assert_eq!(
+                rows[1].1["trigger_execution_hash"],
+                Value::from(calls[0].0.to_string())
+            );
+            // A cursor inside the block keeps the completions strictly after it.
+            let mut after_time_output = vec![];
+            crate::routing::collection_sources::trigger_completions::visit_block_rows(
+                &block,
+                2,
+                Some((2, 1, 0)),
+                |coordinate, _| {
+                    after_time_output.push(coordinate);
+                    std::ops::ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+            assert_eq!(after_time_output, [(2, 0, 0)]);
             assert_eq!(
                 crate::routing::output_fee_projection(&block, &block.execution_outputs()[0])
                     .unwrap(),
@@ -605,15 +654,27 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "app_api")]
     #[test]
-    fn completion_queries_reject_the_removed_reconstruction_option() {
-        assert!(
-            norito::json::from_str::<crate::TriggerCompletionQuery>(
-                r#"{"include_reconstructed":true}"#,
-            )
-            .is_err()
-        );
-        assert!(norito::json::from_str::<crate::TriggerCompletionQuery>("{}").is_ok());
+    fn completion_queries_reject_retired_request_parameters() {
+        for retired in [
+            "include_reconstructed=true",
+            "id=clock",
+            "entrypoint_hash=abcd",
+            "outcome=failure",
+            "from_height=1",
+            "to_height=2",
+            "scan_limit_blocks=5",
+        ] {
+            let error = crate::list_query_from_query_string(Some(retired))
+                .expect_err("retired parameters are rejected, never ignored");
+            let crate::Error::CollectionQuery(error) = error else {
+                panic!("expected a collection query error for {retired}");
+            };
+            assert_eq!(error.code, "invalid_query", "{retired}");
+        }
+        assert!(crate::list_query_from_query_string(None).is_ok());
+        assert!(crate::list_query_from_query_string(Some("limit=5")).is_ok());
     }
 
     #[test]

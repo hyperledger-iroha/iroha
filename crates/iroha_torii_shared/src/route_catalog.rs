@@ -2168,7 +2168,8 @@ pub mod pipeline {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK);
-    /// List trigger completion records.
+    /// Page committed trigger completion records, newest first, with the collection
+    /// query controls (`filter`, `select`, `limit`, `cursor`).
     pub const TRIGGER_COMPLETIONS: RouteDescriptor = RouteDescriptor::new(
         "trigger.completion.list",
         HttpMethod::Get,
@@ -2178,6 +2179,7 @@ pub mod pipeline {
         RouteEffect::ExpensiveCompute,
         AdmissionPolicy::Operator,
     )
+    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);

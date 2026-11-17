@@ -1771,70 +1771,424 @@ fn executed_data_trigger_history_fixture() -> (
     (app, sample, chain)
 }
 
-#[test]
-fn trigger_completion_query_projects_only_authenticated_persisted_calls() {
-    let (app, sample, _chain) = executed_data_trigger_history_fixture();
-    let response = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: None,
-            entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
-            outcome: None,
-            from_height: Some(2),
-            to_height: Some(2),
-            limit: Some(10),
-            scan_limit_blocks: Some(1),
+/// One `GET /v1/triggers/completed` page served by the route's own handler, as a
+/// request that passed operator authentication reaches it: HTTP status and JSON body.
+#[cfg(feature = "app_api")]
+fn trigger_completions_http(
+    app: &SharedAppState,
+    controls: &[(&str, &str)],
+) -> (StatusCode, norito::json::Value) {
+    let mut target = String::from("/v1/triggers/completed");
+    if !controls.is_empty() {
+        target.push('?');
+        target.push_str(
+            &url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(controls)
+                .finish(),
+        );
+    }
+    let uri: axum::http::Uri = target.parse().expect("request target");
+    let available = app.query_fanout_inflight.available_bytes();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("handler runtime");
+    let page = runtime.block_on(crate::utils::with_current_response_format(
+        crate::utils::ResponseFormat::Json,
+        async {
+            let response = match handler_trigger_completions(
+                State(app.clone()),
+                uri,
+                HeaderMap::new(),
+                axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) => error.into_response(),
+            };
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("bounded page body");
+            (
+                status,
+                norito::json::from_slice(&body).expect("JSON response body"),
+            )
         },
-    )
-    .expect("query response");
-    assert_eq!(response.completions.len(), 1);
-    let record = response.completions.first().expect("completion");
-    assert_eq!(record.source, "execution_output");
-    assert_eq!(record.block_height, 2);
-    assert_eq!(record.entrypoint_index, Some(0));
-    assert_eq!(record.completion.trigger_id, sample.trigger_id.to_string());
+    ));
     assert_eq!(
-        record.completion.trigger_execution_hash,
-        sample.entrypoint_hash.to_string()
+        app.query_fanout_inflight.available_bytes(),
+        available,
+        "the page's query owner is released with its response body"
     );
-    let missing_call = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: None,
-            entrypoint_hash: Some(Hash::new(b"missing execution call").to_string()),
-            outcome: None,
-            from_height: Some(2),
-            to_height: Some(2),
-            limit: Some(10),
-            scan_limit_blocks: Some(1),
-        },
-    )
-    .expect("query response");
-    assert!(missing_call.completions.is_empty());
-    let persisted_response = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: None,
-            entrypoint_hash: Some(sample.trigger_execution_hash.to_string()),
-            outcome: None,
-            from_height: Some(2),
-            to_height: Some(2),
-            limit: Some(10),
-            scan_limit_blocks: Some(1),
-        },
-    )
-    .expect("query response");
-    assert_eq!(persisted_response.completions.len(), 1);
-    let persisted = persisted_response.completions.first().expect("completion");
-    assert_eq!(persisted.source, "execution_output");
+    page
+}
+
+/// Follow every continuation of one trigger completion query.
+#[cfg(feature = "app_api")]
+fn trigger_completion_pages(
+    app: &SharedAppState,
+    controls: &[(&str, &str)],
+) -> Vec<norito::json::Value> {
+    let mut pages = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut request = controls.to_vec();
+        if let Some(cursor) = &cursor {
+            request.push(("cursor", cursor));
+        }
+        let (status, page) = trigger_completions_http(app, &request);
+        assert_eq!(status, StatusCode::OK, "{page:?}");
+        let next = page["next_cursor"].as_str().map(str::to_owned);
+        assert!(
+            next.is_none() || next != cursor,
+            "a continuation always advances"
+        );
+        pages.push(page);
+        cursor = next;
+        if cursor.is_none() {
+            return pages;
+        }
+        assert!(pages.len() < 1_024, "a bounded history walk must end");
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn trigger_completion_rows(page: &norito::json::Value) -> &[norito::json::Value] {
+    page["items"].as_array().expect("page items")
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn trigger_completion_collection_projects_only_authenticated_persisted_calls() {
+    use norito::json::Value;
+    let (app, sample, _chain) = executed_data_trigger_history_fixture();
+    let by_call = |hash: String| {
+        let filter = format!(r#"trigger_execution_hash = "{hash}" and block_height = 2"#);
+        trigger_completions_http(&app, &[("filter", &filter), ("limit", "10")])
+    };
+    let (status, page) = by_call(sample.entrypoint_hash.to_string());
+    assert_eq!(status, StatusCode::OK, "{page:?}");
+    let page = page.as_object().expect("page envelope");
     assert_eq!(
-        persisted.completion.trigger_execution_hash,
-        sample.trigger_execution_hash.to_string()
+        page.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["items", "next_cursor"],
+        "the collection page envelope, without a total for history"
+    );
+    assert_eq!(page["next_cursor"], Value::Null);
+    let rows = page["items"].as_array().expect("items");
+    assert_eq!(rows.len(), 1);
+    let row = rows[0].as_object().expect("row");
+    assert_eq!(row["block_height"].as_u64(), Some(2));
+    assert_eq!(row["output_index"].as_u64(), Some(0));
+    assert_eq!(row["completion_index"].as_u64(), Some(0));
+    assert_eq!(row["entrypoint_index"].as_u64(), Some(0));
+    assert_eq!(row["step_index"].as_u64(), Some(0));
+    assert_eq!(
+        row["trigger_id"].as_str(),
+        Some(&*sample.trigger_id.to_string())
+    );
+    assert_eq!(
+        row["trigger_execution_hash"].as_str(),
+        Some(&*sample.entrypoint_hash.to_string())
+    );
+    assert_eq!(row["outcome"].as_str(), Some("Success"));
+    assert_eq!(row["message"], Value::Null);
+    assert_eq!(row.len(), 9, "exactly the declared row fields");
+
+    let (status, missing) = by_call(Hash::new(b"missing execution call").to_string());
+    assert_eq!(status, StatusCode::OK);
+    assert!(trigger_completion_rows(&missing).is_empty());
+    assert_eq!(missing["next_cursor"], Value::Null);
+
+    let (status, persisted) = by_call(sample.trigger_execution_hash.to_string());
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trigger_completion_rows(&persisted).len(), 1);
+
+    // `select` is the shared projection control.
+    let (status, projected) =
+        trigger_completions_http(&app, &[("select", "trigger_id,outcome"), ("limit", "10")]);
+    assert_eq!(status, StatusCode::OK);
+    let projected = trigger_completion_rows(&projected);
+    assert_eq!(projected.len(), 1);
+    assert_eq!(
+        projected[0],
+        norito::json!({"trigger_id": (sample.trigger_id.to_string()), "outcome": "Success"})
     );
 }
+
+#[cfg(feature = "app_api")]
 #[test]
-fn trigger_completion_record_visit_stops_without_buffering_the_block() {
+fn trigger_completion_collection_rejects_invalid_and_retired_controls_with_the_shared_envelope() {
+    let (app, _sample, _chain) = executed_data_trigger_history_fixture();
+    for (controls, code, field) in [
+        // The bespoke request parameters are retired, never silently ignored.
+        (
+            &[("id", "persisted_data_trigger")][..],
+            "invalid_query",
+            "query",
+        ),
+        (&[("entrypoint_hash", "abcd")][..], "invalid_query", "query"),
+        (&[("outcome", "failure")][..], "invalid_query", "query"),
+        (&[("from_height", "1")][..], "invalid_query", "query"),
+        (&[("to_height", "2")][..], "invalid_query", "query"),
+        (&[("scan_limit_blocks", "5")][..], "invalid_query", "query"),
+        // History order is fixed.
+        (&[("sort", "block_height")][..], "invalid_sort", "sort"),
+        (
+            &[("include_total", "true")][..],
+            "invalid_include_total",
+            "include_total",
+        ),
+        // Ordinary collection validation.
+        (&[("limit", "0")][..], "invalid_limit", "limit"),
+        (&[("cursor", "AAAA")][..], "invalid_cursor", "cursor"),
+        (
+            &[("filter", r#"source = "execution_output""#)][..],
+            "invalid_filter",
+            "filter",
+        ),
+        (&[("select", "completion")][..], "invalid_select", "select"),
+    ] {
+        let (status, error) = trigger_completions_http(&app, controls);
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{controls:?}: {error:?}");
+        assert_eq!(
+            error["code"].as_str(),
+            Some(code),
+            "{controls:?}: {error:?}"
+        );
+        assert_eq!(
+            error["details"]["field"].as_str(),
+            Some(field),
+            "{controls:?}: {error:?}"
+        );
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+    }
+    // An unknown filter field names the accepted fields.
+    let (_, error) =
+        trigger_completions_http(&app, &[("filter", r#"source = "execution_output""#)]);
+    assert_eq!(error["details"]["actual"].as_str(), Some("source"));
+    let expected = error["details"]["expected"].as_str().expect("field list");
+    for field in ["block_height", "trigger_id", "outcome", "message"] {
+        assert!(expected.contains(field), "{expected}");
+    }
+}
+
+/// Three committed blocks (H2..H4), each with one applied data-trigger completion.
+#[cfg(feature = "app_api")]
+fn repeated_data_trigger_history_fixture() -> (
+    SharedAppState,
+    TriggerId,
+    iroha_core::sumeragi::test_chain::CertifiedTestChain,
+) {
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::{
+        events::data::prelude::{AccountEventFilter, AccountEventSet, DataEventFilter},
+        isi::{Register, SetKeyValue},
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
+    };
+    let key = checked_torii_test_ed25519_keypair(0x24, "repeated data-trigger history authority");
+    let authority = AccountId::new(key.public_key().clone());
+    let trigger_id: TriggerId = "repeated_data_trigger".parse().unwrap();
+    let trigger = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            vec![iroha_data_model::isi::InstructionBox::from(Log::new(
+                Level::INFO,
+                "repeated persisted data callback".into(),
+            ))],
+            Repeats::Indefinitely,
+            authority.clone(),
+            DataEventFilter::Account(
+                AccountEventFilter::new()
+                    .for_account(authority.clone())
+                    .for_events(AccountEventSet::MetadataInserted),
+            ),
+        )
+        .unwrap(),
+    );
+    let mut config = TestChainConfig::new(world_with_account(&authority), 1_000);
+    config
+        .genesis_instructions
+        .push(Register::trigger(trigger).into());
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    for height in 2..=4_u64 {
+        let transaction = past_fetch_budget_transaction(
+            chain.network_id(),
+            &key,
+            vec![
+                SetKeyValue::account(
+                    authority.clone(),
+                    format!("history_callback_{height}").parse().unwrap(),
+                    "actual source event",
+                )
+                .into(),
+            ],
+        );
+        assert_eq!(chain.commit(vec![transaction]), vec![true]);
+        assert_eq!(chain.height(), height);
+        let receipt = chain.committed(height);
+        let (_, output) = receipt.block().network_output_at(0).unwrap();
+        assert_eq!(
+            output.completions.len(),
+            1,
+            "one data invocation at {height}"
+        );
+    }
+    let mut app = mk_app_state_for_tests();
+    let unique = Arc::get_mut(&mut app).unwrap();
+    unique.state = chain.state().clone();
+    unique.kura = chain.kura().clone();
+    (app, trigger_id, chain)
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn trigger_completion_collection_pages_newest_first_with_bound_cursors() {
+    let (app, trigger_id, _chain) = repeated_data_trigger_history_fixture();
+    let heights = |pages: &[norito::json::Value]| -> Vec<Vec<u64>> {
+        pages
+            .iter()
+            .map(|page| {
+                trigger_completion_rows(page)
+                    .iter()
+                    .map(|row| row["block_height"].as_u64().expect("block height"))
+                    .collect()
+            })
+            .collect()
+    };
+    // One row per page: every completion appears exactly once, newest first.
+    let pages = trigger_completion_pages(&app, &[("limit", "1")]);
+    assert_eq!(heights(&pages), [[4], [3], [2]]);
+    for page in &pages {
+        for row in trigger_completion_rows(page) {
+            assert_eq!(row["trigger_id"].as_str(), Some(&*trigger_id.to_string()));
+            assert_eq!(row["outcome"].as_str(), Some("Success"));
+        }
+    }
+    // A page that fits every row has no continuation.
+    let pages = trigger_completion_pages(&app, &[("limit", "10")]);
+    assert_eq!(heights(&pages), [[4, 3, 2]]);
+    // Conjunctive height bounds seek the walk; the row filter still decides each row.
+    let pages = trigger_completion_pages(&app, &[("filter", "block_height >= 3"), ("limit", "10")]);
+    assert_eq!(heights(&pages), [[4, 3]]);
+    let pages = trigger_completion_pages(
+        &app,
+        &[
+            ("filter", "block_height <= 3 and block_height > 1"),
+            ("limit", "1"),
+        ],
+    );
+    assert_eq!(heights(&pages), [[3], [2]]);
+    let pages = trigger_completion_pages(&app, &[("filter", r#"outcome = "Failure""#)]);
+    assert_eq!(heights(&pages), [Vec::<u64>::new()]);
+    // A disjunction never narrows the walk, and still filters every row.
+    let pages = trigger_completion_pages(
+        &app,
+        &[
+            ("filter", "block_height = 4 or block_height = 2"),
+            ("limit", "10"),
+        ],
+    );
+    assert_eq!(heights(&pages), [[4, 2]]);
+
+    // A continuation is bound to the filter that issued it; `limit` and `select` may change.
+    let filter = format!(r#"trigger_id = "{trigger_id}""#);
+    let (_, first) = trigger_completions_http(&app, &[("filter", &filter), ("limit", "1")]);
+    let cursor = first["next_cursor"]
+        .as_str()
+        .expect("continuation")
+        .to_owned();
+    let (status, second) = trigger_completions_http(
+        &app,
+        &[
+            ("filter", &filter),
+            ("limit", "5"),
+            ("select", "block_height"),
+            ("cursor", &cursor),
+        ],
+    );
+    assert_eq!(status, StatusCode::OK, "{second:?}");
+    assert_eq!(heights(std::slice::from_ref(&second)), [[3, 2]]);
+    for row in trigger_completion_rows(&second) {
+        assert_eq!(
+            row.as_object().map(norito::json::Map::len),
+            Some(1),
+            "the continuation applies its own projection"
+        );
+    }
+    assert_eq!(second["next_cursor"], norito::json::Value::Null);
+    for other in [
+        &[("limit", "1"), ("cursor", cursor.as_str())][..],
+        &[
+            ("filter", r#"outcome = "Success""#),
+            ("cursor", cursor.as_str()),
+        ][..],
+    ] {
+        let (status, error) = trigger_completions_http(&app, other);
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error:?}");
+        assert_eq!(error["code"].as_str(), Some("invalid_cursor"));
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn trigger_completion_collection_is_served_only_to_readers_of_all_ledger_data() {
+    let (app, _trigger_id, _chain) = repeated_data_trigger_history_fixture();
+    let read = |visibility: routing::DataspaceReadVisibility| {
+        let limits = routing::collection_sources::collection_limits();
+        let query = ListQuery::new();
+        let prepared = crate::collections::prepare(
+            &crate::collections::specs::TRIGGER_COMPLETIONS,
+            "",
+            &query,
+            &limits,
+        )
+        .expect("unfiltered first page");
+        let owner = crate::history_producer::HistoryProducerOwner::authentication_read(&app)
+            .expect("query owner");
+        owner.scope(|| {
+            routing::collection_sources::trigger_completions::page(
+                &app.state,
+                &prepared,
+                &visibility,
+            )
+        })
+    };
+    let complete = read(routing::DataspaceReadVisibility::new(
+        std::collections::BTreeSet::new(),
+        true,
+    ))
+    .expect("whole-ledger page");
+    assert_eq!(complete.items.len(), 3);
+    assert_eq!(complete.next_cursor, None);
+    // Completions are operator evidence without a data space of their own: every
+    // narrower visibility, even one naming a data space, reads nothing.
+    for dataspaces in [
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL]),
+    ] {
+        let hidden = read(routing::DataspaceReadVisibility::new(dataspaces, false))
+            .expect("empty page, not an error");
+        assert!(hidden.items.is_empty());
+        assert_eq!(hidden.next_cursor, None);
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn trigger_completion_block_visit_stops_and_resumes_inside_one_output() {
     use iroha_data_model::block::execution_output::{ExecutionOutputV1, InvocationCompletionV1};
+    use routing::collection_sources::trigger_completions::visit_block_rows;
     let mut sample = make_persisted_data_trigger_completion_block(1, None);
     let mut rows = sample.block.execution_outputs().to_vec();
     let ExecutionOutputV1::Network(row) = &mut rows[0] else {
@@ -1852,58 +2206,36 @@ fn trigger_completion_record_visit_stops_without_buffering_the_block() {
         outcome: TriggerCompletedOutcome::Success,
     });
     crate::test_utils::attach_fixture_execution_outputs(&mut sample.block, rows);
-    let mut visited = 0_u8;
-    let completed = super::visit_trigger_completion_records_for_block(&sample.block, 1, |_| {
-        visited = visited.saturating_add(1);
-        false
+    let mut visited = Vec::new();
+    let completed = visit_block_rows(&sample.block, 1, None, |coordinate, _| {
+        visited.push(coordinate);
+        std::ops::ControlFlow::Break(())
     })
     .unwrap();
     assert!(!completed);
     assert_eq!(
-        visited, 1,
-        "the visitor must stop before building later records"
+        visited,
+        [(1, 0, 1)],
+        "the visitor stops at the newest completion before building later rows"
     );
-}
-#[test]
-fn trigger_completion_query_caps_explicit_from_height() {
-    let (app, sample, mut chain) = executed_data_trigger_history_fixture();
-    // Append unrelated real work at H3..H5 through the same execution/certification owner.
-    for _ in 3..=5 {
-        chain.commit(Vec::new());
-    }
-    assert_eq!(chain.height(), 5);
-    let bounded_window = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: Some(sample.trigger_id.to_string()),
-            entrypoint_hash: None,
-            outcome: None,
-            from_height: None,
-            to_height: Some(5),
-            limit: Some(10),
-            scan_limit_blocks: Some(2),
-        },
-    )
-    .expect("query response");
-    assert_eq!(bounded_window.from_height, 4);
-    assert_eq!(bounded_window.scanned_blocks, 2);
-    assert!(bounded_window.completions.is_empty());
-    let explicit_history = super::trigger_completion_query_response(
-        &app,
-        &TriggerCompletionQuery {
-            id: Some(sample.trigger_id.to_string()),
-            entrypoint_hash: None,
-            outcome: None,
-            from_height: Some(1),
-            to_height: Some(5),
-            limit: Some(10),
-            scan_limit_blocks: Some(2),
-        },
-    )
-    .expect("query response");
-    assert_eq!(explicit_history.from_height, 4);
-    assert_eq!(explicit_history.scanned_blocks, 2);
-    assert!(explicit_history.completions.is_empty());
+    // The exclusive cursor keeps the older completion of the same output reachable.
+    let mut resumed = Vec::new();
+    let completed = visit_block_rows(&sample.block, 1, Some((1, 0, 1)), |coordinate, row| {
+        resumed.push((coordinate, row["step_index"].as_u64()));
+        std::ops::ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert!(completed);
+    assert_eq!(resumed, [((1, 0, 0), Some(0))]);
+    let mut none = 0_u8;
+    assert!(
+        visit_block_rows(&sample.block, 1, Some((1, 0, 0)), |_, _| {
+            none += 1;
+            std::ops::ControlFlow::Continue(())
+        })
+        .unwrap()
+    );
+    assert_eq!(none, 0, "nothing lies after the block's oldest completion");
 }
 fn native_ingress_app_for_test(keys: &[&KeyPair]) -> SharedAppState {
     let accounts = keys

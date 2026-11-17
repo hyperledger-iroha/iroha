@@ -1088,13 +1088,6 @@ export interface IterableListOptions extends PermissionedIterableOptions {
   signal?: AbortSignal;
 }
 
-export interface IterableQueryOptions extends IterableListOptions {
-  fetch_size?: NumericLike;
-  queryName?: string;
-  query_name?: string;
-  select?: ReadonlyArray<string | Record<string, unknown>>;
-}
-
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
@@ -1136,24 +1129,6 @@ export interface ToriiRepoAgreement extends RepoAgreementLifecycleFields {
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
-}
-
-export interface TriggerListOptions {
-  namespace?: string;
-  authority?: string;
-  limit?: NumericLike;
-  offset?: NumericLike;
-  signal?: AbortSignal;
-}
-
-export interface TriggerIteratorOptions extends TriggerListOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
-}
-
-export interface TriggerQueryIteratorOptions extends IterableQueryOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
 }
 
 export type SubscriptionStatus =
@@ -5160,32 +5135,6 @@ export interface ToriiGovernanceBallotResponse
 {
   drafted: true;
   tx_instructions: readonly [ToriiGovernanceProposalInstructionDraftV1];
-}
-
-export interface ToriiTriggerUpsertRequest {
-  id: string;
-  action: JsonValue | string;
-  metadata?: JsonValue | null;
-}
-
-export interface ToriiTriggerMutationResponse {
-  ok: boolean;
-  trigger_id: string | null;
-  tx_instructions: ReadonlyArray<ToriiGovernanceDraftInstruction>;
-  accepted?: boolean;
-  message?: string;
-}
-
-export interface ToriiTriggerRecord {
-  id: string;
-  action: JsonValue;
-  metadata: JsonValue;
-  raw: JsonValue;
-}
-
-export interface ToriiTriggerListPage {
-  items: ReadonlyArray<ToriiTriggerRecord>;
-  total: number;
 }
 
 export interface ToriiStatusPayload {
@@ -11583,34 +11532,6 @@ export declare class ToriiClient {
     contractAddress: string,
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceContractResponse>;
-  listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
-  iterateTriggers(
-    options?: TriggerIteratorOptions,
-  ): AsyncGenerator<ToriiTriggerRecord, void, unknown>;
-  getTrigger(
-    triggerId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiTriggerRecord | null>;
-  registerTrigger(
-    trigger: ToriiTriggerUpsertRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<Record<string, unknown> | null>;
-  registerTriggerTyped(
-    trigger: ToriiTriggerUpsertRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiTriggerMutationResponse | null>;
-  deleteTrigger(
-    triggerId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<Record<string, unknown> | null>;
-  deleteTriggerTyped(
-    triggerId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiTriggerMutationResponse | null>;
-  queryTriggers(options?: IterableQueryOptions): Promise<ToriiTriggerListPage>;
-  iterateTriggersQuery(
-    options?: TriggerQueryIteratorOptions,
-  ): AsyncGenerator<ToriiTriggerRecord, void, unknown>;
   createSubscriptionPlan(
     request: SubscriptionPlanCreateRequest,
     options: RequiredCanonicalRequestOptions,

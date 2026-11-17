@@ -20,7 +20,6 @@ from iroha_python import (
     ListQueryError,
     NetworkId,
     ToriiClient,
-    TriggerCompletionList,
 )
 from iroha_python.address import AccountAddress, AccountAddressError
 from iroha_python.crypto import (
@@ -542,77 +541,6 @@ def test_transactions_collection_routes_list_queries_and_rejects_aggregates() ->
         "select": ["entrypoint_hash"],
         "limit": 5,
     }
-
-
-def test_list_trigger_completions_returns_typed_step_evidence() -> None:
-    client, session = _client_with_session()
-    session._response = StubResponse(
-        payload={
-            "latest_height": 42,
-            "from_height": 40,
-            "to_height": 42,
-            "scanned_blocks": 3,
-            "limit": 10,
-            "completions": [
-                {
-                    "block_height": 41,
-                    "entrypoint_index": 2,
-                    "completion": {
-                        "trigger_id": "minimum-liquidity",
-                        "trigger_execution_hash": "hash:trigger-execution",
-                        "step_index": 1,
-                        "outcome": "Success",
-                        "message": None,
-                    },
-                    "source": "execution_output",
-                }
-            ],
-        }
-    )
-
-    result = client.list_trigger_completions(
-        trigger_id="minimum-liquidity",
-        entrypoint_hash="hash:trigger-execution",
-        outcome="success",
-        from_height=40,
-        to_height=42,
-        limit=10,
-        scan_limit_blocks=3,
-    )
-
-    assert isinstance(result, TriggerCompletionList)
-    assert result.latest_height == 42
-    assert result.completions[0].completion.step_index == 1
-    assert result.completions[0].source == "execution_output"
-    assert session.calls[0]["method"] == "GET"
-    assert session.calls[0]["url"] == "http://localhost:8080/v1/triggers/completed"
-    assert session.calls[0]["params"] == {
-        "id": "minimum-liquidity",
-        "entrypoint_hash": "hash:trigger-execution",
-        "outcome": "success",
-        "from_height": 40,
-        "to_height": 42,
-        "limit": 10,
-        "scan_limit_blocks": 3,
-    }
-
-
-def test_list_trigger_completions_validates_filters_before_request() -> None:
-    client, session = _client_with_session()
-
-    with pytest.raises(ValueError, match="all, success, or failure"):
-        client.list_trigger_completions(outcome="maybe")
-    with pytest.raises(ValueError, match="limit"):
-        client.list_trigger_completions(limit=0)
-    with pytest.raises(TypeError, match="from_height"):
-        client.list_trigger_completions(from_height=True)
-    with pytest.raises(ValueError, match="u64"):
-        client.list_trigger_completions(to_height=1 << 64)
-
-    with pytest.raises(TypeError):
-        client.list_trigger_completions(include_reconstructed=False)
-
-    assert session.calls == []
 
 
 def test_accounts_query_body_carries_only_list_query_controls() -> None:

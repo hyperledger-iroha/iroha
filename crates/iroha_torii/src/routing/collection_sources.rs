@@ -16,6 +16,7 @@ mod account_aliases;
 #[cfg(test)]
 mod account_aliases_tests;
 mod roles;
+pub(crate) mod trigger_completions;
 use account_aliases::AccountAliasJoin;
 
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
@@ -68,6 +69,8 @@ pub enum CollectionTarget {
     Bonds,
     /// `/v1/bonds/{bond_id}/entitlements` (path literal: canonical bond address)
     BondEntitlements(String),
+    /// `/v1/triggers/completed` (operator read of committed trigger completions)
+    TriggerCompletions,
 }
 
 impl CollectionTarget {
@@ -96,6 +99,7 @@ impl CollectionTarget {
             Self::UaidManifests(_) => &specs::UAID_MANIFESTS,
             Self::Bonds => &specs::BONDS,
             Self::BondEntitlements(_) => &specs::BOND_ENTITLEMENTS,
+            Self::TriggerCompletions => &specs::TRIGGER_COMPLETIONS,
         }
     }
 
@@ -124,7 +128,8 @@ impl CollectionTarget {
             | Self::RepoAgreements
             | Self::SubscriptionPlans
             | Self::Subscriptions
-            | Self::Bonds => "",
+            | Self::Bonds
+            | Self::TriggerCompletions => "",
         }
     }
 
@@ -153,6 +158,7 @@ impl CollectionTarget {
             Self::UaidManifests(_) => ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
             Self::Bonds => ENDPOINT_BONDS,
             Self::BondEntitlements(_) => ENDPOINT_BOND_ENTITLEMENTS,
+            Self::TriggerCompletions => trigger_completions::ENDPOINT,
         }
     }
 }
@@ -1065,6 +1071,9 @@ fn execute_prepared_collection_local(
         CollectionTarget::ContractEvents => {
             return contract_emission_page(state, prepared, visibility);
         }
+        CollectionTarget::TriggerCompletions => {
+            return trigger_completions::page(state, prepared, visibility);
+        }
         CollectionTarget::Bonds => {
             let world = state.world_view();
             let scan = prepared.ordered_scan();
@@ -1808,9 +1817,25 @@ pub async fn execute_collection_response(
     app: Option<&crate::SharedAppState>,
     state: &Arc<CoreState>,
     target: &CollectionTarget,
+    query: ListQuery,
+    telemetry: &MaybeTelemetry,
+    visibility: &DataspaceReadVisibility,
+) -> Result<Response> {
+    execute_collection_response_retaining(app, state, target, query, telemetry, visibility, ())
+        .await
+}
+
+/// [`execute_collection_response`] whose physical worker also owns `retained` until it
+/// has encoded the page. A read admitted through additional permits passes them here,
+/// so cancelling its HTTP task frees no capacity while the scan is still running.
+pub async fn execute_collection_response_retaining<G: Send + 'static>(
+    app: Option<&crate::SharedAppState>,
+    state: &Arc<CoreState>,
+    target: &CollectionTarget,
     mut query: ListQuery,
     telemetry: &MaybeTelemetry,
     visibility: &DataspaceReadVisibility,
+    retained: G,
 ) -> Result<Response> {
     // Capture task-local custody and geometry before crossing to a physical
     // worker. Cancellation cannot release its backing while execution runs.
@@ -1829,6 +1854,8 @@ pub async fn execute_collection_response(
     let telemetry = telemetry.clone();
     let visibility = visibility.clone();
     run_collection_worker(owner, move |owner| {
+        // Dropped only when this worker returns, after the response is encoded.
+        let _retained = retained;
         canonicalize_collection_query(&state, &target, &mut query, &telemetry)?;
         let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
         let page = execute_prepared_collection_local(
@@ -2480,6 +2507,43 @@ mod tests {
             "detached worker result drops only after its owner"
         );
         assert!(pool.try_acquire_parts([WORKING as u64]).is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retained_admission_moves_into_the_collection_worker_until_the_page_is_encoded() {
+        /// Reports the thread that released it.
+        struct Retained(std::sync::mpsc::Sender<std::thread::ThreadId>);
+        impl Drop for Retained {
+            fn drop(&mut self) {
+                let _ = self.0.send(std::thread::current().id());
+            }
+        }
+        let (state, _, _) = fixture();
+        let (released_tx, released_rx) = std::sync::mpsc::channel();
+        let response = execute_collection_response_retaining(
+            None,
+            &state,
+            &CollectionTarget::Domains,
+            ListQuery::new(),
+            &MaybeTelemetry::for_tests(),
+            &DataspaceReadVisibility::all_for_tests(),
+            Retained(released_tx),
+        )
+        .await
+        .expect("standalone page");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let released_on = released_rx
+            .try_recv()
+            .expect("the worker released the guard before its response returned");
+        assert_ne!(
+            released_on,
+            std::thread::current().id(),
+            "the guard is owned by the physical worker, not by the cancellable HTTP task"
+        );
+        assert!(
+            released_rx.try_recv().is_err(),
+            "the guard is released exactly once"
+        );
     }
 
     #[test]

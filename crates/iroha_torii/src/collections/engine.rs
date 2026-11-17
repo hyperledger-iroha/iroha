@@ -1143,7 +1143,9 @@ fn sort_plan_bytes(spec: &CollectionSpec, query: &ListQuery) -> Result<usize, Co
 
 /// Collections whose pages may continue strictly below a completely examined public block.
 fn continues_at_block_boundaries(spec: &CollectionSpec) -> bool {
-    spec.tag == super::specs::ACCOUNT_HISTORY.tag || spec.tag == super::specs::ASSET_MOVEMENTS.tag
+    spec.tag == super::specs::ACCOUNT_HISTORY.tag
+        || spec.tag == super::specs::ASSET_MOVEMENTS.tag
+        || spec.tag == super::specs::TRIGGER_COMPLETIONS.tag
 }
 
 fn decode_position(
@@ -1153,9 +1155,9 @@ fn decode_position(
     allocation_bytes: usize,
 ) -> Result<Vec<u64>, CursorError> {
     let values = cursor::decode(token, spec.tag, digest, spec.positioned, allocation_bytes)?;
-    // Account-history and asset-movement pages may finish between complete public
-    // blocks without seeing a visible movement. Null coordinates name that block
-    // boundary, never a hidden transaction or movement inside it.
+    // Account-history, asset-movement and trigger-completion pages may finish
+    // between complete public blocks without seeing a visible row. Null coordinates
+    // name that block boundary, never a hidden transaction or movement inside it.
     if continues_at_block_boundaries(spec)
         && matches!(values.as_slice(), [_, Value::Null, Value::Null])
     {
@@ -1579,8 +1581,8 @@ impl Prepared<'_> {
             .map(|position| (position[0], position[1], position[2]))
     }
 
-    /// Account history and asset movements continue strictly below this completely
-    /// scanned public block.
+    /// Account history, asset movements and trigger completions continue strictly
+    /// below this completely scanned public block.
     pub(crate) fn resume_before_block(&self) -> Option<u64> {
         self.after_position
             .as_ref()
@@ -3249,6 +3251,76 @@ mod tests {
         )
         .unwrap();
         assert!(events.block_boundary_page(Vec::new(), 70).is_err());
+    }
+
+    #[test]
+    fn trigger_completion_pages_keep_subrow_and_block_boundary_continuations() {
+        let spec = &super::super::specs::TRIGGER_COMPLETIONS;
+        let query = ListQuery::new().limit(2).filter(
+            field("trigger_id")
+                .eq("clock")
+                .and(field("block_height").gte(40)),
+        );
+        let prepared = prepare(spec, "", &query, &LIMITS).unwrap();
+        assert_eq!(prepared.height_range(), (40, u64::MAX));
+        // A page that filled up inside one output resumes after its last examined row.
+        let token = prepared
+            .subrow_page(Vec::new(), Some((70, 3, 1)))
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        let next = query.clone().cursor(token);
+        let resumed = prepare(spec, "", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_subrow_position(), Some((70, 3, 1)));
+        assert_eq!(resumed.resume_before_block(), None);
+        // A sparse scan that spent its budget resumes strictly below a complete block.
+        let token = prepared
+            .block_boundary_page(Vec::new(), 64)
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        let values = cursor::decode(&token, spec.tag, &prepared.digest, 3, 16 * 1024).unwrap();
+        assert_eq!(values, [Value::from(64_u64), Value::Null, Value::Null]);
+        let next = query.clone().cursor(token.clone());
+        let resumed = prepare(spec, "", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_before_block(), Some(64));
+        assert_eq!(resumed.resume_subrow_position(), None);
+        // Both continuations bind the filter and the collection that issued them.
+        assert!(prepare(spec, "", &ListQuery::new().cursor(token.clone()), &LIMITS).is_err());
+        assert!(
+            prepare(
+                &super::super::specs::CONTRACT_EVENTS,
+                "",
+                &query.clone().cursor(token),
+                &LIMITS
+            )
+            .is_err()
+        );
+        assert!(prepared.block_boundary_page(Vec::new(), 0).is_err());
+        // History order is fixed: sorting, totals and aggregates would scan every block.
+        for (rejected, code) in [
+            (
+                ListQuery::new().sort_by(SortKey::asc("block_height")),
+                "invalid_sort",
+            ),
+            (ListQuery::new().include_total(), "invalid_include_total"),
+        ] {
+            let error = prepare(spec, "", &rejected, &LIMITS)
+                .err()
+                .expect("fixed history order");
+            assert_eq!(error.code, code);
+        }
+        // Retired request parameters are not fields of the collection.
+        for retired in ["id", "entrypoint_hash", "from_height", "scan_limit_blocks"] {
+            let query = ListQuery::new().filter(FilterExpr::Eq(
+                FieldPath(retired.into()),
+                Value::from("forged"),
+            ));
+            let error = prepare(spec, "", &query, &LIMITS)
+                .err()
+                .expect("retired control");
+            assert_eq!(error.code, "invalid_filter", "{retired}");
+        }
     }
 
     #[test]

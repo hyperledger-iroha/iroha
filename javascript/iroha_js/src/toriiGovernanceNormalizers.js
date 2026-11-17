@@ -663,37 +663,6 @@ export function createToriiGovernanceNormalizers({
     };
   }
 
-  function normalizeTriggerMutationResponse(
-    payload,
-    context = "trigger mutation response",
-  ) {
-    const record = ensureRecord(payload, context);
-    const base = normalizeGovernanceDraftResponse(record, context);
-    let triggerId = record.trigger_id ?? null;
-    if (triggerId !== null && triggerId !== undefined) {
-      triggerId = requireNonEmptyString(triggerId, `${context}.trigger_id`);
-    } else {
-      triggerId = null;
-    }
-    const messageValue = record.message ?? null;
-    const message =
-      messageValue === null || messageValue === undefined
-        ? null
-        : String(messageValue);
-    const normalized = {
-      ok: base.ok,
-      trigger_id: triggerId,
-      tx_instructions: base.tx_instructions,
-    };
-    if (base.accepted !== undefined) {
-      normalized.accepted = base.accepted;
-    }
-    if (message !== null && message.length > 0) {
-      normalized.message = message;
-    }
-    return normalized;
-  }
-
   function normalizeGovernanceBallotResponse(payload, context) {
     const record = ensureRecord(payload, context);
     assertSupportedOptionKeys(record, GOVERNANCE_BALLOT_DRAFT_RESPONSE_KEYS, context);
@@ -1071,6 +1040,5 @@ export function createToriiGovernanceNormalizers({
     normalizeMinistryAgendaProposalDraftRequest,
     normalizeMinistryAgendaProposalDraftResponse,
     normalizeMinistryAgendaProposalGetResponse,
-    normalizeTriggerMutationResponse,
   };
 }

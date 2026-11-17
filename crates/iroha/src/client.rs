@@ -276,8 +276,7 @@ use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest as FeeQuoteWireRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
-    PipelineTransactionStatusResponse, TriggerCompletionListResponse,
-    route_catalog as torii_routes,
+    PipelineTransactionStatusResponse, route_catalog as torii_routes,
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned};
 use norito::{
@@ -16672,54 +16671,40 @@ impl Client {
         self.fetch_transaction_status_response_with_scope(hash, Some("global"))
             .await
     }
-    /// Operator-signed GET `/v1/triggers/completed` — list historical trigger completions from
-    /// committed blocks.
+    /// Operator-signed GET `/v1/triggers/completed` — one page of trigger completions
+    /// persisted in committed execution outputs, newest first by `block_height`,
+    /// `output_index` and `completion_index`.
+    ///
+    /// The route is a history collection of the Torii collection contract
+    /// (`specs/torii/collection_queries.md`): `query` carries `filter`, `select`,
+    /// `limit` and `cursor`, while `sort`, `include_total` and `aggregate` are
+    /// rejected before dispatch. Rows hold `block_height`, `output_index`,
+    /// `completion_index`, `trigger_id`, `trigger_execution_hash`,
+    /// `entrypoint_index` (number or null), `step_index`, `outcome` (`Success` or
+    /// `Failure`) and `message` (string or null). A page has a bounded scan budget,
+    /// so it may hold fewer than `limit` rows, or none, and still carry a
+    /// `next_cursor`: pass it back with [`ListQuery::next_page`] until it is absent.
+    ///
+    /// [`ListQuery::next_page`]: crate::collections::ListQuery::next_page
     ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
-    /// or the typed JSON payload cannot be decoded.
-    #[allow(clippy::too_many_arguments)]
+    /// Returns an error if the query is invalid, the HTTP request fails, the response
+    /// has an unexpected content type, or the JSON page cannot be decoded.
     pub fn get_trigger_completions(
         &self,
-        trigger_id: Option<&str>,
-        entrypoint_hash: Option<&str>,
-        outcome: Option<&str>,
-        from_height: Option<u64>,
-        to_height: Option<u64>,
-        limit: Option<u64>,
-        scan_limit_blocks: Option<u64>,
-    ) -> Result<TriggerCompletionListResponse> {
+        query: &crate::collections::ListQuery,
+    ) -> Result<crate::collections::Page<norito::json::Value>> {
+        crate::collections::validate_trigger_completions_query(query)?;
         let mut url = join_torii_url(&self.torii_url, "v1/triggers/completed");
-        {
-            let mut query = url.query_pairs_mut();
-            if let Some(trigger_id) = trigger_id {
-                query.append_pair("id", trigger_id);
-            }
-            if let Some(entrypoint_hash) = entrypoint_hash {
-                query.append_pair("entrypoint_hash", entrypoint_hash);
-            }
-            if let Some(outcome) = outcome {
-                query.append_pair("outcome", outcome);
-            }
-            if let Some(from_height) = from_height {
-                query.append_pair("from_height", &from_height.to_string());
-            }
-            if let Some(to_height) = to_height {
-                query.append_pair("to_height", &to_height.to_string());
-            }
-            if let Some(limit) = limit {
-                query.append_pair("limit", &limit.to_string());
-            }
-            if let Some(scan_limit_blocks) = scan_limit_blocks {
-                query.append_pair("scan_limit_blocks", &scan_limit_blocks.to_string());
-            }
+        for (name, value) in query.to_query_pairs()? {
+            url.query_pairs_mut().append_pair(name, &value);
         }
         let builder = self
             .operator_signed_request(HttpMethod::GET, url, Vec::new())?
             .header("Accept", APPLICATION_JSON);
         let resp = self.send_builder(builder)?;
         match resp.status() {
-            StatusCode::OK | StatusCode::ACCEPTED => {
+            StatusCode::OK => {
                 Self::parse_typed_json_ok_response(&resp, "Failed to get trigger completions")
             }
             status => Err(eyre!(
@@ -33860,24 +33845,95 @@ mod tests {
                     .with_test_http_transport(mock_transport.clone());
 
                 client.get_trigger_completions(
-                    Some("timer"),
-                    Some("abcd"),
-                    Some("failure"),
-                    Some(10),
-                    Some(20),
-                    Some(5),
-                    Some(100),
+                    &crate::collections::ListQuery::new()
+                        .filter(
+                            crate::collections::field("trigger_id").eq("timer")
+                                & crate::collections::field("outcome").eq("Failure")
+                                & crate::collections::field("block_height").gte(10)
+                                & crate::collections::field("block_height").lte(20),
+                        )
+                        .select(["block_height", "trigger_id", "outcome", "message"])
+                        .limit(5)
+                        .cursor("opaque-cursor"),
                 )
             });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_request(&snapshot, &HttpMethod::GET, "/v1/triggers/completed");
         assert_operator_signature_headers(&snapshot);
+        let pairs: Vec<(String, String)> = snapshot
+            .url
+            .query_pairs()
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect();
         assert_eq!(
-            snapshot.url.query(),
-            Some(
-                "id=timer&entrypoint_hash=abcd&outcome=failure&from_height=10&to_height=20&limit=5&scan_limit_blocks=100"
-            )
+            pairs,
+            [
+                (
+                    "filter",
+                    r#"trigger_id = "timer" and outcome = "Failure" and block_height >= 10 and block_height <= 20"#
+                ),
+                ("select", "block_height,trigger_id,outcome,message"),
+                ("limit", "5"),
+                ("cursor", "opaque-cursor"),
+            ]
+            .map(|(name, value)| (name.to_owned(), value.to_owned())),
+            "the shared list-query controls replace the retired bespoke parameters"
         );
+    }
+    #[test]
+    fn trigger_completion_history_rejects_fixed_order_controls_before_dispatch() {
+        let client = client_with_base_url(base_url());
+        let mut builder = client.to_builder();
+        builder.operator_key_pair = Some(checked_random_keypair());
+        let client = builder.build().expect("valid operator client");
+        for (query, code) in [
+            (
+                crate::collections::ListQuery::new()
+                    .sort_by(crate::collections::SortKey::desc("block_height")),
+                "invalid_sort",
+            ),
+            (
+                crate::collections::ListQuery::new().include_total(),
+                "invalid_include_total",
+            ),
+        ] {
+            let error = client
+                .get_trigger_completions(&query)
+                .expect_err("history collections have a fixed order");
+            let error = error
+                .downcast_ref::<crate::collections::ListQueryError>()
+                .expect("list-query validation error");
+            assert_eq!(error.code(), code);
+        }
+    }
+    #[test]
+    fn trigger_completion_history_decodes_the_collection_page() {
+        let client = client_with_base_url(base_url());
+        let mut builder = client.to_builder();
+        builder.operator_key_pair = Some(checked_random_keypair());
+        let client = builder.build().expect("valid operator client");
+        let body = r#"{"items":[{"block_height":7,"output_index":1,"completion_index":0,"trigger_id":"timer","trigger_execution_hash":"abcd","entrypoint_index":null,"step_index":0,"outcome":"Failure","message":"out of fuel"}],"next_cursor":"next"}"#;
+        let (result, _snapshot) =
+            capture_request(json_response(StatusCode::OK, body), |mock_transport| {
+                let client = client
+                    .clone()
+                    .with_test_http_transport(mock_transport.clone());
+                client.get_trigger_completions(&crate::collections::ListQuery::new().limit(1))
+            });
+        let page = result.expect("collection page");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(
+            page.items[0]["trigger_id"],
+            norito::json::Value::from("timer")
+        );
+        assert_eq!(page.items[0]["entrypoint_index"], norito::json::Value::Null);
+        assert_eq!(page.next_cursor.as_deref(), Some("next"));
+        assert_eq!(page.total, None);
+        let next = crate::collections::ListQuery::new()
+            .limit(1)
+            .next_page(&page)
+            .expect("continuation request");
+        assert_eq!(next.cursor.as_deref(), Some("next"));
     }
     #[test]
     fn debug_witness_json_uses_exact_operator_authentication_boundary() {

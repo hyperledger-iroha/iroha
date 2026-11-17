@@ -6186,7 +6186,6 @@ _RECEIVER_CONSTANTS = (
     ("crates/iroha_torii/src/sorafs/gateway/feed_transport.rs", "READ_BUFFER_BYTES"),
     ("crates/iroha_torii/src/torii_fanout_decode_helpers.rs", "QUERY_INGRESS_PHASE_UNITS"),
     ("crates/iroha_torii/src/limits.rs", "MIN_BUCKETS_PER_SHARD"),
-    ("crates/iroha_torii/src/lib_pipeline_handlers.rs", "TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS"),
     ("crates/iroha_torii/src/routing.rs", "DEFAULT_TRADER_CANDLE_BUCKET_MS"),
     ("crates/iroha_torii/src/da/ingest.rs", "BYTES_PER_GIB"),
     ("crates/iroha_torii/src/da/ingest.rs", "SECS_PER_MONTH"),

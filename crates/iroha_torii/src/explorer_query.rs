@@ -952,6 +952,273 @@ mod tests {
         }
     }
 
+    /// What one block-feed read observed: the public page and its owner's refusal signal.
+    struct ServedBlockFeed {
+        heights: Vec<u64>,
+        next_cursor: Option<String>,
+        /// The admitted owner was marked as refused by one of its own limits.
+        owner_refused: bool,
+        /// The routed-read admission would serve this response again with a larger owner.
+        retried_with_a_larger_owner: bool,
+    }
+
+    /// Serve one `/v1/explorer/blocks` read exactly as `execute` does — the native source
+    /// page, then the complete public adapter — under one freshly admitted owner. With
+    /// `source_bytes`, the owner is left exactly that much room for source decoding.
+    async fn serve_block_feed(
+        state: &Arc<iroha_core::state::State>,
+        input: &ListQuery,
+        source_bytes: Option<usize>,
+    ) -> Result<ServedBlockFeed, Error> {
+        use crate::history_producer::HistoryProducerOwner;
+
+        let envelope = QueryFanoutMemoryEnvelope::for_body_admission(48_000_000).unwrap();
+        let reservation = QueryFanoutMemoryReservation::from_admitted_fanout(
+            Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+            envelope,
+            7,
+        )
+        .unwrap();
+        let request = HistoryProducerOwner::from_reservation(&reservation).unwrap();
+        let mut limits = limits();
+        limits.bytes =
+            collections::memory::BytePolicy::for_admitted_read(envelope, envelope.route_body_bytes);
+        let visibility = routing::DataspaceReadVisibility::all_for_tests();
+        let query = ScanQuery::new(
+            &BLOCKS,
+            input.clone(),
+            visibility.visible_route_set_digest(),
+            limits,
+        )?;
+        let policy = query.limits.bytes;
+        if let Some(source_bytes) = source_bytes {
+            let selected = std::alloc::Layout::array::<crate::explorer_history::HistoryBlockRow>(
+                usize::try_from(query.native.limit).unwrap(),
+            )
+            .unwrap()
+            .size();
+            let burn = request.allocation_limit_for_test()
+                - request.block_feed_output_reserve().unwrap()
+                - selected
+                - source_bytes;
+            request
+                .scope(|| norito::core::reserve_decode_allocation(burn))
+                .unwrap();
+        }
+        // Every page reads cold: a warm summary would hide the source refusal under test.
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let native = request.physical_scope(|| {
+            routing::handle_v1_explorer_blocks_sync(
+                state,
+                &routing::MaybeTelemetry::disabled(),
+                &visibility,
+                &query.native,
+                (block_feed_heights(&query), &summaries),
+            )
+        })?;
+        let bytes = axum::body::to_bytes(native.into_body(), policy.source_frame_bytes)
+            .await
+            .unwrap();
+        let response = request.scope(|| {
+            let scan = query.decode_scan(&bytes)?;
+            routing::collection_sources::row_page_response(query.page(scan)?, policy)
+        })?;
+        assert_eq!(response.status(), StatusCode::OK);
+        // The signal is read where the routed-read admission reads it: from the request's
+        // reservation, after the successful public response exists.
+        let owner_refused = reservation.owner_limit_refused();
+        let retried_with_a_larger_owner =
+            crate::app_routed_read_owner_refused(&response, &reservation);
+        let bytes = axum::body::to_bytes(response.into_body(), policy.response_bytes)
+            .await
+            .unwrap();
+        let payload: Value = norito::json::from_slice(&bytes).unwrap();
+        Ok(ServedBlockFeed {
+            heights: payload["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["height"].as_u64().unwrap())
+                .collect(),
+            next_cursor: payload["next_cursor"].as_str().map(str::to_owned),
+            owner_refused,
+            retried_with_a_larger_owner,
+        })
+    }
+
+    #[tokio::test]
+    async fn partial_block_feed_pages_keep_the_owner_refusal_through_public_projection() {
+        use crate::history_producer::HistoryProducerOwner;
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use std::num::NonZeroUsize;
+
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let state = Arc::clone(chain.state());
+        // Source bytes each canonical body costs, newest first: heights 3, 2, 1.
+        let measured = HistoryProducerOwner::for_test();
+        let mut spent = 0_usize;
+        let cost: Vec<usize> = [3, 2, 1]
+            .into_iter()
+            .map(|height| {
+                measured
+                    .scope(|| {
+                        state.read_canonical_history_block(
+                            NonZeroUsize::new(height).unwrap(),
+                            &measured.canonical_history_budget(),
+                        )
+                    })
+                    .unwrap();
+                let total =
+                    usize::try_from(measured.allocation_context().consumed_allocated_bytes())
+                        .unwrap();
+                let block = total - spent;
+                spent = total;
+                assert!(block > 0, "height {height} decodes a canonical body");
+                block
+            })
+            .collect();
+
+        let request = ListQuery::new().limit(100);
+        // An ample owner serves the complete page and reports no refusal: nothing to retry.
+        let complete = serve_block_feed(&state, &request, None).await.unwrap();
+        assert_eq!(complete.heights, [3, 2, 1]);
+        assert_eq!(complete.next_cursor, None);
+        assert!(!complete.owner_refused && !complete.retried_with_a_larger_owner);
+
+        // An owner whose source budget ends inside height 2 still answers 200 with the
+        // row it read and a continuation at the unread height. The original refusal stays
+        // on that owner through native paging and the public projection, so adaptive
+        // admission releases it and serves the read again with a larger owner instead of
+        // returning the short page.
+        let partial = serve_block_feed(&state, &request, Some(cost[0] + cost[1] / 2))
+            .await
+            .unwrap();
+        assert_eq!(partial.heights, [3]);
+        let unread = partial
+            .next_cursor
+            .clone()
+            .expect("continuation at height 2");
+        assert!(
+            partial.owner_refused,
+            "a successful partial page keeps the refusal"
+        );
+        assert!(partial.retried_with_a_larger_owner);
+
+        // The continuation is an ordinary read: with the same small owner it is partial
+        // again and asks for growth again; with a larger owner it completes silently.
+        let continued = request.clone().cursor(unread);
+        let partial_again = serve_block_feed(&state, &continued, Some(cost[1] + cost[2] / 2))
+            .await
+            .unwrap();
+        assert_eq!(partial_again.heights, [2]);
+        assert!(partial_again.next_cursor.is_some());
+        assert!(partial_again.owner_refused && partial_again.retried_with_a_larger_owner);
+        let finished = serve_block_feed(&state, &continued, None).await.unwrap();
+        assert_eq!(finished.heights, [2, 1]);
+        assert_eq!(finished.next_cursor, None);
+        assert!(!finished.owner_refused && !finished.retried_with_a_larger_owner);
+
+        // A budget that cannot read even the first row is the request's own refusal,
+        // never an empty advancing page, and it marks the owner as well.
+        assert!(
+            serve_block_feed(&state, &request, Some(cost[0] / 2))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_block_feed_pages_stay_inside_their_conjunctive_height_range() {
+        use crate::history_producer::HistoryProducerOwner;
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use std::num::NonZeroUsize;
+
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        for _ in 0..3 {
+            chain.commit(Vec::new());
+        }
+        let state = Arc::clone(chain.state());
+        let measured = HistoryProducerOwner::for_test();
+        let mut spent = 0_usize;
+        let mut cost = |height: usize| {
+            measured
+                .scope(|| {
+                    state.read_canonical_history_block(
+                        NonZeroUsize::new(height).unwrap(),
+                        &measured.canonical_history_budget(),
+                    )
+                })
+                .unwrap();
+            let total =
+                usize::try_from(measured.allocation_context().consumed_allocated_bytes()).unwrap();
+            let block = total - spent;
+            spent = total;
+            block
+        };
+        let (third, second) = (cost(3), cost(2));
+
+        // `height >= 2 and height <= 3` seeks the walk below the tip (height 4) and ends
+        // it above genesis; the row filter still decides each row.
+        let range = || field("height").gte(2).and(field("height").lte(3));
+        let request = ListQuery::new().filter(range()).limit(100);
+        let complete = serve_block_feed(&state, &request, None).await.unwrap();
+        assert_eq!(complete.heights, [3, 2]);
+        assert_eq!(complete.next_cursor, None);
+
+        // A source-budget partial page inside the range continues at its unread height,
+        // and that continuation never leaves the range that issued it.
+        let partial = serve_block_feed(&state, &request, Some(third + second / 2))
+            .await
+            .unwrap();
+        assert_eq!(partial.heights, [3]);
+        assert!(partial.owner_refused);
+        let unread = partial.next_cursor.expect("continuation inside the range");
+        let finished = serve_block_feed(&state, &request.clone().cursor(unread.clone()), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            finished.heights,
+            [2],
+            "the walk stops at the range's bottom"
+        );
+        assert_eq!(finished.next_cursor, None);
+
+        // The complete filter decides every row of a partial page too.
+        let odd = ListQuery::new()
+            .filter(range().and(field("height").ne(3)))
+            .limit(100);
+        let filtered = serve_block_feed(&state, &odd, Some(third + second / 2))
+            .await
+            .unwrap();
+        assert!(
+            filtered.heights.is_empty(),
+            "the only row the source budget reached is rejected by the row filter"
+        );
+        assert!(filtered.next_cursor.is_some() && filtered.owner_refused);
+
+        // A continuation is bound to the bounds that issued it.
+        for other in [
+            ListQuery::new().limit(100),
+            ListQuery::new()
+                .filter(field("height").gte(1).and(field("height").lte(3)))
+                .limit(100),
+        ] {
+            assert!(
+                serve_block_feed(&state, &other.cursor(unread.clone()), None)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
     const FAUCET_HEX: &str = "38eb3689fb42390f656ac9e1fa0d02451f1f4f1a1b92c1b074f1c2b6761e8631";
     const FAUCET_LITERAL: &str =
         "hash:38EB3689FB42390F656AC9E1FA0D02451F1F4F1A1B92C1B074F1C2B6761E8631#008C";

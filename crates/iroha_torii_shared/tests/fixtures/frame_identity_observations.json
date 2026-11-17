@@ -1,7 +1,7 @@
 {
   "artifact_retained_path": "/Users/takemiyamakoto/dev/iroha/target/architecture-redesign/norito-identity-cutover/torii-shared-reference-capture/executables/capture-build-1/iroha_torii_shared-f6b4d0aeef0b621e",
   "artifact_sha256": "3b898185b144dc7dc36d03e86f557cc0ee6200e8249ef7591c2c095891039cc2",
-  "automatic_directions": 292,
+  "automatic_directions": 286,
   "build_report_sha256": "59eba87ce5e6758e8ecfc2c1e53f6e6de09f0d41b65e34cbeabc94db7a63c95c",
   "build_warnings": 0,
   "current_recaptures": [
@@ -296,7 +296,7 @@
       "wire_hex": "4e525430000070dc2d72af2b1c7616f4915c08a0630f00380000000000000072749145f70daa5c0201010100160114136d657461646174615f6b65792d73616d706c651c01000000000000001312616c6c6f7765645f6964732d73616d706c65"
     }
   ],
-  "production_owners": 158,
+  "production_owners": 155,
   "records": [
     {
       "column": 37,
@@ -679,63 +679,6 @@
       "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
     },
     {
-      "column": 37,
-      "direction": "deserialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionListResponse",
-      "item_end": 41907,
-      "item_sha256": "7b21fe43f7805833eee9e75a341d9d8ca869d9d50f29dd685ddabf746984ace4",
-      "item_start": 41401,
-      "kind": "capture",
-      "line": 890,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionListResponse",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionListResponse",
-      "root_matches": true,
-      "schema_hash": "6a40a8f8bc871d77e1565073520ba462",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
-      "column": 37,
-      "direction": "deserialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionRecord",
-      "item_end": 41236,
-      "item_sha256": "2a829dd39ef290fc2076f7db17a280aed27bf39f127f23eb127e12fa4cb564fa",
-      "item_start": 40657,
-      "kind": "capture",
-      "line": 873,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionRecord",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionRecord",
-      "root_matches": true,
-      "schema_hash": "341187534269a3d146b405e94c4056a0",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
-      "column": 37,
-      "direction": "deserialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionSummary",
-      "item_end": 40463,
-      "item_sha256": "1537aaa0e92deff50c73e79e515597a9ac2a48b50fa915c125999b39a7edec5e",
-      "item_start": 39993,
-      "kind": "capture",
-      "line": 855,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionSummary",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionSummary",
-      "root_matches": true,
-      "schema_hash": "b9e7b61fe19f1b3115888912d609e54d",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
       "column": 56,
       "direction": "serialize",
       "explicit_root": false,
@@ -1113,63 +1056,6 @@
       "root_hint": "iroha_torii_shared::QueueErrorSnapshot",
       "root_matches": true,
       "schema_hash": "8f4cee9fb5af5397abad46c2e995f6fe",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
-      "column": 56,
-      "direction": "serialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionListResponse",
-      "item_end": 41907,
-      "item_sha256": "7b21fe43f7805833eee9e75a341d9d8ca869d9d50f29dd685ddabf746984ace4",
-      "item_start": 41401,
-      "kind": "capture",
-      "line": 890,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionListResponse",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionListResponse",
-      "root_matches": true,
-      "schema_hash": "6a40a8f8bc871d77e1565073520ba462",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
-      "column": 56,
-      "direction": "serialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionRecord",
-      "item_end": 41236,
-      "item_sha256": "2a829dd39ef290fc2076f7db17a280aed27bf39f127f23eb127e12fa4cb564fa",
-      "item_start": 40657,
-      "kind": "capture",
-      "line": 873,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionRecord",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionRecord",
-      "root_matches": true,
-      "schema_hash": "341187534269a3d146b405e94c4056a0",
-      "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
-    },
-    {
-      "column": 56,
-      "direction": "serialize",
-      "explicit_root": false,
-      "file": "crates/iroha_torii_shared/src/lib.rs",
-      "identifier": "TriggerCompletionSummary",
-      "item_end": 40463,
-      "item_sha256": "1537aaa0e92deff50c73e79e515597a9ac2a48b50fa915c125999b39a7edec5e",
-      "item_start": 39993,
-      "kind": "capture",
-      "line": 855,
-      "module": "iroha_torii_shared",
-      "nominal": "iroha_torii_shared::TriggerCompletionSummary",
-      "original_source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb",
-      "root_hint": "iroha_torii_shared::TriggerCompletionSummary",
-      "root_matches": true,
-      "schema_hash": "b9e7b61fe19f1b3115888912d609e54d",
       "source_sha256": "f255b1f964319f101a84bc741731faaec4cac9095791dbca709c4d0ab9cba4fb"
     },
     {
@@ -5837,11 +5723,23 @@
     {
       "owner": "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
       "scope": "Both directions were removed with the retired KAGEMUSHA V1 Torii API; the preceding top-level capture provenance still describes the original capture of the remaining owners."
+    },
+    {
+      "owner": "iroha_torii_shared::TriggerCompletionListResponse",
+      "scope": "Both directions were removed when `/v1/triggers/completed` moved onto the collection contract and its bespoke response DTOs were retired; the preceding top-level capture provenance still describes the original capture of the remaining owners."
+    },
+    {
+      "owner": "iroha_torii_shared::TriggerCompletionRecord",
+      "scope": "Both directions were removed when `/v1/triggers/completed` moved onto the collection contract and its bespoke response DTOs were retired; the preceding top-level capture provenance still describes the original capture of the remaining owners."
+    },
+    {
+      "owner": "iroha_torii_shared::TriggerCompletionSummary",
+      "scope": "Both directions were removed when `/v1/triggers/completed` moved onto the collection contract and its bespoke response DTOs were retired; the preceding top-level capture provenance still describes the original capture of the remaining owners."
     }
   ],
   "runtime_log_sha256": "ba866bbfe1f42932e5368215f94a0555e33a1792f606205d6b45116c4316b96c",
   "runtime_report_sha256": "01a2dc6b402f8c8a4accf6529f8aad799308ae529d226abfaa3b8fadf12f5c18",
-  "scope": "Actual compiler identities for 158 production Torii owners, with existing golden root frames and Option/Vec observations for 12 handwritten wrappers. Migration evidence only; no release or workspace closure claim.",
+  "scope": "Actual compiler identities for 155 production Torii owners, with existing golden root frames and Option/Vec observations for 12 handwritten wrappers. Migration evidence only; no release or workspace closure claim.",
   "selected_tests": 321,
   "source_fingerprint": {
     "bytes": 493489824,

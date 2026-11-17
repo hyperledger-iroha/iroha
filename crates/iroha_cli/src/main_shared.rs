@@ -6121,14 +6121,14 @@ mod trigger {
                 ));
                 if self.trace {
                     let trace = if let Some(height) = status.block_height {
+                        // One collection page of the finalized block's completions.
                         let completions = client.get_trigger_completions(
-                            Some(&self.id.to_string()),
-                            None,
-                            Some("all"),
-                            Some(height),
-                            Some(height),
-                            Some(100),
-                            Some(1),
+                            &iroha::collections::ListQuery::new()
+                                .filter(
+                                    iroha::collections::field("trigger_id").eq(self.id.to_string())
+                                        & iroha::collections::field("block_height").eq(height),
+                                )
+                                .limit(100),
                         )?;
                         norito::json!({
                             "mode": "committed_trigger_completion",
@@ -6183,11 +6183,12 @@ mod trigger {
         Failure,
     }
     impl CompletedOutcomeArg {
-        fn as_str(self) -> &'static str {
+        /// The `outcome` row value this flag selects; `None` keeps every outcome.
+        fn row_value(self) -> Option<&'static str> {
             match self {
-                Self::All => "all",
-                Self::Success => "success",
-                Self::Failure => "failure",
+                Self::All => None,
+                Self::Success => Some("Success"),
+                Self::Failure => Some("Failure"),
             }
         }
         fn apply(
@@ -6202,26 +6203,25 @@ mod trigger {
             }
         }
     }
+    /// Trigger completions are a history collection (`specs/torii/collection_queries.md`):
+    /// rows come newest first, a page may be short or empty and still carry a
+    /// `next_cursor`, and `--sort` and `--include-total` are rejected.
     #[derive(clap::Args, Debug)]
     pub struct CompletedList {
-        /// Optional trigger ID filter.
+        /// Keep one trigger's completions (`trigger_id = "<ID>"`).
         #[arg(long)]
         pub id: Option<TriggerId>,
-        /// Optional completion outcome filter.
+        /// Keep one outcome (`outcome = "Success"` or `outcome = "Failure"`).
         #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
         pub outcome: CompletedOutcomeArg,
-        /// Maximum completion records to return.
-        #[arg(long, default_value_t = 10)]
-        pub limit: u64,
-        /// First block height to scan. Defaults to the recent bounded window.
+        /// First block height to read (`block_height >= N`).
         #[arg(long)]
         pub from_height: Option<u64>,
-        /// Last block height to scan. Defaults to the current committed height.
+        /// Last block height to read (`block_height <= N`).
         #[arg(long)]
         pub to_height: Option<u64>,
-        /// Hard cap on blocks scanned, including when --from-height is supplied.
-        #[arg(long, default_value_t = 1_000)]
-        pub scan_limit_blocks: u64,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
     }
     #[derive(clap::Args, Debug)]
     pub struct CompletedWatch {
@@ -6239,19 +6239,44 @@ mod trigger {
         pub timeout_ms: Option<u64>,
     }
     impl CompletedList {
+        /// The collection query: the shorthand flags join `--filter` as conjuncts.
+        pub(crate) fn to_query(
+            &self,
+        ) -> std::result::Result<iroha::collections::ListQuery, iroha::collections::ListQueryError>
+        {
+            use iroha::collections::field;
+            let mut query = self.list.to_query()?;
+            let shorthand = [
+                self.id
+                    .as_ref()
+                    .map(|id| field("trigger_id").eq(id.to_string())),
+                self.outcome
+                    .row_value()
+                    .map(|outcome| field("outcome").eq(outcome)),
+                self.from_height
+                    .map(|height| field("block_height").gte(height)),
+                self.to_height
+                    .map(|height| field("block_height").lte(height)),
+            ];
+            for conjunct in shorthand.into_iter().flatten() {
+                query = query.and_filter(conjunct);
+            }
+            iroha::collections::validate_trigger_completions_query(&query)?;
+            Ok(query)
+        }
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let query = self
+                .to_query()
+                .map_err(crate::collection_list::ListInputError)?;
             let client = context.client_from_config()?;
-            let trigger_id = self.id.as_ref().map(ToString::to_string);
-            let response = client.get_trigger_completions(
-                trigger_id.as_deref(),
-                None,
-                Some(self.outcome.as_str()),
-                self.from_height,
-                self.to_height,
-                Some(self.limit),
-                Some(self.scan_limit_blocks),
-            )?;
-            context.print_data(&response)
+            crate::collection_list::run_fetched_list(
+                context,
+                iroha::collections::TRIGGER_COMPLETIONS,
+                query,
+                self.list.all,
+                crate::collection_list::TRIGGER_COMPLETION_COLUMNS,
+                |query| client.get_trigger_completions(query),
+            )
         }
     }
     impl CompletedWatch {

@@ -3,7 +3,7 @@
 Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
 account assets, asset holders, transactions, account transactions, repo
 agreements, stored roles, account role assignments, effective account permissions, subscription plans, subscriptions,
-and UAID manifests) is read with one query language and returns one page envelope. The same language is
+UAID manifests and trigger completions) is read with one query language and returns one page envelope. The same language is
 used by the SDKs, the `iroha` CLI and the event-stream `filter` parameter.
 The Rust reference implementation is
 [`iroha_torii_shared::list_query`](../../crates/iroha_torii_shared/src/list_query/mod.rs);
@@ -48,10 +48,11 @@ Design rules:
 | contract events | `GET /v1/contracts/events` | `POST /v1/contracts/events/query` |
 | bonds | `GET /v1/bonds` | — |
 | bond entitlements | `GET /v1/bonds/{bond_id}/entitlements` | — |
+| trigger completions | `GET /v1/triggers/completed` (operator signature) | — |
 
 `GET` and `POST …/query` are equivalent; `POST` additionally supports
-`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, asset movements, contract activity and events
-are [history collections](#history-collections) with a few
+`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, asset movements, contract activity, events
+and trigger completions are [history collections](#history-collections) with a few
 restrictions.
 
 Collection planning, source scans, filtering, projection and final JSON encoding
@@ -312,6 +313,7 @@ absent.
 | bonds | `id`, `vault`, `terms.issuer`, `terms.paying_agent`, `terms.payment_asset`, `terms.identifiers.isin`, `state.lifecycle` (strings, *sort*), `terms.coupon_rate_bps`, `terms.coupon_frequency`, `terms.issue_date_ms`, `terms.maturity_date_ms` (numbers, *sort*), `state.outstanding_units`, `state.redeemed_units`, `state.retired_units` (decimals, *sort*), `state.transfers_frozen` (bool), `terms`, `state` (JSON); each item is the complete `BondRecord` | `id` |
 | bond entitlements | `id` (`<index>:<holder>`), `bond`, `holder` (strings, *sort*), `index`, `claimed_at_ms` (number or null) (numbers, *sort*), `units`, `amount` (decimals, *sort*), `claimed` (bool) | `id` (cash flow, then holder) |
 | asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`, `OFFLINE_CHARGE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
+| trigger completions | `trigger_id`, `trigger_execution_hash`, `outcome` (`Success`, `Failure`), `message` (string or null) (strings), `block_height`, `output_index`, `completion_index`, `entrypoint_index` (number or null), `step_index` (numbers) | descending `block_height`, `output_index`, `completion_index` |
 | contract events | `event_id`, `provenance` (always `emitted`), `authority`, `execution_hash_hex`, `block_hash_hex`, `contract_address`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `output_index`, `emission_index` (numbers), `result_ok` (always true), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `emission`, `fee_payment` (JSON) | descending `block_height`, `output_index`, `emission_index` |
 
 Stored role reads require canonical account authentication and `CanReadAllLedgerData`.
@@ -384,6 +386,8 @@ descending. Account transactions are the committed transactions the account
 signed or that reference it. Contract activity projects committed top-level
 contract calls. Native event pages walk committed execution outputs and their
 emissions in descending `(block_height, output_index, emission_index)` order.
+Trigger completion pages walk the same outputs and their completion records in
+descending `(block_height, output_index, completion_index)` order.
 Account movement pages add a descending
 `movement_index` within each transaction, so page boundaries never skip other
 movements from that transaction. A cursor within a carrier contains only a
@@ -469,6 +473,32 @@ a rejected output retaining emissions is invalid.
   outputs and Pipeline callbacks sourced from a Network input also require
   visibility of that committed input's route legs. Block-approved and Time
   callbacks use their public source event and the emitting contract's scope.
+
+### Trigger completions
+
+`GET /v1/triggers/completed` lists the trigger completions persisted in committed execution
+outputs, one row per completion record of a Network, Pipeline or Time output, newest first by
+`(block_height, output_index, completion_index)`. It is an operator route: the request carries
+the operator signature, and the read is this node's own, without fan-out.
+
+- `output_index` is the output's position in its block and `completion_index` the completion's
+  position in that output. `entrypoint_index` is the Network input's position in the block and
+  `null` for Pipeline and Time outputs. `trigger_execution_hash` is the output's execution call
+  hash: the entrypoint hash of a Network input, otherwise the invocation hash. `step_index` is
+  the callback's invocation ordinal within that root call. `message` is the failure reason and
+  `null` for `Success`.
+- Completions belong to no data space of their own, so they are served only to a reader of all
+  ledger data, which the operator signature is. Any narrower visibility reads an empty page.
+- A page that fills up inside a block continues after its last examined completion. A page
+  whose history budget ends between blocks continues strictly below the last block it examined
+  completely, so a sparse stretch returns short or empty pages with advancing cursors. A budget
+  that cannot read even the page's first block returns `query_scan_limit_exceeded`.
+- A query owner's capacity refusal after at least one complete block also ends the page at that
+  block boundary; the refusal of a page's first block is the request's own error.
+- A trigger, an outcome or a height range is selected with the filter, for example
+  `filter=trigger_id = "…" and outcome = "Failure" and block_height >= 1200`. Like every
+  collection, the route rejects any other parameter with `invalid_query` and answers with the
+  page envelope alone.
 
 ### Asset movements
 

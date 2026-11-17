@@ -5435,56 +5435,9 @@ const protectedNamespaces = await torii.getProtectedNamespaces({
 });
 console.log(protectedNamespaces.namespaces); // ["apps", "system"]
 
-const registeredTriggers = await torii.listTriggers({
-  namespace: "apps",
-  authority: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-  limit: 5,
-});
-registeredTriggers.items.forEach((trigger) => {
-  console.log(trigger.id, trigger.action.Mint?.Asset?.object);
-});
-
-const trigger = await torii.getTrigger("apps::mint_rewards");
-if (!trigger) {
-  await torii.registerTrigger({
-    id: "apps::mint_rewards",
-    namespace: "apps",
-    action: {
-      Mint: {
-        Asset: {
-          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-          value: "5",
-        },
-      },
-    },
-  });
-  const draft = await torii.registerTriggerTyped({
-    id: "apps::mint_rewards",
-    namespace: "apps",
-    action: {
-      Mint: {
-        Asset: {
-          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY",
-          value: "5",
-        },
-      },
-    },
-  });
-  if (draft) {
-    console.log(`trigger queued ok=${draft.ok} tx_instructions=${draft.tx_instructions.length}`);
-  }
-}
-
-await torii.deleteTrigger("apps::archived");
-await torii.deleteTriggerTyped("apps::archived");
-const pending = await torii.queryTriggers({ limit: 10 });
-console.log("latest triggers", pending.items.map((item) => item.id));
-
-// Helpers are available for building the Norito action payloads expected by
-// `/v1/triggers`. The builders serialise the action to base64 so Torii receives
-// the canonical Norito representation regardless of how the instructions were
+// Triggers are registered and removed through transactions; Torii has no
+// `/v1/triggers` registry routes. The builders below serialise a trigger
+// action to canonical base64 Norito regardless of how the instructions were
 // assembled in JS.
 const timeAction = buildTimeTriggerAction({
   authority,
@@ -5499,11 +5452,6 @@ const timeAction = buildTimeTriggerAction({
   repeats: 10,
   metadata: { label: "hourly faucet" },
 });
-await torii.registerTrigger({
-  id: "apps::mint_rose_hourly",
-  namespace: "apps",
-  action: timeAction,
-});
 
 const precommitAction = buildPrecommitTriggerAction({
   authority,
@@ -5511,11 +5459,7 @@ const precommitAction = buildPrecommitTriggerAction({
     buildMintTriggerRepetitionsInstruction({ triggerId: "apps::guardian", repetitions: 1 }),
   ],
 });
-await torii.registerTrigger({
-  id: "apps::guardian_refill",
-  namespace: "apps",
-  action: precommitAction,
-});
+console.log(timeAction.length, precommitAction.length);
 ```
 
 The canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are

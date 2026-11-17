@@ -282,7 +282,6 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetId,
     },
-    events::trigger_completed::TriggerCompletedOutcome,
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
     nexus::{FeeRejectionCode, FeeSponsorProgramId},
     nft::NftId,
@@ -332,8 +331,7 @@ use iroha_torii_shared::{
     PipelineTransactionStatusResponse, QueueErrorSnapshot,
     SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER, SORACLOUD_SERVED_PROCESS_GENERATION_HEADER,
     SORACLOUD_SERVED_REPLICA_SLOT_HEADER, SORACLOUD_SERVED_SERVICE_NAME_HEADER,
-    SORACLOUD_SERVED_SERVICE_VERSION_HEADER, TriggerCompletionListResponse,
-    TriggerCompletionRecord, TriggerCompletionSummary,
+    SORACLOUD_SERVED_SERVICE_VERSION_HEADER,
     route_catalog::{self, RouteCatalog},
 };
 use ivm::iso20022::{MsgError, parse_xml_message};
@@ -39055,9 +39053,14 @@ impl Torii {
             TRANSACTION_STATUS => public_get(handler_pipeline_transaction_status);
             TRANSACTION_DETAILS => canonical_signed_post(handler_pipeline_transaction_details);
             PREFLIGHT => operator_get(handler_pipeline_preflight, app_state);
-            TRIGGER_COMPLETIONS => operator_get(handler_trigger_completions, app_state);
             RECOVERY => operator_get(handler_pipeline_recovery, app_state);
             RECOVERY_FASTPQ_PROOFS => operator_get(handler_pipeline_recovery_fastpq_proofs, app_state);
+        );
+        // Trigger completions are a history collection of the app API's query engine.
+        #[cfg(feature = "app_api")]
+        mount_catalog_route_rows!(
+            builder, pipeline;
+            TRIGGER_COMPLETIONS => operator_get(handler_trigger_completions, app_state);
         );
         builder.route(
             &route_catalog::pipeline::POLICY,

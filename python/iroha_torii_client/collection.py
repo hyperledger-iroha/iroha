@@ -515,13 +515,22 @@ class Collection(Generic[T]):
             raise ListQueryError("aggregate", "aggregate rows are JSON objects; use .rows() or .iter_rows()")
         return built
 
-    def _fetch(self, query: ListQuery) -> Page[Any]:
-        self._check(query)
-        payload = self._transport._query_collection(
+    def _send(self, query: ListQuery) -> Any:
+        """Issue ``query`` and return the decoded page JSON (``POST <path>/query``).
+
+        A collection Torii serves through another request form overrides this;
+        validation, page decoding and iteration stay shared.
+        """
+
+        return self._transport._query_collection(
             f"{self._path}/query",
             query.to_json(),
             context=f"{self._name} query",
         )
+
+    def _fetch(self, query: ListQuery) -> Page[Any]:
+        self._check(query)
+        payload = self._send(query)
         try:
             page: Page[Any] = Page.from_json(payload)
             if query.limit is not None and len(page.items) > query.limit:

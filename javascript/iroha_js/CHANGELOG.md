@@ -4,6 +4,14 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Removed the `ToriiClient` trigger registry methods `listTriggers`, `iterateTriggers`,
+  `getTrigger`, `registerTrigger`, `registerTriggerTyped`, `deleteTrigger`,
+  `deleteTriggerTyped`, `queryTriggers` and `iterateTriggersQuery`, together with the
+  `TriggerListOptions`, `TriggerIteratorOptions`, `TriggerQueryIteratorOptions`,
+  `IterableQueryOptions`, `ToriiTriggerUpsertRequest`, `ToriiTriggerMutationResponse`,
+  `ToriiTriggerRecord` and `ToriiTriggerListPage` types. They called `/v1/triggers`,
+  `/v1/triggers/{id}` and `/v1/triggers/query`, which Torii does not serve; triggers change only
+  through transactions. `buildTimeTriggerAction` and `buildPrecommitTriggerAction` are unchanged.
 - Routes that negotiate `application/x-norito` responses decode Torii's canonical binary error
   envelope: SoraFS PoR status/export/weekly report, the SoraFS billing statement, transaction
   submission, the validation-fee proof page, Exact12 capabilities, Kagemusha wallet originals and
