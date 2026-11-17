@@ -103,8 +103,8 @@ fn governed_figure9_key_install_is_explicit_strict_and_has_no_ambient_provider()
         );
     }
     assert!(MICROSOFT_MC.contains("static GOVERNED_FIGURE9_ARTIFACTS"));
-    assert!(MICROSOFT_MC.contains("OnceCell<verifier_key::McVerifierKeyWire>"));
-    assert!(MICROSOFT_MC.contains("OnceCell<prover_key::McProverKeyWire>"));
+    assert!(MICROSOFT_MC.contains("OnceLock<verifier_key::McVerifierKeyWire>"));
+    assert!(MICROSOFT_MC.contains("OnceLock<prover_key::McProverKeyWire>"));
     assert!(MICROSOFT_MC.contains("install_lock: Mutex<()>"));
     assert!(!MICROSOFT_MC.contains("take(&mut self)"));
 }

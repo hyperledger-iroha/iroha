@@ -104,12 +104,12 @@ pub fn minimal_contract_artifact_with_identity(
     seiyaku_name: &str,
     compiler_fingerprint: &str,
 ) -> Vec<u8> {
-    use ivm::{encoding::wide as enc, instruction::wide};
+    use ivm::baseline::{encoding::wide as enc, instruction::wide};
     let metadata = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
-        max_cycles: 0,
+        max_cycles: 1_000,
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -149,7 +149,9 @@ pub fn minimal_contract_artifact_with_identity(
         error_messages: Vec::new(),
         states: Vec::new(),
     };
-    let mut artifact = metadata.encode();
+    // ABI V1 artifacts run on the frozen baseline engine: its header and encodings.
+    let mut artifact =
+        metadata.encode_for_profile(ivm::IvmProfileId::of_policy(ivm::SyscallPolicy::AbiV1), 0);
     artifact.extend_from_slice(&interface.encode_section());
     // Return Unit through the caller-owned result table required by this ABI.
     for word in [
