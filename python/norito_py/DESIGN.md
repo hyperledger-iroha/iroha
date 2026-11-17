@@ -7,9 +7,9 @@
 - Stay dependency-light (standard library only) so the library can be embedded in constrained environments and easily audited.
 
 ## Scope in v0.1.0
-- Header handling: encode/decode `NoritoHeader` with magic `NRT0`, version (major=0, minor=0), schema hash (16 bytes), compression byte, payload length, CRC64, flag byte.
+- Header handling: encode/decode `NoritoHeader` with magic `NRT0`, major 0, minor 0 (current) or 1 (dense), schema hash (16 bytes), compression byte, payload length, CRC64, flag byte.
 - CRC64-XZ implementation with table-driven fast path and portable fallback.
-- Flag support: the flags byte is either `0x00` (fixed-width length prefixes) or `COMPACT_LEN` (`0x02`, varint length prefixes) as documented in `norito.md`; every other bit is rejected on encode and decode.
+- Flag support: minor 0 accepts `0x00` (fixed-width length prefixes) or `COMPACT_LEN` (`0x02`, varint length prefixes); minor 1 requires `0x00` and uses shortest varints for lengths and counts. Other flag bits are rejected.
 - Compression: optional Zstandard backend via the `zstandard` Python module. When the dependency is missing, attempts to use compression raise `UnsupportedCompressionError`.
 - Encoding/decoding primitives:
   - Unsigned integers up to 64 bits (`u8`, `u16`, `u32`, `u64`).
@@ -19,8 +19,8 @@
   - UTF-8 strings (`str`).
   - Optional values (Python `None` mapped to `Option::None`).
   - Results represented as `Ok(value)`/`Err(error)` helpers in Python.
-  - Sequences (`list`, `tuple`) encoded as Norito sequences with a fixed-width u64 element count.
-  - Mappings (`dict`, `OrderedDict`) encoded as `Vec<(K,V)>` using the same sequence layout.
+  - Sequences (`list`, `tuple`) use fixed-width u64 counts in current and varint counts in dense.
+  - Dense maps use a varint count followed by sorted, individually length-prefixed keys and values. The existing unframed current adapter uses a sequence of tuples.
 - Streaming surface (module `norito.streaming`):
   - Data classes and adapters for the NSC manifest, telemetry, and control frames mirroring the Rust codec.
   - Enumerations and helper adapters for HPKE suites, capability roles, error codes, and telemetry events.
@@ -28,8 +28,8 @@
 - Schema description: callers provide a `SchemaDescriptor` when encoding to produce the schema hash. The helper supports both dotted type-path hashing and structural descriptors that are canonicalised using Norito's JSON rules so hashes match the Rust implementation.
 - Error model: create `NoritoError` hierarchy with categories paralleling the Rust variant names for easier cross-language comparison.
 - Public API surface:
-  - `norito.encode(value, schema, adapter, *, flags=None, compression=False, compression_level=3) -> bytes`
-  - `norito.decode(data, adapter, schema=None) -> Any`
+  - `norito.encode(value, schema, adapter, *, flags=0, layout=WireLayout.CURRENT, compression=False) -> bytes`
+  - `norito.decode(data, adapter, *, schema=None, layout=None) -> Any`
   - `NoritoEncoder`/`NoritoDecoder` classes for incremental usage.
   - Utility modules: `header`, `crc64`, `varint`, `schema`, `errors`, `types`.
 
@@ -41,8 +41,9 @@
 
 ## Determinism & Flags
 - Encoder accepts `flags` of `0` or `COMPACT_LEN`; `COMPACT_LEN` switches byte and string length prefixes from fixed-width u64 to varints.
-- Sequences write a fixed-width u64 element count followed by the encoded elements. Sequence length headers are fixed-width in v1.
+- Current sequences write a fixed-width u64 element count; dense uses a shortest varint count and length-prefixed non-byte elements. Byte sequences are raw after the count.
 - Struct adapters write their fields in declaration order.
+- Dense is selected solely by header minor 1, or explicitly for bare payloads. It has no padding and uses length-prefixed fields and varint enum tags. The `framed=True` schema option enables Rust-derived field framing in current-layout adapters without changing existing unframed defaults. No decoder retries a different shape or layout.
 
 ## Testing Plan
 - Unit tests using the standard library `unittest` module covering:
@@ -50,6 +51,7 @@
   - Header encode/decode parity including checksum failures.
   - CRC64 test vectors (cross-checked with known values from Rust implementation).
 - Flag-specific behaviors: fixed-width vs `COMPACT_LEN` length prefixes, rejection of every other flag bit.
+- Every committed dense vector and its current twin is exercised from `fixtures/norito_dense/vectors.json`, together with malformed version, padding, prefix, child-span and suffix cases.
   - Deterministic outputs compared against golden byte arrays produced by minimal Rust fixtures (add static reference bytes sampled from the repo's tests).
 - Property-based fuzzing remains deferred until a lightweight pure-Python subset of the Rust harness is extracted (tracked in NORITO-PY#12); current unit tests cover the canonical encoders/decoders.
 

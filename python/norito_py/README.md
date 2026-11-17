@@ -6,11 +6,11 @@ The library mirrors the key features of the production Rust implementation so
 Python tooling and tests can produce deterministic, interoperable payloads.
 
 ## Features
-- Header parsing/serialization (`NRT0`, major 0, minor 0) with CRC64-XZ validation
+- Header parsing/serialization (`NRT0`, major 0, minor 0 or 1) with CRC64-XZ validation
 - Encoding/decoding primitives (bool, signed/unsigned 8–64 bit integers, IEEE-754 floats)
 - Strings, bytes, options (`None`), results (`Ok`/`Err` wrappers)
-- Sequences with fixed u64 count headers; variable-length values use
-  `COMPACT_LEN` varint or fixed-width u64 length prefixes
+- Current-layout sequences with fixed u64 counts; dense sequences with shortest
+  varint counts and lengths, raw byte elements, and varint enum tags
 - Optional Zstandard compression (enable the `compression` extra, requires the `zstandard` package)
 - Maps and tuples built from composable adapters
 - Schema hash helpers (type-name and structural) matching Rust's canonical JSON hashing
@@ -56,18 +56,52 @@ The library exposes builder helpers for common Norito types (`u64()`,
 `string()`, `bytes_()`, `option(...)`, etc.) that can be nested to describe
 complex payloads.
 
+## Dense layout
+
+Pass `layout=WireLayout.DENSE` to `encode` to select header minor 1. `decode`
+and `from_bytes_view` select the layout only from the header; their optional
+`layout=` argument asserts an expected layout and rejects a different minor.
+Dense requires flags `0`, no alignment padding, shortest varints and exact
+field/payload consumption. Unknown minors, truncation and trailing bytes fail.
+
+```python
+from norito import WireLayout
+
+dense = encode([1, 2, 3], schema, adapter, layout=WireLayout.DENSE)
+assert decode(dense, adapter, layout=WireLayout.DENSE) == [1, 2, 3]
+```
+
+The bare helpers `encode_adaptive` and `decode_adaptive` also accept `layout=`;
+their caller must supply the layout because bare bytes do not advertise it.
+Minor 0 retains its existing flags and Python defaults, including unframed
+adapter shapes. To describe Rust-derived current-layout fields explicitly, use
+`framed=True` on `StructAdapter`, `seq`, `option`, `result`, `tuple_adapter`, and
+`map_adapter`. Dense always uses the specified field/element prefixes.
+`fixed_bytes(N)` describes raw array bytes (including derived record fields);
+`fixed_bytes(N, framed=True)` describes generic arrays whose current layout
+frames each byte. Both use raw array bytes in dense.
+Custom adapters use `write_field`/`read_field` and
+`write_variant_index`/`read_variant_index` to inherit the selected layout.
+The existing `fixed_size()` metadata describes current-layout sizing; field
+writers measure the actual encoded child bytes in either layout.
+
+`tests/test_dense_layout.py` loads every committed dense vector and its current
+twin from `fixtures/norito_dense/vectors.json`. Transaction encoding and signing
+remain owned by the native-backed [Python SDK](../iroha_python/README.md).
+Codec support does not activate dense on a network.
+
 ## CLI
 The package installs a small inspector:
 
 ```bash
 $ norito-dump my_payload.to
 Norito payload header:
-  version: 1.0
+  version: 0.1
   schema hash: 0123456789abcdef0123456789abcdef
   compression: 0
   payload length: 128
   checksum: 0xdeadbeefcafebabe
-  flags: 0x13
+  flags: 0x00
 ```
 
 ## Development
@@ -83,7 +117,7 @@ package passes the test suite.
 ### Keeping in sync with Rust Norito
 
 CI runs `scripts/check_norito_bindings_sync.sh` to ensure changes under
-`crates/norito` (or related docs) have matching updates in the Python and Java
+`crates/norito` (or related docs) have matching updates in the Python and Kotlin
 bindings. The script now executes lightweight parity checks (schema hash and
 columnar roundtrips) so regressions are caught early. Run it locally after
 touching the Rust Norito sources to avoid surprises (any shell works because the helper is Python-based):

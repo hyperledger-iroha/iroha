@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import ClassVar
 
 from .errors import (
@@ -19,11 +20,16 @@ from .errors import (
 )
 
 MAGIC = b"NRT0"
-# Norito v1 fixes both the major and the minor version at 0. The payload layout
-# is declared in the header flags byte: 0x00 selects fixed-width length
-# prefixes and COMPACT_LEN selects varint per-value length prefixes.
 MAJOR_VERSION = 0
 MINOR_VERSION = 0
+MINOR_VERSION_DENSE = 1
+
+
+class WireLayout(Enum):
+    """Payload layout selected explicitly, or by a frame's minor version."""
+
+    CURRENT = MINOR_VERSION
+    DENSE = MINOR_VERSION_DENSE
 
 # Header flag constants (mirroring `norito.md`). Every other bit is reserved.
 COMPACT_LEN = 0x02
@@ -37,11 +43,11 @@ COMPRESSION_ZSTD = 1
 _SUPPORTED_FLAGS_MASK = COMPACT_LEN
 
 
-def validate_flags(flags: int) -> None:
+def validate_flags(flags: int, *, layout: WireLayout = WireLayout.CURRENT) -> None:
     """Validate Norito v1 layout flags."""
 
-    normalized = flags & 0xFF
-    unsupported = normalized & ~_SUPPORTED_FLAGS_MASK
+    supported = 0 if layout is WireLayout.DENSE else _SUPPORTED_FLAGS_MASK
+    unsupported = flags & ~supported
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
 
@@ -60,6 +66,13 @@ class NoritoHeader:
 
     _HEADER_LEN: ClassVar[int] = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
 
+    @property
+    def layout(self) -> WireLayout:
+        """Resolve the advertised layout, rejecting unknown versions."""
+        if self.major != MAJOR_VERSION or self.minor not in (MINOR_VERSION, MINOR_VERSION_DENSE):
+            raise UnsupportedVersionError(self.major, self.minor)
+        return WireLayout(self.minor)
+
     def encode(self) -> bytes:
         """Serialize the header to bytes."""
 
@@ -69,7 +82,7 @@ class NoritoHeader:
             raise ValueError("payload_length must be non-negative")
         if self.compression not in (COMPRESSION_NONE, COMPRESSION_ZSTD):
             raise UnsupportedCompressionError(self.compression)
-        validate_flags(self.flags)
+        validate_flags(self.flags, layout=self.layout)
         header = bytearray(self._HEADER_LEN)
         header[0:4] = MAGIC
         header[4] = self.major
@@ -88,6 +101,7 @@ class NoritoHeader:
         *,
         expected_schema_hash: bytes | None = None,
         expected_flags: int | None = None,
+        expected_layout: WireLayout | None = None,
     ) -> tuple["NoritoHeader", bytes]:
         """Parse a Norito header from the front of *data*.
 
@@ -110,7 +124,10 @@ class NoritoHeader:
         checksum = int.from_bytes(data[31:39], "little")
         flags = data[39]
 
-        if minor != MINOR_VERSION:
+        if minor not in (MINOR_VERSION, MINOR_VERSION_DENSE):
+            raise UnsupportedVersionError(major, minor)
+        layout = WireLayout(minor)
+        if expected_layout is not None and layout is not WireLayout(expected_layout):
             raise UnsupportedVersionError(major, minor)
 
         if expected_schema_hash is not None and expected_schema_hash != schema_hash:
@@ -121,13 +138,15 @@ class NoritoHeader:
                 flags.to_bytes(1, "little"),
             )
 
-        validate_flags(flags)
+        validate_flags(flags, layout=layout)
 
         if compression == COMPRESSION_NONE:
             min_end = cls._HEADER_LEN + payload_length
             if len(data) < min_end:
                 raise LengthMismatchError(min_end, len(data))
             padding_len = len(data) - min_end
+            if layout is WireLayout.DENSE and padding_len:
+                raise LengthMismatchError(min_end, len(data))
             if padding_len > MAX_HEADER_PADDING:
                 raise LengthMismatchError(min_end + MAX_HEADER_PADDING, len(data))
             if padding_len:
@@ -168,6 +187,8 @@ __all__ = [
     "MAGIC",
     "MAJOR_VERSION",
     "MINOR_VERSION",
+    "MINOR_VERSION_DENSE",
+    "WireLayout",
     "MAX_HEADER_PADDING",
     "COMPACT_LEN",
     "COMPRESSION_NONE",

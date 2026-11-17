@@ -12,19 +12,26 @@ exposing composable adapters that describe how values should be encoded.
   to serialize a particular shape. The module ships factory helpers such as
   `u64()`, `i64()`, `string()`, `option(inner)`, `seq(inner)`,
   `map_adapter(key, value)`, `StructAdapter([...])`, and `tuple_adapter(...)`.
-- **Flags** – the only layout flag is `COMPACT_LEN` (`0x02`), which switches
-  length prefixes to varints. `norito.DEFAULT_FLAGS` is `0` (fixed-width u64
-  length prefixes), matching the canonical Rust layout policy; every other bit
-  is rejected on encode and decode.
-- **Header version** – v1 fixes the minor byte to `0x00`; decoders reject minor
-  mismatches and unknown flag bits. Non-zero header flags are allowed only when
-  explicitly set and within the supported mask.
+- **Flags** – minor 0 accepts `COMPACT_LEN` (`0x02`) for per-value varint
+  lengths, or `0` for fixed-width lengths. Python's existing `DEFAULT_FLAGS = 0`
+  remains unchanged. Dense (minor 1) requires flags `0` and always uses shortest
+  varints for lengths and counts.
+- **Header version** – `WireLayout.CURRENT` selects minor `0` and
+  `WireLayout.DENSE` selects minor `1`. Framed decoding reads the layout only
+  from that byte; an optional expected `layout=` rejects a different minor.
+  Dense has no alignment padding. Unknown minors and trailing bytes are rejected.
 
 ## High-Level API
-- `norito.encode(value, schema, adapter, flags=None)` returns a Norito payload
+- `norito.encode(value, schema, adapter, flags=0, layout=WireLayout.CURRENT)` returns a Norito payload
   (`header + payload`) as bytes.
-- `norito.decode(data, adapter, schema=None)` validates the header, CRC, and
+- `norito.decode(data, adapter, schema=None, layout=None)` validates the header, CRC, and
   flags before decoding the payload into Python objects.
+
+Bare `encode_adaptive`/`decode_adaptive` calls must receive `layout=WireLayout.DENSE`
+for dense bytes; no payload heuristic selects a layout. Composite adapters use
+canonical field prefixes in dense. Their `framed=True` schema option also selects
+Rust-derived field prefixes in minor 0 while preserving existing unframed defaults.
+See the [README](../README.md#dense-layout) for fixed-array descriptors and examples.
 
 ## Example: Map of Account Balances
 ```python

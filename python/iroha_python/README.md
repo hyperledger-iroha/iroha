@@ -2629,6 +2629,34 @@ stay aligned with Torii.
 
 ## Norito fixtures
 
+Python's Norito codec supports the current layout (header minor `0`, flags `0x00`
+or `0x02`) and the dense layout (minor `1`, flags `0x00`). Framed readers select
+the layout from the header, reject unknown minors, and never inspect payload
+bytes to guess a layout. Dense frames have no alignment padding.
+
+The native typed transaction paths expose explicit `layout="current"` (compact
+lengths) and `layout="dense"` choices. `TransactionBuilder` provides
+`encode_payload_with_layout`, `payload_hash_with_layout`, and `sign_with_layout`;
+the last returns bare signed bytes. The functions
+`decode_transaction_payload_with_layout` / `encode_transaction_payload_with_layout`
+and `decode_signed_transaction_with_layout` / `encode_signed_transaction_with_layout`
+round-trip the existing Rust models through their Norito JSON representation.
+They require `chain_discriminant` for account presentation, and accept
+`framed=True` for complete canonical frames; framed decoding also requires the
+advertised header to match the explicit expected layout. Bare bytes always
+require a layout. `transaction_payload_hash_with_layout` computes the typed
+signing prehash, and `sign_transaction_payload_with_layout` reconstructs and signs
+the same typed payload with that layout's hash. These APIs are exported from
+`iroha_python.crypto` and the package root and require the matching native extension.
+
+Dense codec output is not a current versioned submission envelope. No network
+selects dense yet; ordinary `sign` and submission retain their current wire.
+Codec decoding alone does not authenticate a signed transaction. Shared dense
+transaction conformance tests load
+`fixtures/norito_rpc/transaction_fixtures.dense.json` directly, alongside the
+current manifest, and check typed round-trips, signing hashes and deterministic
+re-signing with the fixture key.
+
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. Python does not own or copy shared `.norito` payload blobs;
 `python/iroha_python/tests/fixtures` is a generated descriptor-only mirror containing

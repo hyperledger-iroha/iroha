@@ -39,6 +39,7 @@ from .codec import (
     u128,
 )
 from .compression import has_zstd, select_zstd_level
+from .header import WireLayout
 from .result import Err, Ok
 from .schema import SchemaDescriptor
 from .columnar import (
@@ -176,6 +177,7 @@ from .telemetry_analysis import BaselineConfig, TelemetryAnalyzer, TelemetrySamp
 
 __all__ = [
     "SchemaDescriptor",
+    "WireLayout",
     "Ok",
     "Err",
     "encode",

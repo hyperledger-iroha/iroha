@@ -26,6 +26,7 @@ from .codec import (
     i32,
 )
 from .errors import DecodeError
+from .header import WireLayout
 
 HASH_LEN = 32
 SIGNATURE_LEN = 64
@@ -45,10 +46,17 @@ class NewtypeAdapter(TypeAdapter[T]):
     def encode(self, encoder, value: T) -> None:  # type: ignore[override]
         if not isinstance(value, self._cls):
             raise TypeError(f"expected {self._cls.__name__}, got {type(value)!r}")
-        self._inner.encode(encoder, getattr(value, self._attr))
+        if encoder.layout is WireLayout.DENSE:
+            encoder.write_field(self._inner, getattr(value, self._attr))
+        else:
+            self._inner.encode(encoder, getattr(value, self._attr))
 
     def decode(self, decoder) -> T:  # type: ignore[override]
-        inner_value = self._inner.decode(decoder)
+        inner_value = (
+            decoder.read_field(self._inner)
+            if decoder.layout is WireLayout.DENSE
+            else self._inner.decode(decoder)
+        )
         return self._cls(inner_value)  # type: ignore[arg-type]
 
     def fixed_size(self) -> Optional[int]:
@@ -59,7 +67,7 @@ class NewtypeAdapter(TypeAdapter[T]):
 
 
 class SimpleEnumAdapter(TypeAdapter[E]):
-    """Encode enums as their declaration index (u32 discriminant)."""
+    """Encode declaration-order u32 tags, using shortest varints in dense."""
 
     def __init__(self, enum_cls: Type[E]) -> None:
         self._enum_cls = enum_cls
@@ -69,10 +77,10 @@ class SimpleEnumAdapter(TypeAdapter[E]):
         if not isinstance(value, self._enum_cls):
             raise TypeError(f"expected {self._enum_cls.__name__}, got {type(value)!r}")
         index = self._members.index(value)
-        encoder.write_uint(index, 32)
+        encoder.write_variant_index(index)
 
     def decode(self, decoder) -> E:  # type: ignore[override]
-        index = decoder.read_uint(32)
+        index = decoder.read_variant_index()
         if index >= len(self._members):
             raise DecodeError(f"invalid {self._enum_cls.__name__} discriminant {index}")
         return self._members[index]
@@ -736,23 +744,28 @@ class EncryptionSuiteAdapter(TypeAdapter[EncryptionSuite]):
 
     def encode(self, encoder, value: EncryptionSuite) -> None:  # type: ignore[override]
         if isinstance(value, X25519ChaCha20Poly1305Suite):
-            encoder.write_uint(0, 32)
-            hash_adapter().encode(encoder, value.fingerprint)
+            encoder.write_variant_index(0)
         elif isinstance(value, Kyber768XChaCha20Poly1305Suite):
-            encoder.write_uint(1, 32)
-            hash_adapter().encode(encoder, value.fingerprint)
+            encoder.write_variant_index(1)
         else:
             raise TypeError(f"unsupported EncryptionSuite variant {type(value)!r}")
+        if encoder.layout is WireLayout.DENSE:
+            encoder.write_field(hash_adapter(), value.fingerprint)
+        else:
+            hash_adapter().encode(encoder, value.fingerprint)
 
     def decode(self, decoder) -> EncryptionSuite:  # type: ignore[override]
-        tag = decoder.read_uint(32)
+        tag = decoder.read_variant_index()
+        if tag not in (0, 1):
+            raise DecodeError(f"invalid EncryptionSuite discriminant {tag}")
+        fingerprint = (
+            decoder.read_field(hash_adapter())
+            if decoder.layout is WireLayout.DENSE
+            else hash_adapter().decode(decoder)
+        )
         if tag == 0:
-            fingerprint = hash_adapter().decode(decoder)
             return X25519ChaCha20Poly1305Suite(fingerprint)
-        if tag == 1:
-            fingerprint = hash_adapter().decode(decoder)
-            return Kyber768XChaCha20Poly1305Suite(fingerprint)
-        raise DecodeError(f"invalid EncryptionSuite discriminant {tag}")
+        return Kyber768XChaCha20Poly1305Suite(fingerprint)
 
     def fixed_size(self) -> int:
         return 4 + HASH_LEN
@@ -770,19 +783,26 @@ def encryption_suite_adapter() -> TypeAdapter[EncryptionSuite]:
 
 class ResolutionAdapter(TypeAdapter[Resolution]):
     def encode(self, encoder, value: Resolution) -> None:  # type: ignore[override]
-        encoder.write_uint(value.kind.value, 32)
+        encoder.write_variant_index(value.kind.value)
         if value.kind is ResolutionKind.CUSTOM:
-            resolution_custom_adapter().encode(encoder, value.custom)
+            if encoder.layout is WireLayout.DENSE:
+                encoder.write_field(resolution_custom_adapter(), value.custom)
+            else:
+                resolution_custom_adapter().encode(encoder, value.custom)
 
     def decode(self, decoder) -> Resolution:  # type: ignore[override]
-        tag = decoder.read_uint(32)
+        tag = decoder.read_variant_index()
         try:
             kind = ResolutionKind(tag)
         except ValueError as exc:  # pragma: no cover - defensive
             raise DecodeError(f"invalid Resolution discriminant {tag}") from exc
         custom = None
         if kind is ResolutionKind.CUSTOM:
-            custom = resolution_custom_adapter().decode(decoder)
+            custom = (
+                decoder.read_field(resolution_custom_adapter())
+                if decoder.layout is WireLayout.DENSE
+                else resolution_custom_adapter().decode(decoder)
+            )
         return Resolution(kind, custom)
 
     def fixed_size(self) -> Optional[int]:
@@ -1223,17 +1243,20 @@ class TelemetryEventAdapter(TypeAdapter[TelemetryEvent]):
     def encode(self, encoder, value: TelemetryEvent) -> None:  # type: ignore[override]
         for index, (variant_type, adapter) in enumerate(self._entries):
             if isinstance(value, variant_type):
-                encoder.write_uint(index, 32)
-                adapter.encode(encoder, value.stats)  # type: ignore[arg-type]
+                encoder.write_variant_index(index)
+                if encoder.layout is WireLayout.DENSE:
+                    encoder.write_field(adapter, value.stats)
+                else:
+                    adapter.encode(encoder, value.stats)  # type: ignore[arg-type]
                 return
         raise TypeError(f"unsupported TelemetryEvent variant {type(value)!r}")
 
     def decode(self, decoder) -> TelemetryEvent:  # type: ignore[override]
-        tag = decoder.read_uint(32)
+        tag = decoder.read_variant_index()
         if tag >= len(self._entries):
             raise DecodeError(f"invalid TelemetryEvent discriminant {tag}")
         variant_type, adapter = self._entries[tag]
-        stats = adapter.decode(decoder)
+        stats = decoder.read_field(adapter) if decoder.layout is WireLayout.DENSE else adapter.decode(decoder)
         return variant_type(stats)  # type: ignore[call-arg]
 
     def fixed_size(self) -> Optional[int]:
@@ -1349,17 +1372,20 @@ class ControlFrameAdapter(TypeAdapter[ControlFrame]):
                     raise TypeError(
                         f"variant {variant.name} expects payload {payload_type.__name__}"
                     )
-                encoder.write_uint(index, 32)
-                adapter_fn().encode(encoder, value.payload)  # type: ignore[arg-type]
+                encoder.write_variant_index(index)
+                if encoder.layout is WireLayout.DENSE:
+                    encoder.write_field(adapter_fn(), value.payload)
+                else:
+                    adapter_fn().encode(encoder, value.payload)  # type: ignore[arg-type]
                 return
         raise ValueError(f"unsupported ControlFrame variant {value.variant}")
 
     def decode(self, decoder) -> ControlFrame:  # type: ignore[override]
-        tag = decoder.read_uint(32)
+        tag = decoder.read_variant_index()
         if tag >= len(self._entries):
             raise DecodeError(f"invalid ControlFrame discriminant {tag}")
         variant, adapter_fn, _payload_type = self._entries[tag]
-        payload = adapter_fn().decode(decoder)
+        payload = decoder.read_field(adapter_fn()) if decoder.layout is WireLayout.DENSE else adapter_fn().decode(decoder)
         return ControlFrame(variant, payload)
 
     def fixed_size(self) -> Optional[int]:
