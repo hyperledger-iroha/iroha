@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     full::{NODE_DOMAIN, Pool, Wiring, constant_entries},
-    points::PointsBuilder,
+    points::{IdentityPoints, PointsBuilder},
     r1cs::{Circuit, Instance, Witness},
     uniform::{Array, UniformCircuit, constant, link, own, plus},
 };
@@ -209,6 +209,24 @@ where
         sources(&gens, 3),
         &mut SpikeRng::new(b"generator points circuit"),
     );
+    // The private fold needs the native identity rule; a builder that chose
+    // hard-slot strictness cannot host it.
+    let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut w = Wiring::<C::Base>::default();
+        let f = w.family(0, 1);
+        let e_out = w.reserve();
+        let e_v = w.reserve();
+        let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
+        let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Refused);
+        let _ = pb.generator_fold(&mut pool, &gens, &fold, &tr, 0);
+    }));
+    let why = strict.expect_err("a strict builder refuses the generator fold");
+    assert!(
+        why.downcast_ref::<String>()
+            .is_some_and(|m| m.contains("the private generator fold follows the native identity rule")),
+        "refused for its identity rule"
+    );
     let mut fingerprint = None;
     for case in 0..4 {
         let original = match case {
@@ -240,7 +258,7 @@ where
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
         let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
         let token = pb.generator_fold(&mut pool, &gens, &fold, &tr, 0);
         let equal = pb.generator_source_equals_inherited(
             &token,
@@ -470,7 +488,7 @@ where
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, family, "zero", &[vec![C::Base::ZERO]]);
         let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-        let mut points = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+        let mut points = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
         let output = points.generator_fold(&mut pool, &gens, fold, tr, 0);
         let mut shared_values = tr.shared.clone();
         push_point::<C>(&mut shared_values, fold.sources[0].g);

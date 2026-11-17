@@ -66,7 +66,7 @@ where
         self.generator_source_equals_input(fold.sources[source], i)
     }
     fn generator_source_equals_input(&mut self, left: usize, right: usize) -> GeneratorEquality {
-        self.total = true;
+        self.require_native("a generator source equality");
         let zero_i = self.inputs.len();
         self.inputs.push((C::Base::ZERO, C::Base::ZERO, None));
         self.consts.push((zero_i, None));
@@ -165,7 +165,7 @@ where
         tr: &FoldTrace<C>,
         base: usize,
     ) -> GeneratorPoints {
-        self.total = true;
+        self.require_native("the private generator fold");
         let l = &tr.layout;
         let mut input_sp = self.fold_sp(tr.input_header);
         self.fold_words(pool, &mut input_sp, base, tr, 0, 2);

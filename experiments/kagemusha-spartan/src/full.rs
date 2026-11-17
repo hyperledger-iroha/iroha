@@ -3635,8 +3635,22 @@ pub fn p_operation(
         pairs[0].inst_p.io[HEAD_IO],
         Some(witness),
         Some(generators),
+        OPERATION_IDENTITY,
     )
 }
+
+/// The monetary backend's identity rule, for its total slot (Receive's
+/// incoming pair) and its hard slots (every predecessor) alike: the native
+/// rule, whatever the generator folding. Its hard slots then agree with
+/// native verification on identity points too.
+pub(crate) const OPERATION_IDENTITY: crate::points::IdentityPoints =
+    crate::points::IdentityPoints::Native;
+
+/// The benchmark relations' identity rule (`p_circuit`, `s_circuit`: hard
+/// slots only, no generator fold and no verdict): hard-slot strictness, as
+/// their incomplete ladders always had.
+pub(crate) const BENCHMARK_IDENTITY: crate::points::IdentityPoints =
+    crate::points::IdentityPoints::Refused;
 
 /// P-recv in the uniform layout: the own relation; for each incoming pair the
 /// P proof's scalar side (with its io digest) and the S proof's points side;
@@ -3739,7 +3753,17 @@ fn p_circuit_with_predecessor(
     key: &WalletKey,
     predecessor: Fp,
 ) -> (Wiring<Fp>, PRecvIdx) {
-    p_circuit_impl(op, gens, pairs, Some(key), predecessor, None, None).expect("benchmark relation")
+    p_circuit_impl(
+        op,
+        gens,
+        pairs,
+        Some(key),
+        predecessor,
+        None,
+        None,
+        BENCHMARK_IDENTITY,
+    )
+    .expect("benchmark relation")
 }
 
 fn p_circuit_impl(
@@ -3750,6 +3774,7 @@ fn p_circuit_impl(
     predecessor: Fp,
     operation: Option<OperationWitness<'_>>,
     generators: Option<&GeneratorFolds>,
+    identity: crate::points::IdentityPoints,
 ) -> Result<(Wiring<Fp>, PRecvIdx), &'static str> {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
@@ -3802,7 +3827,7 @@ fn p_circuit_impl(
     }
     // The S proofs' points sides; a slot taking any kind pins the S proof's
     // fixed rows to the key its kind bits select.
-    let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero, identity);
     let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_p + link_word_at(&pr.tr_p);
@@ -5389,7 +5414,7 @@ pub fn s_circuit(
     gens: &PairGens,
     pairs: &[TracedPair],
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, gens, pairs, false, None)
+    s_circuit_impl(own_kind, gens, pairs, false, None, BENCHMARK_IDENTITY)
 }
 
 /// Secondary half of the complete monetary backend. Receive's incoming slot
@@ -5400,7 +5425,14 @@ pub fn s_operation(
     pairs: &[TracedPair],
     generators: &GeneratorFolds,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, gens, pairs, own_kind == RECEIVE, Some(generators))
+    s_circuit_impl(
+        own_kind,
+        gens,
+        pairs,
+        own_kind == RECEIVE,
+        Some(generators),
+        OPERATION_IDENTITY,
+    )
 }
 
 fn s_circuit_impl(
@@ -5409,6 +5441,7 @@ fn s_circuit_impl(
     pairs: &[TracedPair],
     total_incoming: bool,
     generators: Option<&GeneratorFolds>,
+    identity: crate::points::IdentityPoints,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use crate::verifier::Fq;
@@ -5437,7 +5470,7 @@ fn s_circuit_impl(
     if total_incoming {
         values.extend(incoming_verdict_values(gens, &pairs[1]));
     }
-    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero, identity);
     let mut proof_points = Vec::new();
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_s + link_word_at(&pr.tr_s);

@@ -281,7 +281,7 @@ fn total_points_p(
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fq::ZERO]]);
     let mut pool = Pool::new(Fq::from(NODE_DOMAIN));
-    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero, OPERATION_IDENTITY);
     let token = pb.verify_keyed_total(
         &mut pool,
         &p.0.shape,

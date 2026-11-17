@@ -53,7 +53,7 @@ where
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
     let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-    let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+    let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
     let token = pb.verify_keyed_total(
         &mut pool,
         shape,
@@ -291,7 +291,6 @@ where
     C::Base: Scalar + PoseidonField,
     D::Base: Scalar + PoseidonField,
 {
-    use crate::ipa::IpaProof;
     let shape = Shape {
         label: "identity points",
         sx: 12,
@@ -303,30 +302,8 @@ where
     let inst = Instance {
         io: vec![F::<C>::ZERO; 8],
     };
+    let mut proof = identity_proof(&shape, &gens, &inst);
     let id = C::identity().to_affine();
-    let z2 = F::<C>::from(0x5eed_u64);
-    let mut proof = Proof::<C> {
-        rows: vec![id; shape.rows()],
-        late: Vec::new(),
-        outer: vec![id; shape.outer_blocks().len()],
-        v: [F::<C>::ZERO; 3],
-        inner: vec![id; shape.inner_blocks().len()],
-        ipa: IpaProof {
-            lr: vec![(id, id); shape.col_bits],
-            g_final: id,
-            a: (C::from(gens.h) * z2).to_affine(),
-            z1: F::<C>::ZERO,
-            z2,
-        },
-    };
-    let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &[], &crate::spartan::Link::None);
-    proof.ipa.g_final = iroha_pasta::msm::msm_public::<C>(
-        &crate::ipa::s_vector(&tr.us),
-        &gens.g,
-        iroha_pasta::msm::MemoryBudget::DEFAULT,
-    )
-    .unwrap()
-    .to_affine();
     let bytes = proof.to_bytes();
     assert!(bytes[..32].iter().all(|b| *b == 0), "the identity encodes as zero bytes");
     assert_eq!(
@@ -357,6 +334,41 @@ where
     let built = build(&shape, &gens, &inst, &proof, &[]);
     assert!(holds(&built));
     assert_eq!(built.1.io[4], C::Base::ZERO, "so does the total verifier");
+}
+
+/// A valid proof of the zero io whose every committed point is the
+/// identity: rows, rounds, L and R the identity; v = z1 = 0; A = [z2] H; G
+/// the folded generator. Native verification accepts it.
+fn identity_proof<C: PastaCurve>(shape: &Shape, gens: &Gens<C>, inst: &Instance<F<C>>) -> Proof<C>
+where
+    C::Base: Scalar,
+{
+    use crate::ipa::IpaProof;
+    let id = C::identity().to_affine();
+    let z2 = F::<C>::from(0x5eed_u64);
+    let mut proof = Proof::<C> {
+        rows: vec![id; shape.rows()],
+        late: Vec::new(),
+        outer: vec![id; shape.outer_blocks().len()],
+        v: [F::<C>::ZERO; 3],
+        inner: vec![id; shape.inner_blocks().len()],
+        ipa: IpaProof {
+            lr: vec![(id, id); shape.col_bits],
+            g_final: id,
+            a: (C::from(gens.h) * z2).to_affine(),
+            z1: F::<C>::ZERO,
+            z2,
+        },
+    };
+    let tr = crate::verifier::trace(shape, gens, inst, &proof, &[], &crate::spartan::Link::None);
+    proof.ipa.g_final = iroha_pasta::msm::msm_public::<C>(
+        &crate::ipa::s_vector(&tr.us),
+        &gens.g,
+        iroha_pasta::msm::MemoryBudget::DEFAULT,
+    )
+    .unwrap()
+    .to_affine();
+    proof
 }
 #[test]
 fn identity_points_follow_one_rule_natively_and_in_the_total_verifier() {
@@ -551,7 +563,13 @@ where
             let e_v = w.reserve();
             let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
             let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-            let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero);
+            let mut pb = PointsBuilder::<C>::new(
+                &mut w,
+                e_out,
+                e_v,
+                e_zero,
+                crate::full::OPERATION_IDENTITY,
+            );
             pb.verify_keyed(
                 &mut pool,
                 &shape,
@@ -583,4 +601,144 @@ where
 fn uniform_builders_refuse_cancel_round_and_adaptive_witness() {
     forgeries_refused::<Pallas, Vesta>();
     forgeries_refused::<Vesta, Pallas>();
+}
+
+/// One proof's hard points side in a builder with identity rule `identity`,
+/// the proof's shared values a free array: (circuit, instance, witness).
+fn hard_build<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    proof: &Proof<C>,
+    identity: IdentityPoints,
+) -> (UniformCircuit<C::Base>, Instance<C::Base>, Witness<C::Base>)
+where
+    C::Base: Scalar + PoseidonField,
+{
+    let tr = crate::verifier::trace(shape, gens, inst, proof, &[], &crate::spartan::Link::None);
+    let values = crate::verifier::shared_values(&tr, proof, &[]);
+    let mut w = Wiring::<C::Base>::default();
+    let f = w.family(0, 1);
+    let e_out = w.reserve();
+    let e_v = w.reserve();
+    let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
+    let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+    let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, identity);
+    pb.verify_keyed(
+        &mut pool,
+        shape,
+        gens,
+        proof,
+        &[],
+        &tr,
+        SharedMap {
+            base: 0,
+            other: None,
+            r: None,
+        },
+        None,
+        None,
+    );
+    let n = values.len().next_power_of_two();
+    let mut shared: Vec<_> = values.iter().map(|v| C::Base::from_u128(*v)).collect();
+    shared.resize(n, C::Base::ZERO);
+    let shared_a = w.push(Array {
+        name: "hard points test shared values",
+        family: f,
+        rho: n.trailing_zeros() as usize,
+        r_count: values.len(),
+        fixed: false,
+        lookups: vec![],
+        widths: vec![128],
+        rows: vec![],
+        values: vec![shared],
+    });
+    w.set_export(e_v, shared_a, vec![own(0, n)]);
+    pool.build(&mut w, e_out, &mut SpikeRng::new(b"hard points pool"));
+    let _ = pb.build(&mut w, f, shared_a, true);
+    let (a, p, n, t, c) = w.finish();
+    UniformCircuit::build_with_copies("hard points", a, p, n, t, c, 13, 4, b"hard points")
+}
+
+fn panic_text(e: Box<dyn std::any::Any + Send>) -> String {
+    e.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Review re-check R4: identity handling is each builder's explicit rule,
+/// not a side effect of a generator fold or of a total slot elsewhere in the
+/// circuit. A hard slot alone (no total slot, no generator fold) in a builder
+/// that chose the native rule verifies the valid all-identity proof, as
+/// native verification does, and still refuses an identity A. The same hard
+/// slot under hard-slot strictness refuses the proof, and a strict builder
+/// cannot place a total slot. The monetary backend chooses the native rule.
+fn explicit_identity<C>()
+where
+    C: PastaCurve,
+    C::Base: Scalar + PoseidonField,
+{
+    assert_eq!(crate::full::OPERATION_IDENTITY, IdentityPoints::Native);
+    assert_eq!(crate::full::BENCHMARK_IDENTITY, IdentityPoints::Refused);
+    let shape = Shape {
+        label: "explicit identity rule",
+        sx: 12,
+        row_bits: 2,
+        col_bits: 10,
+        k: 3,
+    };
+    let gens = Gens::<C>::new(shape.cols());
+    let inst = Instance {
+        io: vec![F::<C>::ZERO; 8],
+    };
+    let mut proof = identity_proof(&shape, &gens, &inst);
+    assert_eq!(crate::spartan::verify(&shape, &gens, &inst, &proof.to_bytes()), Ok(()));
+    assert!(
+        holds_any(&hard_build(&shape, &gens, &inst, &proof, IdentityPoints::Native)),
+        "a native-rule hard slot verifies it without any generator fold"
+    );
+    let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hard_build(&shape, &gens, &inst, &proof, IdentityPoints::Refused)
+    }));
+    let why = panic_text(strict.err().expect("hard-slot strictness refuses it"));
+    assert!(why.contains("IdentityPoints::Refused"), "{why}");
+    let total = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &[], &crate::spartan::Link::None);
+        let mut w = Wiring::<C::Base>::default();
+        let f = w.family(0, 1);
+        let e_out = w.reserve();
+        let e_v = w.reserve();
+        let e_zero = constant_entries(&mut w, f, "zero", &[vec![C::Base::ZERO]]);
+        let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
+        let mut pb = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Refused);
+        pb.verify_keyed_total(
+            &mut pool,
+            &shape,
+            &gens,
+            &proof,
+            &[],
+            &tr,
+            SharedMap {
+                base: 0,
+                other: None,
+                r: None,
+            },
+            None,
+            None,
+        );
+    }));
+    let why = panic_text(total.err().expect("a strict builder has no total slot"));
+    assert!(why.contains("a total slot follows the native identity rule"), "{why}");
+    proof.ipa.a = C::identity().to_affine();
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hard_build(&shape, &gens, &inst, &proof, IdentityPoints::Native)
+    }));
+    let why = panic_text(refused.err().expect("an identity A is refused"));
+    assert!(why.contains("Schnorr A must be finite"), "{why}");
+}
+#[test]
+fn identity_rule_is_each_builders_explicit_choice() {
+    explicit_identity::<Pallas>();
+    explicit_identity::<Vesta>();
 }

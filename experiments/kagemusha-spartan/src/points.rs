@@ -129,6 +129,28 @@ pub struct SharedMap {
     pub r: Option<[usize; 2]>,
 }
 
+/// How a verifier treats identity proof points. Every builder of a verified
+/// proof chooses one on purpose (`PointsBuilder::new`); nothing else, such as
+/// whether the circuit happens to run a private generator fold, selects it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityPoints {
+    /// The native rule, for total and hard slots alike: any proof point may
+    /// be the identity (32 zero bytes, absorbed as (0, 0)) except the IPA's
+    /// Schnorr commitment A, which `ipa::verify` refuses and these slots mask
+    /// finite. Complete arithmetic throughout (identity-capable input check,
+    /// complete additions, endoscalings and multiplications). Required for a
+    /// total slot and for the private generator fold.
+    Native,
+    /// Hard-slot strictness: every proof point must be finite, on incomplete
+    /// ladders. Stricter than native verification, never more accepting. Only
+    /// for builders with no verdict to agree on, whose hard slots verify the
+    /// wallet's own predecessor (its prover blinds every committed point, so an
+    /// honest wallet never meets the refusal) or, in the benchmark relations
+    /// without the monetary backend, a pair whose refusal leaves the prover
+    /// without a witness. Never for a total slot or a generator fold.
+    Refused,
+}
+
 /// Exports the builder reserves up front (the pool's lane reads name them).
 #[derive(Clone, Copy, Debug)]
 pub struct Exports {
@@ -160,7 +182,8 @@ pub struct PointsBuilder<C: PastaCurve> {
     squeezes: Vec<SqueezeSpec<C::Base>>,
     equal: Vec<(usize, usize)>,
     soft_equal: Vec<(usize, usize, Option<usize>)>,
-    total: bool,
+    /// The builder's identity rule, chosen by its caller.
+    identity: IdentityPoints,
     /// (binding index, the challenge it equals).
     v_from: Vec<(usize, ChRef)>,
     /// (input point, binding indices of x lo, x hi, y lo, y hi).
@@ -192,7 +215,16 @@ impl<C: PastaCurve> PointsBuilder<C>
 where
     C::Base: Scalar + PoseidonField,
 {
-    pub fn new(w: &mut Wiring<C::Base>, e_out: usize, e_v: usize, e_zero: usize) -> Self {
+    /// A builder over the exports `e_out` (the pool's outputs), `e_v` (the
+    /// shared values) and `e_zero` (a zero word). `identity` is the identity
+    /// rule of every slot it verifies; see `IdentityPoints`.
+    pub fn new(
+        w: &mut Wiring<C::Base>,
+        e_out: usize,
+        e_v: usize,
+        e_zero: usize,
+        identity: IdentityPoints,
+    ) -> Self {
         let mut r = || w.reserve();
         let e = Exports {
             x: r(),
@@ -221,7 +253,7 @@ where
             squeezes: Vec::new(),
             equal: Vec::new(),
             soft_equal: Vec::new(),
-            total: false,
+            identity,
             v_from: Vec::new(),
             claim_limbs: Vec::new(),
             full_limbs: Vec::new(),
@@ -231,6 +263,27 @@ where
             finite: Vec::new(),
             perms: 0,
         }
+    }
+
+    /// The builder's identity rule.
+    pub fn identity(&self) -> IdentityPoints {
+        self.identity
+    }
+
+    /// Whether the builder lays out complete (identity-capable) arithmetic:
+    /// exactly when its caller chose the native identity rule.
+    fn complete(&self) -> bool {
+        self.identity == IdentityPoints::Native
+    }
+
+    /// Panics unless the caller chose the native identity rule: `what` must
+    /// agree with native verification on identity points.
+    pub(crate) fn require_native(&self, what: &str) {
+        assert_eq!(
+            self.identity,
+            IdentityPoints::Native,
+            "{what} follows the native identity rule"
+        );
     }
 
     fn word_src(&self, wd: Word) -> (usize, usize) {
@@ -269,6 +322,10 @@ where
 
     fn input(&mut self, pool: &mut Pool<C::Base>, sp: &mut Sp<C::Base>, p: &Aff<C>) -> (PtRef, C) {
         let pt = C::from(*p);
+        assert!(
+            self.complete() || !bool::from(pt.is_identity()),
+            "an identity proof point in a builder whose rule refuses it (IdentityPoints::Refused)"
+        );
         let (x, y) = coords(&pt);
         let i = self.inputs.len();
         self.inputs.push((x, y, None));
@@ -383,7 +440,7 @@ where
         keys: Option<&KeySelect<C>>,
         wallet: Option<usize>,
     ) -> TotalPoints {
-        self.total = true;
+        self.require_native("a total slot");
         let start = self.inputs.len();
         let verdict = self.soft_equal.len();
         self.verify_keyed_inner(pool, shape, gens, proof, claims, tr, sm, keys, wallet, true);
@@ -1114,7 +1171,7 @@ where
             [o(2), o(0), o(3)],
             [o(1), o(1), plus(&o(3), &constant(vec![C::b(); n_p]))],
         ];
-        if self.total {
+        if self.complete() {
             pv.extend((0..5).map(|_| vec![Fb::<C>::ZERO; n_p]));
             for i in 0..np {
                 let x = pv[0][i];
@@ -1300,7 +1357,7 @@ where
             .collect();
         for (i, s) in self.adds.iter().enumerate() {
             let qy = if s.neg { -s.qv.1 } else { s.qv.1 };
-            let [l, sq, pq, x3, y3] = if self.total {
+            let [l, sq, pq, x3, y3] = if self.complete() {
                 [Fb::<C>::ZERO; 5]
             } else {
                 ladders::n_add(s.pv, (s.qv.0, qy))
@@ -1341,7 +1398,7 @@ where
             [l.clone(), l.clone(), plus(&plus(&x3, &px), &qx)],
             [l.clone(), plus(&px, &neg(&x3)), plus(&y3, &py)],
         ];
-        if self.total {
+        if self.complete() {
             let completed = complete::additions(
                 gfam,
                 rho_a,
@@ -1435,7 +1492,7 @@ where
             .iter()
             .map(|e| (e.point, e.bits.clone()))
             .collect();
-        let lad = if self.total {
+        let lad = if self.complete() {
             complete::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
         } else {
             ladders::endoscale::<C>(first_e, fam_e, pi_e, &inputs)
@@ -1470,7 +1527,7 @@ where
             .iter()
             .map(|m| (m.point, m.bits.clone(), m.fixed))
             .collect();
-        let lad = if self.total {
+        let lad = if self.complete() {
             complete::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
         } else {
             ladders::mixed_mul::<C>(first_m, fam_m, pi_m, &inputs)
@@ -1486,7 +1543,7 @@ where
                 for (p, r) in results.iter().enumerate() {
                     col[p] = if k == 0 { r.0 } else { r.1 };
                 }
-                if self.total {
+                if self.complete() {
                     end.values[5 + k] = col;
                 } else {
                     end.values.push(col);
@@ -1981,7 +2038,8 @@ mod tests {
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
         let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-        let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
+        let mut pb =
+            PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Refused);
         pb.verify_keyed(
             &mut pool,
             &shape,
