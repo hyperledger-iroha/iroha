@@ -145,7 +145,6 @@ pub struct Exports {
     pub pairs: usize,
     pub embed: usize,
     pub header: usize,
-    pub valid: usize,
 }
 
 pub struct PointsBuilder<C: PastaCurve> {
@@ -205,7 +204,6 @@ where
             pairs: r(),
             embed: r(),
             header: r(),
-            valid: r(),
         };
         PointsBuilder {
             e,
@@ -1504,7 +1502,8 @@ where
                 rows,
                 values,
             });
-            w.set_export(self.e.valid, array, vec![own(0, n)]);
+            // Verdict readers link this array's cell 0 directly
+            // (`PointsIdx::validity`); it exports nothing.
             Some(array)
         };
         PointsIdx {

@@ -3433,9 +3433,11 @@ fn linked_uniform(
 /// A linked pair's line: proving time, verification, sizes, and whether its
 /// accumulators hold natively on `gens`' polynomials (returned).
 fn report_pair(label: &str, l: &LinkedPair, gens: &full::PairGens) -> (bool, bool) {
+    // The accumulator is the first n + 1 late values; the generator claim
+    // follows it.
     let (ap, as_) = (
-        deferral::claim_of(&l.pp.late),
-        deferral::claim_of(&l.ps.late),
+        deferral::claim_of(&l.pp.late[..=gens.defer_p.n()]),
+        deferral::claim_of(&l.ps.late[..=gens.defer_s.n()]),
     );
     let (hp, hs) = (
         gens.defer_p.eval(&ap.point) == ap.value,

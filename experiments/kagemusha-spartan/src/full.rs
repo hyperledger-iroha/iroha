@@ -2329,12 +2329,42 @@ mod tests {
             .is_ok_and(|x| x == d),
             "P-boot verifies"
         );
+        // Late io: the accumulator claim (n point coordinates and the value),
+        // then the exact empty generator claim (g[0]'s four coordinate limbs
+        // and an all-zero u).
+        fn empty_generator_claim<C: iroha_pasta::PastaCurve>(
+            gens: &crate::ipa::Gens<C>,
+        ) -> Vec<crate::ipa::F<C>> {
+            use iroha_pasta::PastaAffine;
+            let (x, y) = Option::from(gens.g[0].coordinates()).expect("g[0] is finite");
+            let (x, y): (C::Base, C::Base) = (x, y);
+            let (x, y) = (x.to_repr(), y.to_repr());
+            let mut v: Vec<crate::ipa::F<C>> = [&x[..16], &x[16..], &y[..16], &y[16..]]
+                .into_iter()
+                .map(|h| {
+                    crate::ipa::F::<C>::from_u128(u128::from_le_bytes(h.try_into().unwrap()))
+                })
+                .collect();
+            v.resize(4 + gens.g.len().ilog2() as usize, crate::ipa::F::<C>::ZERO);
+            v
+        }
+        let (np, ns) = (gens.defer_p.n(), gens.defer_s.n());
         let (ap, as_) = (
-            crate::deferral::claim_of(&pp.late),
-            crate::deferral::claim_of(&ps.late),
+            crate::deferral::claim_of(&pp.late[..=np]),
+            crate::deferral::claim_of(&ps.late[..=ns]),
         );
         assert_eq!(ap, gens.defer_p.empty_claim(), "P-boot's accumulator");
         assert_eq!(as_, gens.defer_s.empty_claim(), "S-boot's accumulator");
+        assert_eq!(
+            pp.late[np + 1..],
+            empty_generator_claim(&gens.p)[..],
+            "P-boot's empty generator claim"
+        );
+        assert_eq!(
+            ps.late[ns + 1..],
+            empty_generator_claim(&gens.s)[..],
+            "S-boot's empty generator claim"
+        );
         assert!(
             gens.defer_p.eval(&ap.point) == ap.value && gens.defer_s.eval(&as_.point) == as_.value,
             "the empty claims hold"
