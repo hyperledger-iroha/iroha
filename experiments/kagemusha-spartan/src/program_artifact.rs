@@ -27,6 +27,106 @@ struct PublicProgram {
     late: Vec<[u32; 4]>,
     link: Vec<[u32; 2]>,
 }
+
+/// Formal degree propagation over a matrix-evaluation tape. Inputs are `r_x`
+/// (`sx`), `r_y` (`sz`), then the LogUp challenges alpha and beta (when the
+/// program has them). Every output `A, B, C` must be multilinear in `r_x` and
+/// `r_y` and of at most the declared degrees in alpha and beta: the sumcheck
+/// round degrees, the matrix fold's `deg q` and the soundness bounds all use
+/// exactly those degrees, so a declaration is checked, never trusted. Formal
+/// degrees (max under addition, sum under multiplication) bound the real ones.
+fn check_tape_degrees(
+    ops: &[Op],
+    inputs: usize,
+    layout: (usize, usize, usize),
+    outputs: [u32; 3],
+    declared: (usize, usize),
+) -> Result<(), String> {
+    for (i, op) in ops.iter().enumerate() {
+        let (src, k) = operands(*op);
+        if src[..k].iter().any(|&a| a as usize >= inputs + i) {
+            return Err("matrix tape forward operand".into());
+        }
+    }
+    if outputs.iter().any(|&o| o as usize >= inputs + ops.len()) {
+        return Err("matrix tape output bound".into());
+    }
+    check_register_degrees(&Regs::of(inputs, ops, outputs), layout, declared)
+}
+
+/// `check_tape_degrees` over the tape's register program: one saturating
+/// degree byte per (live register, variable), so the table stays small for
+/// any instruction count.
+fn check_register_degrees(
+    regs: &Regs,
+    (sx, sz, challenges): (usize, usize, usize),
+    declared: (usize, usize),
+) -> Result<(), String> {
+    let vars = regs.inputs.len();
+    if vars != sx + sz + challenges || challenges > 2 {
+        return Err("matrix tape input layout".into());
+    }
+    let cells = regs
+        .count
+        .checked_mul(vars)
+        .filter(|&n| n <= MAX_PROGRAM_BYTES)
+        .ok_or("matrix tape degree table bound")?;
+    // Every bound checked below is at most 128, so saturation can only make
+    // a refusal certain.
+    let mut degree = vec![0u8; cells];
+    for (v, &r) in regs.inputs.iter().enumerate() {
+        degree[r as usize * vars + v] = 1;
+    }
+    let row = |r: Slot| r as usize * vars..(r as usize + 1) * vars;
+    let mut next = vec![0u8; vars];
+    for &(op, d) in &regs.ops {
+        match op {
+            Op::Add(a, b) | Op::Sub(a, b) => {
+                for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
+                    *n = (*x).max(*y);
+                }
+            }
+            Op::Mul(a, b) => {
+                for ((n, x), y) in next.iter_mut().zip(&degree[row(a)]).zip(&degree[row(b)]) {
+                    *n = x.saturating_add(*y);
+                }
+            }
+            Op::Scale(a, _) => next.copy_from_slice(&degree[row(a)]),
+            Op::Const(_) => next.fill(0),
+        }
+        degree[row(d)].copy_from_slice(&next);
+    }
+    let bound = |v: usize| {
+        if v < sx + sz {
+            1
+        } else if v == sx + sz {
+            declared.0
+        } else {
+            declared.1
+        }
+    };
+    for (k, out) in regs.out.into_iter().enumerate() {
+        let degrees = &degree[row(out)];
+        if let Some(v) = (0..vars).find(|&v| degrees[v] as usize > bound(v)) {
+            let what = if v < sx {
+                format!("r_x[{v}]")
+            } else if v < sx + sz {
+                format!("r_y[{}]", v - sx)
+            } else if v == sx + sz {
+                "alpha".into()
+            } else {
+                "beta".into()
+            };
+            return Err(format!(
+                "matrix tape output {k} has formal degree {} in {what}, above its declared bound {}",
+                degrees[v],
+                bound(v)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn encode(value: &PublicProgram) -> Result<Vec<u8>, String> {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
     norito::to_bytes(value).map_err(|e| format!("public program encode: {e}"))
@@ -373,6 +473,13 @@ impl<F: Scalar> UniformCircuit<F> {
             return Err("public program output bound".into());
         }
         let regs = Regs::of(p.inputs as usize, &ops, p.outputs);
+        // The declared LogUp degrees size the matrix fold's q and every bound
+        // over it: derive the tape's real degrees instead of trusting them.
+        check_register_degrees(
+            &regs,
+            (sx, shape.sz(), p.challenges as usize),
+            (p.degrees[0] as usize, p.degrees[1] as usize),
+        )?;
         let tape = Tape {
             inputs: p.inputs as usize,
             ops,
@@ -459,6 +566,18 @@ impl<F: Scalar> UniformCircuit<F> {
             m_plans: OnceLock::new(),
             plan,
         })
+    }
+
+    /// The program's matrix tape is multilinear in `r_x`, `r_y` and within
+    /// its declared LogUp degrees (`check_tape_degrees`). Import checks this
+    /// before building the program; native parameter admission checks every
+    /// authenticated program again, however it was obtained.
+    pub(crate) fn check_declared_degrees(&self) -> Result<(), String> {
+        check_register_degrees(
+            &self.plan().regs,
+            (self.shape.sx, self.shape.sz(), self.phase2_challenges()),
+            self.challenge_degrees(),
+        )
     }
 }
 
@@ -602,6 +721,81 @@ mod tests {
         check::<Fp>(true);
         check::<Fq>(false);
     }
+
+    /// Degrees come from the tape, never from the declaration: inputs r_x0,
+    /// r_x1, r_y0, r_y1, alpha, beta (slots 0-5).
+    #[test]
+    fn matrix_tape_degrees_are_derived_not_declared() {
+        let layout = (2, 2, 2);
+        let mut ops = vec![
+            Op::Mul(0, 2), // 6: r_x0 r_y0
+            Op::Mul(6, 1), // 7: r_x0 r_x1 r_y0
+            Op::Mul(5, 5), // 8: beta^2
+            Op::Mul(7, 8), // 9: r_x0 r_x1 r_y0 beta^2
+            Op::Sub(4, 3), // 10: alpha - r_y1
+            Op::Mul(9, 10),
+            Op::Const(0),     // 12
+            Op::Scale(11, 0), // 13
+            Op::Add(13, 12),  // 14
+        ];
+        let honest = [14, 7, 6];
+        assert_eq!(check_tape_degrees(&ops, 6, layout, honest, (1, 2)), Ok(()));
+        // An over-declaration is only conservative.
+        assert_eq!(check_tape_degrees(&ops, 6, layout, honest, (1, 9)), Ok(()));
+        let low_beta = check_tape_degrees(&ops, 6, layout, honest, (1, 1)).unwrap_err();
+        assert!(low_beta.contains("degree 2 in beta"), "{low_beta}");
+        let low_alpha = check_tape_degrees(&ops, 6, layout, honest, (0, 2)).unwrap_err();
+        assert!(low_alpha.contains("degree 1 in alpha"), "{low_alpha}");
+        // Not multilinear: r_x0 squared, then r_y1 squared, in some output.
+        ops.push(Op::Mul(0, 6)); // 15
+        let squared = check_tape_degrees(&ops, 6, layout, [14, 15, 6], (1, 2)).unwrap_err();
+        assert!(
+            squared.contains("output 1 has formal degree 2 in r_x[0]"),
+            "{squared}"
+        );
+        ops.push(Op::Mul(10, 3)); // 16: (alpha - r_y1) r_y1
+        let squared = check_tape_degrees(&ops, 6, layout, [14, 7, 16], (1, 2)).unwrap_err();
+        assert!(squared.contains("degree 2 in r_y[1]"), "{squared}");
+        // Repeated squaring saturates and stays refused at any declaration.
+        let mut tower = vec![Op::Mul(5, 5)];
+        for i in 0..9 {
+            tower.push(Op::Mul(6 + i, 6 + i));
+        }
+        let top = 6 + tower.len() as u32 - 1;
+        let saturated = check_tape_degrees(&tower, 6, layout, [top, 0, 0], (1, 128)).unwrap_err();
+        assert!(saturated.contains("degree 255 in beta"), "{saturated}");
+        // Layout, forward operands and outputs are part of the check.
+        assert!(check_tape_degrees(&ops, 5, layout, honest, (1, 2)).is_err());
+        assert!(check_tape_degrees(&[Op::Mul(6, 0)], 6, layout, [0, 0, 0], (1, 2)).is_err());
+        assert!(check_tape_degrees(&ops, 6, layout, [99, 0, 0], (1, 2)).is_err());
+    }
+
+    /// A canonical, in-bounds tape whose real degree exceeds its declaration
+    /// is refused at import and by native admission's recheck.
+    #[test]
+    fn imported_tape_above_declared_degree_is_refused() {
+        fn run<F: Scalar>(primary: bool) {
+            let c = sample::<F>(primary);
+            assert_eq!(c.check_declared_degrees(), Ok(()));
+            let bytes = c.export_program().unwrap();
+            let honest = UniformCircuit::<F>::import_program(&bytes, primary).unwrap();
+            assert_eq!(honest.check_declared_degrees(), Ok(()));
+            let mut p: PublicProgram = norito::decode_from_bytes(&bytes).unwrap();
+            // Square r_x[0] and make it A's evaluation: still a valid
+            // straight-line program, but no longer the matrices' MLE.
+            let slot = p.inputs + (p.operations.len() / 12) as u32;
+            for word in [2u32, 0, 0] {
+                p.operations.extend_from_slice(&word.to_le_bytes());
+            }
+            p.outputs[0] = slot;
+            let refused = UniformCircuit::<F>::import_program(&encode(&p).unwrap(), primary)
+                .err()
+                .expect("a squared r_x tape must be refused");
+            assert!(refused.contains("formal degree 2 in r_x[0]"), "{refused}");
+        }
+        run::<Fp>(true);
+        run::<Fq>(false);
+    }
     #[test]
     fn fixed_padding_runs_have_one_bounded_canonical_encoding() {
         for values in [
@@ -647,6 +841,44 @@ mod tests {
         }
         assert!(unpack_fixed_fields::<Fp>(&zero, 0).is_err());
         assert!(unpack_fixed_fields::<Fp>(&[], MAX_PROGRAM_BYTES / 32 + 1).is_err());
+    }
+
+    /// The actual eight saved public programs of a complete chain run import
+    /// with their tapes inside the declared degrees (formal propagation).
+    #[test]
+    #[ignore = "requires saved full-backend-chain public programs"]
+    fn saved_programs_have_their_declared_matrix_degrees() {
+        let directory = std::env::var_os("KAGEMUSHA_SPARTAN_PROGRAMS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output/full-backend-chain")
+            });
+        fn check<F: Scalar>(path: &std::path::Path, primary: bool) {
+            let bytes = std::fs::read(path).unwrap();
+            let loaded = UniformCircuit::<F>::import_program(&bytes, primary)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert_eq!(loaded.check_declared_degrees(), Ok(()));
+            let tape = loaded.plan();
+            eprintln!(
+                "{}: sx={} sz={} challenges={} declared degrees={:?}, {} instructions: within declared degrees",
+                path.file_name().unwrap().to_string_lossy(),
+                loaded.shape.sx,
+                loaded.shape.sz(),
+                loaded.phase2_challenges(),
+                loaded.challenge_degrees(),
+                tape.ops.len(),
+            );
+        }
+        for kind in 0..4 {
+            check::<Fp>(
+                &directory.join(format!("research-kind-{kind}-primary.norito")),
+                true,
+            );
+            check::<Fq>(
+                &directory.join(format!("research-kind-{kind}-secondary.norito")),
+                false,
+            );
+        }
     }
 
     /// Read the actual eight-program closed profile. No compiler warm-up or

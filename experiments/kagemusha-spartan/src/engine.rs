@@ -1,9 +1,13 @@
 //! Native authority for the complete future recursive backend.
 //!
-//! The immutable program set is pinned by a root-signed manifest. Every output
-//! is verified against that program, both native matrix accumulators are checked,
-//! and every proof operation takes fresh OS entropy. Custody remains owned by
-//! the canonical Advance provider.
+//! The immutable program set (eight canonical program digests) and its
+//! commitment-generator/table profile are pinned by a manifest signed by an
+//! Artifact-role key that the installed scheme root certified; installation
+//! recomputes every pin. Every accepted output is verified against those
+//! installed programs, with both native matrix accumulators and both inherited
+//! generator accumulators decided (`verify_pair`), and every proof operation
+//! takes fresh OS entropy. Custody remains owned by the canonical Advance
+//! provider.
 use super::*;
 use crate::{
     carrier, certificate, credential, deferral,
@@ -45,17 +49,264 @@ pub(crate) struct ParameterSet {
     pub finality: SumeragiCommitVerifierV1,
 }
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v1")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v2")]
 pub struct ParameterManifest {
+    /// Exactly `PARAMETER_MANIFEST_VERSION`.
     pub version: u16,
     pub scheme: [u8; 32],
+    /// The parameter identity: proof profiles carry it, and heads, capsules
+    /// and completions are scoped by it.
     pub relation: [u8; 32],
+    /// Canonical program digests, Receive, Send, Bootstrap, Load.
     pub primary: [[u8; 32]; 4],
     pub secondary: [[u8; 32]; 4],
     pub dimensions_p: [u32; 2],
     pub dimensions_s: [u32; 2],
+    /// Commitment generators (research/CONSTRUCTION.md): the namespace, the
+    /// hash-to-curve suite with its index and prefix rule, each side's
+    /// capacity (log2: P's Vesta set, S's Pallas set) and the digest of each
+    /// exact derived set, `g[0..N]`, `h` and `u`.
+    pub generator_domain: String,
+    pub hash_to_curve: String,
+    pub generator_capacity_bits: [u32; 2],
+    pub generator_digests: [[u8; 32]; 2],
+    /// The payment key-table construction, column order included, and its
+    /// known answer: the certified commitment (`x`, `y` little-endian) of the
+    /// P-256 base point's tables.
+    pub table_construction: String,
+    pub table_vector: [[u8; 32]; 2],
     pub finality_network: String,
     pub finality_chain: String,
+    /// The exact Artifact-role signer certificate original (body ‖ signature,
+    /// 172 bytes) issued by the installed scheme root; its key signs the
+    /// manifest. The root itself signs only certificates.
+    pub signer_certificate: Vec<u8>,
+}
+
+/// The current manifest version: the v1 layout named no generator/table
+/// profile and was signed by the scheme root itself.
+pub const PARAMETER_MANIFEST_VERSION: u16 = 2;
+
+/// The retired v1 manifest layout, kept only so that installation refuses it
+/// by a typed error instead of a framing error, and so isolated fixtures can
+/// re-issue a retired bundle's exact scope (`reissue_fixture_manifest`).
+#[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v1")]
+pub(crate) struct RetiredManifestV1 {
+    pub(crate) version: u16,
+    pub(crate) scheme: [u8; 32],
+    pub(crate) relation: [u8; 32],
+    pub(crate) primary: [[u8; 32]; 4],
+    pub(crate) secondary: [[u8; 32]; 4],
+    pub(crate) dimensions_p: [u32; 2],
+    pub(crate) dimensions_s: [u32; 2],
+    pub(crate) finality_network: String,
+    pub(crate) finality_chain: String,
+}
+
+/// Hash-to-curve suite and generator rule the installed parameters name. The
+/// implementation is `iroha_pasta`'s `hash_to_curve`; changing either changes
+/// every commitment and so the relation.
+pub const HASH_TO_CURVE_SUITE: &str = "iroha_pasta hash_to_curve: BLAKE2b-512 XMD (DST prefix || '-' || curve ID || '_XMD:BLAKE2b_SSWU_RO_'), two field elements, simplified SWU on the 3-isogenous curve, sum, 3-isogeny; g[i] = H(domain, LE64 i) for i < N, h = H(domain, LE64 N), u = H(domain, LE64 N+1); a prefix keeps its parent's h and u";
+/// Payment key-table construction the issuer and every wallet recompute.
+pub const TABLE_CONSTRUCTION: &str = "P-256 comb m=16: B_k = 2^(16k) Q (k < 16); T_t[e] = sum_(j<8) (2 bit_j(e) - 1) B_(8t+j) (t < 2, e < 256); row r = 256 t + e holds 7 cells: r, x limbs of 88, 88, 80 bits, y limbs of 88, 88, 80 bits; C = sum cell_c(r) g[512 c + r] over the first 3584 Vesta generators, column-major, unblinded; encoded x || y little-endian";
+
+/// Exact generator and table profile of two derived generator sets.
+pub(crate) struct GeneratorProfile {
+    pub capacity_bits: [u32; 2],
+    pub digests: [[u8; 32]; 2],
+    pub table_vector: [[u8; 32]; 2],
+}
+
+fn generator_set_digest<C: iroha_pasta::PastaCurve>(gens: &Gens<C>) -> Result<[u8; 32]> {
+    let mut h = blake3::Hasher::new();
+    h.update(b"kagemusha-spartan/generators/v1\0");
+    h.update(&(gens.g.len() as u64).to_le_bytes());
+    for point in gens.g.iter().chain([&gens.h, &gens.u]) {
+        let (x, y): (C::Base, C::Base) = Option::from(iroha_pasta::PastaAffine::coordinates(point))
+            .ok_or(Error::Malformed("generator at infinity"))?;
+        h.update(x.to_repr().as_ref());
+        h.update(y.to_repr().as_ref());
+    }
+    Ok(*h.finalize().as_bytes())
+}
+
+fn point_bytes(point: &crate::ipa::Aff<Eq>) -> Result<[[u8; 32]; 2]> {
+    let (x, y): (Fq, Fq) = Option::from(iroha_pasta::PastaAffine::coordinates(point))
+        .ok_or(Error::Malformed("table commitment at infinity"))?;
+    Ok([x.to_repr(), y.to_repr()])
+}
+
+/// Measure the profile of exact generator sets; installation recomputes it.
+pub(crate) fn generator_profile(p: &Gens<Eq>, s: &Gens<Ep>) -> Result<GeneratorProfile> {
+    let bits = |n: usize, least: usize| -> Result<u32> {
+        if !n.is_power_of_two() || n < least {
+            return Err(Error::Malformed("generator capacity"));
+        }
+        Ok(n.trailing_zeros())
+    };
+    Ok(GeneratorProfile {
+        capacity_bits: [bits(p.g.len(), full_table_bases())?, bits(s.g.len(), 1)?],
+        digests: [generator_set_digest(p)?, generator_set_digest(s)?],
+        table_vector: point_bytes(&full::wallet_table_commitment(&p256::generator(), p))?,
+    })
+}
+
+/// Generators the payment key-table commitment uses (7 cells × 512 rows).
+fn full_table_bases() -> usize {
+    crate::nonnative::WALLET_CELLS * crate::nonnative::WALLET_ROWS
+}
+
+/// An unsigned manifest for exact programs on exact generator sets.
+/// `programs[kind]` is the (primary, secondary) canonical digest pair.
+pub(crate) fn manifest_for(
+    scheme: [u8; 32],
+    relation: [u8; 32],
+    programs: [[[u8; 32]; 2]; 4],
+    dimensions: ((usize, usize), (usize, usize)),
+    generators: (&Gens<Eq>, &Gens<Ep>),
+    finality: (&str, &str),
+    signer: &certificate::Certificate,
+) -> Result<ParameterManifest> {
+    let profile = generator_profile(generators.0, generators.1)?;
+    let dims = |d: (usize, usize)| -> Result<[u32; 2]> {
+        Ok([
+            u32::try_from(d.0).map_err(|_| Error::ResourceLimit)?,
+            u32::try_from(d.1).map_err(|_| Error::ResourceLimit)?,
+        ])
+    };
+    Ok(ParameterManifest {
+        version: PARAMETER_MANIFEST_VERSION,
+        scheme,
+        relation,
+        primary: programs.map(|p| p[0]),
+        secondary: programs.map(|p| p[1]),
+        dimensions_p: dims(dimensions.0)?,
+        dimensions_s: dims(dimensions.1)?,
+        generator_domain: crate::ipa::GENERATOR_DOMAIN.into(),
+        hash_to_curve: HASH_TO_CURVE_SUITE.into(),
+        generator_capacity_bits: profile.capacity_bits,
+        generator_digests: profile.digests,
+        table_construction: TABLE_CONSTRUCTION.into(),
+        table_vector: profile.table_vector,
+        finality_network: finality.0.into(),
+        finality_chain: finality.1.into(),
+        signer_certificate: certificate_bytes(signer),
+    })
+}
+
+/// The generator and table profile the manifest names must be exactly the
+/// implementation's, at the programs' column capacities. Returns the derived
+/// generator sets every verifier, prover and credential intake then uses.
+pub(crate) fn authenticate_profile(
+    m: &ParameterManifest,
+    column_bits: [usize; 2],
+) -> Result<(Gens<Eq>, Gens<Ep>)> {
+    if m.generator_domain != crate::ipa::GENERATOR_DOMAIN {
+        return Err(Error::AuthorityMismatch("generator namespace"));
+    }
+    if m.hash_to_curve != HASH_TO_CURVE_SUITE {
+        return Err(Error::AuthorityMismatch("hash-to-curve suite"));
+    }
+    if m.table_construction != TABLE_CONSTRUCTION {
+        return Err(Error::AuthorityMismatch("payment table construction"));
+    }
+    if m.generator_capacity_bits.map(|b| b as usize) != column_bits
+        || (1usize << column_bits[0]) < full_table_bases()
+    {
+        return Err(Error::AuthorityMismatch("generator capacity"));
+    }
+    let p = Gens::<Eq>::new(1 << column_bits[0]);
+    let s = Gens::<Ep>::new(1 << column_bits[1]);
+    let profile = generator_profile(&p, &s)?;
+    if profile.digests != m.generator_digests {
+        return Err(Error::AuthorityMismatch("derived generator sets"));
+    }
+    if profile.table_vector != m.table_vector {
+        return Err(Error::AuthorityMismatch("payment table known answer"));
+    }
+    Ok((p, s))
+}
+
+/// Isolated fixtures only: re-issue a retired v1 manifest in the current
+/// format for its exact program bundle. The retired manifest must carry the
+/// root's own v1 signature (`retired_signature`, under the root of
+/// `root_secret`) and pin exactly the bundle's eight programs (each imported
+/// and degree-checked as installation does). The result keeps its scheme,
+/// relation, dimensions and finality scope and adds the generator/table
+/// profile at the programs' capacities and a root-issued Artifact-role
+/// certificate for `artifact_secret`. Returns the manifest bytes and their
+/// Artifact-role signature, ready for `AuthenticatedParameters::install`.
+#[cfg(any(test, feature = "device-fixture"))]
+pub fn reissue_fixture_manifest(
+    bundle: &[u8],
+    retired_manifest: &[u8],
+    retired_signature: [u8; 64],
+    root_secret: &[u8; 32],
+    artifact_secret: &[u8; 32],
+) -> Result<(Vec<u8>, [u8; 64])> {
+    let retired: RetiredManifestV1 = super::decode(retired_manifest)?;
+    if retired.version != 1 || super::encode(&retired)? != retired_manifest {
+        return Err(Error::Malformed("retired v1 parameter manifest"));
+    }
+    let root_secret = BigUint::from_bytes_be(root_secret);
+    let root = p256::mul(&p256::generator(), &root_secret)
+        .ok_or(Error::Malformed("fixture root secret"))?;
+    verify_signature(
+        &root,
+        crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), retired_manifest),
+        &retired_signature,
+    )?;
+    let bundle = ProgramBundle::decode(bundle)?;
+    let mut pins = [[[0; 32]; 2]; 4];
+    let mut columns = [0; 2];
+    for kind in 0..4 {
+        let primary = UniformCircuit::<Fp>::import_program(&bundle.primary[kind], true)
+            .map_err(Error::Rejected)?;
+        let secondary = UniformCircuit::<Fq>::import_program(&bundle.secondary[kind], false)
+            .map_err(Error::Rejected)?;
+        pins[kind] = [primary.program_digest(), secondary.program_digest()];
+        if pins[kind] != [retired.primary[kind], retired.secondary[kind]] {
+            return Err(Error::AuthorityMismatch("retired manifest program pins"));
+        }
+        columns = [primary.shape.cols(), secondary.shape.cols()];
+    }
+    let artifact_secret = BigUint::from_bytes_be(artifact_secret);
+    let artifact_key = p256::mul(&p256::generator(), &artifact_secret)
+        .ok_or(Error::Malformed("fixture artifact secret"))?;
+    let signer = certificate::issue_fixture(
+        &retired.scheme,
+        certificate::Role::Artifact as u8,
+        &artifact_key,
+        5,
+        &root_secret,
+    );
+    let (gp, gs) = (Gens::<Eq>::new(columns[0]), Gens::<Ep>::new(columns[1]));
+    let manifest = manifest_for(
+        retired.scheme,
+        retired.relation,
+        pins,
+        (
+            (
+                retired.dimensions_p[0] as usize,
+                retired.dimensions_p[1] as usize,
+            ),
+            (
+                retired.dimensions_s[0] as usize,
+                retired.dimensions_s[1] as usize,
+            ),
+        ),
+        (&gp, &gs),
+        (&retired.finality_network, &retired.finality_chain),
+        &signer,
+    )?;
+    let bytes = super::encode(&manifest)?;
+    let signature = bootstrap::sign(
+        crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), &bytes),
+        &artifact_secret,
+        "fixture parameter manifest",
+    );
+    Ok((bytes, signature))
 }
 
 impl AuthenticatedParameters {
@@ -183,19 +434,26 @@ impl ParameterSet {
                 return Err(Error::AuthorityMismatch("exact compiled monetary program"));
             }
         }
-        let pcols = programs[0].primary.shape.cols();
-        let scols = programs[0].secondary.shape.cols();
+        let pbits = programs[0].primary.shape.col_bits;
+        let sbits = programs[0].secondary.shape.col_bits;
         for p in &programs {
-            if p.primary.shape.cols() != pcols
-                || p.secondary.shape.cols() != scols
+            if p.primary.shape.col_bits != pbits
+                || p.secondary.shape.col_bits != sbits
                 || p.primary.io_len != 64
                 || p.secondary.io_len != 62
             {
                 return Err(Error::Malformed("parameter program geometry"));
             }
+            // However a program was obtained, its matrix tape must have the
+            // degrees every fold and bound over it assumes.
+            p.primary
+                .check_declared_degrees()
+                .and(p.secondary.check_declared_degrees())
+                .map_err(|e| Error::Rejected(format!("declared matrix degrees: {e}")))?;
         }
-        let gp = Gens::<Eq>::new(pcols);
-        let gs = Gens::<Ep>::new(scols);
+        // Generators exactly as the signed profile names them, never derived
+        // from program geometry alone.
+        let (gp, gs) = authenticate_profile(&manifest, [pbits, sbits])?;
         let keys_p = programs
             .iter()
             .map(|x| spartan::fixed_commitments(&x.primary.shape, &gp, x.primary.as_ref()))
@@ -226,6 +484,9 @@ impl ParameterSet {
             ds.0,
             ds.1,
         );
+        if (defer_p.x, defer_p.y) != dp || (defer_s.x, defer_s.y) != ds {
+            return Err(Error::Malformed("parameter accumulator dimensions"));
+        }
         let generators = full::PairGens {
             p: gp,
             s: gs,
@@ -277,16 +538,36 @@ pub(super) fn authenticate_manifest(
     signature: &[u8; 64],
     root: &p256::Point,
 ) -> Result<ParameterManifest> {
-    let manifest: ParameterManifest = super::decode(bytes)?;
-    if manifest.version != 1
+    let manifest: ParameterManifest = match super::decode(bytes) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            if super::decode::<RetiredManifestV1>(bytes).is_ok() {
+                return Err(Error::AuthorityMismatch(
+                    "retired v1 parameter manifest: no generator/table profile or Artifact-role signer",
+                ));
+            }
+            return Err(e);
+        }
+    };
+    if manifest.version != PARAMETER_MANIFEST_VERSION
         || super::encode(&manifest)? != bytes
         || manifest.relation == [0; 32]
         || manifest.scheme == [0; 32]
     {
         return Err(Error::Malformed("parameter manifest"));
     }
+    // The root certifies an Artifact-role key for this scheme; that key, not
+    // the root, signs artifacts (proposal §2.3, wire §3.1).
+    let signer = read_certificate(&manifest.signer_certificate)?;
+    let key = certificate::authenticate_signer(
+        &signer,
+        &manifest.scheme,
+        root,
+        certificate::Role::Artifact,
+    )
+    .map_err(Error::AuthorityMismatch)?;
     let m = crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), bytes);
-    verify_signature(root, m, signature)?;
+    verify_signature(&key, m, signature)?;
     Ok(manifest)
 }
 
@@ -356,28 +637,48 @@ fn authenticate_credential(
     c: &Credential,
     cert: &certificate::Certificate,
 ) -> Result<()> {
+    authenticate_credential_under(
+        &parameters.scheme,
+        &parameters.root,
+        &parameters.generators.p,
+        c,
+        cert,
+    )
+}
+/// Credential intake under the installed scope: an Enrollment-role issuer
+/// certificate from the scheme root, the issuer's signature, and the certified
+/// payment key-table commitment recomputed from the certified payment key on
+/// the authenticated generators (`authenticate_profile`). A correctly signed
+/// credential whose table commitment does not recompute is refused.
+pub(super) fn authenticate_credential_under(
+    scheme: &[u8; 32],
+    root: &p256::Point,
+    table_generators: &Gens<Eq>,
+    c: &Credential,
+    cert: &certificate::Certificate,
+) -> Result<()> {
     if c.body[..2] != 1u16.to_le_bytes()
-        || c.body[2..34] != parameters.scheme
-        || cert.body[..2] != 1u16.to_le_bytes()
-        || cert.body[2..34] != parameters.scheme
-        || cert.body[34] != 1
+        || c.body[2..34] != scheme[..]
         || c.body[500..532] != certificate::certificate_digest(cert).to_repr()
     {
         return Err(Error::AuthorityMismatch("credential enrollment chain"));
     }
-    verify_signature(
-        &parameters.root,
-        certificate::message(cert),
-        &cert.signature,
-    )?;
-    let issuer = point(&cert.body[35..100])?;
+    let issuer =
+        certificate::authenticate_signer(cert, scheme, root, certificate::Role::Enrollment)
+            .map_err(Error::AuthorityMismatch)?;
     verify_signature(&issuer, credential::message(c), &c.signature)?;
+    certified_table(table_generators, c)
+}
+/// The certified payment key-table commitment (credential bytes 195..259,
+/// `x || y` little-endian) must be exactly `TABLE_CONSTRUCTION` of the
+/// certified payment key on these generators.
+fn certified_table(generators: &Gens<Eq>, c: &Credential) -> Result<()> {
+    if generators.g.len() < full_table_bases() {
+        return Err(Error::Malformed("payment table generators"));
+    }
     let q = point(&c.body[130..195])?;
-    let table = full::wallet_table_commitment(&q, &parameters.generators.p);
-    let certified: [Fp; 4] = std::array::from_fn(|i| {
-        certificate::fp(&BigUint::from_bytes_le(&c.body[195 + 16 * i..211 + 16 * i]))
-    });
-    if spartan::limbs_of_point::<Eq>(&table) != certified {
+    let table = point_bytes(&full::wallet_table_commitment(&q, generators))?;
+    if c.body[195..227] != table[0] || c.body[227..259] != table[1] {
         return Err(Error::AuthorityMismatch("certified wallet table"));
     }
     Ok(())
@@ -448,20 +749,6 @@ fn verify_pair(
     if vp != d.d || vs != d.rho {
         return Err(Error::Rejected("pair transcript binding".into()));
     }
-    let np = parameters.generators.defer_p.n();
-    let ns = parameters.generators.defer_s.n();
-    if d.pp.late.len() < np + 1 || d.ps.late.len() < ns + 1 {
-        return Err(Error::Malformed("matrix accumulator output length"));
-    }
-    let ap = deferral::claim_of(&d.pp.late[..np + 1]);
-    let as_ = deferral::claim_of(&d.ps.late[..ns + 1]);
-    if ap.point.len() != parameters.generators.defer_p.n()
-        || as_.point.len() != parameters.generators.defer_s.n()
-        || parameters.generators.defer_p.eval(&ap.point) != ap.value
-        || parameters.generators.defer_s.eval(&as_.point) != as_.value
-    {
-        return Err(Error::Rejected("native matrix accumulators".into()));
-    }
     let u = full::UniformPair {
         cp: p.primary.clone(),
         ip: d.ip,
@@ -474,19 +761,60 @@ fn verify_pair(
         r: d.r,
         kind,
     };
-    let traced = full::trace_uniform(u.clone(), &parameters.generators);
-    let inherited_p = full::inherited_generator_claim(&traced.tr_p, &parameters.generators.p)
-        .map_err(Error::Malformed)?;
-    let inherited_s = full::inherited_generator_claim(&traced.tr_s, &parameters.generators.s)
-        .map_err(Error::Malformed)?;
-    if !crate::generator_claim::decide(&parameters.generators.p, &inherited_p)
-        || !crate::generator_claim::decide(&parameters.generators.s, &inherited_s)
-    {
+    decide_accumulators(&parameters.generators, &u)?;
+    Ok(u)
+}
+
+/// One deferred matrix accumulator, the first `n + 1` late outputs of a proof:
+/// its point must have the polynomial's `n` coordinates and its value must be
+/// the installed combined matrix polynomial's exact value there.
+pub(crate) fn matrix_accumulator<S: Scalar>(poly: &deferral::MatPoly<S>, late: &[S]) -> bool {
+    let n = poly.n();
+    if late.len() < n + 1 {
+        return false;
+    }
+    let claim = deferral::claim_of(&late[..n + 1]);
+    claim.point.len() == n && poly.eval(&claim.point) == claim.value
+}
+
+/// The decisions a linked verifier's success does not imply: both deferred
+/// matrix accumulators and both inherited generator accumulators. (Each linked
+/// verification already decided its own IPA generator claim.) Template pairs
+/// that a compiler warm-up builds from toy predecessors verify as linked
+/// proofs under the final programs but carry false accumulators; every native
+/// accepting boundary reaches this through `verify_pair` and refuses them.
+pub(crate) fn decide_accumulators(
+    generators: &full::PairGens,
+    pair: &full::UniformPair,
+) -> Result<()> {
+    if !matrix_accumulator(&generators.defer_p, &pair.pp.late) {
+        return Err(Error::Rejected("native P matrix accumulator".into()));
+    }
+    if !matrix_accumulator(&generators.defer_s, &pair.ps.late) {
+        return Err(Error::Rejected("native S matrix accumulator".into()));
+    }
+    let traced = full::trace_uniform(pair.clone(), generators);
+    let inherited_p =
+        full::inherited_generator_claim(&traced.tr_p, &generators.p).map_err(Error::Malformed)?;
+    if !crate::generator_claim::decide(&generators.p, &inherited_p) {
         return Err(Error::Rejected(
-            "native inherited generator accumulators".into(),
+            "native P inherited generator accumulator".into(),
         ));
     }
-    Ok(u)
+    let inherited_s =
+        full::inherited_generator_claim(&traced.tr_s, &generators.s).map_err(Error::Malformed)?;
+    if !crate::generator_claim::decide(&generators.s, &inherited_s) {
+        return Err(Error::Rejected(
+            "native S inherited generator accumulator".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a native refusal is one of `decide_accumulators`'s.
+#[cfg(test)]
+pub(crate) fn is_accumulator_refusal(e: &Error) -> bool {
+    matches!(e, Error::Rejected(m) if m.starts_with("native ") && m.ends_with(" accumulator"))
 }
 
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
@@ -845,6 +1173,36 @@ impl NativeEngine {
         let certificate = read_certificate(certificate)?;
         authenticate_credential(&parameters.inner, &credential, &certificate)?;
         Ok(credential)
+    }
+    /// Authenticate an exact fee schedule original (body ‖ signature, 255
+    /// bytes) and its RegulatoryPolicy-role signer certificate (172 bytes)
+    /// under the installed scheme root, for the wallet's asset. Policy
+    /// installation must pass this before a schedule's digest may be held;
+    /// Send opens the held schedule only by that digest. Returns the digest.
+    pub fn authenticate_fee_schedule_originals(
+        &self,
+        schedule: &[u8],
+        certificate: &[u8],
+        asset: &[u8; 32],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<Fp> {
+        use crate::fee_schedule::{BODY_BYTES, SignedFeeSchedule};
+        if schedule.len() != BODY_BYTES + 64 {
+            return Err(Error::Malformed("fee schedule length"));
+        }
+        let input = SignedFeeSchedule {
+            body: schedule[..BODY_BYTES].try_into().unwrap(),
+            signature: schedule[BODY_BYTES..].try_into().unwrap(),
+        };
+        let signer = read_certificate(certificate)?;
+        crate::fee_schedule::authenticate(
+            &input,
+            &signer,
+            &parameters.inner.scheme,
+            asset,
+            &parameters.inner.root,
+        )
+        .map_err(Error::AuthorityMismatch)
     }
     /// Bind the canonical local custody/OS clock adapter. Controls-off operations
     /// use `Default` and never acquire a network or clock dependency.
@@ -1561,17 +1919,60 @@ impl Engine for NativeEngine {
     }
 }
 
+/// The fixture scheme root's test secret (`bootstrap::fixture`).
+#[cfg(test)]
+pub(crate) const TEST_ROOT_SECRET: [u8; 32] = [0x11; 32];
+/// The test Artifact-role signer's secret; the root certifies its key.
+#[cfg(test)]
+pub(crate) const TEST_ARTIFACT_SECRET: [u8; 32] = [0x15; 32];
+/// The root-issued Artifact-role certificate of `TEST_ARTIFACT_SECRET`.
+#[cfg(test)]
+pub(crate) fn test_artifact_certificate(scheme: &[u8; 32]) -> certificate::Certificate {
+    let key = p256::mul(
+        &p256::generator(),
+        &BigUint::from_bytes_be(&TEST_ARTIFACT_SECRET),
+    )
+    .expect("test artifact key");
+    certificate::issue_fixture(
+        scheme,
+        certificate::Role::Artifact as u8,
+        &key,
+        5,
+        &BigUint::from_bytes_be(&TEST_ROOT_SECRET),
+    )
+}
+/// The test Artifact-role signature over exact manifest bytes.
+#[cfg(test)]
+pub(crate) fn test_sign_manifest(bytes: &[u8]) -> [u8; 64] {
+    bootstrap::sign(
+        crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), bytes),
+        &BigUint::from_bytes_be(&TEST_ARTIFACT_SECRET),
+        "native test parameter manifest",
+    )
+}
+
 /// The full chain driver calls the actual sealed native API after its program
 /// fixed point. Test software signatures model only the isolated fixture keys.
+/// `templates` are construction artifacts over the final programs, each with
+/// whether its accumulators hold under them (decided by the caller).
 #[cfg(test)]
 pub(crate) fn test_full_chain_native(
     chain: &crate::chain_fixture::Chain,
     pairs: &[full::UniformPair; 4],
     receiver_boot: &full::UniformPair,
+    templates: &[(full::UniformPair, bool)],
     dimensions: ((usize, usize), (usize, usize)),
     artifacts: &std::path::Path,
 ) -> std::result::Result<(), String> {
-    test_chain_native(chain, pairs, receiver_boot, dimensions, artifacts, true)
+    test_chain_native(
+        chain,
+        pairs,
+        receiver_boot,
+        templates,
+        dimensions,
+        artifacts,
+        true,
+    )
 }
 
 /// Candidate measurement only; the selected layout must also pass the complete
@@ -1584,7 +1985,15 @@ pub(crate) fn test_measure_chain_native(
     dimensions: ((usize, usize), (usize, usize)),
     artifacts: &std::path::Path,
 ) -> std::result::Result<(), String> {
-    test_chain_native(chain, pairs, receiver_boot, dimensions, artifacts, false)
+    test_chain_native(
+        chain,
+        pairs,
+        receiver_boot,
+        &[],
+        dimensions,
+        artifacts,
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -1592,6 +2001,7 @@ fn test_chain_native(
     chain: &crate::chain_fixture::Chain,
     pairs: &[full::UniformPair; 4],
     receiver_boot: &full::UniformPair,
+    templates: &[(full::UniformPair, bool)],
     dimensions: ((usize, usize), (usize, usize)),
     artifacts: &std::path::Path,
     complete_validation: bool,
@@ -1600,6 +2010,7 @@ fn test_chain_native(
         chain: &crate::chain_fixture::Chain,
         pairs: &[full::UniformPair; 4],
         receiver_boot: &full::UniformPair,
+        templates: &[(full::UniformPair, bool)],
         dimensions: ((usize, usize), (usize, usize)),
         artifacts: &std::path::Path,
         complete_validation: bool,
@@ -1614,23 +2025,29 @@ fn test_chain_native(
             primary: pairs[i].cp.clone(),
             secondary: pairs[i].cs.clone(),
         });
-        let manifest = ParameterManifest {
-            version: 1,
-            scheme: chain.sender_context.root.scheme,
-            relation: chain.sender_context.relation,
-            primary: std::array::from_fn(|i| programs[i].primary.program_digest()),
-            secondary: std::array::from_fn(|i| programs[i].secondary.program_digest()),
-            dimensions_p: [dimensions.0.0 as u32, dimensions.0.1 as u32],
-            dimensions_s: [dimensions.1.0 as u32, dimensions.1.1 as u32],
-            finality_network: finality.network().to_string(),
-            finality_chain: finality.chain_id().to_string(),
-        };
-        let manifest = super::encode(&manifest)?;
-        let signature = bootstrap::sign(
-            crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), &manifest),
-            &BigUint::from_bytes_be(&[0x11; 32]),
-            "native test parameter manifest",
+        // The signed profile names exactly the generator sets every verifier,
+        // prover and credential intake derives at the programs' capacities.
+        let (gp, gs) = (
+            Gens::<Eq>::new(programs[0].primary.shape.cols()),
+            Gens::<Ep>::new(programs[0].secondary.shape.cols()),
         );
+        let manifest = manifest_for(
+            chain.sender_context.root.scheme,
+            chain.sender_context.relation,
+            std::array::from_fn(|i| {
+                [
+                    programs[i].primary.program_digest(),
+                    programs[i].secondary.program_digest(),
+                ]
+            }),
+            dimensions,
+            (&gp, &gs),
+            (&finality.network().to_string(), finality.chain_id()),
+            &test_artifact_certificate(&chain.sender_context.root.scheme),
+        )?;
+        drop((gp, gs));
+        let manifest = super::encode(&manifest)?;
+        let signature = test_sign_manifest(&manifest);
         let parameters = ParameterSet::authenticate(
             programs,
             &manifest,
@@ -1686,6 +2103,13 @@ fn test_chain_native(
             )?;
             engine.verify_head(&bytes, &chain.send.credential, &parameters)?;
         }
+        adversarial_tests::reject_template_artifacts(&engine, &parameters, chain, templates)?;
+        adversarial_tests::reject_wrong_certified_table(
+            &engine,
+            &parameters,
+            chain,
+            &pairs[full::LOAD],
+        )?;
         let receive_head = encode_head(
             &parameters,
             &pairs[full::RECEIVE],
@@ -1872,6 +2296,7 @@ fn test_chain_native(
         chain,
         pairs,
         receiver_boot,
+        templates,
         dimensions,
         artifacts,
         complete_validation,

@@ -967,26 +967,50 @@ fn run_recursive_chain(complete_validation: bool) {
             }
         }
         if after == before {
+            // Equal digests are the fixed point; the complete programs must
+            // also be exactly equal, byte for byte, in their canonical form.
+            let differences =
+                exact_program_differences(&program_set(&previous), &program_set(&next));
+            assert!(
+                differences.is_empty(),
+                "generation {hop}: equal program digests but different complete programs: {differences:?}"
+            );
+            eprintln!(
+                "generation {hop}: all eight complete public programs exactly equal to generation {}: canonical digests and canonical program bytes",
+                hop - 1
+            );
             let final_gens = next.generators();
+            // The fixed-point generation's own pairs are construction
+            // artifacts over the final programs; the native boundary must
+            // refuse each whose accumulators are false.
+            let templates = template_artifacts(&next, &final_gens);
             let final_chain = final_chain(&chain, &final_gens, next);
             // Record the actual complete monetary bytes before the separate
             // program-distribution size gate, while requiring both gates below.
             let bytes = complete_payment(&config, &chain, &final_chain.kinds[SEND], &final_gens);
             drop(imported_programs(&final_chain));
             malformed_receive_burn(&chain, &final_gens, &final_chain);
-            let native_check = if complete_validation {
-                crate::native::test_full_chain_native
+            let artifacts = config.output.join("native-device");
+            if complete_validation {
+                crate::native::test_full_chain_native(
+                    &chain,
+                    &final_chain.kinds,
+                    &final_chain.receiver_boot,
+                    &templates,
+                    DIMENSIONS,
+                    &artifacts,
+                )
             } else {
-                crate::native::test_measure_chain_native
-            };
-            native_check(
-                &chain,
-                &final_chain.kinds,
-                &final_chain.receiver_boot,
-                DIMENSIONS,
-                &config.output.join("native-device"),
-            )
+                crate::native::test_measure_chain_native(
+                    &chain,
+                    &final_chain.kinds,
+                    &final_chain.receiver_boot,
+                    DIMENSIONS,
+                    &artifacts,
+                )
+            }
             .expect("complete native Send/Receive prepare, resume, finalize and verify flow");
+            drop(templates);
             assert_eq!(chain.load.after_core[9], Fp::from(100));
             assert_eq!(chain.send.after_core[9], Fp::from(90));
             let sent = trace_uniform(final_chain.kinds[SEND].clone(), &final_gens);
@@ -1018,6 +1042,83 @@ fn run_recursive_chain(complete_validation: bool) {
         previous = next;
     }
     panic!("the exact four-kind programs did not reach a fixed point in twelve generations");
+}
+
+type ProgramSet = [(Arc<UniformCircuit<Fp>>, Arc<UniformCircuit<Fq>>); 4];
+
+fn program_set(generation: &Generation) -> ProgramSet {
+    std::array::from_fn(|k| {
+        (
+            generation.kinds[k].cp.clone(),
+            generation.kinds[k].cs.clone(),
+        )
+    })
+}
+
+/// Every difference between two complete four-kind program sets, P and S:
+/// canonical program digest and the exact canonical exported program bytes
+/// (instructions, constants, fixed values, geometry and IO ABI), not sampled
+/// matrix evaluations. Each pair of exports is released before the next.
+fn exact_program_differences(before: &ProgramSet, after: &ProgramSet) -> Vec<String> {
+    fn side<F: Scalar>(
+        kind: usize,
+        name: &str,
+        a: &UniformCircuit<F>,
+        b: &UniformCircuit<F>,
+        out: &mut Vec<String>,
+    ) {
+        if a.program_digest() != b.program_digest() {
+            out.push(format!("kind {kind} {name}: canonical digest"));
+        }
+        match (a.export_program(), b.export_program()) {
+            (Ok(x), Ok(y)) if x == y => {}
+            (Ok(x), Ok(y)) => out.push(format!(
+                "kind {kind} {name}: canonical program bytes ({} B and {} B)",
+                x.len(),
+                y.len()
+            )),
+            (x, y) => out.push(format!(
+                "kind {kind} {name}: export {:?} / {:?}",
+                x.err(),
+                y.err()
+            )),
+        }
+    }
+    let mut out = Vec::new();
+    for kind in 0..4 {
+        side(kind, "P", &before[kind].0, &after[kind].0, &mut out);
+        side(kind, "S", &before[kind].1, &after[kind].1, &mut out);
+    }
+    out
+}
+
+/// The fixed-point generation's non-Bootstrap pairs, each with whether its
+/// accumulators hold under the final programs, decided here independently of
+/// the native engine. They were proved over the final programs from warm-up
+/// predecessors, so linked verification accepts them; at least one must carry
+/// a false accumulator for the native refusals to be exercised.
+fn template_artifacts(fixed: &Generation, gens: &PairGens) -> Vec<(UniformPair, bool)> {
+    let out: Vec<_> = [LOAD, SEND, RECEIVE]
+        .into_iter()
+        .map(|kind| {
+            let pair = fixed.kinds[kind].clone();
+            let (p, s) = matrix_checks(&pair, gens);
+            let traced = trace_uniform(pair.clone(), gens);
+            let gp = inherited_generator_claim(&traced.tr_p, &gens.p)
+                .is_ok_and(|c| crate::generator_claim::decide(&gens.p, &c));
+            let gs = inherited_generator_claim(&traced.tr_s, &gens.s)
+                .is_ok_and(|c| crate::generator_claim::decide(&gens.s, &c));
+            eprintln!(
+                "construction artifact kind {kind}: matrix accumulators P {p}, S {s}; inherited generator accumulators P {gp}, S {gs}"
+            );
+            (pair, p && s && gp && gs)
+        })
+        .collect();
+    assert!(
+        out.iter().any(|(_, holds)| !holds),
+        "the fixed-point generation must contain a construction artifact with a false accumulator"
+    );
+    out
 }
 
 fn parser_relation<S: Scalar>(
@@ -1234,5 +1335,100 @@ fn fixed_profile_candidate_selection_matches_both_circuit_halves() {
         }
         secondary.1.io[265] = Fq::ONE - secondary.1.io[265];
         assert!(!relation_holds(&secondary));
+    }
+}
+
+/// A minimal installable public program: `a * factor = b` over one cell
+/// pair, with the monetary IO ABI's link slots.
+fn tiny_program<F: Scalar + zeroize::Zeroize>(
+    primary: bool,
+    factor: u64,
+) -> Arc<UniformCircuit<F>> {
+    use crate::uniform::{Array, constant, own};
+    let mut w = Wiring::default();
+    let f = w.family(0, 1);
+    w.push(Array {
+        name: "exact program comparison relation",
+        family: f,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: vec![],
+        widths: vec![255, 255],
+        rows: vec![[own(0, 1), constant(vec![F::from(factor)]), own(1, 1)]],
+        values: vec![vec![F::from(7)], vec![F::from(7 * factor)]],
+    });
+    for slot in if primary {
+        vec![124, 125, 126, 127]
+    } else {
+        vec![124, 126]
+    } {
+        let a = w.push(Array {
+            name: "exact program comparison link slot",
+            family: f,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: vec![],
+            widths: vec![255],
+            rows: vec![],
+            values: vec![vec![F::ZERO]],
+        });
+        w.io_arrays.push((a, slot));
+        w.link.io.push((a, slot));
+    }
+    w.link.io_values = Some(Box::new(move |_, _| {
+        vec![F::ZERO; if primary { 4 } else { 2 }]
+    }));
+    let (a, p, n, t, c) = w.finish();
+    let (circuit, _, _) = UniformCircuit::build_with_copies(
+        if primary { "P-uniform" } else { "S-uniform" },
+        a,
+        p,
+        n,
+        t,
+        c,
+        10,
+        if primary { 64 } else { 62 },
+        b"exact program comparison",
+    );
+    Arc::new(circuit.into_verifier_program())
+}
+
+/// The fixed-point comparison sees every complete program, per kind and side:
+/// identical sets have no difference, and one changed matrix constant in one
+/// program is reported for exactly that program, by digest and by bytes.
+#[test]
+fn fixed_point_compares_all_eight_complete_programs_exactly() {
+    let set = |changed: Option<(usize, bool)>| -> ProgramSet {
+        std::array::from_fn(|kind| {
+            let factor = |primary| {
+                if changed == Some((kind, primary)) {
+                    5
+                } else {
+                    3
+                }
+            };
+            (
+                tiny_program::<Fp>(true, factor(true)),
+                tiny_program::<Fq>(false, factor(false)),
+            )
+        })
+    };
+    let base = set(None);
+    assert_eq!(
+        exact_program_differences(&base, &set(None)),
+        Vec::<String>::new()
+    );
+    for kind in 0..4 {
+        for primary in [true, false] {
+            let differences = exact_program_differences(&base, &set(Some((kind, primary))));
+            let name = if primary { "P" } else { "S" };
+            assert_eq!(differences.len(), 2, "{differences:?}");
+            assert!(differences[0].starts_with(&format!("kind {kind} {name}: canonical digest")));
+            assert!(
+                differences[1].starts_with(&format!("kind {kind} {name}: canonical program bytes"))
+            );
+        }
     }
 }

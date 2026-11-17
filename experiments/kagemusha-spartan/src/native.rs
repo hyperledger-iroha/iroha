@@ -16,7 +16,7 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 
 #[path = "engine.rs"]
 pub(crate) mod engine;
-pub use engine::{NativeEngine, ParameterManifest};
+pub use engine::{NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest};
 #[cfg(test)]
 pub(crate) use engine::{test_full_chain_native, test_measure_chain_native};
 #[cfg(any(test, feature = "device-fixture"))]

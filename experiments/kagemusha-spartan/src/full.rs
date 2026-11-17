@@ -4534,24 +4534,31 @@ fn incoming_facts(
 /// global family.
 ///
 /// The fold takes four claims, two slots of two. Receive verifies two proofs,
-/// one per slot. Send verifies one, whose two claims fill both slots: a
+/// one per slot. Send and Load verify one, whose two claims fill both slots: a
 /// repeated true claim folds into a true claim, and a false one still makes
-/// the folded claim false (except with probability `deg q / |F|`), so the
-/// repetition is sound; it only spends the second slot's fold work.
+/// the folded claim false except when the fold challenge hits a root of the
+/// nonzero error polynomial `q - P(gamma)`: probability at most
+/// `deg q / 2^126`, since the fold challenge is the raw 126-bit second-phase
+/// challenge `ch[1]` (beta), not uniform in the field. The repetition is sound;
+/// it only spends the second slot's fold work.
 ///
-/// Kinds: a slot of `(kind, false)` takes kind `kind` (the fresh claim's
-/// selector bits c0, c1 are its constants). A slot of `(kind, true)` takes
-/// any kind (Receive, Send or Bootstrap): c0 and c1 are the verified proof's
-/// io values at `KIND_IO` and `KIND_IO + 1`, each held boolean and not both
-/// one (the corner (1, 1) is the empty claim's, no kind's), and the proof's
-/// kind bits in the shared values (`kind_shared` = the shared array and the
-/// pairs' first kind-bit index) equal them, so the other circuit of the pair
-/// sees the same kind (and selects the same key). A constant slot's kind
+/// Kinds: four, at selector corners Receive (0, 0), Send (1, 0), Bootstrap
+/// (0, 1) and Load (1, 1). A slot of `(kind, false)` takes kind `kind` (the
+/// fresh claim's selector bits c0, c1 are its constants). A slot of
+/// `(kind, true)` takes any kind: c0 and c1 are the verified proof's io values
+/// at `KIND_IO` and `KIND_IO + 1`, each held boolean, and the proof's kind bits
+/// in the shared values (`kind_shared` = the shared array and the pairs' first
+/// kind-bit index) equal them, so the other circuit of the pair sees the same
+/// kind (and selects the same key). Only a polynomial of fewer than four kinds
+/// also forbids (1, 1), which then selects no kind. A constant slot's kind
 /// bits equal its constants.
 ///
 /// No flag replaces an incoming accumulator: a chain starts at a Bootstrap
-/// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`), so every
-/// Send and Receive folds its predecessor's accumulator as it is.
+/// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`). That
+/// claim sits at corner (1, 1), Load's corner, but its `r` coordinate is zero,
+/// so every term `r A + r^2 B + r^3 C` vanishes and it holds with value zero on
+/// any combined polynomial. Every other kind folds its predecessor's
+/// accumulator as it is.
 #[allow(clippy::type_complexity)]
 pub fn defer_into<C: iroha_pasta::PastaCurve>(
     w: &mut Wiring<crate::ipa::F<C>>,
@@ -5111,9 +5118,14 @@ pub fn word_scalar<S: Scalar>(word: &[u8; 32]) -> S {
     S::from_u128(lo) + S::from(2u64).pow_vartime([128u64]) * S::from_u128(hi)
 }
 
-/// The binding chain's mask mu, one value for both circuits of a pair. A
-/// prover samples it fresh per pair; the experiment derives it from the
-/// pair's shared values, so the pair's two circuits agree without a channel.
+/// The binding chain's mask mu, one value for both circuits of a pair,
+/// derived from the pair's shared values so the two circuits agree without a
+/// channel. Receive, Send and Load take a fresh mu from the native prover's
+/// entropy instead (`GeneratorFolds`); this derivation remains for Bootstrap,
+/// whose only shared value is its kind, so its mu is the same public constant
+/// in every Bootstrap pair, and for research fixtures. A deterministic mu is
+/// still fixed before rho, which is all the link's soundness uses; it hides
+/// nothing, and a Bootstrap pair shares nothing private.
 pub fn binding_mu(values: &[u128]) -> BigUint {
     let tag = values.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
         (h ^ (*v as u64) ^ ((*v >> 64) as u64)).wrapping_mul(0x0100_0000_01b3)
@@ -5665,6 +5677,8 @@ pub fn p_boot_from_inputs(
     let (mut w, gfam) = (prepared.wiring, prepared.gfam);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
     let values = boot_values();
+    // Bootstrap's pair mask is deterministic: binding_mu([BOOTSTRAP]), one
+    // public constant fixed before rho (see `binding_mu`).
     let _ = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let (_, empty) =
         crate::deferral::expose_constant(&mut w, gfam, &gens.defer_p.empty_claim(), LATE_IO);
@@ -5710,6 +5724,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     w.tables.push((bits, BIT_TABLE));
     w.arrays[pin].lookups.push((BIT_TABLE, vec![own(0, 2)]));
     let values = boot_values();
+    // The same deterministic public Bootstrap mask as P-boot's (`binding_mu`).
     let mu = Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(&binding_mu(&values))))
         .expect("mu below q");
     let _ = native_binding(&mut w, gfam, mu, &values);

@@ -78,6 +78,103 @@ fn items(body: &[u8; BODY_BYTES]) -> Vec<Fp> {
 pub fn message(cert: &Certificate) -> Fp {
     poseidon::hash_with_domain(SIGN_DOMAIN, &items(&cert.body))
 }
+/// Signer-certificate roles (wire §3.1, "Signer certificate"). Tag 2 is
+/// invalid and every other tag is unknown; neither authenticates any role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Credentials (the issuer).
+    Enrollment = 1,
+    /// Scheme policy, fee schedule, blacklist, quota share and charge quote.
+    RegulatoryPolicy = 3,
+    /// Time-anchor responses.
+    TimeAnchor = 4,
+    /// Artifact manifests (the installed verifier programs and parameters).
+    Artifact = 5,
+}
+
+/// Canonical low-S P-256 verification of a 32-byte protocol message
+/// (ECDSA-P256-SHA256 over `m`'s canonical encoding), as issuers and hardware
+/// sign it.
+pub(crate) fn verify_native(q: &Point, m: Fp, signature: &[u8; 64]) -> Result<(), &'static str> {
+    if q.x >= p256::p() || q.y >= p256::p() || !p256::on_curve(q) {
+        return Err("noncanonical signer key");
+    }
+    let r = BigUint::from_bytes_be(&signature[..32]);
+    let s = BigUint::from_bytes_be(&signature[32..]);
+    if s > p256::n() >> 1 {
+        return Err("high-S signature");
+    }
+    let z = BigUint::from_bytes_be(&p256::sha256_one_block(m.to_repr().as_ref()));
+    if !p256::verify(q, &z, &p256::Signature { r, s }) {
+        return Err("P-256 signature");
+    }
+    Ok(())
+}
+
+/// Native signer-certificate authentication for the role its consumer needs:
+/// exact version 1, the trusted scheme, exactly that role tag, a canonical
+/// on-curve SEC1 key and a canonical low-S signature by the installed scheme
+/// root. Returns the certified key. Depth is one: the root signs certificates
+/// only, and no validity period or revocation is evaluated offline.
+pub fn authenticate_signer(
+    cert: &Certificate,
+    scheme: &[u8; 32],
+    root: &Point,
+    role: Role,
+) -> Result<Point, &'static str> {
+    if *scheme == [0; 32] {
+        return Err("zero trusted scheme");
+    }
+    if cert.body[..2] != 1u16.to_le_bytes() {
+        return Err("signer certificate version");
+    }
+    if cert.body[2..34] != scheme[..] {
+        return Err("signer certificate scheme");
+    }
+    if cert.body[34] != role as u8 {
+        return Err("signer certificate role");
+    }
+    let key = &cert.body[KEY_START..KEY_START + 65];
+    if key[0] != 4 {
+        return Err("signer certificate key encoding");
+    }
+    let q = Point {
+        x: BigUint::from_bytes_be(&key[1..33]),
+        y: BigUint::from_bytes_be(&key[33..]),
+    };
+    if q.x >= p256::p() || q.y >= p256::p() || !p256::on_curve(&q) {
+        return Err("signer certificate key");
+    }
+    verify_native(root, message(cert), &cert.signature)
+        .map_err(|_| "signer certificate root signature")?;
+    Ok(q)
+}
+
+/// A root-issued signer certificate for tests and isolated fixtures only.
+#[cfg(any(test, feature = "device-fixture"))]
+pub(crate) fn issue_fixture(
+    scheme: &[u8; 32],
+    role: u8,
+    key: &Point,
+    serial: u64,
+    root_secret: &BigUint,
+) -> Certificate {
+    let mut body = [0; BODY_BYTES];
+    body[..2].copy_from_slice(&1u16.to_le_bytes());
+    body[2..34].copy_from_slice(scheme);
+    body[34] = role;
+    body[KEY_START] = 4;
+    body[36..68].copy_from_slice(&scalar_bytes(&key.x));
+    body[68..100].copy_from_slice(&scalar_bytes(&key.y));
+    body[100..].copy_from_slice(&serial.to_le_bytes());
+    let mut cert = Certificate {
+        body,
+        signature: [0; SIGNATURE_BYTES],
+    };
+    cert.signature = crate::bootstrap::sign(message(&cert), root_secret, "test signer certificate");
+    cert
+}
+
 pub fn certificate_digest(cert: &Certificate) -> Fp {
     let r = BigUint::from_bytes_be(&cert.signature[..32]);
     let s = BigUint::from_bytes_be(&cert.signature[32..]);

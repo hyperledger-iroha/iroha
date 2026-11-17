@@ -17,11 +17,7 @@ pub(super) fn reject_wrong_program_digests(
             }
             let bytes = super::super::encode(&manifest)?;
             // A correctly signed manifest still cannot select a different program.
-            let signature = bootstrap::sign(
-                crate::payment::byte_digest(u64::from_le_bytes(*b"kgwparm1"), &bytes),
-                &BigUint::from_bytes_be(&[0x11; 32]),
-                "native wrong-program manifest fixture",
-            );
+            let signature = super::test_sign_manifest(&bytes);
             let programs = std::array::from_fn(|i| Program {
                 primary: parameters.inner.programs[i].primary.clone(),
                 secondary: parameters.inner.programs[i].secondary.clone(),
@@ -39,6 +35,122 @@ pub(super) fn reject_wrong_program_digests(
                 return Err(Error::AuthorityMismatch("all eight exact program pins"));
             }
         }
+    }
+    Ok(())
+}
+
+/// G5: construction artifacts at every native accepting boundary. A template
+/// pair from the compiler's last warm-up generation verifies as linked proofs
+/// under these exact programs, but its accumulators fold toy or earlier-program
+/// claims. The head boundary (which also guards preparation, resume, finalize
+/// and completion recovery, all through `decode_head`/`verify_head`), the
+/// Payment boundary and the Receive candidate verdict each accept such a pair
+/// exactly when the caller's independent decision says its accumulators hold.
+pub(super) fn reject_template_artifacts(
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    chain: &crate::chain_fixture::Chain,
+    templates: &[(full::UniformPair, bool)],
+) -> Result<()> {
+    let verdict = |label: &str, result: Result<()>, holds: bool| -> Result<bool> {
+        match (result, holds) {
+            (Ok(()), true) => Ok(false),
+            (Err(e), false) if super::is_accumulator_refusal(&e) => Ok(true),
+            (other, _) => {
+                eprintln!("native template {label}: holds={holds}, result={other:?}");
+                Err(Error::AuthorityMismatch("template accumulator verdict"))
+            }
+        }
+    };
+    let trusted = parameters.inner.profile(full::SEND)?;
+    let payment_profile = payment_wire::Profile {
+        pair: &trusted,
+        scheme: parameters.inner.scheme,
+        relation: parameters.inner.relation,
+    };
+    let mut refused = 0;
+    for (template, holds) in templates {
+        let (credential, certificate) = if template.kind == full::RECEIVE {
+            (
+                &chain.receiver_bootstrap.credential,
+                &chain.receiver_bootstrap.certificate,
+            )
+        } else {
+            (&chain.send.credential, &chain.sender_bootstrap.certificate)
+        };
+        // The pair itself, then the retained-head boundary.
+        let label = format!("kind {} pair", template.kind);
+        let direct = decide_accumulators(&parameters.inner.generators, template);
+        refused += usize::from(verdict(&label, direct, *holds)?);
+        let head = encode_head(parameters, template, credential, certificate)?;
+        let label = format!("kind {} head", template.kind);
+        let result = engine
+            .verify_head(&head, credential, parameters)
+            .map(|_| ());
+        refused += usize::from(verdict(&label, result, *holds)?);
+        if template.kind == full::SEND {
+            let payment = payment_wire::encode(
+                &payment_profile,
+                &chain.payment_originals(),
+                &template.ip,
+                &template.is,
+                &template.pp,
+                &template.ps,
+                template.r,
+            )
+            .map_err(Error::Rejected)?;
+            let result = engine.verify_payment(&payment, parameters).map(|_| ());
+            refused += usize::from(verdict("Send Payment", result, *holds)?);
+            // At Receive, the same bytes never credit: Native derives Burn.
+            if engine.incoming_candidate(&payment, parameters)?.valid != *holds {
+                return Err(Error::AuthorityMismatch("template incoming verdict"));
+            }
+        }
+    }
+    if !templates.is_empty() && refused == 0 {
+        return Err(Error::AuthorityMismatch(
+            "no template artifact with a false accumulator was exercised",
+        ));
+    }
+    eprintln!(
+        "native template artifacts: {} pairs, {refused} accumulator refusals across pair, head and Payment boundaries",
+        templates.len()
+    );
+    Ok(())
+}
+
+/// G6 at the engine boundaries: a credential the real issuer signed, whose
+/// certified table commitment is another wallet's, is refused at original
+/// intake and inside a retained head.
+pub(super) fn reject_wrong_certified_table(
+    engine: &NativeEngine,
+    parameters: &AuthenticatedParameters,
+    chain: &crate::chain_fixture::Chain,
+    load: &full::UniformPair,
+) -> Result<()> {
+    let mut wrong = chain.send.credential.clone();
+    wrong.body[195..259].copy_from_slice(&chain.receiver_bootstrap.credential.body[195..259]);
+    wrong.signature = bootstrap::sign(
+        credential::message(&wrong),
+        &BigUint::from_bytes_be(&[0x26; 32]),
+        "correctly issued wrong-table credential",
+    );
+    let certificate = &chain.sender_bootstrap.certificate;
+    let table =
+        |r: Result<()>| matches!(r, Err(Error::AuthorityMismatch("certified wallet table")));
+    let intake = engine
+        .authenticate_credential_originals(
+            &credential_bytes(&wrong),
+            &certificate_bytes(certificate),
+            parameters,
+        )
+        .map(|_| ());
+    if !table(intake) {
+        return Err(Error::AuthorityMismatch("wrong-table credential intake"));
+    }
+    let head = encode_head(parameters, load, &wrong, certificate)?;
+    if !table(engine.verify_head(&head, &wrong, parameters).map(|_| ())) {
+        return Err(Error::AuthorityMismatch("wrong-table credential head"));
     }
     Ok(())
 }
