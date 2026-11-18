@@ -1328,9 +1328,9 @@ impl IVM {
 
     /// Construct a VM with its fixed guest memory image prepaid by a local pool.
     ///
-    /// This funds the fixed image backing, memory and register Merkle nodes.
-    /// The memory Merkle storage is only admitted here: its prepaid credit stays
-    /// with the image until the first root or path request allocates it.
+    /// This funds the fixed image, dirty-leaf bitmaps and register Merkle backing.
+    /// The first memory root or path request admits its leaf and node storage
+    /// from this same pool.
     /// Root and nested frame initialization bitmaps are admitted before call
     /// entry. Runtime templates, frame-vector growth, and host scratch still
     /// require separate admission.

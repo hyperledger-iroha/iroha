@@ -487,10 +487,14 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
         .unwrap();
     let prepared_bytes = budget.reserved_bytes();
     let mut first = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
-    let first_charge = budget.reserved_bytes();
+    let unrooted_charge = budget.reserved_bytes();
     let first_row = row_pointer(first.backing.as_ref().unwrap());
     let first_image = first.memory.load_region(0, 1).unwrap().as_ptr();
+    assert!(!first.memory.merkle_storage_allocated());
     let first_root = first.memory.root().unwrap();
+    let first_charge = budget.reserved_bytes();
+    assert!(first_charge > unrooted_charge);
+    assert!(first.memory.merkle_storage_allocated());
     let mut second = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     let second_row = row_pointer(second.backing.as_ref().unwrap());
     let second_image = second.memory.load_region(0, 1).unwrap().as_ptr();
@@ -514,7 +518,9 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
     let mut warm = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     assert_eq!(row_pointer(warm.backing.as_ref().unwrap()), first_row);
     assert_eq!(warm.memory.load_region(0, 1).unwrap().as_ptr(), first_image);
+    assert!(warm.memory.merkle_storage_allocated());
     assert_eq!(warm.memory.root().unwrap(), first_root);
+    assert_eq!(budget.reserved_bytes(), first_charge);
     assert_eq!(warm.register(7), 0);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
     assert_eq!(warm.remaining_gas(), GAS);

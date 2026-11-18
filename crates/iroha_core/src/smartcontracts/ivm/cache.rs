@@ -421,8 +421,9 @@ impl PreparedContractCache {
             store.stats.runtime_template_builds =
                 store.stats.runtime_template_builds.saturating_add(1);
         });
-        // A cold template prepays its image, tree, register and tracking copies
-        // from this VM's original State pool. Keep that fallible allocation
+        // A cold template admits its image, registers and tracking from this
+        // VM's State pool. Only a rooted image needs tree storage in its copy.
+        // Keep that fallible allocation
         // outside the shared store mutex so another borrower can
         // resolve or return a prepared artifact while it is being built.
         let baseline = vm.try_runtime_template()?;

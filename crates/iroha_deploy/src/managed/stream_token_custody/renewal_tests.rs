@@ -1910,7 +1910,8 @@ fn renewal_selection_commitment_refuses_lost_body_and_uncertain_epoch_cannot_rei
 #[test]
 fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacement() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::predecessor_with_renewal_validity(8_000);
+    // The predecessor and the retained renewal must each finish a genuine wallet journal.
+    let mut fixture = Fixture::predecessor_with_renewal_validity(30_000);
     fixture.wait_renewable();
     // The body is signed under an authorization as long as its own validity, selected only
     // after the genuine current proof is available.
@@ -1928,7 +1929,10 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
     };
     let expires = validity.expires_at_unix_ms;
     // The short absolute request interval bounds only this request, inside the body's validity.
-    let utc = (now_ms().unwrap() + 2_000).min(expires);
+    let now = now_ms().unwrap();
+    let remaining = expires.checked_sub(now).expect("renewal body is live");
+    let utc = now + remaining / 2;
+    assert!(now < utc && utc < expires);
     journal::explicit(
         &directory,
         original,
@@ -1948,7 +1952,7 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
         .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
         .unwrap();
     let inventory = wallet.entries(8).unwrap();
-    wait_until(expires, Duration::from_secs(10));
+    wait_until(expires, Duration::from_secs(32));
     let mut peers = fixture.unavailable_peers();
     // Explicit one-intent calls cannot refresh the retained dispatch UTC or replace this body.
     // Semantic replacement requires a separate live generated issuer and native predecessor join.

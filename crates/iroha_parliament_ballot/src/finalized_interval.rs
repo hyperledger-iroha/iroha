@@ -10,7 +10,10 @@ use crate::{
 use iroha_data_model::{
     block::{
         consensus::SumeragiRootScope,
-        execution_output::{ExecutionOutputV1, governance_start_row_count_v1},
+        execution_output::{
+            ExecutionOutputV1, TransactionRejectionRef, TransactionResultRef,
+            governance_start_row_count_v1,
+        },
     },
     governance::{
         GovernanceAnchorV1,
@@ -56,7 +59,8 @@ fn governance(
     seal: GovernanceAnchorV1,
 ) -> Result<(), FinalizedIntervalErrorV1> {
     let height = block.height();
-    let time = block.header().creation_time_ms;
+    let time = u64::try_from(block.header().creation_time().as_millis())
+        .map_err(|_| evidence(height, "block timestamp overflow"))?;
     let context = &request.context;
     let anchors = request.anchors;
     let mut seen = [false; 4];
@@ -168,9 +172,11 @@ fn replay_block(block: &VerifiedSumeragiBlock) -> Result<ReplayBlockV1, Finalize
                 "ballot source index or trigger completions differ",
             ));
         }
-        let (recorded, expected) = match &row.result.0 {
+        let (recorded, expected) = match TransactionResultRef::from(&row.result).as_ref() {
             Ok(_) => (RecordedBallotResultV1::Accepted, Ok(Vec::new())),
-            Err(TransactionRejectionReason::AnonymousBallot(reason)) => (
+            Err(TransactionRejectionRef::Baseline(
+                TransactionRejectionReason::AnonymousBallot(reason),
+            )) => (
                 RecordedBallotResultV1::Rejected(*reason),
                 Err(TransactionRejectionReason::AnonymousBallot(*reason)),
             ),
@@ -191,7 +197,8 @@ fn replay_block(block: &VerifiedSumeragiBlock) -> Result<ReplayBlockV1, Finalize
     }
     Ok(ReplayBlockV1 {
         height,
-        timestamp_ms: block.header().creation_time_ms,
+        timestamp_ms: u64::try_from(block.header().creation_time().as_millis())
+            .map_err(|_| evidence(height, "block timestamp overflow"))?,
         ballots,
     })
 }

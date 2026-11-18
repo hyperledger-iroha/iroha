@@ -5493,6 +5493,7 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::ivm_c10::StoredC10TriggerV1,
     >,
     /// Derived scan candidates from the bounded Data, Time and Pipeline C10 registrations.
+    #[norito(skip)]
     pub(crate) c10_trigger_candidates: StorageField<
         'world,
         iroha_data_model::trigger::TriggerId,
