@@ -135,6 +135,8 @@ pub struct KotoTestCliOptions {
     pub chain_discriminant: u16,
     /// Enable ZK seiyaku compilation.
     pub zk_enabled: bool,
+    /// Compiled IVM profile for the harness and its seiyaku.
+    pub host_profile: ivm::IvmProfileId,
     /// Report format written to stdout.
     pub format: KotoTestReportFormat,
     /// Additional `JUnit` XML report file.
@@ -156,6 +158,7 @@ impl KotoTestCliOptions {
             seed: 0,
             chain_discriminant,
             zk_enabled: false,
+            host_profile: ivm::IvmProfileId::BASELINE_ABI_V1,
             format: KotoTestReportFormat::Human,
             junit: None,
             gas_report: false,
@@ -866,13 +869,21 @@ fn run_discovered_suite_structured(
     }
     let compiled = modules
         .map_or_else(
-            || compile_suite_for_chain(&suite, request.zk_enabled, request.chain_discriminant),
+            || {
+                compile_suite_for_chain(
+                    &suite,
+                    request.zk_enabled,
+                    request.chain_discriminant,
+                    ivm::IvmProfileId::BASELINE_ABI_V1,
+                )
+            },
             |modules| {
                 compile_suite_with_modules_for_chain(
                     &suite,
                     modules,
                     request.zk_enabled,
                     request.chain_discriminant,
+                    ivm::IvmProfileId::BASELINE_ABI_V1,
                 )
             },
         )
@@ -1088,8 +1099,21 @@ pub fn run_cli(options: KotoTestCliOptions) -> Result<(), KotoTestCliError> {
             ),
         ));
     }
-    let compiled = compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)
-        .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
+    if options.action == KotoTestAction::Trace
+        && options.host_profile.engine() == ivm::IvmEngine::Baseline
+    {
+        return Err(KotoTestCliError::new(
+            Kind::Usage,
+            "register-delta tracing requires a C10 profile; use --host-profile iroha.ivm.c10.v1 to trace a C10 build",
+        ));
+    }
+    let compiled = compile_suite_for_chain(
+        &suite,
+        options.zk_enabled,
+        options.chain_discriminant,
+        options.host_profile,
+    )
+    .map_err(|error| localize_suite_diagnostics(&suite, error).into_cli())?;
     let trace_mode = match options.action {
         KotoTestAction::Run => TraceMode::Off,
         KotoTestAction::Coverage => TraceMode::PcOnly,
@@ -1770,12 +1794,14 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         suite,
         zk_enabled,
         iroha_data_model::account::address::chain_discriminant(),
+        ivm::IvmProfileId::BASELINE_ABI_V1,
     )
 }
 fn compile_suite_for_chain(
     suite: &DiscoveredSuite,
     zk_enabled: bool,
     chain_discriminant: u16,
+    profile: ivm::IvmProfileId,
 ) -> Result<CompiledSuite, SuiteError> {
     if !suite.sources.is_empty() || !suite.artifacts.is_empty() {
         return compile_suite_with_modules_for_chain(
@@ -1787,10 +1813,13 @@ fn compile_suite_for_chain(
             },
             zk_enabled,
             chain_discriminant,
+            profile,
         );
     }
     let source_name = suite.target_path.display().to_string();
     let test_opts = CompilerOptions {
+        engine: profile.engine(),
+        host_policy: profile.policy(),
         force_zk: zk_enabled,
         chain_discriminant,
         mode: CompilerMode::Test,
@@ -1833,6 +1862,7 @@ fn compile_suite_with_modules_for_chain(
     modules: &KotoTestModuleGraphV1,
     zk_enabled: bool,
     chain_discriminant: u16,
+    profile: ivm::IvmProfileId,
 ) -> Result<CompiledSuite, SuiteError> {
     let source_name = if suite.target_path.is_absolute() {
         let project_root = suite
@@ -1895,6 +1925,8 @@ fn compile_suite_with_modules_for_chain(
             },
             &test_units,
             CompilerOptions {
+                engine: profile.engine(),
+                host_policy: profile.policy(),
                 force_zk: zk_enabled,
                 chain_discriminant,
                 mode: CompilerMode::Test,

@@ -400,6 +400,40 @@ fn test_failures_exit_eleven_and_name_the_test_file_values_and_gas() {
 }
 
 #[test]
+fn trace_requires_a_profile_with_register_delta_support() {
+    let root = package("trace_profile");
+    let args = ["test", "trace", "--filter", "bump_adds", "--exact"];
+    let source = "tests/counter.test.ko";
+    let baseline = koto(&root, &[args.as_slice(), &[source]].concat());
+    assert!(!baseline.status.success());
+    assert!(String::from_utf8_lossy(&baseline.stderr).contains("--host-profile iroha.ivm.c10.v1"));
+    let c10 = koto(
+        &root,
+        &[
+            args.as_slice(),
+            &[
+                "--host-profile",
+                "iroha.ivm.c10.v1",
+                "--format",
+                "json",
+                source,
+            ],
+        ]
+        .concat(),
+    );
+    assert!(
+        c10.status.success(),
+        "{}",
+        String::from_utf8_lossy(&c10.stderr)
+    );
+    let trace = String::from_utf8(c10.stdout).expect("trace output");
+    assert!(
+        trace.contains("bump_adds") && trace.contains("bump"),
+        "{trace}"
+    );
+}
+
+#[test]
 fn check_treats_test_modules_as_tests_and_fmt_walks_directories() {
     let root = package("check");
     let output = koto(
