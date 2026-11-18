@@ -1373,6 +1373,15 @@ fn synthesize_manifest_from_payload(
     };
     let mut store = ChunkStore::with_profile(profile);
     store.ingest_bytes(payload)?;
+    let erasure_profile = ErasureProfile {
+        data_shards: 1,
+        parity_shards: 0,
+        row_parity_stripes: 0,
+        chunk_alignment: 1,
+        fec_scheme: FecScheme::Rs12_10,
+    };
+    // The canonical RS16 inventory groups each data chunk with its source stripe.
+    let data_shards = u32::from(erasure_profile.data_shards);
     let chunk_commitments = store
         .chunks()
         .iter()
@@ -1385,7 +1394,7 @@ fn synthesize_manifest_from_payload(
                 chunk.length,
                 ChunkDigest::new(chunk.blake3),
                 ChunkRole::Data,
-                0,
+                idx / data_shards,
             ))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -1395,13 +1404,6 @@ fn synthesize_manifest_from_payload(
         .first()
         .map(|commitment| commitment.length)
         .unwrap_or(effective_chunk);
-    let erasure_profile = ErasureProfile {
-        data_shards: 1,
-        parity_shards: 0,
-        row_parity_stripes: 0,
-        chunk_alignment: 1,
-        fec_scheme: FecScheme::Rs12_10,
-    };
     let total_stripes = u32::try_from(
         chunk_commitments
             .len()
@@ -1608,6 +1610,21 @@ mod tests {
     };
     use iroha_model_base::topology::LaneId;
     use std::path::PathBuf;
+    #[test]
+    fn synthetic_manifest_places_each_one_data_shard_in_its_source_stripe() {
+        let manifest = super::synthesize_manifest_from_payload(&[0xab; 3 * 4096 + 7], 4096)
+            .expect("synthetic manifest");
+        assert_eq!(manifest.total_stripes, 4);
+        assert_eq!(
+            manifest
+                .chunks
+                .iter()
+                .map(|chunk| chunk.group_id)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3],
+        );
+    }
+
     fn sample_receipt(
         ticket: [u8; 32],
         manifest: [u8; 32],

@@ -237,8 +237,9 @@ struct BuildArgs {
     /// Write the manifest to this path, or `-` for stdout (one source only).
     #[arg(long, value_name = "FILE.json")]
     manifest_out: Option<PathBuf>,
-    /// ZK trace bound recorded in the header of a `--zk` artifact; must not exceed the chain's
-    /// `ivm_max_cycles_upper_bound`. A non-ZK artifact carries no bound: gas is its only budget.
+    /// Cycle bound recorded in the header of a `--zk` artifact (the baseline header's cycle
+    /// ceiling, or the C10 header's ZK trace bound); must not exceed the chain's
+    /// `ivm_max_cycles_upper_bound`.
     #[arg(long, value_name = "COUNT", requires = "zk")]
     zk_trace_cycles: Option<std::num::NonZeroU64>,
     /// Exact named ABI V1 host profile required by the produced contract: `abi-v1`, the frozen
@@ -1128,7 +1129,12 @@ fn build(args: BuildArgs) -> Result<(), KotoError> {
         .unwrap_or_else(|| unreachable!("clap validates the exact named host profile"));
     (compiler_options.host_policy, compiler_options.engine) = (target.policy(), target.engine());
     if let Some(zk_trace_cycles) = zk_trace_cycles {
-        compiler_options.zk_trace_cycles = zk_trace_cycles;
+        // A `--zk` artifact records this bound in its header: the baseline header's cycle
+        // ceiling, or the C10 header's ZK trace bound.
+        match compiler_options.engine {
+            ivm::IvmEngine::Baseline => compiler_options.baseline_max_cycles = zk_trace_cycles,
+            ivm::IvmEngine::C10 => compiler_options.zk_trace_cycles = zk_trace_cycles,
+        }
     }
     compiler_options.chain_discriminant = capabilities.chain_discriminant();
     compiler_options.force_zk = capabilities.zk;

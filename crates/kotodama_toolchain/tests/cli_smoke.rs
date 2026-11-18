@@ -79,6 +79,13 @@ fn koto_build_meta_header_smoke() {
     );
     assert_eq!(zk.mode, ivm::ivm_mode::ZK);
     assert_eq!(zk.max_cycles, 2000);
+    // On the baseline the same flag sets the header's cycle ceiling of a ZK artifact.
+    let baseline_zk = header(
+        "cli_smoke_meta_baseline_zk.to",
+        &["--zk", "--zk-trace-cycles", "2000"],
+    );
+    assert_ne!(baseline_zk.mode & ivm::baseline::mode::ZK, 0);
+    assert_eq!(baseline_zk.max_cycles, 2000);
     let status = Command::new(bin)
         .arg("build")
         .arg(input.as_os_str())

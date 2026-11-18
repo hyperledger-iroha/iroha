@@ -335,6 +335,8 @@ fn profile_manifest(
         npos.evidence_horizon_blocks = epoch;
         npos.slashing_delay_blocks = epoch;
         npos.validate().map_err(|error| eyre!(error))?;
+        // Genesis signs one epoch length: the NPoS schedule must equal Sumeragi's own.
+        typed.sumeragi.epoch_length_blocks = npos.epoch_length_blocks;
         typed.custom.insert(npos.into_custom_parameter());
         *parameters = json::value::to_value(&typed)?;
     }
@@ -1078,16 +1080,26 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 3. Re-target the manifest and sign it against the flattened profile render.
         let genesis_dir = root.join("genesis");
         owner_only_dir(&genesis_dir)?;
-        let kagami_custody = seats[0].text(&["pipeline", "gas", "tech_account_id"])?;
-        let profile_custody = protocol_custody_account(ProfileId::SoraNexusV1)
-            .to_i105_for_discriminant(369)?;
-        ensure!(
+        // Fee custody is committed root fee policy, not node configuration (`pipeline.gas` is
+        // retired): Kagami's genesis gives the fee sink and the sponsor vault one account. Its
+        // account literals decode under Taira's chain discriminant.
+        let kagami_fees = {
+            let _discriminant = ChainDiscriminantGuard::enter(369);
             iroha_data_model::block::consensus::RootFeePolicy::from_parameters(
-                &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?.effective_parameters()?
-            )?.ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?
-                .fee_sink_account_id.to_i105_for_discriminant(369)? == kagami_custody,
+                &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?
+                    .effective_parameters()?,
+            )?
+        }
+        .ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?;
+        ensure!(
+            kagami_fees.fee_sink_account_id == kagami_fees.sponsor_vault_custody_account_id,
             "Kagami custody roles no longer share one account"
         );
+        let kagami_custody = kagami_fees
+            .fee_sink_account_id
+            .to_i105_for_discriminant(369)?;
+        let profile_custody = protocol_custody_account(ProfileId::SoraNexusV1)
+            .to_i105_for_discriminant(369)?;
         profile_manifest(
             &kagami_dir,
             &genesis_dir.join("genesis.json"),

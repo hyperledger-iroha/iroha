@@ -256,6 +256,47 @@ pub async fn advance_checkpoint(
     Ok(verifier.export_checkpoint(&tip)?)
 }
 
+/// How long a readiness poll waits when Torii's rate limit refused it: the response's
+/// `Retry-After` seconds, or one second. `None` for any other status.
+fn rate_limited(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Option<Duration> {
+    (status == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| {
+        headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(Duration::from_secs(1), Duration::from_secs)
+    })
+}
+
+#[test]
+fn readiness_rate_limit_honors_retry_after_only_on_429() {
+    use reqwest::{
+        StatusCode,
+        header::{HeaderMap, HeaderValue, RETRY_AFTER},
+    };
+
+    let limited = StatusCode::TOO_MANY_REQUESTS;
+    let mut headers = HeaderMap::new();
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(1))
+    );
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(7))
+    );
+    assert_eq!(rate_limited(StatusCode::FORBIDDEN, &headers), None);
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("invalid"));
+    assert_eq!(
+        rate_limited(limited, &headers),
+        Some(Duration::from_secs(1))
+    );
+}
+
 /// Read one untrusted public full finality proof, waiting until the height is served.
 async fn finality_proof(
     http: &reqwest::Client,
@@ -289,6 +330,10 @@ async fn finality_proof(
             || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
         {
             tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        if let Some(wait) = rate_limited(response.status(), response.headers()) {
+            tokio::time::sleep(wait).await;
             continue;
         }
         ensure!(
@@ -330,6 +375,10 @@ pub async fn preparation(
                 || response.status() == reqwest::StatusCode::ACCEPTED
             {
                 tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            if let Some(wait) = rate_limited(response.status(), response.headers()) {
+                tokio::time::sleep(wait).await;
                 continue;
             }
             ensure!(
