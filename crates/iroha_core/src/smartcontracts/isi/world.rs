@@ -17539,6 +17539,10 @@ pub mod isi {
                     &state_transaction.world,
                     token,
                 )?;
+                crate::runtime::state_scope_permission::guard_role_grant(
+                    &state_transaction.world,
+                    token,
+                )?;
                 crate::runtime::content_publish_permission::guard_role_grant(
                     &state_transaction.world,
                     token,
@@ -17640,6 +17644,10 @@ pub mod isi {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
             crate::runtime::state_row_permission::guard_role_grant(
+                &state_transaction.world,
+                &permission,
+            )?;
+            crate::runtime::state_scope_permission::guard_role_grant(
                 &state_transaction.world,
                 &permission,
             )?;

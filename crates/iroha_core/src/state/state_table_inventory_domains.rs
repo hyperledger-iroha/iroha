@@ -181,6 +181,24 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Release catalog module name that drafts the scoped State read permission.",
+        literals: &[r"iroha.permission.state_scope.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Wire identity of Taira's certified scoped-read permission schedule.",
+        literals: &[r"iroha.runtime.taira_read_scope.schedule.v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Identity and signature domains of the four-seat scoped-read activation plan.",
+        literals: &[
+            r"iroha:runtime:taira-read-scope:plan:v1\0",
+            r"iroha:runtime:taira-read-scope:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Wire identity of the one certified Taira activation; no selection binds it and it hashes no State content.",
         literals: &[r"iroha.runtime.taira_time_ironwood.schedule.v1"],
     },

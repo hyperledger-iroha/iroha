@@ -32,7 +32,9 @@ pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
 pub mod state_row_permission;
+pub mod state_scope_permission;
 pub mod taira_activation;
+pub mod taira_read_scope;
 
 use iroha_data_model::runtime::{
     definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},
@@ -282,6 +284,7 @@ pub fn draftable_modules() -> Result<Vec<&'static str>, CatalogError> {
             iroha_data_model::runtime::keyed_state::PROFILE_NAME,
             catalog::parameters::MODULE,
             content_publish_permission::MODULE,
+            state_scope_permission::MODULE,
         ])
         .collect())
 }
@@ -317,6 +320,15 @@ pub fn draft_addition(
     }
     if module == catalog::parameters::MODULE {
         return release_catalog()?.parameter_activation(
+            world.runtime_selection(),
+            &published,
+            network,
+            effective_height,
+            qualification,
+        );
+    }
+    if module == state_scope_permission::MODULE {
+        return state_scope_permission::activation(
             world.runtime_selection(),
             &published,
             network,

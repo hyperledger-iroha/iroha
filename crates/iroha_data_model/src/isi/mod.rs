@@ -104,6 +104,7 @@ pub mod ministry;
 /// Typed one-time SoraFS successor repair instruction.
 pub mod sorafs_repair;
 pub mod taira_activation;
+pub mod taira_read_scope;
 /// Canonical registered instruction storage.
 ///
 /// Ordinary instructions own their trait object. Native AMX proof instructions can instead
@@ -434,6 +435,7 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::AttestRuntimeSupportV1
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 impl_direct_instruction_box!(crate::isi::sorafs_repair::ApplySorafsRepairV1);
 impl_direct_instruction_box!(crate::isi::taira_activation::ScheduleTairaTimeIronwoodV1);
+impl_direct_instruction_box!(crate::isi::taira_read_scope::ScheduleTairaReadScopeV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);

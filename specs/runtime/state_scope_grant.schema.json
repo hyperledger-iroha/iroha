@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanReadStateScope direct account permission",
+  "description": "Permission input to iroha account permission grant. The all-ledger reader issues it directly to the destination account. The permission parser requires a canonical compact JSON payload. The selected grant checks typed identifiers and State paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "payload"],
+  "properties": {
+    "name": { "const": "CanReadStateScope" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope"],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["AssetBalances", "AssetEscrows", "ContractStatePrefix", "IdentifierClaims", "MultisigRecords"] },
+            "value": {}
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "kind": { "enum": ["AssetBalances", "AssetEscrows"] },
+                "value": { "type": "string", "minLength": 1, "description": "Canonical Base58 AssetDefinitionId from the signed deployment." }
+              }
+            },
+            {
+              "properties": {
+                "kind": { "const": "ContractStatePrefix" },
+                "value": { "type": "string", "pattern": "^([^/]+/)+$", "description": "Canonical NFC StatePath with a trailing slash." }
+              }
+            },
+            {
+              "properties": {
+                "kind": { "const": "IdentifierClaims" },
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "business_rule"],
+                  "properties": {
+                    "kind": { "type": "string", "minLength": 1 },
+                    "business_rule": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "kind": { "const": "MultisigRecords" },
+                "value": { "type": "string", "minLength": 1, "description": "Canonical domainless multisig AccountId encoded as I105 for the selected network." }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

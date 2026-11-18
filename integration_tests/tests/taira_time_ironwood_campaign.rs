@@ -777,3 +777,6 @@ fn four_peers_take_the_repair_and_the_activation_with_one_peer_restarted_across_
     }
     Ok(())
 }
+
+#[path = "taira_time_ironwood_campaign/read_scope.rs"]
+mod read_scope;

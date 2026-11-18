@@ -26327,6 +26327,15 @@
             "exprs": {
               "TAIRA_ACTIVATION_MAX_CERTIFICATE_BYTES_V1": "8 * 1024 * 1024"
             }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/taira_read_scope.rs",
+            "symbols": [
+              "TAIRA_READ_SCOPE_MAX_CERTIFICATE_BYTES_V1"
+            ],
+            "exprs": {
+              "TAIRA_READ_SCOPE_MAX_CERTIFICATE_BYTES_V1": "8 * 1024 * 1024"
+            }
           }
         ]
       }
@@ -26802,6 +26811,18 @@
               "path": "crates/iroha_core/src/runtime/keyed_state.rs",
               "sites": {
                 "effective_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/taira_read_scope.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/taira_read_scope.rs",
+              "sites": {
+                "self.change_set.effective_height < 2": 1
               }
             },
             {

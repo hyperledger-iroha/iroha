@@ -89810,7 +89810,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Read the exact requested Global State rows at the certified non-genesis tip. Each row returns its original bytes or proven absence under the same post-execution root. Supply 1 to 32 (table, key) positions in strictly ascending order. Each read requires current CanReadAllLedgerData or a direct CanReadStateRow grant for every position. Independently verify the batch against finality and a pinned schema.",
+        "description": "Read the exact requested Global State rows at the certified non-genesis tip. Each row returns its original bytes or proven absence under the same post-execution root. Supply 1 to 32 (table, key) positions in strictly ascending order. Each position requires current CanReadAllLedgerData, a direct CanReadStateRow grant, or a matching direct CanReadStateScope grant under its active definition. Opaque escrow and claim IDs require a present matching certified record for scoped reads. Independently verify the batch against finality and a pinned schema.",
         "operationId": "ledgerStateRowsV1",
         "parameters": [
           {

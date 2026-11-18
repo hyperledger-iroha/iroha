@@ -374,11 +374,13 @@ fn content_step(
         permission::Permission,
     };
 
-    if !super::content_publish_permission::selected(world.runtime_selection.get()) {
+    let content = super::content_publish_permission::selected(world.runtime_selection.get());
+    let scoped = super::state_scope_permission::selected(world.runtime_selection.get());
+    if !content && !scoped {
         return None;
     }
     let raw = instruction.as_any();
-    if let Some(retire) = raw.downcast_ref::<RetireContentBundle>() {
+    if content && let Some(retire) = raw.downcast_ref::<RetireContentBundle>() {
         return world
             .content_bundles
             .get(&retire.bundle_id)
@@ -393,7 +395,8 @@ fn content_step(
             Some(RevokeBox::Permission(revoke)) => Some(revoke),
             _ => None,
         })?;
-    (revoke.object.name() == super::content_publish_permission::NAME
+    (((content && revoke.object.name() == super::content_publish_permission::NAME)
+        || (scoped && revoke.object.name() == super::state_scope_permission::NAME))
         && world
             .account_permissions
             .get(&revoke.destination)

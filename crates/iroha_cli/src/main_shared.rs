@@ -53,6 +53,7 @@ pub use taira_dataspace_deploy::{
 mod deployment_genesis_fixture;
 #[cfg(unix)]
 mod taira_public_reset;
+mod taira_read_scope;
 mod taira_time_ironwood;
 mod transaction_journal;
 mod transaction_load;
@@ -1633,6 +1634,11 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     }
     if let Command::Taira(taira::Command::TimeIronwood(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira time-ironwood")?;
+        return map_command_result(command.run_without_client_config(&mut io::stdout()))
+            .map(|()| std::process::ExitCode::SUCCESS);
+    }
+    if let Command::Taira(taira::Command::ReadScope(command)) = &args.command {
+        reject_irrelevant_local_tool_globals(&args, "taira read-scope")?;
         return map_command_result(command.run_without_client_config(&mut io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }

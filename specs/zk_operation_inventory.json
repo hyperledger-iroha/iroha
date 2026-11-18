@@ -879,6 +879,10 @@
     "scope": "out",
     "reason": "The owner-authorized Taira certificate that schedules the compiled Time and Ironwood change set (crates/iroha_core/src/runtime/taira_activation.rs, specs/runtime/taira_time_ironwood_v1.md). It authenticates signatures, not a proof; the Ironwood pool it later authorizes is admitted by its own bootstrap operation."
    },
+   "taira_read_scope": {
+    "scope": "out",
+    "reason": "ScheduleTairaReadScopeV1 verifies four validator signatures over the scoped-read permission change set. Its admission and activation use the runtime certificate and support attestations (crates/iroha_core/src/runtime/taira_read_scope.rs, specs/runtime/taira_read_scope_v1.md)."
+   },
    "account_signing_key": {
     "scope": "out",
     "reason": "Off-chain signing key install, rotation and revocation (crates/iroha_core/src/smartcontracts/isi/account_signing_key.rs, specs/account_signing_keys.md). The account itself authorizes it in an ordinary controller-signed transaction; it verifies no proof and carries no ZK or FHE relation."

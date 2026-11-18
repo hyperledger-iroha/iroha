@@ -46,8 +46,11 @@ Norito key bytes. Each key uses lowercase hexadecimal. Cells use the empty key.
 {"rows":[{"table":"world.parameters","key_hex":""}]}
 ```
 
-The reader needs `CanReadAllLedgerData` or a direct `CanReadStateRow`
-grant for every requested position. Torii checks current grants before
+The reader needs `CanReadAllLedgerData` or a current direct grant for every
+requested position. A position may use an exact `CanReadStateRow` grant or a
+matching `CanReadStateScope` grant once its permission definition is active.
+Escrow and claim scope checks verify ownership against the original value at
+the certified cut (see [State read permissions](data_model_and_isi_spec.md)). Torii checks current grants before
 source capture and again at egress. The complete batch succeeds or fails
 together. A permission refusal reveals no row presence or absence. The old
 `CanReadCertifiedOriginals` scope alone grants no access to generic row reads.

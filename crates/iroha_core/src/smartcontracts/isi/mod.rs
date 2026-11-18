@@ -393,6 +393,7 @@ define_instruction_handlers! {
     dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::taira_activation::ScheduleTairaTimeIronwoodV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::taira_read_scope::ScheduleTairaReadScopeV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,

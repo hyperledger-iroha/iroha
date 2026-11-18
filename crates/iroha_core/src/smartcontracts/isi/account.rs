@@ -883,6 +883,12 @@ pub mod isi {
                 self.object(),
                 false,
             )?;
+            crate::runtime::state_scope_permission::guard_account_change(
+                &state_transaction.world,
+                authority,
+                self.object(),
+                false,
+            )?;
             let account_id = self.destination().clone();
             let permission = self.object().clone();
             if !crate::alias::asset_definition_alias_permission_targets_active_binding(
@@ -957,6 +963,12 @@ pub mod isi {
                 self.object(),
             )?;
             crate::runtime::state_row_permission::guard_account_change(
+                &state_transaction.world,
+                authority,
+                self.object(),
+                true,
+            )?;
+            crate::runtime::state_scope_permission::guard_account_change(
                 &state_transaction.world,
                 authority,
                 self.object(),

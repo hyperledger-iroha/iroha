@@ -12,7 +12,7 @@ use iroha_data_model::{
     NetworkId, ValidationFail,
     isi::{
         error::InstructionExecutionError, runtime_upgrade::AttestRuntimeSupportV1,
-        taira_activation::ScheduleTairaTimeIronwoodV1,
+        taira_activation::ScheduleTairaTimeIronwoodV1, taira_read_scope::ScheduleTairaReadScopeV1,
     },
     privacy::PrivacyIronwoodPoolBootstrapV1,
     runtime::{
@@ -64,16 +64,86 @@ pub(crate) fn retained_certificate(
         .transpose()
 }
 
-pub(crate) fn sole_schedule(executable: &Executable) -> Option<&ScheduleTairaTimeIronwoodV1> {
+fn sole_instruction(executable: &Executable) -> Option<&iroha_data_model::isi::InstructionBox> {
     let Executable::Instructions(instructions) = executable else {
         return None;
     };
     if instructions.len() != 1 {
         return None;
     }
-    instructions[0]
-        .as_any()
-        .downcast_ref::<ScheduleTairaTimeIronwoodV1>()
+    Some(&instructions[0])
+}
+
+/// The sole reviewed schedule in an external signed transaction.
+enum Schedule<'a> {
+    TimeIronwood(&'a ScheduleTairaTimeIronwoodV1),
+    ReadScope(&'a ScheduleTairaReadScopeV1),
+}
+
+/// Rollback-owned authorization for the exact signed plan and instruction kind.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum AdmittedSchedule {
+    /// Original Time and Ironwood certificate.
+    TimeIronwood([u8; 32]),
+    /// Single scoped-read permission publication.
+    ReadScope([u8; 32]),
+}
+
+impl<'a> Schedule<'a> {
+    fn of(executable: &'a Executable) -> Option<Self> {
+        let instruction = sole_instruction(executable)?.as_any();
+        if let Some(schedule) = instruction.downcast_ref::<ScheduleTairaTimeIronwoodV1>() {
+            return Some(Self::TimeIronwood(schedule));
+        }
+        instruction
+            .downcast_ref::<ScheduleTairaReadScopeV1>()
+            .map(Self::ReadScope)
+    }
+
+    fn validate(
+        self,
+        world: &impl WorldReadOnly,
+        chain: &ChainId,
+        network: NetworkId,
+        height: u64,
+        now_ms: u64,
+        committee: &[PublicKey],
+    ) -> Result<AdmittedSchedule, ValidationFail> {
+        match self {
+            Self::TimeIronwood(schedule) => validate_boundary(
+                &schedule.certificate,
+                world,
+                chain,
+                network,
+                height,
+                now_ms,
+                committee,
+            )
+            .map(AdmittedSchedule::TimeIronwood),
+            Self::ReadScope(schedule) => {
+                if !is_taira(chain, network) {
+                    return Err(rejected(
+                        "read-scope authority requires the exact Taira deployment",
+                    ));
+                }
+                super::taira_read_scope::validate_context(
+                    &schedule.certificate,
+                    world,
+                    chain,
+                    network,
+                    height,
+                    now_ms,
+                    committee,
+                )
+                .map(AdmittedSchedule::ReadScope)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn sole_schedule(executable: &Executable) -> Option<&ScheduleTairaTimeIronwoodV1> {
+    sole_instruction(executable)?.as_any().downcast_ref()
 }
 
 /// Authenticate the exact deployment, roster, selection and change set without changing State.
@@ -191,7 +261,7 @@ fn validate_context(
 /// Queue-only admissibility. A valid certificate permits this exact new envelope to reach the
 /// execution boundary; ordinary signature, authority, fees and resource checks still apply.
 pub(crate) fn queue_admits(view: &StateView<'_>, signed: &SignedTransaction) -> bool {
-    let Some(schedule) = sole_schedule(signed.instructions()) else {
+    let Some(schedule) = Schedule::of(signed.instructions()) else {
         return false;
     };
     let Some(tip) = view.native_execution_tip() else {
@@ -207,16 +277,16 @@ pub(crate) fn queue_admits(view: &StateView<'_>, signed: &SignedTransaction) -> 
         .iter()
         .map(|peer| peer.public_key().clone())
         .collect();
-    validate_boundary(
-        &schedule.certificate,
-        view.world(),
-        &view.chain_id,
-        view.network_id,
-        height,
-        tip.creation_time_ms(),
-        &committee,
-    )
-    .is_ok()
+    schedule
+        .validate(
+            view.world(),
+            &view.chain_id,
+            view.network_id,
+            height,
+            tip.creation_time_ms(),
+            &committee,
+        )
+        .is_ok()
 }
 
 /// Admit the exact certified envelope in this signed transaction's rollback-owned overlay.
@@ -227,7 +297,7 @@ pub(crate) fn prepare_signed_boundary(
     state: &mut StateTransaction<'_, '_>,
     signed: &SignedTransaction,
 ) -> Result<(), ValidationFail> {
-    let Some(schedule) = sole_schedule(signed.instructions()) else {
+    let Some(schedule) = Schedule::of(signed.instructions()) else {
         return Ok(());
     };
     // The second admission call of the same transaction finds the marker in the same overlay.
@@ -247,8 +317,7 @@ pub(crate) fn prepare_signed_boundary(
             .iter()
             .map(|peer| peer.public_key().clone())
             .collect();
-        validate_boundary(
-            &schedule.certificate,
+        schedule.validate(
             &*state.world,
             &state.chain_id,
             state.network_id,
@@ -277,11 +346,15 @@ pub(crate) fn admitted_by_boundary(
     state: &StateTransaction<'_, '_>,
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> bool {
-    state.taira_activation_entrypoint.is_some()
-        && instruction
-            .as_any()
-            .downcast_ref::<ScheduleTairaTimeIronwoodV1>()
-            .is_some()
+    match state.taira_activation_entrypoint {
+        Some(AdmittedSchedule::TimeIronwood(_)) => {
+            instruction.as_any().is::<ScheduleTairaTimeIronwoodV1>()
+        }
+        Some(AdmittedSchedule::ReadScope(_)) => {
+            instruction.as_any().is::<ScheduleTairaReadScopeV1>()
+        }
+        None => false,
+    }
 }
 
 impl Execute for ScheduleTairaTimeIronwoodV1 {
@@ -297,7 +370,7 @@ impl Execute for ScheduleTairaTimeIronwoodV1 {
         };
         let plan = &self.certificate.plan;
         let id = plan.id().map_err(|error| invalid(&error.to_string()))?;
-        if state.taira_activation_entrypoint != Some(id) {
+        if state.taira_activation_entrypoint != Some(AdmittedSchedule::TimeIronwood(id)) {
             return Err(invalid("schedule requires the exact certified boundary"));
         }
         let now_ms = super::change_set::block_ms(state);
@@ -347,14 +420,18 @@ pub(crate) fn attests_certified_change_set(
     else {
         return false;
     };
-    let Ok(Some(certificate)) = retained_certificate(&*state.world) else {
-        return false;
-    };
-    certificate
-        .plan
-        .change_set
-        .id()
-        .is_ok_and(|id| id == attest.attestation.attestation.change_set)
+    let target = attest.attestation.attestation.change_set;
+    retained_certificate(&*state.world)
+        .ok()
+        .flatten()
+        .is_some_and(|certificate| {
+            certificate
+                .plan
+                .change_set
+                .id()
+                .is_ok_and(|id| id == target)
+        })
+        || super::taira_read_scope::attests_retained(&*state.world, target)
 }
 
 /// Whether the retained certificate authorizes bootstrapping exactly `pool` now: the certified

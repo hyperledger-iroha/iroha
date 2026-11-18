@@ -30343,6 +30343,14 @@
       }
     ]
   },
+  "ScheduleTairaReadScopeV1": {
+    "Struct": [
+      {
+        "name": "certificate",
+        "type": "TairaReadScopeCertificateV1"
+      }
+    ]
+  },
   "ScheduleTairaTimeIronwoodV1": {
     "Struct": [
       {
@@ -36283,6 +36291,66 @@
       {
         "name": "pool",
         "type": "PrivacyIronwoodPoolBootstrapV1"
+      }
+    ]
+  },
+  "TairaReadScopeCertificateV1": {
+    "Struct": [
+      {
+        "name": "plan",
+        "type": "TairaReadScopePlanV1"
+      },
+      {
+        "name": "signatures",
+        "type": "Array<Signature, 4>"
+      }
+    ]
+  },
+  "TairaReadScopePlanV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "chain_id",
+        "type": "ChainId"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "change_set",
+        "type": "ChangeSetV1"
+      },
+      {
+        "name": "notice",
+        "type": "RuntimeNoticeV1"
+      },
+      {
+        "name": "committee",
+        "type": "Array<PublicKey, 4>"
+      },
+      {
+        "name": "expires_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authorization_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "release_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_closure_digest",
+        "type": "Array<u8, 32>"
       }
     ]
   },

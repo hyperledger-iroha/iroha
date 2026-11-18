@@ -286,6 +286,13 @@ discarded overlay, and a four-peer campaign on a daemon patched only in its depl
 passed end to end. Its validator roll and final signing, and consumer decoder releases, remain
 open.
 
+Release R (`815f5b46a0`) supplies the keyed State cutover. On its successor,
+the [four-seat scoped-read schedule](specs/runtime/taira_read_scope_v1.md) selects
+`CanReadStateScope` after the keyed cutover. Each validator must attest before the
+effective height. The genesis read operator can then grant the five documented scopes
+directly to BOI readers. BOI owns Linux artifact admission and the live window.
+The four seat signatures and the signed reader-grant transaction are outstanding.
+
 Current-source release qualification remains open. Private DPN, paid `dpn`/`admin@dpn`,
 clean-client completion and newer wallet ordinary-Load finality commissioning remain open.
 Retained incident records describe the

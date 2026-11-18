@@ -293,7 +293,8 @@ impl State {
                 .into()]);
                 lane_policy_attestation_unscheduled =
                     verdict(crate::tx::lane_policy_verdict(&first_attestation, &tx));
-                tx.taira_activation_entrypoint = Some(plan_id);
+                tx.taira_activation_entrypoint =
+                    Some(crate::runtime::taira_activation::AdmittedSchedule::TimeIronwood(plan_id));
                 (ScheduleTairaTimeIronwoodV1 { certificate })
                     .execute(&authority, &mut tx)
                     .map_err(|error| format!("schedule refused: {error}"))?;
