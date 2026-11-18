@@ -50,7 +50,7 @@ claim before item E5 measures it.
   full verifier; OQ-3 is applied in `specs/kagemusha_lambda_omega_v1.md` §2.7. `authenticated_native_containment_from_bundle`
   passed on the 11-17 bundle (`output/r26/containment-20261117T175154Z.log`): 15 independently corrupted cases each
   burned 10, kept 100 and let Send10 spend; a valid Payment could not be forced to burn and credited (DESIGN.md §0).
-- [ ] **G5. Native acceptance hardening.** Reject construction artifacts whose template accumulators are false at
+- [x] **G5. Native acceptance hardening.** Reject construction artifacts whose template accumulators are false at
   every accepting native boundary (linked verification accepted them:
   `../../output/kagemusha-100x-20261108/spike/runs/codex-20261112/bootstrap-resume-fixed-point-8.log` line 346).
   Pin program identity by canonical digest at every accepting boundary.
@@ -59,7 +59,7 @@ claim before item E5 measures it.
   *2026-11-18 (iroha a96dd1f3f4):* every accepting boundary decides both matrix and both inherited generator
   accumulators through `engine::decide_accumulators`; imported tapes get their challenge degrees derived and refused
   above the declaration (all eight saved programs pass); the chain test compares the exact canonical bytes of all
-  eight programs and refuses its template pairs at pair, head, Payment and Receive verdict. Open: that heavy chain run.
+  eight programs and refuses its template pairs at pair, head, Payment and Receive verdict. The [recovered four-kind chain](output/takeover-20261118/mac-chain-result.json) passed on 18 November. Generations 5 and 6 matched in all eight canonical programs. Native rejected the template with false matrix accumulators at its accepting boundaries and completed 15 containment cases.
 - [x] **G6. Issuance parameters.** Pin generator namespace, capacity, column order and table construction in
   authenticated parameters (research/CONSTRUCTION.md).
   *Done when:* a correctly signed credential that carries a wrong table commitment is refused, by test.
@@ -85,7 +85,7 @@ claim before item E5 measures it.
 ## Engineering: to a complete operation on a phone
 
 - [x] **E1. The three failing library tests** — fixed at their causes, iroha 1def5379c7 (suite 196 passed, 0 failed).
-- [ ] **E2. Fresh complete chain on the Mac** (none since 14e5a5e1f4's bundle-frame fix): times per kind, peak RSS,
+- [x] **E2. Fresh complete chain on the Mac** (none since 14e5a5e1f4's bundle-frame fix): times per kind, peak RSS,
   and the complete IPM1 Payment size against the 12,000 B experimental budget (11-13 run5: 12,050 B; the 11-15
   two-wallet run: 11,597 B).
   *2026-11-17/18:* chain run `output/s2/chain-20261117T051751Z.log` gave per-kind times and a complete Payment of
@@ -97,6 +97,7 @@ claim before item E5 measures it.
   accounting (P-Receive 869 MB, +139 MB); process peak 5.26 → 2.94 GB RSS; every proof faster (P-Receive 1.58 →
   1.32 s Mac). In progress: the engine side (release private values, no private digest recompile, chunked
   preparation check) and the real-RSS measurement of whole native operations.
+  *2026-11-18:* the seven E3b source changes are in signed commit `66b290aff5`. A full valid native Receive in the authenticated chain took 61.822 s. Finalization reached 3,480 MB RSS and 2,304 MB physical footprint under the Mac profiler. The separate [three-launch two-wallet run](output/takeover-20261118/mac-two-wallet/result.json) received exact retained bytes in a fresh process in 120.445 s normal flow. Prepare reached 767,574,016 B RSS and Execute reached 1,866,498,048 B. Both exceed the 0.68 GiB admission. The complete chain timings are in the [Mac chain log](output/takeover-20261118/chain.log).
 - [ ] **E4. Shrink P-boot's matrix program** (53,964 products, about 72% of the three P programs). Taking Bootstrap out
   of the per-step polynomial needs an authenticated discharge of its matrix obligation, not a one-time native check.
   *2026-11-18:* construction chosen in [research/E4-F1-F2-DESIGN.md](research/E4-F1-F2-DESIGN.md) §3 (Codex astra):
@@ -115,11 +116,9 @@ claim before item E5 measures it.
   phase timings, carrier bytes and peak RSS from the same run; then Send, Load and Bootstrap. The Pixel operator runs
   it only with the owner's go typed in the operator's own chat. *Done when:* the 3 s target is judged on these
   numbers.
-  *2026-11-18:* runner and package scripts ready (`output/e5-pixel-package/`: build with source-drift checks, run,
-  manifest template); no phone binary yet. Build after E3 lands, from a committed HEAD; if E3 changes a program, take
-  the bundle from a fresh chain run.
+  *2026-11-18:* both physical-device fixtures were built from the canonical checkout with the new signed four-kind Mac bundle. The Android instrumentation APK and iOS archive passed signature and embedded-original checks. The physical [package receipt](output/takeover-20261118/physical-fixture-package.json) records hashes, input bundle and app identity. The Pixel 6 was absent from ADB. Measurement requires the Pixel and a holder for its protected confirmation.
 - [ ] **E6. iPhone measurement** with the Secure Enclave / App Attest device fixture (iOS and Android must behave the
-  same).
+  same). The signed iOS test app carries the production App Attest entitlement. Xcode lists the paired iPhone 17 Pro Max offline. On-device enrollment, confirmation and Receive timings require a connected, unlocked iPhone.
 - [x] **E7. Two-wallet device runner** (the phone fixture's Bootstrap → Load100 → Send10 → `receive_self` flow is a
   self-transfer and is refused at Send10).
   *Done 2026-11-18 (670a26616d):* launch 1 runs A Bootstrap → Load100 → Send10 to software wallet B, B receives and
