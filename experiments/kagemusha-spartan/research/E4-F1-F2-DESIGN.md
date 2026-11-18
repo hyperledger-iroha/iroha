@@ -2,6 +2,8 @@
 
 # KAGEMUSHA Path 2: E4, F1 and F2 construction
 
+> **Decision update, 2026-11-18.** Revision `1e2afdc338` selects four pairs and three Control modes. Bootstrap remains in the recurring polynomial. The Unload and Refresh relation specifications below still apply with the revised kind placement and hard anchor check. [E4 reweigh and integration decision](E4-REWEIGH.md)
+
 **Target:** `experiments/kagemusha-spartan/research/E4-F1-F2-DESIGN.md`  
 **Status:** Proposed construction and implementation plan. Not implemented or qualified.  
 **Review basis:** Working tree based on `60309bba27e8205c6196bb0c6b040b954f6f584e`, reviewed read-only on 2026-11-18. No files changed or tests executed.

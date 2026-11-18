@@ -45,9 +45,7 @@ claim before item E5 measures it.
   document findings go back to its author. Owner decisions listed at the end of the review.
   *Later 2026-11-18:* document findings resolved in SOUNDNESS.md revision 2 (8672d5ee88; re-check accepts G1 and G2
   conditionally). Code findings 4, 7 and 9 fixed in 6c345ed8d0 (finding 4 confirmed by test first; every unbound
-  io-fold leaf pinned to zero, no rows added); re-check item R4 in 740b30764f. Open: finding 5 (LogUp phase invariant
-  enforced at build time, after the prover-memory work leaves `uniform.rs`), a fresh chain on the new programs, and
-  the owner's decisions.
+  io-fold leaf pinned to zero, no rows added); re-check item R4 in 740b30764f. Finding 5 is implemented in 0c83bc226a. The uniform builder checks lookup, table and copy tuple inputs before introducing LogUp helpers and checks triangular challenge definitions. Three phase tests passed. A fresh chain, independent re-check and owner decisions remain open.
 - [x] **G4. Native burn, end to end** — done 2026-11-18. `engine.rs` derives `valid` from parsing plus the exact
   full verifier; OQ-3 is applied in `specs/kagemusha_lambda_omega_v1.md` §2.7. `authenticated_native_containment_from_bundle`
   passed on the 11-17 bundle (`output/r26/containment-20261117T175154Z.log`): 15 independently corrupted cases each
@@ -136,17 +134,15 @@ claim before item E5 measures it.
   *2026-11-18:* relation, Core acceptance and exactly-once storage specified in E4-F1-F2-DESIGN.md §4. The Core side
   is future-generation code and ships with D4.
   *2026-11-18 (14e14627e6):* the exact Unload relation is in `src/unload.rs`, standalone (147,620 rows, 11 tests incl.
-  native parity with `iroha_data_model`'s nullifier and redeem leaf). Not yet a recursive kind: it needs E4 to free
-  the (0, 1) corner, then the full.rs/native/engine integration listed in that commit's checklist.
+  native parity with `iroha_data_model`'s nullifier and redeem leaf). Recursive integration follows the shared Control mode `(1,0)` in [the placement decision](research/E4-REWEIGH.md). The three-mode relation shares the recovery insertion. Recursive P/S, native/engine integration and authenticated proof-before-payout acceptance are still open.
 - [ ] **F2. RefreshTimeAnchor** as a recursive kind (only statement tags exist in `statement.rs`).
   *2026-11-18:* E4-F1-F2-DESIGN.md §5 puts it in one Control program shared with Load (no fifth kind; ten programs
   in all with E4 and F1). Not implemented.
   *2026-11-18 (32245ce8ae):* `src/time_anchor.rs` and `src/control.rs` hold the standalone Control relation (Load in
   mode 0, exactly Load's constraints; RefreshTimeAnchor in mode 1 with a root-certified TimeAnchor-role signer and the
   floor as the exact maximum). Cost: 2^20 constraints against 2^18 for Load alone, almost all TimeAnchor signature
-  work. Levers need a decision: check the anchor signature hard against a public dummy signer in Load mode (about
-  −80k rows, departs from the design's total predicate), or certify a table commitment for TimeAnchor keys (spec
-  change, about −50k rows). Integration needs E4 and the geometry census.
+  work. Revision `1e2afdc338` selected the hard anchor-signature check with a fixed public dummy signer in inactive modes and deferred the certified table change. Recursive integration follows Control mode `(0,1)` and the geometry census in [the placement decision](research/E4-REWEIGH.md).
+  *2026-11-18 (dd38d1348c).* Standalone Control now implements all three modes, a single depth-32 recovery insertion, and the hard check on the selected anchor-signature tuple. All three witnesses emit identical canonical program bytes. Targeted Load parity, charged Unload, forged successor, authority, prepared-Advance, selector and branch checks passed. Each mode has 308,871 raw rows, 475,410 lookups and 669,176 cells and compiles at `sx=20` (`row_bits=5`, `col_bits=16`). See [the census](output/takeover-20261118/control3-census-control_relation_census.log). The recursive catalog, native mode handling and proof-before-payout acceptance are still open.
 - [ ] **F3. The remaining policy signer roles**, including the fee-schedule signer check.
   *2026-11-18 (a96dd1f3f4):* certificates authenticate exactly one role; manifests are signed by a root-certified
   Artifact-role key (wire spec §1, §3.1); the fee-schedule check (RegulatoryPolicy role) exists but no transition

@@ -22,6 +22,8 @@ file explains how the design works and where each part stands.
 
 ## 0. Status at iroha `optimizations` 79d42d60da (2026-11-15)
 
+**Control decision, 2026-11-18 (`1e2afdc338`).** The next experimental catalog keeps four P/S pairs. Bootstrap remains in the recurring matrix polynomial. The standalone relation in `dd38d1348c` shares the recovery insertion across Load, RefreshTimeAnchor and Unload. Recursive integration still needs one shared Control pair. The two mode bits are authenticated ordinary inputs. The standalone Refresh relation hard-checks its anchor signature, with a fixed public dummy signer for the other modes. Qualification still requires a combined build, all eight exact program comparisons, native recovery, signed device measurements and the owner decisions. [Integration decision and gates](research/E4-REWEIGH.md)
+
 **Update 2026-11-18** (HEAD 60309bba27; supersedes the Payment-size and Burn bullets below):
 
 - **Complete chain on the Mac, 11-17** (`output/s2/chain-20261117T051751Z.log`, HEAD 1def5379c7 plus the then
