@@ -2,6 +2,7 @@
 //! production trust. Actual device custody still performs every hardware receipt.
 use super::*;
 use ff::{Field, PrimeField};
+use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
 use iroha_data_model::{
     kagemusha::*,
     sumeragi_finality::{SumeragiCommitVerifierV1, test_fixtures::NativeFinalityFixture},
@@ -208,85 +209,138 @@ fn unsigned_receipt(c: &Credential, fields: &[Fp; 26], payment: Fp) -> bootstrap
 /// Genuine fixture-genesis BLS finality for a synthetic isolated Load100 event.
 /// No production ledger transition or spendable funds are created by this fixture.
 pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitness> {
+    let ExactOperationWitness::Bootstrap(boot) = bootstrap else {
+        return Err(Error::Malformed("fixture Load requires Bootstrap input"));
+    };
+    let (receipt, finality) = certified_loads(&[(&boot.input.credential, 1)])?
+        .pop()
+        .ok_or(Error::Malformed("fixture missing Load event"))?;
+    load_from_receipt(
+        &boot.input,
+        &receipt,
+        &finality,
+        crate::indexed_map::empty_insert,
+    )
+}
+
+/// Certify all requested ordinal events in one checkpoint successor. Every
+/// ordinal has a distinct transaction/request and its own Merkle inclusion.
+fn certified_loads(
+    wallets: &[(&Credential, u8)],
+) -> Result<Vec<(KagemushaWalletLoadReceiptV1, KagemushaWalletLoadFinalityV1)>> {
     use iroha_data_model::{
         events::{
             EventBox,
             data::{DataEvent, kagemusha::KagemushaLoadCommittedV1},
         },
-        isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1,
         prelude::{HashOf, MerkleTree},
         sumeragi_finality::SumeragiCommitCertificateV1,
     };
-    let ExactOperationWitness::Bootstrap(boot) = bootstrap else {
-        return Err(Error::Malformed("fixture Load requires Bootstrap input"));
-    };
-    let input = &boot.input;
-    let c = &input.credential;
-    // Reserve the first post-genesis block for this exact Load event. The
-    // `new` fixture already certifies H2 and would make next_header() select H3.
     let mut consensus =
         NativeFinalityFixture::start_with_explicit_parameters("portable-native-fixture");
     let header = consensus.next_header();
-    let receipt = KagemushaWalletLoadReceiptV1 {
-        version: 1,
-        scheme_id: c.body[2..34].try_into().unwrap(),
-        asset_digest: c.body[34..66].try_into().unwrap(),
-        wallet_id: c.body[66..98].try_into().unwrap(),
-        request_id: [0x45; 32],
-        ordinal: 0,
-        amount: 100,
-        online_charge: 0,
-        charge_quote: [0; 32],
-        transaction_hash: [0x56; 32],
-        block_height: header.height.get(),
-        payer_account_digest: c.body[98..130].try_into().unwrap(),
-    };
-    let events = [EventBox::Data(
-        DataEvent::KagemushaLoadCommitted(
-            KagemushaLoadCommittedV1::from_receipt(&receipt)
-                .map_err(|e| Error::Rejected(e.to_string()))?,
-        )
-        .into(),
-    )];
+    let height = header.height.get();
+    let receipts: Vec<_> = wallets
+        .iter()
+        .enumerate()
+        .flat_map(|(group, &(c, count))| {
+            (0..count).map(move |ordinal| {
+                let mut request_id = [0x45; 32];
+                let mut transaction_hash = [0x56; 32];
+                request_id[30] ^= u8::try_from(group).expect("isolated fixture wallet count");
+                request_id[31] ^= ordinal;
+                transaction_hash[30] ^= u8::try_from(group).expect("isolated fixture wallet count");
+                transaction_hash[31] ^= ordinal;
+                KagemushaWalletLoadReceiptV1 {
+                    version: 1,
+                    scheme_id: c.body[2..34].try_into().unwrap(),
+                    asset_digest: c.body[34..66].try_into().unwrap(),
+                    wallet_id: c.body[66..98].try_into().unwrap(),
+                    request_id,
+                    ordinal: u128::from(ordinal),
+                    amount: 100,
+                    online_charge: 0,
+                    charge_quote: [0; 32],
+                    transaction_hash,
+                    block_height: height,
+                    payer_account_digest: c.body[98..130].try_into().unwrap(),
+                }
+            })
+        })
+        .collect();
+    let events: Vec<EventBox> = receipts
+        .iter()
+        .map(|receipt| {
+            KagemushaLoadCommittedV1::from_receipt(receipt)
+                .map(|event| EventBox::Data(DataEvent::KagemushaLoadCommitted(event).into()))
+                .map_err(|e| Error::Rejected(e.to_string()))
+        })
+        .collect::<Result<_>>()?;
     let tree: MerkleTree<EventBox> = events.iter().map(HashOf::new).collect();
     let block = consensus.block_with_submitted_work(header);
     let proof = consensus.certify_with_events(block, &events);
-    let finality = KagemushaWalletLoadFinalityV1 {
-        version: 1,
-        receipt_digest: receipt
-            .receipt_digest()
-            .map_err(|e| Error::Rejected(e.to_string()))?,
-        certificate: SumeragiCommitCertificateV1::from_proof(&proof)
-            .map_err(|e| Error::Rejected(e.to_string()))?,
-        event_proof: tree
-            .get_proof(0)
-            .ok_or(Error::Malformed("fixture Load event"))?,
-    };
+    let certificate = SumeragiCommitCertificateV1::from_proof(&proof)
+        .map_err(|e| Error::Rejected(e.to_string()))?;
+    receipts
+        .into_iter()
+        .enumerate()
+        .map(|(i, receipt)| {
+            let finality = KagemushaWalletLoadFinalityV1 {
+                version: 1,
+                receipt_digest: receipt
+                    .receipt_digest()
+                    .map_err(|e| Error::Rejected(e.to_string()))?,
+                certificate: certificate.clone(),
+                event_proof: tree
+                    .get_proof(i as u32)
+                    .ok_or(Error::Malformed("fixture Load event"))?,
+            };
+            Ok((receipt, finality))
+        })
+        .collect()
+}
+
+fn load_from_receipt(
+    input: &crate::bootstrap::Inputs,
+    receipt: &KagemushaWalletLoadReceiptV1,
+    finality: &KagemushaWalletLoadFinalityV1,
+    insert: impl FnOnce(Fp, Fp) -> (crate::indexed_map::InsertWitness<32>, Fp),
+) -> Result<ExactOperationWitness> {
+    let c = &input.credential;
     let ordinary = receipt
         .transcript()
         .map_err(|e| Error::Rejected(e.to_string()))?;
     let digest = crate::load::ordinary_digest(&ordinary);
     let recovery_value = iroha_pasta::poseidon::hash_with_domain(
         crate::load::RECOVERY_DOMAIN,
-        &[Fp::ZERO, digest, Fp::from(100)],
+        &[
+            Fp::from_u128(receipt.ordinal),
+            digest,
+            Fp::from_u128(receipt.amount),
+        ],
     );
-    let (recovery, root) =
-        crate::indexed_map::empty_insert(Fp::from_u128(1u128 << 127).double(), recovery_value);
+    let (recovery, root) = insert(
+        Fp::from_u128(1u128 << 127).double() + Fp::from_u128(receipt.ordinal),
+        recovery_value,
+    );
     let mut after = input.core;
-    after[9] = Fp::from(100);
-    after[11] = Fp::ONE;
-    after[13] = Fp::ONE;
+    after[9] += Fp::from_u128(receipt.amount);
+    after[11] += Fp::ONE;
+    after[13] += Fp::ONE;
     after[19] = root;
     after[29] += Fp::ONE;
     let mut fields = input.statement;
-    fields[9] = Fp::ONE;
-    fields[10] = Fp::ONE;
+    fields[8] = after[0];
+    fields[9] = after[11];
+    fields[10] = after[13];
+    fields[11] = after[22];
+    fields[12..14].fill(Fp::ZERO);
     fields[14] = crate::monetary_state::commitment(&input.core, &input.rest);
     fields[15] = crate::monetary_state::commitment(&after, &input.rest);
     fields[16] = Fp::from(2);
     fields[17] = digest;
-    fields[18] = Fp::ZERO;
-    fields[19] = Fp::from(100);
+    fields[18] = Fp::from_u128(receipt.ordinal);
+    fields[19] = Fp::from_u128(receipt.amount);
     fields[20..].fill(Fp::ZERO);
     Ok(ExactOperationWitness::Load {
         step: Box::new(crate::load::Witness {
@@ -310,6 +364,10 @@ pub fn load100(bootstrap: &ExactOperationWitness) -> Result<ExactOperationWitnes
             .into(),
     })
 }
+
+#[cfg(test)]
+#[path = "native_control_lifecycle_tests.rs"]
+mod control_lifecycle;
 
 #[cfg(test)]
 mod tests {
@@ -940,6 +998,9 @@ pub fn send10_from(
     let receiver_wallet = crate::request::word::RECEIVER_WALLET.map(|word| terms.words[word]);
     let before = *origin.core;
     let rest = *origin.rest;
+    let floor = u64::from_le_bytes(before[28].to_repr()[..8].try_into().unwrap());
+    let accepted = u64::from_le_bytes(request.body[346..354].try_into().unwrap());
+    let time = floor.max(accepted);
     let mut fields = *origin.statement;
     fields[9] = before[11] + Fp::ONE;
     fields[10] = before[13];
@@ -954,8 +1015,8 @@ pub fn send10_from(
     fields[21] = Fp::from(10);
     fields[22] = Fp::ZERO;
     fields[23] = terms.digest;
-    fields[24] = Fp::from(110);
-    fields[25] = Fp::from(110);
+    fields[24] = Fp::from(time);
+    fields[25] = Fp::from(time);
     let pending_value =
         iroha_pasta::poseidon::hash_with_domain(crate::send_maps::PENDING_DOMAIN, &fields[17..24]);
     let (pending, pending_root) = crate::indexed_map::empty_insert(terms.credit, pending_value);
@@ -988,7 +1049,7 @@ pub fn send10_from(
         ],
     );
     after[18] = pending_root;
-    after[28] = Fp::from(110);
+    after[28] = Fp::from(time);
     after[29] += Fp::ONE;
     fields[15] = crate::monetary_state::commitment(&after, &rest);
     Ok(ExactOperationWitness::Send(Box::new(
@@ -1004,8 +1065,8 @@ pub fn send10_from(
                 signature: [0; 64],
             },
             quota: crate::send_controls::QuotaWitness::default(),
-            lower: 110,
-            upper: 110,
+            lower: time,
+            upper: time,
             statement: fields,
             receipt: unsigned_receipt(origin.credential, &fields, Fp::ZERO),
             maps: crate::send_maps::Witness { pending, fee },
@@ -1042,7 +1103,8 @@ pub fn receive_from(
             (state.core, state.rest, state.statement) =
                 (step.after_core, step.after_rest, step.statement);
         }
-        ExactOperationWitness::RefreshTimeAnchor(step) => {
+        ExactOperationWitness::RefreshTimeAnchor(step)
+        | ExactOperationWitness::Unload { step, .. } => {
             (state.core, state.rest, state.statement) =
                 (step.after_core, step.after_rest, step.statement);
         }

@@ -1184,22 +1184,6 @@ fn prove_control_successor(
     result
 }
 
-/// Exercise a distinct signed claim from installed keys and an authenticated predecessor.
-pub(crate) fn prove_installed_control(
-    gens: &PairGens,
-    root: &p256::Point,
-    keys: (&Arc<UniformCircuit<Fp>>, &Arc<UniformCircuit<Fq>>),
-    prior: &UniformPair,
-    witness: &crate::control::Witness,
-) -> UniformPair {
-    let config = RunConfig {
-        p_columns: keys.0.shape.col_bits,
-        s_columns: keys.1.shape.col_bits,
-        output: Default::default(),
-    };
-    prove_control_successor(&config, gens, root, keys, prior, witness)
-}
-
 type ProgramSet = [(Arc<UniformCircuit<Fp>>, Arc<UniformCircuit<Fq>>); 4];
 
 fn program_set(generation: &Generation) -> ProgramSet {

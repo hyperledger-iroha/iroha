@@ -39,6 +39,8 @@ pub use unload_claim::{MAX_UNLOAD_CLAIM_BYTES, UnloadDestinations, VerifiedUnloa
 #[derive(Default)]
 pub struct NativeEngine {
     time: Option<Arc<dyn TimeSource>>,
+    #[cfg(test)]
+    isolated_unload_confirmation: bool,
 }
 impl sealed::Engine for NativeEngine {}
 
@@ -918,16 +920,19 @@ impl Drop for RecoveryFrame {
 struct OutputFrame {
     version: u16,
     head: Vec<u8>,
+    // Version 1 carries a Payment (or no artifact). Version 2 is exclusive to a completed Unload claim.
     payment: Vec<u8>,
 }
 pub(super) fn retained_output_part(bytes: &[u8], part: u32) -> Result<Vec<u8>> {
     let out: OutputFrame = super::decode(bytes)?;
-    if out.version != 1 || super::encode(&out)? != bytes {
+    if !matches!(out.version, 1 | 2) || super::encode(&out)? != bytes {
         return Err(Error::Malformed("retained output"));
     }
     match part {
         0 => Ok(out.head),
-        1 => Ok(out.payment),
+        1 if out.version == 1 => Ok(out.payment),
+        1 if out.version == 2 => Ok(Vec::new()),
+        3 if out.version == 2 => Ok(out.payment),
         _ => Err(Error::Malformed("retained output selector")),
     }
 }
@@ -935,7 +940,8 @@ fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
     match w {
         ExactOperationWitness::Bootstrap(x) => &mut x.input.receipt,
         ExactOperationWitness::Load { step, .. } => &mut step.receipt,
-        ExactOperationWitness::RefreshTimeAnchor(x) => &mut x.receipt,
+        ExactOperationWitness::RefreshTimeAnchor(x)
+        | ExactOperationWitness::Unload { step: x, .. } => &mut x.receipt,
         ExactOperationWitness::Send(x) => &mut x.receipt,
         ExactOperationWitness::Receive { step, .. } => &mut step.receipt,
     }
@@ -949,6 +955,9 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
             (&step.credential, &step.statement, &step.receipt, 2)
         }
         ExactOperationWitness::RefreshTimeAnchor(x) => (&x.credential, &x.statement, &x.receipt, 7),
+        ExactOperationWitness::Unload { step: x, .. } => {
+            (&x.credential, &x.statement, &x.receipt, 6)
+        }
         ExactOperationWitness::Send(x) => (&x.credential, &x.statement, &x.receipt, 3),
         ExactOperationWitness::Receive { step, .. } => {
             (&step.credential, &step.statement, &step.receipt, 4)
@@ -958,9 +967,9 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
 fn kind(w: &ExactOperationWitness) -> usize {
     match w {
         ExactOperationWitness::Bootstrap(_) => full::BOOTSTRAP,
-        ExactOperationWitness::Load { .. } | ExactOperationWitness::RefreshTimeAnchor(_) => {
-            full::CONTROL
-        }
+        ExactOperationWitness::Load { .. }
+        | ExactOperationWitness::RefreshTimeAnchor(_)
+        | ExactOperationWitness::Unload { .. } => full::CONTROL,
         ExactOperationWitness::Send(_) => full::SEND,
         ExactOperationWitness::Receive { .. } => full::RECEIVE,
     }
@@ -1318,10 +1327,37 @@ impl NativeEngine {
         )
         .map_err(Error::AuthorityMismatch)
     }
+    /// Unload Prepare and Resume produce an authenticated review. A protected
+    /// confirmation verifier must precede both custody selection and finalization.
+    /// Only unit tests can run the software stand-in for that authority.
+    fn require_unload_confirmation(&self, tag: u8) -> Result<()> {
+        if tag == 6 {
+            #[cfg(test)]
+            if self.isolated_unload_confirmation {
+                return Ok(());
+            }
+            return Err(Error::AuthorityMismatch(
+                "protected Unload review confirmation unavailable",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn isolated_unload_fixture() -> Self {
+        Self {
+            isolated_unload_confirmation: true,
+            ..Self::default()
+        }
+    }
+
     /// Bind the canonical local custody/OS clock adapter. Controls-off operations
     /// use `Default` and never acquire a network or clock dependency.
     pub fn with_time_source(time: Arc<dyn TimeSource>) -> Self {
-        Self { time: Some(time) }
+        Self {
+            time: Some(time),
+            ..Self::default()
+        }
     }
     pub(super) fn check_send_time(
         &self,
@@ -1525,6 +1561,14 @@ impl NativeEngine {
                 )
                 .map_err(Error::Malformed)?;
             }
+            ExactOperationWitness::Unload { step, destinations } => {
+                if step.mode != crate::control::Mode::Unload {
+                    return Err(Error::AuthorityMismatch("Unload mode"));
+                }
+                destinations.verify(&step.credential, &step.statement, &p.scheme, &p.root)?;
+                crate::control::append_preparation(&mut w, family, &p.root, step, &predecessor)
+                    .map_err(Error::Malformed)?;
+            }
             ExactOperationWitness::RefreshTimeAnchor(step) => {
                 if step.mode != crate::control::Mode::RefreshTimeAnchor {
                     return Err(Error::AuthorityMismatch("RefreshTimeAnchor mode"));
@@ -1645,19 +1689,19 @@ impl NativeEngine {
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
         c: &Credential,
-    ) -> Result<(VerifiedWalletHead, Vec<u8>)> {
+    ) -> Result<(VerifiedWalletHead, OutputFrame)> {
         let out: OutputFrame = super::decode(bytes)?;
-        if out.version != 1 || super::encode(&out)? != bytes {
+        if !matches!(out.version, 1 | 2) || super::encode(&out)? != bytes {
             return Err(Error::Malformed("completion output"));
         }
         let head = self.verify_head(&out.head, c, parameters)?;
-        if !out.payment.is_empty() {
+        if out.version == 1 && !out.payment.is_empty() {
             let incoming = self.verify_payment(&out.payment, parameters)?;
             if incoming.profile != head.profile {
                 return Err(Error::AuthorityMismatch("released Payment head"));
             }
         }
-        Ok((head, out.payment))
+        Ok((head, out))
     }
 }
 
@@ -1667,9 +1711,10 @@ impl Engine for NativeEngine {
         capsule: &RecoveryCapsule,
         parameters: &AuthenticatedParameters,
     ) -> Result<()> {
+        self.require_unload_confirmation(capsule.kind())?;
         let kind = match capsule.kind() {
             1 => full::BOOTSTRAP,
-            2 | 7 => full::CONTROL,
+            2 | 6 | 7 => full::CONTROL,
             3 => full::SEND,
             4 => full::RECEIVE,
             _ => return Err(Error::Malformed("capsule kind")),
@@ -1796,6 +1841,7 @@ impl Engine for NativeEngine {
         receipt: &HardwareAdvanceReceipt,
         parameters: &AuthenticatedParameters,
     ) -> Result<CompletedOperation> {
+        self.require_unload_confirmation(prepared.capsule.kind())?;
         scope(parameters, &prepared.parameters_id)?;
         let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
@@ -1865,7 +1911,8 @@ impl Engine for NativeEngine {
             ExactOperationWitness::Load { step, .. } => {
                 prove_control(&crate::control::Witness::load((**step).clone()))?
             }
-            ExactOperationWitness::RefreshTimeAnchor(step) => prove_control(step)?,
+            ExactOperationWitness::RefreshTimeAnchor(step)
+            | ExactOperationWitness::Unload { step, .. } => prove_control(step)?,
             ExactOperationWitness::Send(step) => (
                 full::p_operation(
                     full::OperationWitness::Send(step),
@@ -2041,10 +2088,29 @@ impl Engine for NativeEngine {
         } else {
             Vec::new()
         };
+        let (version, artifact) =
+            if let ExactOperationWitness::Unload { step, destinations } = &witness {
+                let head = self.verify_head(&head_bytes, c, parameters)?;
+                let receipt = [
+                    step.receipt.body.as_slice(),
+                    step.receipt.signature.as_slice(),
+                ]
+                .concat();
+                let claim = self.unload_claim(
+                    &head,
+                    &step.statement.map(|x| x.to_repr()),
+                    &receipt,
+                    destinations.as_ref().clone(),
+                    parameters,
+                )?;
+                (2, claim)
+            } else {
+                (1, payment)
+            };
         let output = super::encode(&OutputFrame {
-            version: 1,
+            version,
             head: head_bytes,
-            payment,
+            payment: artifact,
         })?;
         let mut head = self.output_head(&output, parameters, c)?.0;
         head.custody_digest = actual.capsule_digest;
@@ -2090,12 +2156,26 @@ impl Engine for NativeEngine {
             return Err(Error::AuthorityMismatch("retained completion"));
         }
         let c = terms(&prepared.witness).0;
-        let (mut head, payment) = self.output_head(&record.frame.output, parameters, c)?;
+        let (mut head, output) = self.output_head(&record.frame.output, parameters, c)?;
+        let exact_artifact = if let ExactOperationWitness::Unload { step, destinations } =
+            prepared.witness.as_ref()
+        {
+            output.version == 2
+                && self.unload_claim(
+                    &head,
+                    &step.statement.map(|x| x.to_repr()),
+                    &record.frame.receipt,
+                    destinations.as_ref().clone(),
+                    parameters,
+                )? == output.payment
+        } else {
+            output.version == 1 && (!output.payment.is_empty()) == (capsule.frame.kind == 3)
+        };
         if head.profile[full::HEAD_IO].to_repr() != capsule.frame.successor
             || head.profile[full::STATEMENT_IO]
                 != crate::statement::digest(terms(&prepared.witness).1)
             || head.profile[full::RECEIPT_IO] != crate::receipt::digest(&receipt.receipt)
-            || (!payment.is_empty()) != (capsule.frame.kind == 3)
+            || !exact_artifact
         {
             return Err(Error::AuthorityMismatch(
                 "completion exact selected operation",

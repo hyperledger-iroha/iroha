@@ -212,6 +212,11 @@ pub enum ExactOperationWitness {
     },
     /// A signed TimeAnchor floor update. No local direct-exchange observation is created.
     RefreshTimeAnchor(Box<crate::control::Witness>),
+    /// Future Control-Unload. Native authenticates both payout destinations before review.
+    Unload {
+        step: Box<crate::control::Witness>,
+        destinations: Box<UnloadDestinations>,
+    },
     Send(Box<crate::send::Witness>),
     Receive {
         step: Box<crate::receive::Witness>,
@@ -226,7 +231,7 @@ impl ExactOperationWitness {
         match self {
             Self::Bootstrap(w) => &w.input.credential,
             Self::Load { step, .. } => &step.credential,
-            Self::RefreshTimeAnchor(w) => &w.credential,
+            Self::RefreshTimeAnchor(w) | Self::Unload { step: w, .. } => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
         }
@@ -351,13 +356,21 @@ impl PreparedOperation {
             _ => None,
         };
         let mut out = Vec::with_capacity(if refresh.is_some() { 243 } else { 291 });
-        let version: u16 = if refresh.is_some() { 2 } else { 1 };
+        let version: u16 = match self.witness.as_ref() {
+            ExactOperationWitness::Unload { .. } => 3,
+            ExactOperationWitness::RefreshTimeAnchor(_) => 2,
+            _ => 1,
+        };
         out.extend_from_slice(&version.to_le_bytes());
         out.push(self.capsule.kind());
         out.extend_from_slice(self.capsule.scheme());
         out.extend_from_slice(self.capsule.wallet());
         out.extend_from_slice(self.capsule.operation_id());
         out.extend_from_slice(&RecoveryCapsule::frame_digest(&self.capsule.encode()?));
+        if let ExactOperationWitness::Unload { step, destinations } = self.witness.as_ref() {
+            destinations.append_review(step, &self.capsule, &mut out)?;
+            return Ok(out);
+        }
         if let Some(step) = refresh {
             out.extend_from_slice(step.after_rest[5].to_repr().as_ref());
             out.extend_from_slice(
@@ -632,7 +645,7 @@ impl RecoveryCapsule {
     fn validate(&self) -> Result<()> {
         let f = &self.frame;
         if f.version != FUTURE_ARTIFACT_VERSION
-            || ![1, 2, 3, 4, 7].contains(&f.kind)
+            || ![1, 2, 3, 4, 6, 7].contains(&f.kind)
             || f.receipt_body.len() != 338
             || f.recovery.is_empty()
             || f.recovery.len() > MAX_RECOVERY_BYTES
@@ -702,7 +715,7 @@ pub struct CompletionRecord {
     frame: CompletionFrame,
 }
 impl CompletionRecord {
-    /// Exact retained public output: 0 complete head, 1 Payment, 2 this record.
+    /// Exact retained public output: 0 head, 1 Payment, 2 completion, 3 Unload claim.
     /// Decoding output does not itself grant proof authority.
     pub fn output_part(&self, part: u32) -> Result<Vec<u8>> {
         if part == 2 {

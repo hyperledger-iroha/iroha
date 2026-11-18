@@ -470,22 +470,47 @@ pub(crate) mod tests {
         if let Some(load) = first_load {
             map.insert(load.recovery.key, load.recovery.value);
         }
-        assert_eq!(map.root(), control.after_core[19]);
+        recursive_unload_with_map(
+            (
+                &control.after_core,
+                &control.after_rest,
+                &control.credential,
+                &control.statement,
+                &control.receipt,
+            ),
+            profile,
+            key,
+            &map,
+            1,
+            quote,
+        )
+    }
+
+    pub(crate) fn recursive_unload_with_map(
+        state: (&[Fp; 30], &[Fp; 6], &Credential, &[Fp; 26], &Receipt),
+        profile: [Fp; 64],
+        key: &WalletKey,
+        map: &Map,
+        charge: u128,
+        quote: Fp,
+    ) -> Witness {
+        let (core, rest, credential, statement, receipt) = state;
+        assert_eq!(map.root(), core[19]);
         let mut f = Fixture {
             input: Witness {
-                before_core: control.after_core,
-                before_rest: control.after_rest,
-                after_core: control.after_core,
-                after_rest: control.after_rest,
-                credential: control.credential.clone(),
-                statement: control.statement,
-                receipt: control.receipt.clone(),
+                before_core: *core,
+                before_rest: *rest,
+                after_core: *core,
+                after_rest: *rest,
+                credential: credential.clone(),
+                statement: *statement,
+                receipt: receipt.clone(),
                 recovery: crate::load::dummy_recovery(),
             },
             profile,
             key: key.clone(),
-            map,
-            terms: terms(4, 1),
+            map: map.clone(),
+            terms: terms(4, charge),
         };
         complete(&mut f);
         f.input.statement[21] = quote;
@@ -499,13 +524,13 @@ pub(crate) mod tests {
 
     /// Native depth-32 indexed map in canonical slot order (sentinel at 0).
     #[derive(Clone)]
-    struct Map {
+    pub(crate) struct Map {
         nodes: BTreeMap<(usize, u32), Fp>,
         empty: Vec<Fp>,
         leaves: Vec<Leaf>,
     }
     impl Map {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let mut empty = vec![Fp::ZERO];
             for h in 0..32 {
                 empty.push(poseidon::hash_with_domain(
@@ -557,13 +582,13 @@ pub(crate) mod tests {
                 siblings: std::array::from_fn(|h| self.get(h, (index >> h) ^ 1)),
             }
         }
-        fn root(&self) -> Fp {
+        pub(crate) fn root(&self) -> Fp {
             self.get(32, 0)
         }
         /// A native store's insertion witness: greatest smaller key as the low
         /// leaf, next free slot as destination. For a key already present this
         /// is the best available forgery, which the relation must refuse.
-        fn insert(&mut self, key: Fp, value: Fp) -> InsertWitness<32> {
+        pub(crate) fn insert(&mut self, key: Fp, value: Fp) -> InsertWitness<32> {
             let old_root = self.root();
             let low_index = (0..self.leaves.len())
                 .filter(|&i| integer(self.leaves[i].key) < integer(key))

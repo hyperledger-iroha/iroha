@@ -582,7 +582,18 @@ pub(crate) mod tests {
         key: &WalletKey,
         boot: &bootstrap::Inputs,
     ) -> Witness {
-        let (mut authority, signer) = authority(FLOOR + 1, SIGNER);
+        recursive_refresh_at(before, rest, profile, key, boot, FLOOR + 1)
+    }
+
+    pub(crate) fn recursive_refresh_at(
+        before: &[Fp; 30],
+        rest: &[Fp; 6],
+        profile: &[Fp],
+        key: &WalletKey,
+        boot: &bootstrap::Inputs,
+        time: u64,
+    ) -> Witness {
+        let (mut authority, signer) = authority(time, SIGNER);
         let scheme = boot.credential.body[2..34].try_into().unwrap();
         let wallet: [u8; 32] = boot.credential.body[66..98].try_into().unwrap();
         authority.anchor.body[34..66].copy_from_slice(&wallet);
@@ -753,6 +764,14 @@ pub(crate) mod tests {
     }
     /// A construction error (no ECDSA witness for the own receipt) is a
     /// refusal too: no satisfying assignment exists for that input.
+    pub(crate) fn witness_holds(input: Witness, profile: [Fp; 64], key: &WalletKey) -> bool {
+        holds(&Fixture {
+            input,
+            profile,
+            key: key.clone(),
+        })
+    }
+
     fn holds(f: &Fixture) -> bool {
         try_build(f).is_ok_and(|b| harness::holds(&b))
     }

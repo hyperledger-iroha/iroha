@@ -244,6 +244,25 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.blob(finality_original);
             2
         }
+        ExactOperationWitness::Unload { step, destinations } => {
+            if step.mode != crate::control::Mode::Unload {
+                return Err(Error::Malformed("Unload mode"));
+            }
+            w.fields(&step.before_core);
+            w.fields(&step.before_rest);
+            w.fields(&step.after_core);
+            w.fields(&step.after_rest);
+            w.credential(&step.credential);
+            w.fields(&step.statement);
+            w.receipt(&step.receipt);
+            w.insert(&step.recovery);
+            let bytes = super::encode(destinations.as_ref())?;
+            if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
+                return Err(Error::ResourceLimit);
+            }
+            w.blob(&bytes);
+            6
+        }
         ExactOperationWitness::RefreshTimeAnchor(step) => {
             if step.mode != crate::control::Mode::RefreshTimeAnchor {
                 return Err(Error::Malformed("RefreshTimeAnchor mode"));
@@ -423,6 +442,24 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
                 incoming_payment: r.blob()?,
             }
         }
+        6 => {
+            let step = crate::control::Witness::unload(crate::unload::Witness {
+                before_core: r.fields()?,
+                before_rest: r.fields()?,
+                after_core: r.fields()?,
+                after_rest: r.fields()?,
+                credential: r.credential()?,
+                statement: r.fields()?,
+                receipt: r.receipt()?,
+                recovery: r.insert()?,
+            });
+            let bytes = r.blob()?;
+            let destinations = UnloadDestinations::decode_bounded(&bytes)?;
+            ExactOperationWitness::Unload {
+                step: Box::new(step),
+                destinations: Box::new(destinations),
+            }
+        }
         7 => ExactOperationWitness::RefreshTimeAnchor(Box::new(crate::control::Witness::refresh(
             r.fields()?,
             r.fields()?,
@@ -487,7 +524,7 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
             insert(&mut x.recovery);
         }
         // Control owns the zeroization of its state, statement and map.
-        ExactOperationWitness::RefreshTimeAnchor(_) => {}
+        ExactOperationWitness::RefreshTimeAnchor(_) | ExactOperationWitness::Unload { .. } => {}
         ExactOperationWitness::Send(x) => {
             x.before_core.zeroize();
             x.before_rest.zeroize();

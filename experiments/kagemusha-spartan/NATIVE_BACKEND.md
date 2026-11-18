@@ -112,6 +112,35 @@ integration and explicit release authority. The generic SDK holds Unload pending
 platform-enforced confirmation of the exact review and device acceptance.
 The production prover and proof-before-payout hold continue.
 
+Native Unload Prepare and Resume return review version 3, semantic tag 6. They check
+the credential account and the signed quote, beneficiary and branch before freezing
+the capsule. Normal custody refuses Unload before selection and again at finalization.
+Only the isolated Rust test owner can produce a sample software-confirmed Advance.
+The resulting completion retains its verified claim in output part 3. Part 1 stays
+empty. Completion recovery checks the retained claim against the exact resumed
+destinations, verified head, signed receipt and statement.
+
+| Review bytes (end exclusive) | Value |
+|---|---|
+| 0–131 | u16 LE version 3, u8 tag 6, scheme, wallet, operation ID, capsule digest (32 bytes each) |
+| 131–195 | Asset digest, Unload nullifier (32 bytes each) |
+| 195–259 | Ordinal, face debit, online charge, net account payout (u128 LE each) |
+| 259–355 | Signed quote digest, credential account digest, beneficiary account digest |
+| 355–419 | Predecessor and successor commitments |
+| 419–end | u16 LE credential account length and canonical AccountAddress payload, then u16 LE beneficiary length and canonical AccountAddress payload |
+
+The full review is at most 16,384 bytes. A zero charge has zero quote and
+beneficiary digests and an empty beneficiary address. A positive charge requires
+both digests and a beneficiary. The account receives exactly face minus charge
+and may receive zero when the charge equals the face amount. The account payloads
+are canonical network-independent binary addresses. The native owner authenticates
+their account digest bindings. A future protected approval must cover this exact
+review before the nonexportable Advance key is used. World must select the installed
+profile, scheme, asset and reserve, verify the whole claim before lookup, and apply
+both destination transfers and the replay record atomically. The record binds
+the nullifier, full canonical claim digest, amount and original transaction.
+
+
 The heavy `complete_recursive_bootstrap_load_send_receive` test stabilizes all eight
 programs, restarts a genuine Bootstrap→Load→Send→Receive chain, checks the complete
 Payment size, imports the public programs and re-verifies, exercises NativeEngine
@@ -137,5 +166,6 @@ device admission. The current device runner uses a software-key counterparty and
 physical wallet's return Receive in a fresh process. The signed Pixel 6 and
 iPhone fixture packages have matching authenticated programs. Measurements on
 physical devices still require their holders for hardware admission and payment
-confirmation. The Mac three-launch run and the independent authenticated claim
-run have separate receipts. [Two-wallet Mac result](output/takeover-20261118/control-mac-two-wallet/result.json) · [Unload verification](output/takeover-20261118/native-claim-result.json)
+confirmation. The refreshed Mac process measured 82.943765 s and 2,311,028,736 bytes peak RSS for a complete Receive. Launch three recovered both exact Payments. [Two-wallet Mac result](output/takeover-20261118/control-native-v3/mac-two-wallet/result.json) · [Charged Unload review and retained claim](output/takeover-20261118/control-native-v3/charged/test.log)
+
+The signed manifest-v3 fixture exercised 19 funded transitions and the zero-balance Bootstrap refusal. It also verified exact retained Payment bytes through both Refresh→Receive→Send and Receive→Refresh→Send. Reproduce the latter from this checkout with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed native-device bundle directory and `KAGEMUSHA_SPARTAN_RETAINED_PAYMENT` set to the associated wallet-A fixture’s `complete-payment.bin`. Run `cargo iroha-fast -- test --offline --locked --release --manifest-path experiments/kagemusha-spartan/Cargo.toml --target-dir experiments/kagemusha-spartan/target --lib native::device_fixture::control_lifecycle::refresh_around_a_joined_payment_and_immediate_send -- --exact --ignored --nocapture`. [Input hashes and command](output/takeover-20261118/control-native-v3/joined/invocation.json) · [Acceptance results](output/takeover-20261118/control-native-v3/result.json)

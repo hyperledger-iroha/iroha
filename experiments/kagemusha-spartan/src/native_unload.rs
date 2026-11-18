@@ -82,8 +82,71 @@ fn amount(field: Fp) -> Result<u128> {
 }
 
 impl UnloadDestinations {
+    pub(in crate::native) fn decode_bounded(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
+            return Err(Error::ResourceLimit);
+        }
+        let limits = norito::DecodeLimits::new(
+            MAX_UNLOAD_CLAIM_BYTES,
+            MAX_UNLOAD_CLAIM_BYTES,
+            4 * MAX_UNLOAD_CLAIM_BYTES,
+            8 * MAX_UNLOAD_CLAIM_BYTES,
+            16,
+        );
+        let value: Self = norito::core::with_decode_limits_scope(limits, || super::decode(bytes))?;
+        if super::encode(&value)? != bytes {
+            return Err(Error::Malformed("canonical Unload destinations"));
+        }
+        Ok(value)
+    }
+
+    pub(in crate::native) fn append_review(
+        &self,
+        step: &crate::control::Witness,
+        capsule: &RecoveryCapsule,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        let address = |id: &AccountId| {
+            id.to_account_address()
+                .and_then(|a| a.canonical_bytes())
+                .map_err(model_error)
+        };
+        let account = address(&self.account)?;
+        let (beneficiary, beneficiary_digest) = match &self.charge {
+            KagemushaWalletUnloadChargeV1::None => (Vec::new(), [0; 32]),
+            KagemushaWalletUnloadChargeV1::Quoted { beneficiary, quote } => {
+                (address(beneficiary)?, quote.body.beneficiary_account_digest)
+            }
+        };
+        let face = amount(step.statement[19])?;
+        let charge = amount(step.statement[20])?;
+        let net = kagemusha_wallet_unload_account_payout_v1(face, charge).map_err(model_error)?;
+        out.extend_from_slice(&step.credential.body[34..66]);
+        out.extend_from_slice(&step.statement[17].to_repr());
+        for n in [amount(step.statement[18])?, face, charge, net] {
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        out.extend_from_slice(&step.statement[21].to_repr());
+        out.extend_from_slice(&step.credential.body[98..130]);
+        out.extend_from_slice(&beneficiary_digest);
+        out.extend_from_slice(capsule.predecessor());
+        out.extend_from_slice(capsule.successor());
+        if out.len() + 4 + account.len() + beneficiary.len() > MAX_UNLOAD_CLAIM_BYTES {
+            return Err(Error::ResourceLimit);
+        }
+        for bytes in [account, beneficiary] {
+            out.extend_from_slice(
+                &u16::try_from(bytes.len())
+                    .map_err(|_| Error::ResourceLimit)?
+                    .to_le_bytes(),
+            );
+            out.extend_from_slice(&bytes);
+        }
+        Ok(())
+    }
+
     /// Check every quote and recipient binding before either Prepare or claim acceptance.
-    fn verify(
+    pub(super) fn verify(
         &self,
         credential: &Credential,
         statement: &[Fp; 26],
@@ -395,8 +458,7 @@ pub(crate) mod tests {
         key: &crate::full::WalletKey,
         account: AccountId,
     ) {
-        let engine = NativeEngine::default();
-        let p = &parameters.inner;
+        let engine = NativeEngine::isolated_unload_fixture();
         let dest = quoted(
             account,
             &refresh.credential,
@@ -411,29 +473,59 @@ pub(crate) mod tests {
             digest,
         );
         let control = crate::control::Witness::unload(step);
-        let (_, _, _, _, prior) = decode_head(before.exact_pair(), parameters).unwrap();
-        let keys = &p.programs[full::CONTROL];
-        let pair = full::backend_chain_tests::prove_installed_control(
-            &p.generators,
-            &p.root,
-            (&keys.primary, &keys.secondary),
-            &prior,
-            &control,
+        let op = ExactOperationWitness::Unload {
+            step: Box::new(control.clone()),
+            destinations: Box::new(dest.clone()),
+        };
+        let mut redirected = dest.clone();
+        if let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } = &mut redirected.charge {
+            *beneficiary = dest.account.clone();
+        }
+        let wrong = ExactOperationWitness::Unload {
+            step: Box::new(control.clone()),
+            destinations: Box::new(redirected),
+        };
+        assert!(engine.prepare(&wrong, before, parameters).is_err());
+        let prepared = engine.prepare(&op, before, parameters).unwrap();
+        let review = prepared.review_bytes().unwrap();
+        assert_eq!(&review[..3], &[3, 0, 6]);
+        assert_eq!(&review[211..227], &4u128.to_le_bytes());
+        assert_eq!(&review[227..243], &1u128.to_le_bytes());
+        assert_eq!(&review[243..259], &3u128.to_le_bytes());
+        assert_eq!(&review[259..291], &digest.to_repr());
+        assert_eq!(&review[291..323], &control.credential.body[98..130]);
+        assert_eq!(
+            &review[323..355],
+            &dest.charge.quote().unwrap().body.beneficiary_account_digest
         );
-        let head_bytes =
-            encode_head(parameters, &pair, &control.credential, &before.certificate).unwrap();
-        let head = engine
-            .verify_head(&head_bytes, &control.credential, parameters)
-            .unwrap();
-        let receipt = [
-            control.receipt.body.as_slice(),
-            control.receipt.signature.as_slice(),
-        ]
-        .concat();
+        let capsule = prepared.capsule().clone();
+        assert_eq!(
+            NativeEngine::default()
+                .resume(&capsule, parameters)
+                .unwrap()
+                .review_bytes()
+                .unwrap(),
+            review
+        );
+        let signature = bootstrap::sign(
+            field(&prepared.signing_message()).unwrap(),
+            &key.d,
+            "isolated confirmed charged Unload",
+        );
+        let selected =
+            HardwareAdvanceReceipt::verify_selected(&prepared, prepared.receipt_body(), signature)
+                .unwrap();
+        engine.before_selection(&capsule, parameters).unwrap();
+        let completed = engine.finalize(prepared, &selected, parameters).unwrap();
+        let head = completed.head();
+        let receipt = completed.completion().exact_receipt();
         let st = control.statement.map(|f| f.to_repr());
-        let bytes = engine
-            .unload_claim(&head, &st, &receipt, dest.clone(), parameters)
+        let bytes = completed.completion().output_part(3).unwrap();
+        let restored = NativeEngine::default()
+            .verify_completion(&capsule, completed.completion(), parameters)
             .unwrap();
+        assert_eq!(restored.completion().output_part(3).unwrap(), bytes);
+        assert!(restored.completion().output_part(1).unwrap().is_empty());
         let accepted = engine.verify_unload_claim(&bytes, parameters).unwrap();
         assert_eq!(
             (
@@ -496,7 +588,9 @@ pub(crate) mod tests {
             let path = std::path::PathBuf::from(directory);
             std::fs::create_dir_all(&path).unwrap();
             std::fs::write(path.join("signed-unload-claim.norito"), &bytes).unwrap();
+            std::fs::write(path.join("charged-unload-review.bin"), &review).unwrap();
         }
+        let pair = decode_head(head.exact_pair(), parameters).unwrap().4;
         eprintln!(
             "verified charged Unload claim {} bytes; actual P {} B S {} B, {} debited, {} account payout, {} beneficiary payout, 11 canonical/proof/authority refusals and identical claim digest on retry",
             bytes.len(),
