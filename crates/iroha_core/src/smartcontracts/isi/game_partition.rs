@@ -15,6 +15,7 @@ use mv::storage::StorageReadOnly;
 
 mod captured;
 mod captured_proofs;
+pub mod unit_step;
 pub use captured_proofs::*;
 
 fn invalid(s: impl Into<String>) -> Error {
@@ -130,7 +131,7 @@ impl Execute for InstallGamePartitionV1 {
         state: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         require_governance(state, authority)?;
-        if self.kernel_hash != ivm::game_unit_step::kernel_hash() {
+        if self.kernel_hash != unit_step::kernel_hash() {
             return Err(invalid("unapproved game partition kernel"));
         }
         if state.world.game_partitions.get(&self.world_id).is_some()
@@ -251,13 +252,13 @@ impl Execute for AdvanceGameUnitV1 {
         )?;
         let mut p = read(state, &self.world_id)?;
         let i = owned_index(&p, self.unit_id, authority)?;
-        if p.kernel_hash != ivm::game_unit_step::kernel_hash() || p.units[i].work_remaining == 0 {
+        if p.kernel_hash != unit_step::kernel_hash() || p.units[i].work_remaining == 0 {
             return Err(invalid(
                 "game kernel mismatch or advance allowance exhausted",
             ));
         }
         let unit = &mut p.units[i];
-        let next = ivm::game_unit_step::step_unit(ivm::game_unit_step::UnitStepInput {
+        let next = unit_step::step_unit(unit_step::UnitStepInput {
             hp: unit.hp,
             x: unit.x,
         })

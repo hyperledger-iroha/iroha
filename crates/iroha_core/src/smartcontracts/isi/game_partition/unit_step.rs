@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 use iroha_crypto::Hash;
 
-use crate::{IVM, ProgramMetadata, VMError, encoding::wide as enc, instruction::wide as op};
+use ivm::{IVM, ProgramMetadata, VMError, encoding::wide as enc, instruction::wide as op};
 
 /// Hard per-invocation gas ceiling, including the halt instruction. Gas is the only
 /// execution budget; the artifact is not a ZK program and declares no cycle bound.

@@ -6,7 +6,7 @@ use iroha_data_model::smart_contract::event::{ContractEmissionV1, ContractEventD
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn event_context<'a>(
         &'a self,
-        vm: &'a IVM,
+        vm: ivm::host::SyscallQuote<'a>,
     ) -> Result<
         (
             &'a ContractRuntimeExecutionContext,
@@ -23,7 +23,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         ) {
             return Err(ivm::VMError::PermissionDenied);
         }
-        for register in [10, 11, 12] {
+        let ordinal = vm.public_register(10)?;
+        for register in [11, 12] {
             vm.ensure_public_register(register)?;
         }
         let context = self
@@ -56,7 +57,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         ) {
             return Err(ivm::VMError::PermissionDenied);
         }
-        let event = u32::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
+        let event = u32::try_from(ordinal).map_err(|_| ivm::VMError::DecodeError)?;
         let definition = interface
             .events
             .get(event as usize)
@@ -75,9 +76,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
 
     /// Preparation authenticates only signed descriptors; recursive guest data
     /// traversal runs after the interpreter reserves the available syscall gas.
-    pub(super) fn quote_contract_event(&self, vm: &IVM) -> Result<u64, ivm::VMError> {
+    pub(super) fn quote_contract_event(
+        &self,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         let _ = self.event_context(vm)?;
-        ivm::host::reserve_available_syscall_gas_at_least(vm, 32)
+        vm.reserve_available_syscall_gas_at_least(32)
     }
 
     pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {

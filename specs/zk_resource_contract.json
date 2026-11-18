@@ -16211,7 +16211,7 @@
         ]
       },
       {
-        "path": "crates/ivm/src/game_unit_step.rs",
+        "path": "crates/iroha_core/src/smartcontracts/isi/game_partition/unit_step.rs",
         "reason": "Per-invocation gas ceiling of the fixed movement kernel of the game-partition prototype (specs/sumeragi.md, independent-root game-unit transport). step_unit loads one non-ZK artifact of eight instructions without a loop into a fresh VM with GAS_LIMIT gas; the artifact declares no cycle bound (gas is the only budget) and its hash is the kernel identity: InstallGamePartitionV1 accepts only that hash, and AdvanceGameUnitV1 runs only while the partition still pins it. Exhausting the gas fails the VM (OutOfGas) and the advance before any write. Every input takes one of three paths, which the kernel's boundary-input test runs within the ceiling, so no transaction can approach it: it is geometry of one fixed artifact, not a budget a transaction spends. A unit has at most GAME_PARTITION_MAX_WORK advances, each one instruction inside transaction.max_instructions; the spec keeps block-level metering of this direct adapter work open.",
         "symbols": [
           "GAS_LIMIT"

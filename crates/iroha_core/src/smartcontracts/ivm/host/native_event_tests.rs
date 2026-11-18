@@ -323,6 +323,12 @@ fn native_event_preparation_does_not_traverse_guest_values_before_gas_reservatio
     vm.set_register(10, 0);
     vm.set_register(11, u64::MAX);
     vm.set_register(12, 1);
+    vm.set_gas_limit(31);
+    assert!(matches!(
+        host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote()),
+        Err(ivm::VMError::OutOfGas)
+    ));
+    assert!(host.queued.is_empty());
     vm.set_gas_limit(32);
     assert_eq!(
         host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())

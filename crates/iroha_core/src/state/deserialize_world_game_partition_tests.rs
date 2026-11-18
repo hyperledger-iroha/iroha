@@ -17,7 +17,7 @@ fn record(marker: u8) -> GamePartitionStateV1 {
     GamePartitionStateV1 {
         world_id,
         local_instance: [1; 32],
-        kernel_hash: ivm::game_unit_step::kernel_hash(),
+        kernel_hash: crate::smartcontracts::isi::game_partition::unit_step::kernel_hash(),
         controller: owner.clone(),
         peers: Vec::new(),
         units: vec![GameUnitV1 {

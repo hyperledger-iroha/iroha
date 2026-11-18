@@ -5,7 +5,9 @@
 
 use std::{error::Error, hint::black_box, time::Instant};
 
-use ivm::game_unit_step::{UnitStepInput, kernel_hash, step_unit};
+use iroha_core::smartcontracts::isi::game_partition::unit_step::{
+    UnitStepInput, kernel_hash, step_unit,
+};
 use norito::{json, json::Value};
 
 fn main() -> Result<(), Box<dyn Error>> {
