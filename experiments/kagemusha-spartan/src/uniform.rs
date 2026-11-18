@@ -357,8 +357,9 @@ pub type ChallengeFill<F> = Box<dyn Fn(&[F]) -> Vec<(usize, usize, usize, F)> + 
 
 /// Second-phase relations a builder declares over the LogUp challenges:
 /// template rows whose terms carry a challenge factor, and the cells those
-/// rows define, which `fill` computes once the challenges are known. Every
-/// cell a row reads with a challenge factor must be fixed by the first phase.
+/// rows define, which `fill` computes once the challenges are known. Inputs
+/// are fixed before the LogUp challenges, apart from strictly later instances
+/// of the same output in a backwards triangular recurrence.
 pub struct ChallengeRows<F> {
     /// (array, row): the row's A, B and C over (term, factor).
     pub rows: Vec<(usize, [Vec<(Term<F>, Factor)>; 3])>,
@@ -540,6 +541,9 @@ pub struct UniformCircuit<F> {
     /// first use.
     plan: OnceLock<Tape<F>>,
 }
+
+#[path = "logup_phases.rs"]
+mod logup_phases;
 
 #[path = "fixed_values.rs"]
 mod fixed_values;
@@ -1621,6 +1625,7 @@ impl<F: Scalar> UniformCircuit<F> {
         for (f, (&pf, &cf)) in pi.iter().zip(&counts).enumerate() {
             assert!(cf <= 1 << pf, "family {f}: count fits 2^pi");
         }
+        logup_phases::check(&arrays, &table_specs, &copies);
         let mut copies = copies;
         if copies.product_masks.is_empty() {
             // Every uniform circuit needs private masking even when it has no
