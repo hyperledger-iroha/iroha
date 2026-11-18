@@ -1191,8 +1191,13 @@ pub fn check_test_module_v1(
         SuiteError::Diagnostics(bundle) => KotoTestCheckErrorV1::Diagnostics(bundle),
         other => KotoTestCheckErrorV1::Other(other.into_cli()),
     })?;
-    match compile_suite_for_chain(&suite, zk_enabled, chain_discriminant)
-        .map_err(|error| localize_suite_diagnostics(&suite, error))
+    match compile_suite_for_chain(
+        &suite,
+        zk_enabled,
+        chain_discriminant,
+        ivm::IvmProfileId::BASELINE_ABI_V1,
+    )
+    .map_err(|error| localize_suite_diagnostics(&suite, error))
     {
         Ok(_) => Ok(suite.target_path),
         Err(SuiteError::Diagnostics(bundle)) => Err(KotoTestCheckErrorV1::Diagnostics(bundle)),
