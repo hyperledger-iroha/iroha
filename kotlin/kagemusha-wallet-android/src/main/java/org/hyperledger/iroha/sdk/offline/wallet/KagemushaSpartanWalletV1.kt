@@ -224,7 +224,12 @@ class KagemushaSpartanExecutionV1 internal constructor(reply: KagemushaSpartanRe
     val sequence = KagemushaWalletUInt128V1(reply.sequenceLow, reply.sequenceHigh)
     val detail = reply.detail
     private val retained = reply.bytes()
-    init { if ((status == Status.RELEASED) != retained.isNotEmpty()) invalidSpartanOutput() }
+    init {
+        // Native Execute reserves both sequence words. Only NOT_PERFORMED carries a reason.
+        val validDetail = if (status == Status.NOT_PERFORMED) detail in 0..2 else detail == 0
+        if (reply.sequenceLow != 0L || reply.sequenceHigh != 0L || !validDetail ||
+            (status == Status.RELEASED) != retained.isNotEmpty()) invalidSpartanOutput()
+    }
     fun completion(): ByteArray? = retained.takeIf { status == Status.RELEASED }?.copyOf()
 }
 

@@ -72,6 +72,21 @@ class KagemushaSpartanWalletV1Test {
         completed.completion()!!.fill(0)
         assertContentEquals(byteArrayOf(1, 2, 3), completed.completion())
     }
+    @Test fun `execute validates native sequence and status specific reason`() {
+        fun execution(status: Int, low: Long = 0, high: Long = 0, detail: Int = 0): KagemushaSpartanExecutionV1 {
+            val bytes = if (status == 1) byteArrayOf(1) else byteArrayOf()
+            return KagemushaSpartanExecutionV1(KagemushaSpartanReplyV1(status, -1, 0, low, high, detail, bytes))
+        }
+        for (status in 1..5) {
+            assertFailsWith<KagemushaWalletExceptionV1> { execution(status, low = 1) }
+            assertFailsWith<KagemushaWalletExceptionV1> { execution(status, high = 1) }
+            if (status != 3) assertFailsWith<KagemushaWalletExceptionV1> { execution(status, detail = 1) }
+        }
+        for (reason in 0..2) assertEquals(reason, execution(3, detail = reason).detail)
+        assertFailsWith<KagemushaWalletExceptionV1> { execution(3, detail = 3) }
+        assertFailsWith<KagemushaWalletExceptionV1> { execution(3, detail = -1) }
+    }
+
     @Test fun `verified payment owns its digest and exact 482 byte request`() {
         val bytes = ByteArray(514) { (it % 251).toByte() }
         val result = KagemushaSpartanVerifiedPaymentV1(bytes)

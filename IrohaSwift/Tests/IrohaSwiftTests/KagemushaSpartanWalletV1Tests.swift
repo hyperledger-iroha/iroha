@@ -57,6 +57,20 @@ final class KagemushaSpartanWalletV1Tests: XCTestCase {
       XCTAssertThrowsError(try KagemushaSpartanReviewProjectionV1(bytes))
     }
   }
+  func testExecuteValidatesNativeSequenceAndStatusSpecificReason() throws {
+    func execution(_ status: Int32, low: UInt64 = 0, high: UInt64 = 0, detail: UInt32 = 0) throws -> KagemushaSpartanExecutionV1 {
+      try .init(.init(status: status, sequenceLow: low, sequenceHigh: high, detail: detail,
+        bytes: status == 1 ? Data([1]) : Data()))
+    }
+    for status in Int32(1)...5 {
+      XCTAssertThrowsError(try execution(status, low: 1))
+      XCTAssertThrowsError(try execution(status, high: 1))
+      if status != 3 { XCTAssertThrowsError(try execution(status, detail: 1)) }
+    }
+    for reason in UInt32(0)...2 { XCTAssertEqual(try execution(3, detail: reason).detail, reason) }
+    XCTAssertThrowsError(try execution(3, detail: 3))
+  }
+
   func testReplyDomainRejectsFalseCompleteAndInvalidToken() throws {
     func reply(_ status: Int32, _ token: UInt64 = 0, _ bytes: Data = Data()) -> KagemushaSpartanReplyV1 {
       .init(status: status, sequenceLow: token, sequenceHigh: 0, detail: 0, bytes: bytes)

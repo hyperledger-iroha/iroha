@@ -235,7 +235,11 @@ public struct KagemushaSpartanExecutionV1: Sendable {
   public let detail: UInt32
   public let completion: Data?
   init(_ reply: KagemushaSpartanReplyV1) throws {
-    guard let status = Status(rawValue: reply.status), (status == .released) == !reply.bytes.isEmpty
+    // Native Execute reserves both sequence words. Only notPerformed carries a reason.
+    guard let status = Status(rawValue: reply.status),
+      reply.sequenceLow == 0, reply.sequenceHigh == 0,
+      (status == .notPerformed ? reply.detail <= 2 : reply.detail == 0),
+      (status == .released) == !reply.bytes.isEmpty
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.status = status; sequence = .init(low: reply.sequenceLow, high: reply.sequenceHigh)
     detail = reply.detail; completion = status == .released ? reply.bytes : nil
