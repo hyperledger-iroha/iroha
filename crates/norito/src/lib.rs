@@ -906,6 +906,8 @@ pub mod telemetry {
 ///   surrogate pairs (two `\u` sequences representing one code point) which are
 ///   combined into a single character when valid.
 /// - Leading zeros in numbers are rejected to match JSON rules.
+/// - The `Value` parser behind `parse_value`/`from_str`/`from_slice` rejects
+///   arrays/objects nested more than 128 levels deep.
 /// - Number parsing is conservative and aims for correctness over breadth for
 ///   benchmarking scenarios.
 pub mod json {
@@ -2196,7 +2198,7 @@ pub mod json {
     /// Convenience: parse a JSON `Value` from `&str` using Norito's parser.
     pub fn parse_value(s: &str) -> Result<Value, Error> {
         let mut parser = super::json::Parser::new(s);
-        let value = parse_value_internal(&mut parser)?;
+        let value = parse_value_internal(&mut parser, 0)?;
         parser.skip_ws();
         if !parser.eof() {
             let (byte, line, col) = parser.pos_meta(parser.position());
@@ -2205,7 +2207,16 @@ pub mod json {
         Ok(value)
     }
 
-    fn parse_value_internal(p: &mut super::json::Parser<'_>) -> Result<Value, Error> {
+    /// Maximum array/object nesting accepted by the `Value` parser.
+    ///
+    /// The parser recurses once per nested container, so the depth of
+    /// untrusted input (e.g. Torii request bodies) must be bounded to keep it
+    /// from overflowing the thread stack.
+    const MAX_VALUE_NESTING_DEPTH: usize = 128;
+    const VALUE_NESTING_DEPTH_MSG: &str = "JSON nesting depth limit exceeded";
+
+    /// Parse one value; `depth` is the number of arrays/objects enclosing it.
+    fn parse_value_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Value, Error> {
         p.skip_ws();
         match p.peek() {
             Some(b'"') => Ok(Value::String(p.parse_string()?)),
@@ -2214,12 +2225,15 @@ pub mod json {
                 Ok(Value::Null)
             }
             Some(b't') | Some(b'f') => Ok(Value::Bool(p.parse_bool()?)),
+            Some(b'[' | b'{') if depth >= MAX_VALUE_NESTING_DEPTH => {
+                Err(p.err_here(VALUE_NESTING_DEPTH_MSG))
+            }
             Some(b'[') => {
-                let arr = parse_array_internal(p)?;
+                let arr = parse_array_internal(p, depth)?;
                 Ok(Value::Array(arr))
             }
             Some(b'{') => {
-                let map = parse_object_internal(p)?;
+                let map = parse_object_internal(p, depth)?;
                 Ok(Value::Object(map))
             }
             Some(b'-') | Some(b'0'..=b'9') => parse_number_value(p),
@@ -2231,7 +2245,10 @@ pub mod json {
         }
     }
 
-    fn parse_array_internal(p: &mut super::json::Parser<'_>) -> Result<Vec<Value>, Error> {
+    fn parse_array_internal(
+        p: &mut super::json::Parser<'_>,
+        depth: usize,
+    ) -> Result<Vec<Value>, Error> {
         if p.bump() != Some(b'[') {
             let (byte, line, col) = p.pos_meta(p.position());
             return Err(Error::ExpectedArrayStart { byte, line, col });
@@ -2243,7 +2260,7 @@ pub mod json {
             return Ok(arr);
         }
         loop {
-            let value = parse_value_internal(p)?;
+            let value = parse_value_internal(p, depth + 1)?;
             arr.push(value);
             p.skip_ws();
             match p.peek() {
@@ -2264,7 +2281,7 @@ pub mod json {
         Ok(arr)
     }
 
-    fn parse_object_internal(p: &mut super::json::Parser<'_>) -> Result<Map, Error> {
+    fn parse_object_internal(p: &mut super::json::Parser<'_>, depth: usize) -> Result<Map, Error> {
         if p.bump() != Some(b'{') {
             let (byte, line, col) = p.pos_meta(p.position());
             return Err(Error::ExpectedObjectStart { byte, line, col });
@@ -2284,7 +2301,7 @@ pub mod json {
                 let (byte, line, col) = p.pos_meta(p.position());
                 return Err(Error::ExpectedColon { byte, line, col });
             }
-            let value = parse_value_internal(p)?;
+            let value = parse_value_internal(p, depth + 1)?;
             map.insert(key, value);
             p.skip_ws();
             match p.peek() {
@@ -2597,6 +2614,45 @@ pub mod json {
                     Error::WithPos { msg, .. } => assert_eq!(msg, Parser::LEADING_ZERO_MSG),
                     other => panic!("unexpected error variant for {sample:?}: {other:?}"),
                 }
+            }
+        }
+
+        fn nested_arrays(depth: usize) -> String {
+            "[".repeat(depth) + &"]".repeat(depth)
+        }
+
+        fn nested_objects(depth: usize) -> String {
+            "{\"k\":".repeat(depth - 1) + "{}" + &"}".repeat(depth - 1)
+        }
+
+        #[test]
+        fn parse_value_accepts_nesting_up_to_limit() {
+            for sample in [
+                nested_arrays(MAX_VALUE_NESTING_DEPTH),
+                nested_objects(MAX_VALUE_NESTING_DEPTH),
+            ] {
+                parse_value(&sample).expect("nesting at the limit should parse");
+                from_json::<Value>(&sample).expect("nesting at the limit should parse");
+            }
+        }
+
+        #[test]
+        fn parse_value_rejects_nesting_beyond_limit() {
+            // 100_000 levels overflowed the stack and aborted the process
+            // before the parser bounded its recursion depth.
+            for sample in [
+                nested_arrays(MAX_VALUE_NESTING_DEPTH + 1),
+                nested_objects(MAX_VALUE_NESTING_DEPTH + 1),
+                nested_arrays(100_000),
+                nested_objects(100_000),
+            ] {
+                let err = parse_value(&sample).expect_err("excess nesting should be rejected");
+                match err {
+                    Error::WithPos { msg, .. } => assert_eq!(msg, VALUE_NESTING_DEPTH_MSG),
+                    other => panic!("unexpected error variant: {other:?}"),
+                }
+                assert!(from_slice::<Value>(sample.as_bytes()).is_err());
+                assert!(from_json::<Value>(&sample).is_err());
             }
         }
     }
@@ -4880,7 +4936,7 @@ pub mod json {
 
     impl JsonDeserialize for Value {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            parse_value_internal(p)
+            parse_value_internal(p, 0)
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
