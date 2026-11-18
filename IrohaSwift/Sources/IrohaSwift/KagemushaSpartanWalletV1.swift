@@ -24,6 +24,16 @@ public final class KagemushaSpartanWalletV1: @unchecked Sendable {
 
   /// Native authenticates the complete witness and freezes a hardware-signable review.
   public func prepare(witness: Data, predecessorHead: Data) throws -> KagemushaSpartanReviewV1 {
+    try prepare(witness: witness, predecessorHead: predecessorHead, decode: KagemushaSpartanReviewProjectionV1.init)
+  }
+
+  /// Prepare Native's signed anchor update for the wallet's ordinary durable Advance.
+  public func prepareRefreshTimeAnchor(witness: Data, predecessorHead: Data) throws -> KagemushaSpartanTimeAnchorReviewV2 {
+    try prepare(witness: witness, predecessorHead: predecessorHead, decode: KagemushaSpartanTimeAnchorProjectionV2.init)
+  }
+
+  private func prepare<Projection: Sendable>(witness: Data, predecessorHead: Data,
+    decode: (Data) throws -> Projection) throws -> KagemushaSpartanPreparedReviewV1<Projection> {
     guard !witness.isEmpty, witness.count <= Self.maximumRecordBytes,
       predecessorHead.count <= 1_048_576 else { throw KagemushaWalletErrorV1.invalidInput }
     let handle = try owner.handle()
@@ -34,9 +44,9 @@ public final class KagemushaSpartanWalletV1: @unchecked Sendable {
           head.bindMemory(to: UInt8.self).baseAddress, head.count, out)
       } } }
     }
-    try reply.requireShape(status: 82, count: 291, token: true)
+    try reply.requireShape(status: 82, token: true)
     do {
-      return try .init(owner: self, token: reply.sequenceLow, projection: .init(reply.bytes))
+      return try .init(owner: self, token: reply.sequenceLow, projection: decode(reply.bytes))
     } catch {
       try? discard(reply.sequenceLow)
       throw error
@@ -186,14 +196,39 @@ public struct KagemushaSpartanReviewProjectionV1: Sendable {
   }
 }
 
+/// Authenticated Native fields for RefreshTimeAnchor under review wire version 2.
+public struct KagemushaSpartanTimeAnchorProjectionV2: Sendable {
+  public let schemeId, walletId, operationId, capsuleDigest, anchorDigest: Data
+  public let issuerTime, successorFloor: UInt64
+  public let beforeHead, afterHead: Data
+
+  init(_ original: Data) throws {
+    let bytes = [UInt8](original)
+    guard bytes.count == 243, bytes[0] == 2, bytes[1] == 0, bytes[2] == 7 else {
+      throw KagemushaWalletErrorV1.invalidNativeOutput
+    }
+    func data(_ offset: Int) -> Data { Data(bytes[offset..<offset + 32]) }
+    func word(_ offset: Int) -> UInt64 {
+      (0..<8).reduce(UInt64(0)) { $0 | (UInt64(bytes[offset + $1]) << ($1 * 8)) }
+    }
+    schemeId = data(3); walletId = data(35); operationId = data(67); capsuleDigest = data(99)
+    anchorDigest = data(131); issuerTime = word(163); successorFloor = word(171)
+    guard successorFloor >= issuerTime else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    beforeHead = data(179); afterHead = data(211)
+  }
+}
+
+public typealias KagemushaSpartanReviewV1 = KagemushaSpartanPreparedReviewV1<KagemushaSpartanReviewProjectionV1>
+public typealias KagemushaSpartanTimeAnchorReviewV2 = KagemushaSpartanPreparedReviewV1<KagemushaSpartanTimeAnchorProjectionV2>
+
 /// Review bound to one Native owner and capsule; pending execution is retryable.
-public final class KagemushaSpartanReviewV1: @unchecked Sendable {
+public final class KagemushaSpartanPreparedReviewV1<Projection: Sendable>: @unchecked Sendable {
   private let owner: KagemushaSpartanWalletV1
   private let lock = NSLock()
   private var token: UInt64
   private var executing = false
-  public let projection: KagemushaSpartanReviewProjectionV1
-  fileprivate init(owner: KagemushaSpartanWalletV1, token: UInt64, projection: KagemushaSpartanReviewProjectionV1) {
+  public let projection: Projection
+  fileprivate init(owner: KagemushaSpartanWalletV1, token: UInt64, projection: Projection) {
     self.owner = owner; self.token = token; self.projection = projection
   }
   private func begin() throws -> UInt64 {
@@ -205,7 +240,7 @@ public final class KagemushaSpartanReviewV1: @unchecked Sendable {
     lock.lock(); defer { lock.unlock() }
     if consumed { token = 0 }; executing = false
   }
-  /// Invoke only after fresh hardware-backed biometric/device-credential confirmation of this exact review.
+  /// Advance the frozen operation. Send requires fresh hardware-backed confirmation of its exact review.
   public func execute() throws -> KagemushaSpartanExecutionV1 {
     let value = try begin()
     do {

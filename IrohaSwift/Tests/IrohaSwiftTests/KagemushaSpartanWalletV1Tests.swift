@@ -57,6 +57,35 @@ final class KagemushaSpartanWalletV1Tests: XCTestCase {
       XCTAssertThrowsError(try KagemushaSpartanReviewProjectionV1(bytes))
     }
   }
+  func testSignedTimeAnchorReviewBindsItsFloorAndHeads() throws {
+    var bytes = Data(repeating: 0, count: 243)
+    bytes[0] = 2; bytes[2] = 7
+    for (index, offset) in [3, 35, 67, 99, 131, 179, 211].enumerated() {
+      bytes.replaceSubrange(offset..<offset + 32, with: repeatElement(UInt8(index + 1), count: 32))
+    }
+    bytes[170] = 0x80
+    bytes[178] = 0x80
+    bytes[171] = 1
+    let anchor = try KagemushaSpartanTimeAnchorProjectionV2(bytes)
+    XCTAssertEqual(anchor.issuerTime, UInt64(1) << 63)
+    XCTAssertEqual(anchor.successorFloor, (UInt64(1) << 63) + 1)
+    for (index, field) in [anchor.schemeId, anchor.walletId, anchor.operationId, anchor.capsuleDigest,
+      anchor.anchorDigest, anchor.beforeHead, anchor.afterHead].enumerated() {
+      XCTAssertEqual(field, Data(repeating: UInt8(index + 1), count: 32))
+    }
+    XCTAssertThrowsError(try KagemushaSpartanReviewProjectionV1(bytes))
+    XCTAssertThrowsError(try KagemushaSpartanTimeAnchorProjectionV2(projection()))
+    for malformed in [Data(bytes.dropLast()), bytes + Data([0])] {
+      XCTAssertThrowsError(try KagemushaSpartanTimeAnchorProjectionV2(malformed))
+    }
+    for (offset, value) in [(0, UInt8(1)), (1, 1), (2, 6), (178, 0)] {
+      var malformed = bytes; malformed[offset] = value
+      XCTAssertThrowsError(try KagemushaSpartanTimeAnchorProjectionV2(malformed))
+    }
+    bytes[171] = 0
+    XCTAssertEqual(try KagemushaSpartanTimeAnchorProjectionV2(bytes).successorFloor, anchor.issuerTime)
+  }
+
   func testExecuteValidatesNativeSequenceAndStatusSpecificReason() throws {
     func execution(_ status: Int32, low: UInt64 = 0, high: UInt64 = 0, detail: UInt32 = 0) throws -> KagemushaSpartanExecutionV1 {
       try .init(.init(status: status, sequenceLow: low, sequenceHigh: high, detail: detail,

@@ -32,15 +32,28 @@ class KagemushaSpartanWalletV1 internal constructor(
 
     /** Native authenticates the complete witness and freezes a hardware-signable review. */
     fun prepare(witness: ByteArray, predecessorHead: ByteArray): KagemushaSpartanReviewV1 {
+        return prepare(witness, predecessorHead) { token, bytes ->
+            KagemushaSpartanReviewV1(this, token, KagemushaSpartanReviewProjectionV1(bytes))
+        }
+    }
+
+    /** Prepare Native's signed anchor update for the wallet's ordinary durable Advance. */
+    fun prepareRefreshTimeAnchor(witness: ByteArray, predecessorHead: ByteArray): KagemushaSpartanTimeAnchorReviewV2 {
+        return prepare(witness, predecessorHead) { token, bytes ->
+            KagemushaSpartanTimeAnchorReviewV2(this, token, KagemushaSpartanTimeAnchorProjectionV2(bytes))
+        }
+    }
+
+    private fun <T> prepare(witness: ByteArray, predecessorHead: ByteArray, decode: (Long, ByteArray) -> T): T {
         require(witness.isNotEmpty() && witness.size <= MAX_RECORD && predecessorHead.size <= 1_048_576)
         val identity = slot.copyOf()
         val privateInput = witness.copyOf()
         val head = predecessorHead.copyOf()
         try {
             val reply = call { NativeSpartanBridge.prepare(owner.exchangeHandle(), identity, privateInput, head) }
-            reply.requireShape(82, 291, token = true)
+            reply.requireShape(82, null, token = true)
             return try {
-                KagemushaSpartanReviewV1(this, reply.sequenceLow, KagemushaSpartanReviewProjectionV1(reply.bytes()))
+                decode(reply.sequenceLow, reply.bytes())
             } catch (failure: Throwable) {
                 try { discard(reply.sequenceLow) } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
                 throw failure
@@ -188,13 +201,43 @@ class KagemushaSpartanReviewProjectionV1 internal constructor(bytes: ByteArray) 
     override fun toString(): String = "KagemushaSpartanReviewProjectionV1([REDACTED])"
 }
 
-/** Review permanently bound to one Native owner and capsule; pending execution is retryable. */
+/** Authenticated Native fields for RefreshTimeAnchor under review wire version 2. */
+class KagemushaSpartanTimeAnchorProjectionV2 internal constructor(bytes: ByteArray) {
+    private val original = bytes.copyOf()
+    val issuerTime: ULong
+    val successorFloor: ULong
+    init {
+        if (original.size != 243 || original[0] != 2.toByte() || original[1] != 0.toByte() ||
+            original[2] != 7.toByte()) invalidSpartanOutput()
+        val view = ByteBuffer.wrap(original).order(ByteOrder.LITTLE_ENDIAN)
+        issuerTime = view.getLong(163).toULong()
+        successorFloor = view.getLong(171).toULong()
+        if (successorFloor < issuerTime) invalidSpartanOutput()
+    }
+    fun schemeId(): ByteArray = original.copyOfRange(3, 35)
+    fun walletId(): ByteArray = original.copyOfRange(35, 67)
+    fun operationId(): ByteArray = original.copyOfRange(67, 99)
+    fun capsuleDigest(): ByteArray = original.copyOfRange(99, 131)
+    fun anchorDigest(): ByteArray = original.copyOfRange(131, 163)
+    fun beforeHead(): ByteArray = original.copyOfRange(179, 211)
+    fun afterHead(): ByteArray = original.copyOfRange(211, 243)
+    override fun toString(): String = "KagemushaSpartanTimeAnchorProjectionV2([REDACTED])"
+}
+
 class KagemushaSpartanReviewV1 internal constructor(
+    owner: KagemushaSpartanWalletV1, token: Long, val projection: KagemushaSpartanReviewProjectionV1,
+) : KagemushaSpartanPreparedReviewV1(owner, token)
+
+class KagemushaSpartanTimeAnchorReviewV2 internal constructor(
+    owner: KagemushaSpartanWalletV1, token: Long, val projection: KagemushaSpartanTimeAnchorProjectionV2,
+) : KagemushaSpartanPreparedReviewV1(owner, token)
+
+/** Review permanently bound to one Native owner and capsule; pending execution is retryable. */
+sealed class KagemushaSpartanPreparedReviewV1 protected constructor(
     private val owner: KagemushaSpartanWalletV1, token: Long,
-    val projection: KagemushaSpartanReviewProjectionV1,
 ) : Closeable {
     private val retained = AtomicLong(token)
-    /** Invoke only after fresh hardware-backed biometric/device-credential confirmation of this exact review. */
+    /** Advance the frozen operation. Send requires fresh hardware-backed confirmation of its exact review. */
     fun execute(): KagemushaSpartanExecutionV1 {
         val token = retained.get()
         check(token > 0 && retained.compareAndSet(token, -token)) { "Review is consumed or executing" }

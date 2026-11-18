@@ -56,6 +56,32 @@ class KagemushaSpartanWalletV1Test {
             projection().also { it[2] = 0 }, projection().also { it[2] = 5 })
         bad.forEach { assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanReviewProjectionV1(it) } }
     }
+    @Test fun `signed time anchor binds unsigned floor and selected heads`() {
+        val bytes = ByteArray(243)
+        bytes[0] = 2; bytes[2] = 7
+        for ((index, offset) in listOf(3, 35, 67, 99, 131, 179, 211).withIndex()) {
+            bytes.fill((index + 1).toByte(), offset, offset + 32)
+        }
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putLong(163, Long.MIN_VALUE); putLong(171, Long.MIN_VALUE + 1)
+        }
+        val anchor = KagemushaSpartanTimeAnchorProjectionV2(bytes)
+        assertEquals(1uL shl 63, anchor.issuerTime)
+        assertEquals((1uL shl 63) + 1uL, anchor.successorFloor)
+        val fields = listOf(anchor.schemeId(), anchor.walletId(), anchor.operationId(), anchor.capsuleDigest(),
+            anchor.anchorDigest(), anchor.beforeHead(), anchor.afterHead())
+        fields.forEachIndexed { index, field -> assertContentEquals(ByteArray(32) { (index + 1).toByte() }, field) }
+        anchor.anchorDigest().fill(0)
+        assertContentEquals(ByteArray(32) { 5 }, anchor.anchorDigest())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanReviewProjectionV1(bytes) }
+        val malformed = listOf(bytes.copyOf(242), bytes.copyOf(244), projection(),
+            bytes.copyOf().also { it[0] = 1 }, bytes.copyOf().also { it[1] = 1 },
+            bytes.copyOf().also { it[2] = 6 }, bytes.copyOf().also { it[178] = 0 })
+        malformed.forEach { assertFailsWith<KagemushaWalletExceptionV1> { KagemushaSpartanTimeAnchorProjectionV2(it) } }
+        bytes[171] = 0
+        assertEquals(anchor.issuerTime, KagemushaSpartanTimeAnchorProjectionV2(bytes).successorFloor)
+    }
+
     @Test fun `reply domains reject unexpected tokens output shapes and false complete`() {
         fun reply(status: Int, token: Long = 0, data: ByteArray = byteArrayOf()) =
             KagemushaSpartanReplyV1(status, -1, 0, token, 0, 0, data).checked()
