@@ -244,6 +244,23 @@ pub(super) fn encode_witness(witness: &ExactOperationWitness) -> Result<Vec<u8>>
             w.blob(finality_original);
             2
         }
+        ExactOperationWitness::RefreshTimeAnchor(step) => {
+            if step.mode != crate::control::Mode::RefreshTimeAnchor {
+                return Err(Error::Malformed("RefreshTimeAnchor mode"));
+            }
+            w.fields(&step.before_core);
+            w.fields(&step.before_rest);
+            w.fields(&step.after_core);
+            w.fields(&step.after_rest);
+            w.credential(&step.credential);
+            w.fields(&step.statement);
+            w.receipt(&step.receipt);
+            w.raw(&step.authority.certificate.body);
+            w.raw(&step.authority.certificate.signature);
+            w.raw(&step.authority.anchor.body);
+            w.raw(&step.authority.anchor.signature);
+            7
+        }
         ExactOperationWitness::Send(x) => {
             w.fields(&x.before_core);
             w.fields(&x.before_rest);
@@ -406,6 +423,25 @@ pub(super) fn decode_witness(bytes: &[u8]) -> Result<ExactOperationWitness> {
                 incoming_payment: r.blob()?,
             }
         }
+        7 => ExactOperationWitness::RefreshTimeAnchor(Box::new(crate::control::Witness::refresh(
+            r.fields()?,
+            r.fields()?,
+            r.fields()?,
+            r.fields()?,
+            r.credential()?,
+            r.fields()?,
+            r.receipt()?,
+            crate::time_anchor::Authority {
+                certificate: crate::certificate::Certificate {
+                    body: r.fixed()?,
+                    signature: r.fixed()?,
+                },
+                anchor: crate::time_anchor::TimeAnchor {
+                    body: r.fixed()?,
+                    signature: r.fixed()?,
+                },
+            },
+        ))),
         _ => return Err(Error::Malformed("recovery operation kind")),
     };
     if !r.fields.is_empty() || !r.bytes.is_empty() || encode_witness(&out)? != bytes {
@@ -427,12 +463,7 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
         x.siblings.zeroize();
     }
     fn insert<const N: usize>(x: &mut InsertWitness<N>) {
-        x.old_root.zeroize();
-        x.key.zeroize();
-        x.value.zeroize();
-        leaf(&mut x.low);
-        path(&mut x.low_path);
-        path(&mut x.slot);
+        x.zeroize();
     }
     fn search<const N: usize>(x: &mut SearchWitness<N>) {
         x.root.zeroize();
@@ -455,6 +486,8 @@ pub(super) fn wipe(witness: &mut ExactOperationWitness) {
             x.ordinary.zeroize();
             insert(&mut x.recovery);
         }
+        // Control owns the zeroization of its state, statement and map.
+        ExactOperationWitness::RefreshTimeAnchor(_) => {}
         ExactOperationWitness::Send(x) => {
             x.before_core.zeroize();
             x.before_rest.zeroize();

@@ -16,7 +16,10 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 
 #[path = "engine.rs"]
 pub(crate) mod engine;
-pub use engine::{NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest};
+pub use engine::{
+    MAX_UNLOAD_CLAIM_BYTES, NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest,
+    UnloadDestinations, VerifiedUnloadClaim,
+};
 #[cfg(test)]
 pub(crate) use engine::{test_full_chain_native, test_measure_chain_native};
 #[cfg(any(test, feature = "device-fixture"))]
@@ -35,7 +38,7 @@ pub const MAX_CUSTODY_FRAME_BYTES: usize = MAX_RECOVERY_BYTES + 16 * 1024;
 pub const MAX_PROGRAM_BUNDLE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Four complete public verifier programs per curve, ordered Receive, Send,
-/// Bootstrap, Load. Encoding or decoding this object grants no authority.
+/// Bootstrap, Control. Encoding or decoding this object grants no authority.
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha.research.kagemusha_spartan.native.ProgramBundle.v1")]
 pub struct ProgramBundle {
@@ -207,6 +210,8 @@ pub enum ExactOperationWitness {
         receipt_original: Arc<[u8]>,
         finality_original: Arc<[u8]>,
     },
+    /// A signed TimeAnchor floor update. No local direct-exchange observation is created.
+    RefreshTimeAnchor(Box<crate::control::Witness>),
     Send(Box<crate::send::Witness>),
     Receive {
         step: Box<crate::receive::Witness>,
@@ -221,6 +226,7 @@ impl ExactOperationWitness {
         match self {
             Self::Bootstrap(w) => &w.input.credential,
             Self::Load { step, .. } => &step.credential,
+            Self::RefreshTimeAnchor(w) => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
         }
@@ -336,16 +342,36 @@ impl PreparedOperation {
     pub fn credential(&self) -> &Credential {
         self.witness.credential()
     }
-    /// Fixed 291-byte financial review projection, version 1. All terms come
-    /// from this sealed checked operation and bind its exact frozen capsule.
+    /// Version 1 financial review (291 bytes), or version 2 signed TimeAnchor
+    /// review (243 bytes). Both bind the exact checked and frozen capsule.
+    /// The signed issuer time and resulting floor do not assert OS clock custody.
     pub fn review_bytes(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(291);
-        out.extend_from_slice(&1u16.to_le_bytes());
+        let refresh = match self.witness.as_ref() {
+            ExactOperationWitness::RefreshTimeAnchor(step) => Some(step),
+            _ => None,
+        };
+        let mut out = Vec::with_capacity(if refresh.is_some() { 243 } else { 291 });
+        let version: u16 = if refresh.is_some() { 2 } else { 1 };
+        out.extend_from_slice(&version.to_le_bytes());
         out.push(self.capsule.kind());
         out.extend_from_slice(self.capsule.scheme());
         out.extend_from_slice(self.capsule.wallet());
         out.extend_from_slice(self.capsule.operation_id());
         out.extend_from_slice(&RecoveryCapsule::frame_digest(&self.capsule.encode()?));
+        if let Some(step) = refresh {
+            out.extend_from_slice(step.after_rest[5].to_repr().as_ref());
+            out.extend_from_slice(
+                &crate::time_anchor::issuer_time(&step.authority.anchor).to_le_bytes(),
+            );
+            let floor = step.after_core[28].to_repr();
+            if floor[8..].iter().any(|&x| x != 0) {
+                return Err(Error::Malformed("TimeAnchor review floor"));
+            }
+            out.extend_from_slice(&floor[..8]);
+            out.extend_from_slice(self.capsule.predecessor());
+            out.extend_from_slice(self.capsule.successor());
+            return Ok(out);
+        }
         let (amount, fee, receiver, account) = match self.witness.as_ref() {
             ExactOperationWitness::Send(w) => (
                 &w.request.body[242..258],
@@ -606,7 +632,7 @@ impl RecoveryCapsule {
     fn validate(&self) -> Result<()> {
         let f = &self.frame;
         if f.version != FUTURE_ARTIFACT_VERSION
-            || ![1, 2, 3, 4].contains(&f.kind)
+            || ![1, 2, 3, 4, 7].contains(&f.kind)
             || f.receipt_body.len() != 338
             || f.recovery.is_empty()
             || f.recovery.len() > MAX_RECOVERY_BYTES

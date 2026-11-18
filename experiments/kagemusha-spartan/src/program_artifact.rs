@@ -4,7 +4,7 @@ use super::*;
 
 const MAX_PROGRAM_BYTES: usize = 128 * 1024 * 1024;
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgram.v1")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.PublicProgram.v2")]
 struct PublicProgram {
     version: u16,
     side: u8,
@@ -275,7 +275,7 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         }
         let value = PublicProgram {
-            version: 1,
+            version: 2,
             side,
             modulus_minus_one: (-F::ONE).to_repr(),
             geometry: u32s([
@@ -355,7 +355,7 @@ impl<F: Scalar> UniformCircuit<F> {
         if encode(&p)? != bytes {
             return Err("noncanonical public program".into());
         }
-        if p.version != 1
+        if p.version != 2
             || p.side != if primary { 1 } else { 2 }
             || p.modulus_minus_one != (-F::ONE).to_repr()
         {
@@ -381,7 +381,7 @@ impl<F: Scalar> UniformCircuit<F> {
             || !(9..=18).contains(&col_bits)
             || row_bits + col_bits > 30
             || k != 3
-            || io_len != if primary { 64 } else { 62 }
+            || io_len != 64
             || !matches!(p.challenges, 0 | 2)
             || p.degrees[0] > 1
             || p.degrees[1] > 128
@@ -676,7 +676,7 @@ mod tests {
             t,
             c,
             10,
-            if primary { 64 } else { 62 },
+            64,
             b"public artifact fixture",
         )
         .0

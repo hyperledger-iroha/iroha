@@ -8,7 +8,7 @@
 //! Decoding is not admission: the parameter owner must verify both linked
 //! proofs/accumulators and authenticate the root/issuer credential and its
 //! payment-table commitment. No trust bit is manufactured here. All omitted
-//! original fields and all126 ordinary proof inputs are reconstructed exactly;
+//! original fields and all 128 ordinary proof inputs are reconstructed exactly;
 //! encoding refuses discrepancies instead of normalizing signed originals.
 
 use blake2::{Blake2b, Digest, digest::consts::U32};
@@ -29,7 +29,7 @@ use crate::{
 };
 
 pub const PEER_PROFILE: u16 = 0x8001;
-pub const PEER_SCHEMA: u16 = 1;
+pub const PEER_SCHEMA: u16 = 2;
 pub const QR_BUDGET: usize = 12_000;
 pub const HEADER_BYTES: usize = 84;
 const MAX_BYTES: usize = 65_536;
@@ -401,6 +401,7 @@ pub fn projection(profile: &Profile<'_>, o: &Originals) -> Result<ProjectedInput
         ],
         table,
         crate::full::SEND,
+        [Fp::ZERO; 2],
     )
 }
 
@@ -1025,7 +1026,7 @@ mod tests {
     fn peer_hashes_match_independent_golden_and_reject_every_corruption() {
         // Python hashlib.blake2b(digest_size=32), same domains/header ordering
         // as IrohaSwift and Kotlin IrohaPeerWireV1. No SDK schema1 fallback.
-        let golden = "49504d3101008001030000010000001c0000001c29b00f652bad4582435f2a39a929ed1e07b07eea09252041e8d903c5884e5b2bb407ab01101f19da6003ece0428784d1da90ea237102b007ec534fd9435600f04b575059504331000000000300000009656e76636f6d70616e696f6e";
+        let golden = "49504d3101008001030000020000001c0000001c181d6516c6519c9368c5c09d2886180cb041d9b7646d0b4e9c3737d5eb35a28ce4c5707e53f361f526149b37ae030fe2418cc9ad4fb2150fbdb20de6768d97704b575059504331000000000300000009656e76636f6d70616e696f6e";
         let bytes = peer_encode(b"env", b"companion").unwrap();
         let expected: Vec<_> = golden
             .as_bytes()

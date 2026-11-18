@@ -680,7 +680,7 @@ fn tiny_program<F: crate::fs::Scalar + zeroize::Zeroize>(primary: bool, factor: 
         t,
         c,
         if primary { 12 } else { 10 },
-        if primary { 64 } else { 62 },
+        64,
         b"manifest test program",
     );
     circuit.export_program().unwrap()

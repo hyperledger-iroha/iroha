@@ -3545,11 +3545,11 @@ fn run_fixed_point() {
             let (w, _) = full::p_boot(&gens, &key_a);
             let (pb, _, _) = uniform_of!("P-uniform", w, P_COL_BITS, 64, b"p-boot-uniform");
             let (w, _) = full::s_recv(&gens, &pairs);
-            let (sr, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform");
+            let (sr, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 64, b"s-recv-uniform");
             let (w, _) = full::s_send(&gens, &pairs[0]);
-            let (st, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform");
+            let (st, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 64, b"s-send-uniform");
             let (w, _) = full::s_boot(&gens);
-            let (sb, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform");
+            let (sb, _, _) = uniform_of!("S-uniform", w, S_COL_BITS, 64, b"s-boot-uniform");
             (
                 bootstrap_layout::common(&[&pr, &pt, &pb]),
                 bootstrap_layout::common(&[&sr, &st, &sb]),
@@ -3558,7 +3558,7 @@ fn run_fixed_point() {
         let (w, idx) = full::p_recv(&gens, &pairs, &key_a);
         let (cp, ip, wp) = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform", pl);
         let (w, sidx) = full::s_recv(&gens, &pairs);
-        let (cs, is, ws) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform", sl);
+        let (cs, is, ws) = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-recv-uniform", sl);
         let send_p = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::p_send(gens, pred, &key_a);
             let (c, i, wt) = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform", pl);
@@ -3566,13 +3566,13 @@ fn run_fixed_point() {
         };
         let send_s = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::s_send(gens, pred);
-            let (c, i, wu) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform", sl);
+            let (c, i, wu) = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-send-uniform", sl);
             (c, i, wu, idx)
         };
         let boot_p = |gens: &full::PairGens| p_boot_at(gens, pl, &key_a);
         let boot_s = |gens: &full::PairGens| {
             let (w, idx) = full::s_boot(gens);
-            let (c, i, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform", sl);
+            let (c, i, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-boot-uniform", sl);
             (c, i, wv, idx)
         };
         let (ct, it, wt, idx_t) = send_p(&gens, &pairs[0]);
@@ -3833,7 +3833,7 @@ fn wallet_chains(
     let clock = Instant::now();
     let (cb, ib, wb, _) = p_boot_at(gens, pl, &key_b);
     let (w, _) = full::s_boot(gens);
-    let (cv, iv, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-boot-uniform", sl);
+    let (cv, iv, wv) = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-boot-uniform", sl);
     same("Bootstrap (B)", 2, &cb, &cv);
     let l = prove_linked_pair("wallet B boot", hop, &cb, &ib, &wb, &cv, &iv, &wv);
     assert!(l.ok, "second wallet Bootstrap verified before projection");
@@ -3878,7 +3878,7 @@ fn wallet_chains(
                     .context;
                 let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-recv-uniform", pl);
                 let (w, sidx) = full::s_recv(gens, inputs);
-                let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-recv-uniform", sl);
+                let s = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-recv-uniform", sl);
                 (
                     p,
                     s,
@@ -3899,7 +3899,7 @@ fn wallet_chains(
                     .context;
                 let p = uniform_at!("P-uniform", w, P_COL_BITS, 64, b"p-send-uniform", pl);
                 let (w, sidx) = full::s_send(gens, &inputs[0]);
-                let s = uniform_at!("S-uniform", w, S_COL_BITS, 62, b"s-send-uniform", sl);
+                let s = uniform_at!("S-uniform", w, S_COL_BITS, 64, b"s-send-uniform", sl);
                 (
                     p,
                     s,

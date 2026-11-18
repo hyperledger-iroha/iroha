@@ -33,7 +33,7 @@ use crate::p256;
 use crate::sha::{self, Sha};
 #[cfg(test)]
 #[path = "backend_chain_tests.rs"]
-mod backend_chain_tests;
+pub(crate) mod backend_chain_tests;
 #[cfg(test)]
 #[path = "io_binding_tests.rs"]
 mod io_binding_tests;
@@ -1795,6 +1795,40 @@ mod tests {
     use crate::uniform::UniformCircuit;
     use iroha_pasta::Eq as Vesta;
 
+    #[test]
+    fn semantic_mode_io_is_bound_to_the_pair_and_zero_outside_control() {
+        use crate::{control::Mode, operation_auth::tests as harness};
+        let build = |mode: Option<Mode>, shared_bits: [u64; 2], public: [u64; 2]| {
+            let mut w = Wiring::default();
+            let family = w.family(0, 1);
+            let shared = w.push(Array {
+                name: "fixed test link words",
+                family,
+                rho: 1,
+                r_count: 2,
+                fixed: true,
+                lookups: vec![],
+                widths: vec![1],
+                rows: vec![],
+                values: vec![shared_bits.map(Fp::from).to_vec()],
+            });
+            let io = bind_mode_io(&mut w, family, mode.map(|m| (m, shared, 0)));
+            w.arrays[io].values[0] = public.map(Fp::from).to_vec();
+            harness::holds(&harness::finish(w, 10))
+        };
+        for mode in [Mode::Load, Mode::RefreshTimeAnchor, Mode::Unload] {
+            let bits = mode.bits();
+            assert!(build(Some(mode), bits, bits));
+            assert!(!build(Some(mode), bits, [1 - bits[0], bits[1]]));
+        }
+        for invalid in [[1, 1], [0, 2], [2, 0]] {
+            assert!(!build(Some(Mode::Load), invalid, invalid));
+        }
+        assert!(build(None, [0, 0], [0, 0]));
+        assert!(!build(None, [0, 0], [0, 1]));
+        assert!(!build(None, [0, 0], [1, 0]));
+    }
+
     fn accepted(
         c: &UniformCircuit<Fp>,
         inst: &Instance<Fp>,
@@ -2268,7 +2302,7 @@ mod tests {
         let (w, bs) = s_boot(&gens);
         let (arrays, pi, counts, tables, copies) = w.finish();
         let (cs, is, ws) = UniformCircuit::build_with_copies(
-            "boot-s", arrays, pi, counts, tables, copies, 10, 62, b"boot s",
+            "boot-s", arrays, pi, counts, tables, copies, 10, 64, b"boot s",
         );
         let (gp, gs) = (
             crate::ipa::Gens::<Vesta>::new(cp.shape.cols()),
@@ -3007,8 +3041,8 @@ pub const SEND: usize = 1;
 /// The chain's first link: no predecessor slot, the empty claim as its
 /// accumulator (`p_boot`, `s_boot`).
 pub const BOOTSTRAP: usize = 2;
-/// An ordinary, finalized online-to-offline Load into the existing wallet.
-pub const LOAD: usize = 3;
+/// One program for Load, RefreshTimeAnchor and Unload, selected by ordinary IO.
+pub const CONTROL: usize = 3;
 
 /// Generators of the two proof shapes (P: Vesta 2^14, S: Pallas 2^13).
 pub struct PairGens {
@@ -3101,6 +3135,57 @@ fn kind_pin<S: Scalar>(w: &mut Wiring<S>, gfam: usize, kind: usize) -> (usize, u
         values: vec![bits],
     });
     (io, pin)
+}
+
+/// Expose the semantic mode in ordinary IO on either side of the pair. For
+/// Control the selected bits must equal the shared, first-phase link words.
+/// Every other authenticated program pins both words to zero.
+fn bind_mode_io<S: Scalar>(
+    w: &mut Wiring<S>,
+    family: usize,
+    control: Option<(crate::control::Mode, usize, usize)>,
+) -> usize {
+    let bits = control.map_or([0, 0], |(mode, _, _)| mode.bits());
+    let io = w.push(Array {
+        name: "ordinary semantic mode",
+        family,
+        rho: 1,
+        r_count: 2,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![1],
+        rows: Vec::new(),
+        values: vec![bits.map(S::from).to_vec()],
+    });
+    w.io_arrays.push((io, crate::control::MODE_IO));
+    let word = |i| link(io, 0, vec![Some(i)], S::ONE);
+    let mut rows = Vec::new();
+    for i in 0..2 {
+        let mut constraint = word(i);
+        if let Some((_, shared, offset)) = control {
+            constraint = plus(
+                &constraint,
+                &link(shared, 0, vec![Some(offset + i)], -S::ONE),
+            );
+            rows.push([word(i), plus(&word(i), &constant(vec![-S::ONE])), vec![]]);
+        }
+        rows.push([constraint, constant(vec![S::ONE]), vec![]]);
+    }
+    if control.is_some() {
+        rows.push([word(0), word(1), vec![]]);
+    }
+    w.push(Array {
+        name: "public semantic mode bindings",
+        family,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![],
+        rows,
+        values: vec![],
+    });
+    io
 }
 
 /// A toy circuit kind of the combined matrix polynomial.
@@ -3346,28 +3431,28 @@ pub fn next_gens(
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
 ) -> PairGens {
-    next_gens_with_load(recv, send, boot, None)
+    next_gens_with_control(recv, send, boot, None)
 }
 
-/// Include the actual Load relation in the fixed recursive program. A Load
+/// Include the three-mode Control relation in the fixed recursive program. A Control
 /// predecessor is selected by the fourth two-bit corner, never represented by
 /// a fabricated funded Bootstrap.
-pub fn next_gens_with_load(
+pub fn next_gens_with_control(
     recv: &UniformPair,
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
-    load: Option<&UniformPair>,
+    control: Option<&UniformPair>,
 ) -> PairGens {
-    next_gens_with_load_at(recv, send, boot, load, FP_DIMS)
+    next_gens_with_control_at(recv, send, boot, control, FP_DIMS)
 }
 
 /// A full backend fixes its accumulator dimensions independently of temporary
 /// seed circuits. Every subsequent operation must fit this selected program.
-pub fn next_gens_with_load_at(
+pub fn next_gens_with_control_at(
     recv: &UniformPair,
     send: Option<&UniformPair>,
     boot: Option<&UniformPair>,
-    load: Option<&UniformPair>,
+    control: Option<&UniformPair>,
     dimensions: ((usize, usize), (usize, usize)),
 ) -> PairGens {
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
@@ -3390,8 +3475,8 @@ pub fn next_gens_with_load_at(
     let (boot_p, boot_s) = kinds_of(boot, BOOTSTRAP, 0);
     let mut p_kinds = vec![uniform_kind(recv.cp.clone()), send_p, boot_p];
     let mut s_kinds = vec![uniform_kind(recv.cs.clone()), send_s, boot_s];
-    if let Some(load) = load {
-        let (lp, ls) = kinds_of(Some(load), LOAD, 0);
+    if let Some(control) = control {
+        let (lp, ls) = kinds_of(Some(control), CONTROL, 0);
         p_kinds.push(lp);
         s_kinds.push(ls);
     }
@@ -3414,7 +3499,7 @@ pub fn next_gens_with_load_at(
             && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len)
     };
     let (keys_p, keys_s) = match (send, boot) {
-        (Some(t), Some(b)) if same(t) && same(b) && load.is_none_or(same) => {
+        (Some(t), Some(b)) if same(t) && same(b) && control.is_none_or(same) => {
             let key = |c: &crate::uniform::UniformCircuit<Fp>| {
                 crate::spartan::fixed_commitments(&c.shape, &p, c)
             };
@@ -3423,9 +3508,9 @@ pub fn next_gens_with_load_at(
             };
             let mut kp = vec![key(&recv.cp), key(&t.cp), key(&b.cp)];
             let mut ks = vec![key_s(&recv.cs), key_s(&t.cs), key_s(&b.cs)];
-            if let Some(load) = load {
-                kp.push(key(&load.cp));
-                ks.push(key_s(&load.cs));
+            if let Some(control) = control {
+                kp.push(key(&control.cp));
+                ks.push(key_s(&control.cs));
             }
             (Some(kp), Some(ks))
         }
@@ -3530,13 +3615,17 @@ pub struct PRecvIdx {
 /// Exact monetary witnesses; this selection is part of the circuit program.
 pub enum OperationWitness<'a> {
     Send(&'a crate::send::Witness),
-    Load(&'a crate::load::Witness),
+    Control {
+        /// Installed scheme root, a constant in the Control program.
+        root: &'a p256::Point,
+        witness: &'a crate::control::Witness,
+    },
     Receive(&'a crate::receive::Witness),
 }
 
 pub enum CompleteOperation {
     Send(crate::send::CompleteSend),
-    Load(crate::load::CompleteLoad),
+    Control(crate::control::CompleteControl),
     Receive(crate::receive::CompleteReceive),
 }
 
@@ -3544,7 +3633,7 @@ impl OperationWitness<'_> {
     pub fn kind(&self) -> usize {
         match self {
             Self::Send(_) => SEND,
-            Self::Load(_) => LOAD,
+            Self::Control { .. } => CONTROL,
             Self::Receive(_) => RECEIVE,
         }
     }
@@ -3570,7 +3659,7 @@ impl CompleteOperation {
                 op.context(),
                 op.lineage(),
             ),
-            Self::Load(op) => (
+            Self::Control(op) => (
                 [op.head(), statement(op.statement()), op.receipt().digest()],
                 op.context(),
                 op.lineage(),
@@ -3584,7 +3673,20 @@ impl CompleteOperation {
     }
 }
 
-fn expose_operation(w: &mut Wiring<Fp>, family: usize, operation: &CompleteOperation) {
+fn expose_operation(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    operation: &CompleteOperation,
+    modes: usize,
+) {
+    if let CompleteOperation::Control(op) = operation {
+        let mut binding = crate::certificate::Cells::new(family);
+        binding.a.name = "Control relation mode joins";
+        for (index, source) in op.mode().inputs().into_iter().enumerate() {
+            binding.eq(source.linear(), link(modes, 0, vec![Some(index)], Fp::ONE));
+        }
+        w.push(binding.a);
+    }
     let (head, context, lineage) = operation.public_sources();
     for (offset, sources) in [
         (HEAD_IO, head.as_slice()),
@@ -3779,6 +3881,10 @@ fn p_circuit_impl(
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
     let total_incoming = matches!(&operation, Some(OperationWitness::Receive(_)));
+    let mode = match &operation {
+        Some(OperationWitness::Control { witness, .. }) => Some(witness.mode),
+        _ => None,
+    };
     if total_incoming && pairs.len() != 2 {
         return Err("Receive needs predecessor and incoming Send");
     }
@@ -3814,6 +3920,10 @@ fn p_circuit_impl(
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    let mode_at = values.len();
+    if let Some(mode) = mode {
+        values.extend(mode.bits().map(u128::from));
+    }
     let table_offs = table_values(pairs, &mut values);
     let generator_offsets = generators.map(|g| g.append_shared(&mut values));
     let incoming_wire = total_incoming.then(|| incoming_encoding(&pairs[1]));
@@ -3894,6 +4004,9 @@ fn p_circuit_impl(
         |g| BigUint::from_bytes_le(&g.mu.to_repr()),
     );
     let shared = p_binding(&mut w, gfam, &mu, &values);
+    let modes = operation
+        .as_ref()
+        .map(|_| bind_mode_io(&mut w, gfam, mode.map(|m| (m, shared, mode_at))));
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     // The P proofs' scalar sides and their io digests.
@@ -4103,9 +4216,9 @@ fn p_circuit_impl(
             OperationWitness::Send(witness) => {
                 CompleteOperation::Send(crate::send::append(&mut w, gfam, witness, &predecessor)?)
             }
-            OperationWitness::Load(witness) => {
-                CompleteOperation::Load(crate::load::append(&mut w, gfam, witness, &predecessor)?)
-            }
+            OperationWitness::Control { root, witness } => CompleteOperation::Control(
+                crate::control::append(&mut w, gfam, root, witness, &predecessor)?,
+            ),
             OperationWitness::Receive(witness) => {
                 CompleteOperation::Receive(crate::receive::append(
                     &mut w,
@@ -4116,7 +4229,12 @@ fn p_circuit_impl(
                 )?)
             }
         };
-        expose_operation(&mut w, gfam, &complete);
+        expose_operation(
+            &mut w,
+            gfam,
+            &complete,
+            modes.expect("monetary mode profile"),
+        );
         Some(complete)
     } else {
         None
@@ -4276,7 +4394,7 @@ struct IncomingEncoding {
 
 fn incoming_encoding(pair: &TracedPair) -> IncomingEncoding {
     use crate::bootstrap_context::{CONTEXT_IO, RELATION};
-    let mut bytes = b"KGSPPR1\0".to_vec();
+    let mut bytes = crate::carrier::PROJECTED_MAGIC.to_vec();
     bytes.extend_from_slice(&[1, 0]);
     for i in 0..2 {
         let value = pair.inst_p.io[CONTEXT_IO + RELATION + i].to_repr();
@@ -4542,7 +4660,11 @@ fn incoming_facts(
     let leaves = (1usize << w.arrays[io].rho) / 2;
     let mut c = Cells::new(family);
     c.a.name = "exact incoming pair header and derived verifier conjunction";
-    for (i, b) in b"KGSPPR1\0\x01\x00".iter().enumerate() {
+    for (i, b) in crate::carrier::PROJECTED_MAGIC
+        .iter()
+        .chain(&[1, 0])
+        .enumerate()
+    {
         c.eq(bytes.byte(i).linear(), constant(vec![Fp::from(*b as u64)]));
     }
     for i in 0..2 {
@@ -4623,7 +4745,7 @@ fn incoming_facts(
 ///
 /// No flag replaces an incoming accumulator: a chain starts at a Bootstrap
 /// proof, whose accumulator is the empty claim (`p_boot`, `s_boot`). That
-/// claim sits at corner (1, 1), Load's corner, but its `r` coordinate is zero,
+/// claim sits at corner (1, 1), Control's corner, but its `r` coordinate is zero,
 /// so every term `r A + r^2 B + r^3 C` vanishes and it holds with value zero on
 /// any combined polynomial. Every other kind folds its predecessor's
 /// accumulator as it is.
@@ -5414,19 +5536,26 @@ pub fn s_circuit(
     gens: &PairGens,
     pairs: &[TracedPair],
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    s_circuit_impl(own_kind, gens, pairs, false, None, BENCHMARK_IDENTITY)
+    s_circuit_impl(own_kind, None, gens, pairs, false, None, BENCHMARK_IDENTITY)
 }
 
 /// Secondary half of the complete monetary backend. Receive's incoming slot
 /// produces a total verdict and folds corrected matrix claims on this side.
 pub fn s_operation(
     own_kind: usize,
+    mode: Option<crate::control::Mode>,
     gens: &PairGens,
     pairs: &[TracedPair],
     generators: &GeneratorFolds,
 ) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    assert_eq!(
+        own_kind == CONTROL,
+        mode.is_some(),
+        "one mode for the Control program"
+    );
     s_circuit_impl(
         own_kind,
+        mode,
         gens,
         pairs,
         own_kind == RECEIVE,
@@ -5437,6 +5566,7 @@ pub fn s_operation(
 
 fn s_circuit_impl(
     own_kind: usize,
+    mode: Option<crate::control::Mode>,
     gens: &PairGens,
     pairs: &[TracedPair],
     total_incoming: bool,
@@ -5457,6 +5587,10 @@ fn s_circuit_impl(
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    let mode_at = values.len();
+    if let Some(mode) = mode {
+        values.extend(mode.bits().map(u128::from));
+    }
     // The P proofs' table commitments (as in the P circuit): each P proof's
     // wallet row is pinned to its own.
     let table_offs = table_values(pairs, &mut values);
@@ -5540,6 +5674,9 @@ fn s_circuit_impl(
         |g| *g.mu,
     );
     let shared = native_binding(&mut w, gfam, mu, &values);
+    if generators.is_some() {
+        bind_mode_io(&mut w, gfam, mode.map(|m| (m, shared, mode_at)));
+    }
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     let _table = endo_table(&mut w, gfam);
@@ -5755,6 +5892,7 @@ pub fn p_boot_from_inputs(
     let prepared = crate::bootstrap::prepare(context, input)?;
     let (mut w, gfam) = (prepared.wiring, prepared.gfam);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    bind_mode_io(&mut w, gfam, None);
     let values = boot_values();
     // Bootstrap's pair mask is deterministic: binding_mu([BOOTSTRAP]), one
     // public constant fixed before rho (see `binding_mu`).
@@ -5789,6 +5927,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
     let mut w = Wiring::<Fq>::default();
     let gfam = w.family(0, 1);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
+    bind_mode_io(&mut w, gfam, None);
     let bits = w.push(Array {
         name: "bit table",
         family: gfam,

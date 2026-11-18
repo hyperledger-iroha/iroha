@@ -1,0 +1,510 @@
+//! Future Unload claim intake. A verified claim is a proof/terms result for a
+//! World-owned verifier. This module has no ledger, replay store or payout path.
+use super::*;
+use iroha_data_model::{
+    account::AccountId,
+    kagemusha::{
+        KagemushaWalletChargeKindV1, KagemushaWalletUnloadChargeV1,
+        kagemusha_wallet_account_digest_v1, kagemusha_wallet_unload_account_payout_v1,
+    },
+};
+
+pub const MAX_UNLOAD_CLAIM_BYTES: usize = 16_384;
+
+/// Exact payment destinations and the optional quoted charge's signer original.
+/// The enrollment signer and credential are carried in the separately verified head.
+#[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.UnloadDestinations.v1")]
+pub struct UnloadDestinations {
+    pub account: AccountId,
+    pub charge: KagemushaWalletUnloadChargeV1,
+    pub quote_certificate: Vec<u8>,
+}
+
+#[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.UnloadClaim.v1")]
+struct Claim {
+    version: u16,
+    parameter_id: [u8; 32],
+    credential: Vec<u8>,
+    issuer_certificate: Vec<u8>,
+    profile: Vec<u8>,
+    pair: Vec<u8>,
+    statement: Vec<u8>,
+    receipt: Vec<u8>,
+    destinations: UnloadDestinations,
+}
+
+/// Payout terms exposed only after the full proof pair and originals authenticate.
+/// Core must use its installed World parameters before any replay or transfer.
+pub struct VerifiedUnloadClaim {
+    digest: [u8; 32],
+    nullifier: [u8; 32],
+    ordinal: u128,
+    amount: u128,
+    account_payout: u128,
+    destinations: UnloadDestinations,
+}
+impl VerifiedUnloadClaim {
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+    pub fn nullifier(&self) -> &[u8; 32] {
+        &self.nullifier
+    }
+    pub fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+    pub fn amount(&self) -> u128 {
+        self.amount
+    }
+    pub fn account_payout(&self) -> u128 {
+        self.account_payout
+    }
+    pub fn online_charge(&self) -> u128 {
+        self.amount - self.account_payout
+    }
+    pub fn destinations(&self) -> &UnloadDestinations {
+        &self.destinations
+    }
+}
+
+fn model_error(e: impl std::fmt::Display) -> Error {
+    Error::Rejected(e.to_string())
+}
+
+fn amount(field: Fp) -> Result<u128> {
+    let bytes = field.to_repr();
+    if bytes[16..].iter().any(|&x| x != 0) {
+        return Err(Error::Malformed("Unload u128"));
+    }
+    Ok(u128::from_le_bytes(bytes[..16].try_into().unwrap()))
+}
+
+impl UnloadDestinations {
+    /// Check every quote and recipient binding before either Prepare or claim acceptance.
+    fn verify(
+        &self,
+        credential: &Credential,
+        statement: &[Fp; 26],
+        scheme: &[u8; 32],
+        root: &p256::Point,
+    ) -> Result<(u128, u128, u128)> {
+        if statement[16] != Fp::from(6) || statement[17] == Fp::ZERO {
+            return Err(Error::AuthorityMismatch("Unload statement kind/nullifier"));
+        }
+        let ordinal = amount(statement[18])?;
+        let face = amount(statement[19])?;
+        let charge = amount(statement[20])?;
+        let net = kagemusha_wallet_unload_account_payout_v1(face, charge).map_err(model_error)?;
+        let account = kagemusha_wallet_account_digest_v1(&self.account).map_err(model_error)?;
+        if credential.body[2..34] != *scheme || credential.body[98..130] != account || face == 0 {
+            return Err(Error::AuthorityMismatch(
+                "Unload credential payout account/amount",
+            ));
+        }
+        match &self.charge {
+            KagemushaWalletUnloadChargeV1::None => {
+                if charge != 0 || statement[21] != Fp::ZERO || !self.quote_certificate.is_empty() {
+                    return Err(Error::AuthorityMismatch("Unload absent charge originals"));
+                }
+            }
+            KagemushaWalletUnloadChargeV1::Quoted { quote, beneficiary } => {
+                quote.validate().map_err(model_error)?;
+                let body = &quote.body;
+                let cert = read_certificate(&self.quote_certificate)?;
+                let signer = certificate::authenticate_signer(
+                    &cert,
+                    scheme,
+                    root,
+                    certificate::Role::RegulatoryPolicy,
+                )
+                .map_err(Error::AuthorityMismatch)?;
+                let beneficiary_digest =
+                    kagemusha_wallet_account_digest_v1(beneficiary).map_err(model_error)?;
+                if body.scheme_id != *scheme
+                    || body.asset_digest != credential.body[34..66]
+                    || body.signer_certificate != certificate::certificate_digest(&cert).to_repr()
+                    || beneficiary_digest != body.beneficiary_account_digest
+                    || quote.charge_quote_digest() != statement[21].to_repr()
+                    || statement[21] == Fp::ZERO
+                {
+                    return Err(Error::AuthorityMismatch("Unload signed quote scope"));
+                }
+                quote
+                    .require_terms(
+                        KagemushaWalletChargeKindV1::Unload,
+                        credential.body[66..98].try_into().unwrap(),
+                        ordinal,
+                        face,
+                        charge,
+                    )
+                    .map_err(model_error)?;
+                verify_signature(
+                    &signer,
+                    field(&body.signing_message())?,
+                    quote.signature.as_ref().try_into().unwrap(),
+                )?;
+            }
+        }
+        Ok((ordinal, face, net))
+    }
+}
+
+fn fields<const N: usize>(bytes: &[u8]) -> Result<[Fp; N]> {
+    if bytes.len() != 32 * N {
+        return Err(Error::Malformed("Unload field count"));
+    }
+    let mut values = [Fp::ZERO; N];
+    for (slot, word) in values.iter_mut().zip(bytes.chunks_exact(32)) {
+        *slot = field(word.try_into().unwrap())?;
+    }
+    Ok(values)
+}
+
+impl NativeEngine {
+    /// Encode exact completed originals for independent proof-before-payout intake.
+    /// An unchanged completion can reproduce this exact claim without proving again.
+    pub fn unload_claim(
+        &self,
+        head: &VerifiedWalletHead,
+        statement: &[[u8; 32]; 26],
+        receipt: &[u8],
+        destinations: UnloadDestinations,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<Vec<u8>> {
+        if receipt.len() != 402 || !matches!(destinations.quote_certificate.len(), 0 | 172) {
+            return Err(Error::Malformed("Unload receipt/certificate lengths"));
+        }
+        scope(parameters, head.parameters_id())?;
+        let frame: HeadFrame = super::decode(head.exact_pair())?;
+        if frame.kind as usize != full::CONTROL {
+            return Err(Error::AuthorityMismatch("Unload head program"));
+        }
+        let bytes = super::encode(&Claim {
+            version: 1,
+            parameter_id: *parameters.id(),
+            credential: frame.credential,
+            issuer_certificate: frame.certificate,
+            profile: frame.profile.concat(),
+            pair: frame.pair,
+            statement: statement.concat(),
+            receipt: receipt.to_vec(),
+            destinations,
+        })?;
+        self.verify_unload_claim(&bytes, parameters)?;
+        Ok(bytes)
+    }
+
+    /// Authenticate the bounded claim under the caller's installed profile. Grants
+    /// no monetary effect and has no way to consult or alter a replay record.
+    pub fn verify_unload_claim(
+        &self,
+        bytes: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<VerifiedUnloadClaim> {
+        if bytes.len() > MAX_UNLOAD_CLAIM_BYTES {
+            return Err(Error::ResourceLimit);
+        }
+        let limits = norito::DecodeLimits::new(
+            MAX_UNLOAD_CLAIM_BYTES,
+            MAX_UNLOAD_CLAIM_BYTES,
+            4 * MAX_UNLOAD_CLAIM_BYTES,
+            8 * MAX_UNLOAD_CLAIM_BYTES,
+            16,
+        );
+        let claim: Claim = norito::core::with_decode_limits_scope(limits, || super::decode(bytes))?;
+        if claim.version != 1 || super::encode(&claim)? != bytes {
+            return Err(Error::Malformed("canonical Unload claim"));
+        }
+        scope(parameters, &claim.parameter_id)?;
+        let p = &parameters.inner;
+        let c = read_credential(&claim.credential)?;
+        authenticate_credential(p, &c, &read_certificate(&claim.issuer_certificate)?)?;
+        let profile = fields::<64>(&claim.profile)?;
+        let statement = fields::<26>(&claim.statement)?;
+        if claim.receipt.len() != 402 {
+            return Err(Error::Malformed("Unload own receipt"));
+        }
+        let receipt = bootstrap::Receipt {
+            body: claim.receipt[..338].try_into().unwrap(),
+            signature: claim.receipt[338..].try_into().unwrap(),
+        };
+        profile_matches(p, &profile, &c)?;
+        if profile[crate::control::MODE_IO..crate::control::MODE_IO + 2] != [Fp::ONE, Fp::ZERO]
+            || statement[16] != Fp::from(6)
+            || profile[full::HEAD_IO] != statement[15]
+            || profile[full::STATEMENT_IO] != crate::statement::digest(&statement)
+            || profile[full::RECEIPT_IO] != crate::receipt::digest(&receipt)
+        {
+            return Err(Error::AuthorityMismatch("Unload proof originals"));
+        }
+        let projected = projection(&profile, full::CONTROL)?;
+        let pair =
+            carrier::decode_projected_pair(&p.profile(full::CONTROL)?, &claim.pair, &projected)
+                .map_err(Error::Rejected)?;
+        verify_pair(p, full::CONTROL, pair)?;
+        let (ordinal, face, net) = claim
+            .destinations
+            .verify(&c, &statement, &p.scheme, &p.root)?;
+        Ok(VerifiedUnloadClaim {
+            digest: crate::payment::byte_digest(u64::from_le_bytes(*b"kgwuclm1"), bytes).to_repr(),
+            nullifier: statement[17].to_repr(),
+            ordinal,
+            amount: face,
+            account_payout: net,
+            destinations: claim.destinations,
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use iroha_data_model::kagemusha::{
+        KagemushaDeviceSignatureV1, KagemushaWalletChargeQuoteBodyV1, KagemushaWalletChargeQuoteV1,
+    };
+
+    fn quoted(dest: AccountId, credential: &Credential, ordinal: u128) -> UnloadDestinations {
+        let beneficiary = AccountId::new(
+            "ed01203D4017C3E843895A92B70AA74D1B7EBC9C982CCF2EC4968CC0CD55F12AF4660C"
+                .parse()
+                .unwrap(),
+        );
+        let scheme = credential.body[2..34].try_into().unwrap();
+        let secret = BigUint::from(0x37u8);
+        let key = p256::mul(&p256::generator(), &secret).unwrap();
+        let cert = certificate::issue_fixture(
+            &scheme,
+            certificate::Role::RegulatoryPolicy as u8,
+            &key,
+            18,
+            &BigUint::from_bytes_be(&TEST_ROOT_SECRET),
+        );
+        let body = KagemushaWalletChargeQuoteBodyV1 {
+            version: 1,
+            scheme_id: scheme,
+            asset_digest: credential.body[34..66].try_into().unwrap(),
+            wallet_id: credential.body[66..98].try_into().unwrap(),
+            kind: KagemushaWalletChargeKindV1::Unload,
+            ordinal,
+            net_amount: 4,
+            online_charge: 1,
+            beneficiary_account_digest: kagemusha_wallet_account_digest_v1(&beneficiary).unwrap(),
+            issued_at_ms: 1_763_400_000_000,
+            signer_certificate: certificate::certificate_digest(&cert).to_repr(),
+        };
+        let signature = bootstrap::sign(
+            field(&body.signing_message()).unwrap(),
+            &secret,
+            "Unload fixture RegulatoryPolicy",
+        );
+        UnloadDestinations {
+            account: dest,
+            charge: KagemushaWalletUnloadChargeV1::Quoted {
+                quote: KagemushaWalletChargeQuoteV1 {
+                    body,
+                    signature: KagemushaDeviceSignatureV1::from_raw_bytes(&signature).unwrap(),
+                },
+                beneficiary,
+            },
+            quote_certificate: certificate_bytes(&cert),
+        }
+    }
+
+    fn refused<T>(result: Result<T>, case: &str) {
+        assert!(result.is_err(), "{case}");
+    }
+
+    #[test]
+    fn unload_signed_account_quote_and_refusals() {
+        let account = AccountId::new(
+            "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
+                .parse()
+                .unwrap(),
+        );
+        let key = crate::full::WalletKey::labelled("Unload quote authority test");
+        let (ctx, input) = bootstrap::fixture(&key, &Gens::<Eq>::new(4096));
+        let mut credential = input.credential;
+        credential.body[98..130]
+            .copy_from_slice(&kagemusha_wallet_account_digest_v1(&account).unwrap());
+        let dest = quoted(account.clone(), &credential, 0);
+        let mut st = [Fp::ZERO; 26];
+        st[16] = Fp::from(6);
+        st[17] = Fp::ONE;
+        st[19] = Fp::from(4);
+        st[20] = Fp::ONE;
+        st[21] = field(&dest.charge.quote().unwrap().charge_quote_digest()).unwrap();
+        let verify = |d: &UnloadDestinations, s: &[Fp; 26]| {
+            d.verify(&credential, s, &ctx.root.scheme, &ctx.root.root)
+        };
+        assert_eq!(verify(&dest, &st).unwrap(), (0, 4, 3));
+        for field in [16, 17, 18, 19, 20, 21] {
+            let mut changed = st;
+            if field == 17 {
+                changed[field] = Fp::ZERO;
+            } else {
+                changed[field] += Fp::ONE;
+            }
+            refused(verify(&dest, &changed), "altered quote terms");
+        }
+        let mut changed = dest.clone();
+        let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } = &mut changed.charge else {
+            unreachable!()
+        };
+        std::mem::swap(&mut changed.account, beneficiary);
+        refused(verify(&changed, &st), "substituted payout account");
+        let mut changed = dest.clone();
+        let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } = &mut changed.charge else {
+            unreachable!()
+        };
+        *beneficiary = account.clone();
+        refused(verify(&changed, &st), "substituted beneficiary");
+        let mut changed = dest.clone();
+        changed.quote_certificate[34] = certificate::Role::TimeAnchor as u8;
+        refused(verify(&changed, &st), "wrong signer role");
+        let mut changed = dest.clone();
+        changed.quote_certificate[115] ^= 1;
+        refused(verify(&changed, &st), "wrong root signature");
+        let mut changed = dest.clone();
+        let KagemushaWalletUnloadChargeV1::Quoted { quote, .. } = &mut changed.charge else {
+            unreachable!()
+        };
+        quote.body.issued_at_ms += 1;
+        let mut altered = st;
+        altered[21] = field(&quote.charge_quote_digest()).unwrap();
+        refused(verify(&changed, &altered), "changed signed quote");
+        let mut no_fee = UnloadDestinations {
+            account,
+            charge: KagemushaWalletUnloadChargeV1::None,
+            quote_certificate: vec![],
+        };
+        refused(verify(&no_fee, &st), "missing charged quote");
+        st[20] = Fp::ZERO;
+        st[21] = Fp::ZERO;
+        assert_eq!(verify(&no_fee, &st).unwrap(), (0, 4, 4));
+        no_fee.quote_certificate = dest.quote_certificate;
+        refused(verify(&no_fee, &st), "spurious certificate");
+    }
+
+    pub(crate) fn test_unload_claim(
+        parameters: &AuthenticatedParameters,
+        before: &VerifiedWalletHead,
+        refresh: &crate::control::Witness,
+        load: &crate::load::Witness,
+        key: &crate::full::WalletKey,
+        account: AccountId,
+    ) {
+        let engine = NativeEngine::default();
+        let p = &parameters.inner;
+        let dest = quoted(
+            account,
+            &refresh.credential,
+            amount(refresh.after_core[14]).unwrap(),
+        );
+        let digest = field(&dest.charge.quote().unwrap().charge_quote_digest()).unwrap();
+        let step = crate::unload::tests::recursive_unload_from(
+            refresh,
+            *before.profile(),
+            key,
+            Some(load),
+            digest,
+        );
+        let control = crate::control::Witness::unload(step);
+        let (_, _, _, _, prior) = decode_head(before.exact_pair(), parameters).unwrap();
+        let keys = &p.programs[full::CONTROL];
+        let pair = full::backend_chain_tests::prove_installed_control(
+            &p.generators,
+            &p.root,
+            (&keys.primary, &keys.secondary),
+            &prior,
+            &control,
+        );
+        let head_bytes =
+            encode_head(parameters, &pair, &control.credential, &before.certificate).unwrap();
+        let head = engine
+            .verify_head(&head_bytes, &control.credential, parameters)
+            .unwrap();
+        let receipt = [
+            control.receipt.body.as_slice(),
+            control.receipt.signature.as_slice(),
+        ]
+        .concat();
+        let st = control.statement.map(|f| f.to_repr());
+        let bytes = engine
+            .unload_claim(&head, &st, &receipt, dest.clone(), parameters)
+            .unwrap();
+        let accepted = engine.verify_unload_claim(&bytes, parameters).unwrap();
+        assert_eq!(
+            (
+                accepted.ordinal(),
+                accepted.amount(),
+                accepted.account_payout(),
+                accepted.online_charge()
+            ),
+            (0, 4, 3, 1)
+        );
+        assert_eq!(accepted.nullifier(), &st[17]);
+        assert_eq!(control.after_core[9], Fp::from(96));
+        assert_eq!(accepted.destinations().account, dest.account);
+        assert_eq!(
+            engine
+                .unload_claim(&head, &st, &receipt, dest, parameters)
+                .unwrap(),
+            bytes
+        );
+        let tamper = |apply: &dyn Fn(&mut Claim)| {
+            let mut changed: Claim = super::super::decode(&bytes).unwrap();
+            apply(&mut changed);
+            let encoded = super::super::encode(&changed).unwrap();
+            refused(
+                engine.verify_unload_claim(&encoded, parameters),
+                "altered completed claim",
+            );
+        };
+        tamper(&|c| c.pair[100] ^= 1);
+        tamper(&|c| {
+            let at = c.pair.len() - 35;
+            c.pair[at] ^= 1;
+        });
+        tamper(&|c| c.receipt[339] ^= 1);
+        tamper(&|c| c.statement[19 * 32] ^= 1);
+        tamper(&|c| c.issuer_certificate[110] ^= 1);
+        tamper(&|c| c.profile[62 * 32] = 0);
+        tamper(&|c| c.parameter_id[0] ^= 1);
+        tamper(&|c| c.destinations.quote_certificate[34] = 4);
+        tamper(&|c| {
+            if let KagemushaWalletUnloadChargeV1::Quoted { beneficiary, .. } =
+                &mut c.destinations.charge
+            {
+                *beneficiary = c.destinations.account.clone();
+            }
+        });
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        refused(
+            engine.verify_unload_claim(&trailing, parameters),
+            "trailing claim bytes",
+        );
+        refused(
+            engine.verify_unload_claim(&vec![0; MAX_UNLOAD_CLAIM_BYTES + 1], parameters),
+            "oversize claim",
+        );
+        let replay = engine.verify_unload_claim(&bytes, parameters).unwrap();
+        assert_eq!(accepted.digest(), replay.digest());
+        if let Some(directory) = std::env::var_os("KAGEMUSHA_SPARTAN_TEST_OUTPUT") {
+            let path = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("signed-unload-claim.norito"), &bytes).unwrap();
+        }
+        eprintln!(
+            "verified charged Unload claim {} bytes; actual P {} B S {} B, {} debited, {} account payout, {} beneficiary payout, 11 canonical/proof/authority refusals and identical claim digest on retry",
+            bytes.len(),
+            pair.pp.to_bytes().len(),
+            pair.ps.to_bytes().len(),
+            accepted.amount(),
+            accepted.account_payout(),
+            accepted.online_charge()
+        );
+    }
+}

@@ -335,7 +335,11 @@ impl SessionAdapter {
                 out,
             )
         })?;
-        if reply.status != 82 || reply.token == 0 || reply.bytes.len() != 291 {
+        let valid_projection = matches!(
+            (reply.bytes.get(..3), reply.bytes.len()),
+            (Some([1, 0, 1..=4]), 291) | (Some([2, 0, 7]), 243)
+        );
+        if reply.status != 82 || reply.token == 0 || !valid_projection {
             return Err("wrong native review response".into());
         }
         Ok(Prepared {

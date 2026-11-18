@@ -449,6 +449,50 @@ pub(crate) mod tests {
         (fixture.input, fixture.profile, fixture.key)
     }
 
+    /// Spend four offline units from the receiver after Refresh, with a one-unit
+    /// online charge. This chain starts with an authenticated empty recovery map.
+    pub(crate) fn recursive_unload(
+        control: &crate::control::Witness,
+        profile: [Fp; 64],
+        key: &WalletKey,
+    ) -> Witness {
+        recursive_unload_from(control, profile, key, None, Fp::from(QUOTE))
+    }
+
+    pub(crate) fn recursive_unload_from(
+        control: &crate::control::Witness,
+        profile: [Fp; 64],
+        key: &WalletKey,
+        first_load: Option<&crate::load::Witness>,
+        quote: Fp,
+    ) -> Witness {
+        let mut map = Map::new();
+        if let Some(load) = first_load {
+            map.insert(load.recovery.key, load.recovery.value);
+        }
+        assert_eq!(map.root(), control.after_core[19]);
+        let mut f = Fixture {
+            input: Witness {
+                before_core: control.after_core,
+                before_rest: control.after_rest,
+                after_core: control.after_core,
+                after_rest: control.after_rest,
+                credential: control.credential.clone(),
+                statement: control.statement,
+                receipt: control.receipt.clone(),
+                recovery: crate::load::dummy_recovery(),
+            },
+            profile,
+            key: key.clone(),
+            map,
+            terms: terms(4, 1),
+        };
+        complete(&mut f);
+        f.input.statement[21] = quote;
+        reseal(&mut f);
+        f.input
+    }
+
     fn integer(x: Fp) -> BigUint {
         BigUint::from_bytes_le(x.to_repr().as_ref())
     }

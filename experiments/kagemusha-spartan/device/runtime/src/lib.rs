@@ -657,6 +657,7 @@ fn operation_id(witness: &native::ExactOperationWitness) -> [u8; 32] {
     let body = match witness {
         native::ExactOperationWitness::Bootstrap(w) => &w.input.receipt.body,
         native::ExactOperationWitness::Load { step, .. } => &step.receipt.body,
+        native::ExactOperationWitness::RefreshTimeAnchor(step) => &step.receipt.body,
         native::ExactOperationWitness::Send(step) => &step.receipt.body,
         native::ExactOperationWitness::Receive { step, .. } => &step.receipt.body,
     };
@@ -673,6 +674,7 @@ fn complete(
     let name = match witness {
         native::ExactOperationWitness::Bootstrap(_) => "Bootstrap",
         native::ExactOperationWitness::Load { .. } => "Load",
+        native::ExactOperationWitness::RefreshTimeAnchor(_) => "RefreshTimeAnchor",
         native::ExactOperationWitness::Send(_) => "Send",
         native::ExactOperationWitness::Receive { .. } => "Receive",
     };

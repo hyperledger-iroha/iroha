@@ -1,7 +1,8 @@
 # Experimental native backend
 
-This profile implements Bootstrap, Load, Send and Receive with the future 532-byte
-credential body and the 30-field monetary Core. It is distinct from the installed
+The experimental catalog has four recursive pairs. Bootstrap, Send and Receive
+each have one pair. Control shares one pair across Load, RefreshTimeAnchor and
+Unload. All use the future 532-byte credential body and the 30-field monetary Core. It is distinct from the installed
 wallet generation. Installing its public programs does not migrate a funded wallet
 or change a ledger, enrollment record, hardware key or journal.
 
@@ -9,9 +10,9 @@ or change a ledger, enrollment record, hardware key or journal.
 
 The eight public verifier programs contain verification instructions, constants and
 geometry only. Private witness arrays and witness-producing closures are excluded.
-Native verifies the small root-signed parameter manifest before decoding the program
-bundle, then checks every exact program digest, fixed key, generator profile and
-ledger scope against its independently installed scheme and signed genesis.
+Native verifies the Artifact-role signature on the version 3 parameter manifest
+under its installed scheme root, then checks all eight program digests, fixed keys,
+generator profiles and the ledger scope against its installed signed genesis.
 
 The installed runtime transfers its existing exclusive provider into the future
 frame types. It retains the same platform, protected storage, journal, original
@@ -44,6 +45,10 @@ Swift and Kotlin expose the same stages:
 4. `prepare` validates the complete private operation witness and predecessor head
    and returns a review bound to one immutable capsule. The projection includes the
    operation, amount, fee, receiver, before/after heads and capsule digest.
+   `prepareRefreshTimeAnchor` in Swift and Kotlin accepts the separately typed
+   243-byte version 2 review for tag 7. The prepared fields include the exact
+   signed anchor digest, issuer time, successor floor and both heads. Both SDKs
+   bind the review to the same native capsule and Advance owner.
 5. Before Send, the application completes hardware-backed biometric or device-
    credential confirmation of that exact review. `execute` advances that capsule
    through the canonical provider. No app-only PIN or approval Boolean is accepted
@@ -90,11 +95,22 @@ Both paths replay the same first-phase entropy schedule.
 
 ## Scope and validation
 
-The four-program profile does not implement RefreshTimeAnchor. Controls-off Send
-requires its canonical local floor and no network clock. A Send with time-dependent
-controls requires a protected matching anchor; its absence remains unavailable.
-Installing a caller timestamp or adding a time-response API cannot replace the
-missing authenticated state transition.
+Control exposes its Unload and RefreshTimeAnchor selectors in primary and secondary
+inputs 62 and 63. Both sides use the shared pair link. Native verifies the exact
+root-certified TimeAnchor original before Prepare and enforces the maximum of
+the prior floor and signed issuer time. A cached signed response can update that
+floor. A time-controlled Send separately requires the matching same-boot protected
+direct-exchange observation. Its durable capture for the future custody owner
+is outstanding. Controls-off Send can use its local floor offline.
+
+The bounded future Unload verifier accepts an authenticated Control head, its
+exact receipt and statement, the credential-bound AccountId, and any exact
+RegulatoryPolicy quote, root-certified signer and beneficiary AccountId. It
+verifies P, S, their link and all four accumulators before releasing sealed terms.
+Core still needs a World-installed future profile, atomic replay/transfer
+integration and explicit release authority. The generic SDK holds Unload pending
+platform-enforced confirmation of the exact review and device acceptance.
+The production prover and proof-before-payout hold continue.
 
 The heavy `complete_recursive_bootstrap_load_send_receive` test stabilizes all eight
 programs, restarts a genuine Bootstrap→Load→Send→Receive chain, checks the complete
@@ -117,5 +133,9 @@ The isolated device fixture collects real platform enrollment originals, then it
 independent test issuer signs the future credential. It does not run the FI-side
 attestation verifier before that signature. Its assertions cover native runtime,
 account admission and hardware custody; they do not qualify FI enrollment policy or
-device admission. The physical self-transfer also remains distinct from the host
-test's two-wallet chain and from a physical transfer between two phones.
+device admission. The current device runner uses a software-key counterparty and measures the
+physical wallet's return Receive in a fresh process. The signed Pixel 6 and
+iPhone fixture packages have matching authenticated programs. Measurements on
+physical devices still require their holders for hardware admission and payment
+confirmation. The Mac three-launch run and the independent authenticated claim
+run have separate receipts. [Two-wallet Mac result](output/takeover-20261118/control-mac-two-wallet/result.json) · [Unload verification](output/takeover-20261118/native-claim-result.json)

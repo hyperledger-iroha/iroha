@@ -30,6 +30,12 @@ use iroha_pasta::{Ep, Eq, Fq};
 #[path = "engine_adversarial_tests.rs"]
 mod adversarial_tests;
 
+#[path = "native_unload.rs"]
+mod unload_claim;
+#[cfg(test)]
+pub(crate) use unload_claim::tests::test_unload_claim;
+pub use unload_claim::{MAX_UNLOAD_CLAIM_BYTES, UnloadDestinations, VerifiedUnloadClaim};
+
 #[derive(Default)]
 pub struct NativeEngine {
     time: Option<Arc<dyn TimeSource>>,
@@ -49,7 +55,7 @@ pub(crate) struct ParameterSet {
     pub finality: SumeragiCommitVerifierV1,
 }
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v2")]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Parameters.v3")]
 pub struct ParameterManifest {
     /// Exactly `PARAMETER_MANIFEST_VERSION`.
     pub version: u16,
@@ -57,7 +63,7 @@ pub struct ParameterManifest {
     /// The parameter identity: proof profiles carry it, and heads, capsules
     /// and completions are scoped by it.
     pub relation: [u8; 32],
-    /// Canonical program digests, Receive, Send, Bootstrap, Load.
+    /// Canonical program digests, Receive, Send, Bootstrap, Control.
     pub primary: [[u8; 32]; 4],
     pub secondary: [[u8; 32]; 4],
     pub dimensions_p: [u32; 2],
@@ -83,9 +89,9 @@ pub struct ParameterManifest {
     pub signer_certificate: Vec<u8>,
 }
 
-/// The current manifest version: the v1 layout named no generator/table
-/// profile and was signed by the scheme root itself.
-pub const PARAMETER_MANIFEST_VERSION: u16 = 2;
+/// Version 3 names four recursive pairs with 64 ordinary inputs on both
+/// sides. Control's last two inputs select Load, RefreshTimeAnchor or Unload.
+pub const PARAMETER_MANIFEST_VERSION: u16 = 3;
 
 /// The retired v1 manifest layout, kept only so that installation refuses it
 /// by a typed error instead of a framing error, and so isolated fixtures can
@@ -440,7 +446,7 @@ impl ParameterSet {
             if p.primary.shape.col_bits != pbits
                 || p.secondary.shape.col_bits != sbits
                 || p.primary.io_len != 64
-                || p.secondary.io_len != 62
+                || p.secondary.io_len != 64
             {
                 return Err(Error::Malformed("parameter program geometry"));
             }
@@ -710,6 +716,9 @@ fn projection(profile: &[Fp; 64], kind: usize) -> Result<carrier::ProjectedInput
             .try_into()
             .unwrap(),
         kind,
+        profile[crate::control::MODE_IO..crate::control::MODE_IO + 2]
+            .try_into()
+            .unwrap(),
     )
     .map_err(Error::Rejected)?;
     if out.primary().io != profile {
@@ -926,6 +935,7 @@ fn receipt_mut(w: &mut ExactOperationWitness) -> &mut bootstrap::Receipt {
     match w {
         ExactOperationWitness::Bootstrap(x) => &mut x.input.receipt,
         ExactOperationWitness::Load { step, .. } => &mut step.receipt,
+        ExactOperationWitness::RefreshTimeAnchor(x) => &mut x.receipt,
         ExactOperationWitness::Send(x) => &mut x.receipt,
         ExactOperationWitness::Receive { step, .. } => &mut step.receipt,
     }
@@ -938,6 +948,7 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
         ExactOperationWitness::Load { step, .. } => {
             (&step.credential, &step.statement, &step.receipt, 2)
         }
+        ExactOperationWitness::RefreshTimeAnchor(x) => (&x.credential, &x.statement, &x.receipt, 7),
         ExactOperationWitness::Send(x) => (&x.credential, &x.statement, &x.receipt, 3),
         ExactOperationWitness::Receive { step, .. } => {
             (&step.credential, &step.statement, &step.receipt, 4)
@@ -947,7 +958,9 @@ fn terms(w: &ExactOperationWitness) -> (&Credential, &[Fp; 26], &bootstrap::Rece
 fn kind(w: &ExactOperationWitness) -> usize {
     match w {
         ExactOperationWitness::Bootstrap(_) => full::BOOTSTRAP,
-        ExactOperationWitness::Load { .. } => full::LOAD,
+        ExactOperationWitness::Load { .. } | ExactOperationWitness::RefreshTimeAnchor(_) => {
+            full::CONTROL
+        }
         ExactOperationWitness::Send(_) => full::SEND,
         ExactOperationWitness::Receive { .. } => full::RECEIVE,
     }
@@ -958,7 +971,7 @@ fn kind_name(k: usize) -> &'static str {
         full::RECEIVE => "Receive",
         full::SEND => "Send",
         full::BOOTSTRAP => "Bootstrap",
-        _ => "Load",
+        _ => "Control",
     }
 }
 fn freeze_witness(
@@ -1503,7 +1516,34 @@ impl NativeEngine {
                 finality
                     .verify_with(&mut p.finality.clone(), &receipt)
                     .map_err(|e| Error::Rejected(e.to_string()))?;
-                crate::load::append_preparation(&mut w, family, step, &predecessor)
+                crate::control::append_preparation(
+                    &mut w,
+                    family,
+                    &p.root,
+                    &crate::control::Witness::load((**step).clone()),
+                    &predecessor,
+                )
+                .map_err(Error::Malformed)?;
+            }
+            ExactOperationWitness::RefreshTimeAnchor(step) => {
+                if step.mode != crate::control::Mode::RefreshTimeAnchor {
+                    return Err(Error::AuthorityMismatch("RefreshTimeAnchor mode"));
+                }
+                let wallet = c.body[66..98].try_into().unwrap();
+                let anchor =
+                    crate::time_anchor::authenticate(&step.authority, &p.scheme, &wallet, &p.root)
+                        .map_err(Error::AuthorityMismatch)?;
+                let (expected_core, expected_rest) = crate::time_anchor::refresh(
+                    &step.before_core,
+                    &step.before_rest,
+                    &anchor,
+                    step.after_core[29],
+                )
+                .map_err(Error::AuthorityMismatch)?;
+                if expected_core != step.after_core || expected_rest != step.after_rest {
+                    return Err(Error::AuthorityMismatch("signed TimeAnchor successor"));
+                }
+                crate::control::append_preparation(&mut w, family, &p.root, step, &predecessor)
                     .map_err(Error::Malformed)?;
             }
             ExactOperationWitness::Send(step) => {
@@ -1629,7 +1669,7 @@ impl Engine for NativeEngine {
     ) -> Result<()> {
         let kind = match capsule.kind() {
             1 => full::BOOTSTRAP,
-            2 => full::LOAD,
+            2 | 7 => full::CONTROL,
             3 => full::SEND,
             4 => full::RECEIVE,
             _ => return Err(Error::Malformed("capsule kind")),
@@ -1798,6 +1838,23 @@ impl Engine for NativeEngine {
             )
         };
         stage.mark("folds");
+        let prove_control = |control: &crate::control::Witness| -> Result<_> {
+            let folds = folds.as_ref().expect("Control has predecessor folds");
+            Ok((
+                full::p_operation(
+                    full::OperationWitness::Control {
+                        root: &p.root,
+                        witness: control,
+                    },
+                    &p.generators,
+                    &pairs,
+                    folds,
+                )
+                .map_err(Error::Malformed)?
+                .0,
+                full::s_operation(k, Some(control.mode), &p.generators, &pairs, folds).0,
+            ))
+        };
         let (wp, ws) = match &witness {
             ExactOperationWitness::Bootstrap(input) => (
                 full::p_boot_from_inputs(&p.generators, &p.context(), &input.input)
@@ -1805,17 +1862,10 @@ impl Engine for NativeEngine {
                     .0,
                 full::s_boot(&p.generators).0,
             ),
-            ExactOperationWitness::Load { step, .. } => (
-                full::p_operation(
-                    full::OperationWitness::Load(step),
-                    &p.generators,
-                    &pairs,
-                    folds.as_ref().unwrap(),
-                )
-                .map_err(Error::Malformed)?
-                .0,
-                full::s_operation(k, &p.generators, &pairs, folds.as_ref().unwrap()).0,
-            ),
+            ExactOperationWitness::Load { step, .. } => {
+                prove_control(&crate::control::Witness::load((**step).clone()))?
+            }
+            ExactOperationWitness::RefreshTimeAnchor(step) => prove_control(step)?,
             ExactOperationWitness::Send(step) => (
                 full::p_operation(
                     full::OperationWitness::Send(step),
@@ -1825,7 +1875,7 @@ impl Engine for NativeEngine {
                 )
                 .map_err(Error::Malformed)?
                 .0,
-                full::s_operation(k, &p.generators, &pairs, folds.as_ref().unwrap()).0,
+                full::s_operation(k, None, &p.generators, &pairs, folds.as_ref().unwrap()).0,
             ),
             ExactOperationWitness::Receive { step, .. } => (
                 full::p_operation(
@@ -1836,7 +1886,7 @@ impl Engine for NativeEngine {
                 )
                 .map_err(Error::Malformed)?
                 .0,
-                full::s_operation(k, &p.generators, &pairs, folds.as_ref().unwrap()).0,
+                full::s_operation(k, None, &p.generators, &pairs, folds.as_ref().unwrap()).0,
             ),
         };
         stage.mark("wiring");
@@ -2239,7 +2289,7 @@ fn test_chain_native(
             finality,
         )?;
         let engine = NativeEngine::default();
-        for i in [full::BOOTSTRAP, full::LOAD, full::SEND] {
+        for i in [full::BOOTSTRAP, full::CONTROL, full::SEND] {
             let bytes = encode_head(
                 &parameters,
                 &pairs[i],
@@ -2253,7 +2303,7 @@ fn test_chain_native(
             &engine,
             &parameters,
             chain,
-            &pairs[full::LOAD],
+            &pairs[full::CONTROL],
         )?;
         let receive_head = encode_head(
             &parameters,
@@ -2268,7 +2318,7 @@ fn test_chain_native(
         )?;
         let sender_head = encode_head(
             &parameters,
-            &pairs[full::LOAD],
+            &pairs[full::CONTROL],
             &chain.send.credential,
             &chain.sender_bootstrap.certificate,
         )?;

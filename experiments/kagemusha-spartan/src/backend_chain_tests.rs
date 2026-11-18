@@ -66,18 +66,18 @@ type Built<F> = (UniformCircuit<F>, Instance<F>, Witness<F>);
 
 struct Generation {
     config: RunConfig,
-    /// Selector order is Receive, Send, Bootstrap, Load.
+    /// Selector order is Receive, Send, Bootstrap, Control.
     kinds: [UniformPair; 4],
     receiver_boot: UniformPair,
 }
 
 impl Generation {
     fn generators(&self) -> PairGens {
-        next_gens_with_load_at(
+        next_gens_with_control_at(
             &self.kinds[RECEIVE],
             Some(&self.kinds[SEND]),
             Some(&self.kinds[BOOTSTRAP]),
-            Some(&self.kinds[LOAD]),
+            Some(&self.kinds[CONTROL]),
             DIMENSIONS,
         )
     }
@@ -105,7 +105,7 @@ impl Step {
     fn kind(self) -> usize {
         match self {
             Self::SenderBoot | Self::ReceiverBoot => BOOTSTRAP,
-            Self::Load => LOAD,
+            Self::Load => CONTROL,
             Self::Send => SEND,
             Self::Receive => RECEIVE,
         }
@@ -131,7 +131,7 @@ fn build<F: Scalar>(
         } else {
             config.s_columns
         },
-        if primary { 64 } else { 62 },
+        64,
         if primary {
             b"full backend P"
         } else {
@@ -203,9 +203,18 @@ fn seed_secondary(gens: &PairGens, kind: usize) -> Wiring<Fq> {
     });
     w.tables.push((bits, BIT_TABLE));
     w.arrays[pin].lookups.push((BIT_TABLE, vec![own(0, 2)]));
-    let values = vec![kind as u128];
+    let values = if kind == CONTROL {
+        vec![kind as u128, 0, 0]
+    } else {
+        vec![kind as u128]
+    };
     let mu = Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(&binding_mu(&values)))).unwrap();
-    native_binding(&mut w, f, mu, &values);
+    let shared = native_binding(&mut w, f, mu, &values);
+    bind_mode_io(
+        &mut w,
+        f,
+        (kind == CONTROL).then_some((crate::control::Mode::Load, shared, 1)),
+    );
     deferral::expose_constant(&mut w, f, &gens.defer_s.empty_claim(), LATE_IO);
     generator_integration::expose_empty(&mut w, f, &gens.s);
     w
@@ -249,9 +258,16 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
     });
     pin_fixture_arrays(&mut w, 0);
     let complete = match step {
-        Step::Load => {
-            CompleteOperation::Load(crate::load::append(&mut w, f, &chain.load, &previous).unwrap())
-        }
+        Step::Load => CompleteOperation::Control(
+            crate::control::append(
+                &mut w,
+                f,
+                &chain.sender_context.root.root,
+                &crate::control::Witness::load(chain.load.clone()),
+                &previous,
+            )
+            .unwrap(),
+        ),
         Step::Send => {
             CompleteOperation::Send(crate::send::append(&mut w, f, &chain.send, &previous).unwrap())
         }
@@ -272,9 +288,19 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
         _ => unreachable!(),
     };
     kind_pin(&mut w, f, step.kind());
-    let values = vec![step.kind() as u128];
-    p_binding(&mut w, f, &binding_mu(&values), &values);
-    expose_operation(&mut w, f, &complete);
+    let is_control = step.kind() == CONTROL;
+    let values = if is_control {
+        vec![step.kind() as u128, 0, 0]
+    } else {
+        vec![step.kind() as u128]
+    };
+    let shared = p_binding(&mut w, f, &binding_mu(&values), &values);
+    let modes = bind_mode_io(
+        &mut w,
+        f,
+        is_control.then_some((crate::control::Mode::Load, shared, 1)),
+    );
+    expose_operation(&mut w, f, &complete, modes);
     deferral::expose_constant(&mut w, f, &gens.defer_p.empty_claim(), LATE_IO);
     generator_integration::expose_empty(&mut w, f, &gens.p);
     let mut seen = std::collections::HashSet::new();
@@ -285,7 +311,7 @@ fn seed_primary(chain: &Chain, gens: &PairGens, step: Step) -> Wiring<Fp> {
 fn recursive_pairs(previous: &Generation, gens: &PairGens, step: Step) -> Vec<TracedPair> {
     let selected: Vec<&UniformPair> = match step {
         Step::Load => vec![&previous.kinds[BOOTSTRAP]],
-        Step::Send => vec![&previous.kinds[LOAD]],
+        Step::Send => vec![&previous.kinds[CONTROL]],
         Step::Receive => vec![&previous.receiver_boot, &previous.kinds[SEND]],
         _ => vec![],
     };
@@ -335,8 +361,15 @@ fn recursive_primary(
     }
     let pairs = &plan.pairs;
     let receive;
+    let control;
     let operation = match step {
-        Step::Load => OperationWitness::Load(&chain.load),
+        Step::Load => {
+            control = crate::control::Witness::load(chain.load.clone());
+            OperationWitness::Control {
+                root: &chain.sender_context.root.root,
+                witness: &control,
+            }
+        }
         Step::Send => OperationWitness::Send(&chain.send),
         Step::Receive => {
             let raw = incoming_encoding(&pairs[1]);
@@ -370,7 +403,14 @@ fn recursive_secondary(gens: &PairGens, plan: &OperationPlan, step: Step) -> Wir
     if step.kind() == BOOTSTRAP {
         return s_boot(gens).0;
     }
-    s_operation(step.kind(), gens, &plan.pairs, plan.folds.as_ref().unwrap()).0
+    s_operation(
+        step.kind(),
+        (step.kind() == CONTROL).then_some(crate::control::Mode::Load),
+        gens,
+        &plan.pairs,
+        plan.folds.as_ref().unwrap(),
+    )
+    .0
 }
 
 fn primary(chain: &Chain, gens: &PairGens, plan: Option<&OperationPlan>, step: Step) -> Wiring<Fp> {
@@ -818,6 +858,7 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
             .unwrap(),
         send.ip.io[TABLE_IO..TABLE_IO + 4].try_into().unwrap(),
         SEND,
+        [Fp::ZERO; 2],
     )
     .unwrap();
     let mut raw = incoming_encoding(&trace_uniform(send.clone(), gens)).bytes;
@@ -861,7 +902,7 @@ fn malformed_receive_burn(chain: &Chain, gens: &PairGens, final_chain: &Generati
         final_chain.kinds[RECEIVE].cs.layout(),
     );
     let (cp, ip, wp) = build(&final_chain.config, w, true, Some(layout.0));
-    let (w, _) = s_operation(RECEIVE, gens, &pairs, &folds);
+    let (w, _) = s_operation(RECEIVE, None, gens, &pairs, &folds);
     let (cs, is, ws) = build(&final_chain.config, w, false, Some(layout.1));
     assert_eq!(
         cp.program_digest(),
@@ -1028,6 +1069,42 @@ fn run_recursive_chain(complete_validation: bool) {
                 crate::monetary_state::commitment(&received.after_core, &received.after_rest),
                 "the final accepted receiver head commits to the credited balance"
             );
+            let incoming = &final_chain.kinds[RECEIVE];
+            let catalog = &final_chain.kinds[CONTROL];
+            let refresh = crate::control::tests::recursive_refresh(
+                &received.after_core,
+                &received.after_rest,
+                &incoming.ip.io,
+                &chain.receiver_key,
+                &chain.receiver_bootstrap,
+            );
+            let refreshed = prove_control_successor(
+                &config,
+                &final_gens,
+                &chain.receiver_context.root.root,
+                (&catalog.cp, &catalog.cs),
+                incoming,
+                &refresh,
+            );
+            assert_eq!(refresh.after_core[9], Fp::from(10));
+            let unload = crate::control::Witness::unload(crate::unload::tests::recursive_unload(
+                &refresh,
+                refreshed.ip.io.clone().try_into().unwrap(),
+                &chain.receiver_key,
+            ));
+            let redeemed = prove_control_successor(
+                &config,
+                &final_gens,
+                &chain.receiver_context.root.root,
+                (&catalog.cp, &catalog.cs),
+                &refreshed,
+                &unload,
+            );
+            assert_eq!(unload.after_core[9], Fp::from(6));
+            assert_eq!(
+                redeemed.ip.io[HEAD_IO],
+                crate::monetary_state::commitment(&unload.after_core, &unload.after_rest)
+            );
             assert!(
                 bytes <= payment_wire::QR_BUDGET,
                 "complete Payment {bytes} B exceeds {} B",
@@ -1042,6 +1119,85 @@ fn run_recursive_chain(complete_validation: bool) {
         previous = next;
     }
     panic!("the exact four-kind programs did not reach a fixed point in twelve generations");
+}
+
+/// Prove a semantic Control successor against the exact installed pair. The
+/// fixed-point Load witness must produce both identical public programs for
+/// Refresh and Unload. Both accumulated matrices and generators are decided.
+fn prove_control_successor(
+    config: &RunConfig,
+    gens: &PairGens,
+    root: &p256::Point,
+    fixed: (&Arc<UniformCircuit<Fp>>, &Arc<UniformCircuit<Fq>>),
+    predecessor: &UniformPair,
+    witness: &crate::control::Witness,
+) -> UniformPair {
+    let prior = [trace_uniform(predecessor.clone(), gens)];
+    let coins = crate::fs::ProofEntropy::fresh().expect("OS entropy for Control");
+    let folds = GeneratorFolds::prepare(gens, &prior, &coins).unwrap();
+    let mode = witness.mode;
+    let (wp, _) = p_operation(
+        OperationWitness::Control { root, witness },
+        gens,
+        &prior,
+        &folds,
+    )
+    .unwrap();
+    let (ws, _) = s_operation(CONTROL, Some(mode), gens, &prior, &folds);
+    let (cp, ip, mut pw) = build(config, wp, true, Some(fixed.0.layout()));
+    let (cs, is, mut sw) = build(config, ws, false, Some(fixed.1.layout()));
+    let at = crate::control::MODE_IO;
+    let bits = mode.bits();
+    assert_eq!(&ip.io[at..at + 2], &bits.map(Fp::from));
+    assert_eq!(&is.io[at..at + 2], &bits.map(Fq::from));
+    assert!(
+        cp.export_program().unwrap() == fixed.0.export_program().unwrap(),
+        "exact Control P"
+    );
+    assert!(
+        cs.export_program().unwrap() == fixed.1.export_program().unwrap(),
+        "exact Control S"
+    );
+    let pair = crate::prove_linked_pair(
+        "three-mode Control successor",
+        300 + mode.tag() as usize,
+        &cp,
+        &ip,
+        &pw,
+        &cs,
+        &is,
+        &sw,
+    );
+    assert!(pair.ok, "both Control proofs verified");
+    zeroize::Zeroize::zeroize(&mut pw);
+    zeroize::Zeroize::zeroize(&mut sw);
+    let result = crate::linked_uniform(fixed.0, ip, fixed.1, is, pair, CONTROL);
+    assert_eq!(matrix_checks(&result, gens), (true, true));
+    let trace = trace_uniform(result.clone(), gens);
+    let p = inherited_generator_claim(&trace.tr_p, &gens.p).unwrap();
+    let s = inherited_generator_claim(&trace.tr_s, &gens.s).unwrap();
+    assert!(crate::generator_claim::decide(&gens.p, &p));
+    assert!(crate::generator_claim::decide(&gens.s, &s));
+    eprintln!(
+        "full backend Control {mode:?}: exact catalog, linked pair and all four accumulators accepted"
+    );
+    result
+}
+
+/// Exercise a distinct signed claim from installed keys and an authenticated predecessor.
+pub(crate) fn prove_installed_control(
+    gens: &PairGens,
+    root: &p256::Point,
+    keys: (&Arc<UniformCircuit<Fp>>, &Arc<UniformCircuit<Fq>>),
+    prior: &UniformPair,
+    witness: &crate::control::Witness,
+) -> UniformPair {
+    let config = RunConfig {
+        p_columns: keys.0.shape.col_bits,
+        s_columns: keys.1.shape.col_bits,
+        output: Default::default(),
+    };
+    prove_control_successor(&config, gens, root, keys, prior, witness)
 }
 
 type ProgramSet = [(Arc<UniformCircuit<Fp>>, Arc<UniformCircuit<Fq>>); 4];
@@ -1098,7 +1254,7 @@ fn exact_program_differences(before: &ProgramSet, after: &ProgramSet) -> Vec<Str
 /// predecessors, so linked verification accepts them; at least one must carry
 /// a false accumulator for the native refusals to be exercised.
 fn template_artifacts(fixed: &Generation, gens: &PairGens) -> Vec<(UniformPair, bool)> {
-    let out: Vec<_> = [LOAD, SEND, RECEIVE]
+    let out: Vec<_> = [CONTROL, SEND, RECEIVE]
         .into_iter()
         .map(|kind| {
             let pair = fixed.kinds[kind].clone();
@@ -1216,6 +1372,7 @@ fn fixed_profile_candidate_selection_matches_both_circuit_halves() {
         [Fp::ZERO; crate::bootstrap_context::LINEAGE_FIELDS],
         spartan::limbs_of_point::<Eq>(&Eq::generator().to_affine()),
         SEND,
+        [Fp::ZERO; 2],
     )
     .unwrap();
     let mut bp = vec![0u8; p.proof_bytes()];
@@ -1389,7 +1546,7 @@ fn tiny_program<F: Scalar + zeroize::Zeroize>(
         t,
         c,
         10,
-        if primary { 64 } else { 62 },
+        64,
         b"exact program comparison",
     );
     Arc::new(circuit.into_verifier_program())

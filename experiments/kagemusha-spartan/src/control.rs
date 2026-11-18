@@ -47,6 +47,34 @@ pub enum Mode {
     Unload,
 }
 impl Mode {
+    /// Public input order on both fields of the recursive pair.
+    pub fn bits(self) -> [u64; 2] {
+        [
+            u64::from(self == Self::Unload),
+            u64::from(self == Self::RefreshTimeAnchor),
+        ]
+    }
+
+    /// Decode the complete ordinary-IO mode under the selected matrix kind.
+    /// Non-Control circuits admit the zero mode only.
+    pub fn for_program(kind: usize, bits: [Fp; 2]) -> Result<Option<Self>, &'static str> {
+        let mode = match bits {
+            [u, r] if u == Fp::ZERO && r == Fp::ZERO => Self::Load,
+            [u, r] if u == Fp::ZERO && r == Fp::ONE => Self::RefreshTimeAnchor,
+            [u, r] if u == Fp::ONE && r == Fp::ZERO => Self::Unload,
+            _ => return Err("invalid Control mode"),
+        };
+        match kind {
+            crate::full::CONTROL => Ok(Some(mode)),
+            crate::full::BOOTSTRAP | crate::full::SEND | crate::full::RECEIVE
+                if mode == Self::Load =>
+            {
+                Ok(None)
+            }
+            _ => Err("invalid program kind or nonzero mode outside Control"),
+        }
+    }
+
     /// Wire statement tag for this semantic operation.
     pub fn tag(self) -> u64 {
         match self {
@@ -109,6 +137,19 @@ pub struct Witness {
     /// Refresh branch originals; `Authority::dummy()` in Load mode.
     pub authority: Authority,
 }
+impl Drop for Witness {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.before_core.zeroize();
+        self.before_rest.zeroize();
+        self.after_core.zeroize();
+        self.after_rest.zeroize();
+        self.statement.zeroize();
+        self.ordinary.zeroize();
+        self.recovery.zeroize();
+    }
+}
+
 impl Witness {
     /// A Load: exactly the Load witness, with the inactive dummy authority.
     pub fn load(input: load::Witness) -> Self {
@@ -380,7 +421,7 @@ fn append_with<R>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         bootstrap,
@@ -533,6 +574,43 @@ mod tests {
         reseal(&mut f);
         f
     }
+    /// A real signed Refresh extending the supplied chain wallet's state.
+    pub(crate) fn recursive_refresh(
+        before: &[Fp; 30],
+        rest: &[Fp; 6],
+        profile: &[Fp],
+        key: &WalletKey,
+        boot: &bootstrap::Inputs,
+    ) -> Witness {
+        let (mut authority, signer) = authority(FLOOR + 1, SIGNER);
+        let scheme = boot.credential.body[2..34].try_into().unwrap();
+        let wallet: [u8; 32] = boot.credential.body[66..98].try_into().unwrap();
+        authority.anchor.body[34..66].copy_from_slice(&wallet);
+        sign_anchor(&mut authority, &signer);
+        let verified = time_anchor::authenticate(&authority, &scheme, &wallet, &root()).unwrap();
+        let (after, after_rest) =
+            time_anchor::refresh(before, rest, &verified, before[29] + Fp::ONE).unwrap();
+        let offset = context::CONTEXT_IO + context::RELATION;
+        let statement = time_anchor::statement(
+            profile[offset..offset + 2].try_into().unwrap(),
+            (before, rest),
+            (&after, &after_rest),
+            verified.digest,
+        );
+        let mut witness = Witness::refresh(
+            *before,
+            *rest,
+            after,
+            after_rest,
+            boot.credential.clone(),
+            statement,
+            boot.receipt.clone(),
+            authority,
+        );
+        sign(&mut witness, key);
+        witness
+    }
+
     fn refresh(time: u64) -> Fixture {
         let (before, rest) = funded();
         refresh_from(before, rest, authority(time, SIGNER).0)

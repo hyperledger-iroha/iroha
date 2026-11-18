@@ -405,6 +405,152 @@ mod tests {
         KagemushaDevicePublicKeyV1::try_from(sec1.as_slice()).unwrap()
     }
 
+    #[test]
+    #[ignore = "requires the three-mode fixed-point signed program bundle"]
+    fn signed_time_anchor_review_from_bundle() {
+        let path = std::path::PathBuf::from(
+            std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+        );
+        let read = |name: &str| std::fs::read(path.join(name)).unwrap();
+        let parameters = install(
+            &read("program-bundle.norito"),
+            &read("parameter-manifest.norito"),
+            read("parameter-signature.bin").try_into().unwrap(),
+        )
+        .unwrap();
+        let engine = NativeEngine::default();
+        let key = crate::full::WalletKey::labelled("signed time floor test wallet");
+        let account = iroha_data_model::account::AccountId::new(
+            "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
+                .parse()
+                .unwrap(),
+        );
+        let account_digest = kagemusha_wallet_account_digest_v1(&account).unwrap();
+        let boot = issue(&parameters, &key, &[(98, account_digest)]).unwrap();
+        let ExactOperationWitness::Bootstrap(b) = &boot else {
+            unreachable!()
+        };
+        let origin = engine
+            .enrollment_origin(b, [0x57; 32], &parameters)
+            .unwrap();
+        let prepared = engine.prepare(&boot, &origin, &parameters).unwrap();
+        let signed = sign_selected(&prepared, &key.d, "signed floor test bootstrap").unwrap();
+        let enrolled = engine.finalize(prepared, &signed, &parameters).unwrap();
+        let load = load100(&boot).unwrap();
+        let prepared = engine.prepare(&load, enrolled.head(), &parameters).unwrap();
+        let signed = sign_selected(&prepared, &key.d, "signed floor test Load100").unwrap();
+        let loaded = engine.finalize(prepared, &signed, &parameters).unwrap();
+        let ExactOperationWitness::Load {
+            step: load_step, ..
+        } = &load
+        else {
+            unreachable!()
+        };
+        let step = crate::control::tests::recursive_refresh(
+            &load_step.after_core,
+            &load_step.after_rest,
+            loaded.head().profile(),
+            &key,
+            &b.input,
+        );
+        let mut changed = step.clone();
+        changed.authority.anchor.signature[3] ^= 1;
+        assert!(
+            engine
+                .prepare(
+                    &ExactOperationWitness::RefreshTimeAnchor(Box::new(changed)),
+                    loaded.head(),
+                    &parameters
+                )
+                .is_err()
+        );
+        let mut jumped = step.clone();
+        jumped.after_core[28] += Fp::ONE;
+        assert!(
+            engine
+                .prepare(
+                    &ExactOperationWitness::RefreshTimeAnchor(Box::new(jumped)),
+                    loaded.head(),
+                    &parameters
+                )
+                .is_err()
+        );
+        let expected_anchor = step.after_rest[5].to_repr();
+        let expected_floor = step.after_core[28].to_repr();
+        let signed_time = crate::time_anchor::issuer_time(&step.authority.anchor);
+        let operation = ExactOperationWitness::RefreshTimeAnchor(Box::new(step));
+        let original = operation.encode().unwrap();
+        assert_eq!(
+            ExactOperationWitness::decode(&original)
+                .unwrap()
+                .encode()
+                .unwrap(),
+            original
+        );
+        let mut trailing = original.clone();
+        trailing.push(0);
+        assert!(ExactOperationWitness::decode(&trailing).is_err());
+        let prepared = engine
+            .prepare(&operation, loaded.head(), &parameters)
+            .unwrap();
+        let capsule = prepared.capsule().clone();
+        let review = prepared.review_bytes().unwrap();
+        assert_eq!(review.len(), 243);
+        assert_eq!(&review[..3], &[2, 0, 7]);
+        assert_eq!(&review[3..35], capsule.scheme());
+        assert_eq!(&review[35..67], capsule.wallet());
+        assert_eq!(&review[67..99], capsule.operation_id());
+        assert_eq!(&review[99..131], prepared.capsule_digest());
+        assert_eq!(&review[131..163], &expected_anchor);
+        assert_eq!(&review[163..171], &signed_time.to_le_bytes());
+        assert_eq!(&review[171..179], &expected_floor[..8]);
+        assert_eq!(&review[179..211], capsule.predecessor());
+        assert_eq!(&review[211..243], capsule.successor());
+        assert_eq!(
+            engine
+                .resume(&capsule, &parameters)
+                .unwrap()
+                .review_bytes()
+                .unwrap(),
+            review
+        );
+        engine.before_selection(&capsule, &parameters).unwrap();
+        let signed = sign_selected(&prepared, &key.d, "signed floor test refresh").unwrap();
+        let completed = engine.finalize(prepared, &signed, &parameters).unwrap();
+        assert_eq!(&completed.head().profile()[62..64], &[Fp::ZERO, Fp::ONE]);
+        let verified = engine
+            .verify_completion(&capsule, completed.completion(), &parameters)
+            .unwrap();
+        assert_eq!(
+            verified.completion().encode().unwrap(),
+            completed.completion().encode().unwrap()
+        );
+        assert!(completed.completion().output_part(1).unwrap().is_empty());
+        assert!(
+            engine
+                .prepare(&operation, completed.head(), &parameters)
+                .is_err()
+        );
+        let ExactOperationWitness::RefreshTimeAnchor(refresh) = &operation else {
+            unreachable!()
+        };
+        engine::test_unload_claim(
+            &parameters,
+            completed.head(),
+            refresh,
+            load_step,
+            &key,
+            account,
+        );
+        eprintln!(
+            "signed TimeAnchor v2 review {} bytes, signed time {}, resulting floor {}, exact completion {} bytes",
+            review.len(),
+            signed_time,
+            u64::from_le_bytes(expected_floor[..8].try_into().unwrap()),
+            completed.completion().encode().unwrap().len()
+        );
+    }
+
     /// Two wallets through the real engine under the authenticated program
     /// bundle of a complete compiler run: A Bootstrap, A Load100, B Bootstrap,
     /// B-signed Request, A Send10 to B, B Receive; then back: A-signed
@@ -893,6 +1039,10 @@ pub fn receive_from(
     match latest {
         ExactOperationWitness::Bootstrap(_) => {}
         ExactOperationWitness::Load { step, .. } => {
+            (state.core, state.rest, state.statement) =
+                (step.after_core, step.after_rest, step.statement);
+        }
+        ExactOperationWitness::RefreshTimeAnchor(step) => {
             (state.core, state.rest, state.statement) =
                 (step.after_core, step.after_rest, step.statement);
         }

@@ -619,6 +619,7 @@ pub(crate) fn projection(context: &Context, input: &Inputs) -> crate::carrier::P
             .try_into()
             .unwrap(),
         full::BOOTSTRAP,
+        [Fp::ZERO; 2],
     )
     .expect("valid expected Bootstrap output encodings")
 }
@@ -890,7 +891,7 @@ mod tests {
                     tables,
                     copies,
                     cols,
-                    62,
+                    64,
                     b"profile S",
                 )
                 .0

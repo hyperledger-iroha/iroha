@@ -117,6 +117,14 @@ pub fn public_after(
     let (a, b) = crate::deferral::kind_bits(kind);
     public[full::KIND_IO] = Fp::from(a);
     public[full::KIND_IO + 1] = Fp::from(b);
+    public[crate::control::MODE_IO..crate::control::MODE_IO + 2].copy_from_slice(&[
+        Fp::from(u64::from(
+            kind == full::CONTROL && fields[16] == Fp::from(6),
+        )),
+        Fp::from(u64::from(
+            kind == full::CONTROL && fields[16] == Fp::from(7),
+        )),
+    ]);
     public
 }
 
@@ -213,7 +221,7 @@ fn new_inner(gens: &Gens<Eq>, relation: Option<[u8; 32]>) -> Chain {
         &load.statement,
         &load.receipt,
         boot_public[32..38].try_into().unwrap(),
-        full::LOAD,
+        full::CONTROL,
     );
 
     let mut request = CompletedRequest {
