@@ -104,6 +104,11 @@ claim before item E5 measures it.
   *2026-11-18:* construction chosen in [research/E4-F1-F2-DESIGN.md](research/E4-F1-F2-DESIGN.md) §3 (Codex astra):
   discharge Bootstrap's fresh matrix claims inside the first successor's circuits under pinned Bootstrap keys, then
   drop Bootstrap from the recurring polynomial. Not implemented; its cost is unmeasured.
+  *Step 1 (af4cc93556):* the in-circuit evaluator of the real Bootstrap tapes is exact and refuses false claims, but
+  it costs about 678K constraint rows and 1.18M committed cells per recurring P proof, likely a P geometry step and
+  about +200 B per Payment, and saves only about 3.8% of P's native q: P-Bootstrap is no longer 72% of it (the
+  53,964 figure predates the complete relations; P-Receive's tape now dominates). E4 is being re-weighed against
+  other ways to give Unload a corner before any integration.
 - [ ] **E5. One complete Pixel 6 Receive**: retained incoming bytes to a verified, durable, releasable output, with
   phase timings, carrier bytes and peak RSS from the same run; then Send, Load and Bootstrap. The Pixel operator runs
   it only with the owner's go typed in the operator's own chat. *Done when:* the 3 s target is judged on these
