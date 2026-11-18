@@ -24,10 +24,12 @@ import org.hyperledger.iroha.sdk.norito.WireLayout
  * a signer signs the hash of the bytes this adapter produces, so a dense payload is signed over
  * its dense hash, and bytes of the other layout are refused rather than reinterpreted.
  *
+ * In the dense layout each instruction keeps its typed framed form; the native bridge transcodes
+ * it to and from the envelope's bare dense payload by wire ID. Only a wire ID the bridge does not
+ * register stays an opaque [org.hyperledger.iroha.sdk.core.model.DenseWirePayload] envelope.
+ *
  * TODO(dense-activation): no ledger definition selects the dense layout yet, so nodes accept
- * only compact transactions. In the dense layout an instruction is an opaque
- * [org.hyperledger.iroha.sdk.core.model.DenseWirePayload] envelope; signed attachments and the
- * typed instruction builders remain compact-only.
+ * only compact transactions, and signed attachments remain compact-only.
  */
 class NoritoJavaCodecAdapter @JvmOverloads constructor(
     val chainDiscriminant: Int,

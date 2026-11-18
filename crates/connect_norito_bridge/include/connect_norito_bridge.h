@@ -31,6 +31,18 @@ extern "C" {
 #define CONNECT_NORITO_ERR_FI_CHECKPOINT -510
 #define CONNECT_NORITO_ERR_FI_CONTEXT -511
 #define CONNECT_NORITO_ERR_FI_CHECKPOINT_ADVANCE -512
+#define CONNECT_NORITO_ERR_WIRE_LAYOUT -515
+#define CONNECT_NORITO_ERR_INSTRUCTION_UNREGISTERED -516
+#define CONNECT_NORITO_ERR_INSTRUCTION_PAYLOAD -517
+#define CONNECT_NORITO_ERR_TRANSACTION_ARCHIVE -518
+
+/* Explicit Norito layout selectors; nothing infers a layout from payload bytes. */
+#define CONNECT_NORITO_LAYOUT_CURRENT 0
+#define CONNECT_NORITO_LAYOUT_DENSE 1
+/* Transaction archive framing: the versioned submission wire exists for the current layout only. */
+#define CONNECT_NORITO_TX_FORMAT_VERSIONED 0
+#define CONNECT_NORITO_TX_FORMAT_BARE 1
+#define CONNECT_NORITO_TX_FORMAT_FRAMED 2
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
 
@@ -1817,9 +1829,34 @@ int32_t connect_norito_encode_burn_signed_transaction_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-int32_t connect_norito_decode_signed_transaction_json(
+/* Decode one canonical signed transaction in an explicit layout and framing into typed JSON.
+ * Signatures are not authenticated. */
+int32_t connect_norito_decode_signed_transaction_json_v1(
     const uint8_t* signed_bytes, unsigned long signed_len,
+    uint8_t layout,
+    uint8_t format,
     uint8_t** out_json_ptr, unsigned long* out_json_len);
+
+/* Transcode one typed instruction envelope payload between layouts, keyed by its wire ID:
+ * the current layout carries the Norito frame, the dense layout the bare dense payload.
+ * CONNECT_NORITO_ERR_INSTRUCTION_UNREGISTERED leaves an unregistered envelope opaque. */
+int32_t connect_norito_transcode_instruction_v1(
+    const char* wire_id, unsigned long wire_id_len,
+    const uint8_t* payload, unsigned long payload_len,
+    uint8_t from_layout,
+    uint8_t to_layout,
+    uint8_t** out_payload_ptr, unsigned long* out_payload_len);
+
+/* Sign one exact bare or framed transaction payload in an explicit layout after binding its
+ * network; the signed transaction keeps the same selection. */
+int32_t connect_norito_sign_transaction_payload_v1(
+    const char* network_id, unsigned long network_id_len,
+    const uint8_t* payload, unsigned long payload_len,
+    uint8_t layout,
+    uint8_t format,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len);
 
 int32_t connect_norito_decode_asset_id_json(
     const char* asset_literal, unsigned long asset_len,

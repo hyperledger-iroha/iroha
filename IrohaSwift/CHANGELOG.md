@@ -4,6 +4,13 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-11-17: Dense instruction bodies are typed. The native bridge's
+  `connect_norito_transcode_instruction_v1` decodes a dense envelope's bare payload into the frame
+  of the instruction its wire ID registers and transcodes frames into dense payloads, so a dense
+  executable decodes to, and builds from, the same instruction frames as the current layout.
+  `NoritoNativeBridge.decodeSignedTransaction` binds the explicit-layout
+  `connect_norito_decode_signed_transaction_json_v1`, which replaces the current-only export.
+
 - 2026-11-17: The Swift Norito codec implements the dense layout (`norito.md`, header minor `1`)
   next to the unchanged current layouts. `NoritoWireLayout` (`.fixed`, `.compact`, `.dense`) is
   the explicit selector: `noritoEncode(typeName:payload:layout:)` writes the header, `NoritoHeader`
@@ -12,8 +19,7 @@ All notable changes to `IrohaSwift` are documented in this file.
   executable, fee-payment, metadata and signed-transaction paths take the same parameter
   internally. Frame decoders for the current layouts refuse a dense frame, and a headerless
   payload is read only in the layout its owner names. No builder emits dense: no ledger
-  definition selects it, and the native bridge still encodes instruction bodies in the current
-  layout only.
+  definition selects it.
 
 - 2026-10-31: `ToriiParliamentAPIV1` layout tables state Core's actual Norito and event-kind
   indices: the rows after `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN

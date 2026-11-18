@@ -117,6 +117,7 @@ retail_model = Path(sys.argv[5]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[6]).read_text(encoding="utf-8")
 jni_path = Path(sys.argv[7])
 rust += "\n" + (jni_path.parent / "privacy_construction.rs").read_text(encoding="utf-8")
+rust += "\n" + (jni_path.parent / "transaction_layout.rs").read_text(encoding="utf-8")
 wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
@@ -166,6 +167,11 @@ DETACHED_EXPORTS = {
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
+}
+TRANSACTION_LAYOUT_EXPORTS = {
+    "connect_norito_decode_signed_transaction_json_v1",
+    "connect_norito_sign_transaction_payload_v1",
+    "connect_norito_transcode_instruction_v1",
 }
 RETAIL_EXPORTS = {
     "connect_norito_retail_fee_intent_hash_v1",
@@ -663,10 +669,23 @@ for name in sorted(rust_transaction_signers):
     ]:
         raise SystemExit(f"C signer {name} fee/private-key argument ordering drift")
 
+def transaction_layout_exports(exports) -> set[str]:
+    return {
+        name
+        for name in exports
+        if name.startswith(("connect_norito_transcode_instruction", "connect_norito_sign_transaction_payload"))
+        or name.startswith("connect_norito_decode_signed_transaction_json")
+    }
+
+
+exact("Rust transaction layout", TRANSACTION_LAYOUT_EXPORTS, transaction_layout_exports(rust_exports("connect_norito_")))
+exact("C transaction layout", TRANSACTION_LAYOUT_EXPORTS, transaction_layout_exports(header_exports("connect_norito_")))
+
 require_signature_parity(
     PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
+    | TRANSACTION_LAYOUT_EXPORTS
     | RETAIL_EXPORTS
     | PRIVATE_SETTLEMENT_EXPORTS
     | KAGEMUSHA_WALLET_EXPORTS
@@ -701,8 +720,23 @@ for rust_name, value, header_name in (
         "-506",
         "CONNECT_NORITO_ERR_RETAIL_FEE_ASSESSMENT",
     ),
+    ("ERR_WIRE_LAYOUT", "-515", "CONNECT_NORITO_ERR_WIRE_LAYOUT"),
+    ("ERR_INSTRUCTION_UNREGISTERED", "-516", "CONNECT_NORITO_ERR_INSTRUCTION_UNREGISTERED"),
+    ("ERR_INSTRUCTION_PAYLOAD", "-517", "CONNECT_NORITO_ERR_INSTRUCTION_PAYLOAD"),
+    ("ERR_TRANSACTION_ARCHIVE", "-518", "CONNECT_NORITO_ERR_TRANSACTION_ARCHIVE"),
 ):
     require(rf"const\s+{rust_name}\s*:\s*c_int\s*=\s*{value}\s*;", rust, rust_name)
+    require(rf"#define\s+{header_name}\s+{value}(?:\s|$)", header, header_name)
+
+# Explicit layout and archive selectors: one C name per Rust selector, never inferred.
+for rust_name, value, header_name in (
+    ("LAYOUT_CURRENT", "0", "CONNECT_NORITO_LAYOUT_CURRENT"),
+    ("LAYOUT_DENSE", "1", "CONNECT_NORITO_LAYOUT_DENSE"),
+    ("FORMAT_VERSIONED", "0", "CONNECT_NORITO_TX_FORMAT_VERSIONED"),
+    ("FORMAT_BARE", "1", "CONNECT_NORITO_TX_FORMAT_BARE"),
+    ("FORMAT_FRAMED", "2", "CONNECT_NORITO_TX_FORMAT_FRAMED"),
+):
+    require(rf"const\s+{rust_name}\s*:\s*c_uchar\s*=\s*{value}\s*;", rust, rust_name)
     require(rf"#define\s+{header_name}\s+{value}(?:\s|$)", header, header_name)
 
 for name, expected in {

@@ -9,7 +9,9 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// The Norito RPC fixture transactions in the dense layout
 /// (<c>fixtures/norito_rpc/transaction_fixtures.dense.json</c>) and their current-layout twins
 /// (<c>transaction_fixtures.manifest.json</c>): the typed transaction decoder reads both layouts
-/// and re-encodes each byte-identically. Needs no native artifact.
+/// and re-encodes each byte-identically. A dense instruction body is admitted only as the typed
+/// instruction its wire id registers, which the ABI-33 native bridge decodes, so the dense suite
+/// needs the same-source bridge.
 /// </summary>
 public sealed class NoritoDenseTransactionFixtureTests
 {
@@ -134,8 +136,9 @@ public sealed class NoritoDenseTransactionFixtureTests
                 DescribeExecutable(compactPayload.Executable, out var compactInstructions),
                 DescribeExecutable(densePayload.Executable, out var denseInstructions));
 
-            // The same instructions travel in both layouts: a complete Norito frame per
-            // instruction in the current layout, the bare dense payload in the dense one.
+            // The same typed instructions travel in both layouts: a complete Norito frame per
+            // instruction in the current layout, the bare dense payload in the dense one. The
+            // bridge decodes each as its registered instruction and transcodes it exactly.
             Assert.Equal(compactInstructions.Count, denseInstructions.Count);
             foreach (var (framed, bare) in compactInstructions.Zip(denseInstructions))
             {
@@ -143,6 +146,14 @@ public sealed class NoritoDenseTransactionFixtureTests
                 Assert.Equal(NoritoWireLayout.Compact, NoritoCodec.ReadLayout(framed.Payload));
                 Assert.True(bare.Payload.AsSpan().IndexOf("NRT0"u8) < 0);
                 Assert.True(bare.Payload.Length + NoritoHeader.EncodedLength <= framed.Payload.Length);
+                Assert.Equal(
+                    bare.Payload,
+                    NoritoInstructionLayoutNative.Transcode(
+                        framed.WireId, framed.Payload, NoritoWireLayout.Compact, NoritoWireLayout.Dense, "framed"));
+                Assert.Equal(
+                    framed.Payload,
+                    NoritoInstructionLayoutNative.Transcode(
+                        bare.WireId, bare.Payload, NoritoWireLayout.Dense, NoritoWireLayout.Compact, "bare"));
             }
 
             compactTotal += compact.SignedTransactionBytes.Length;

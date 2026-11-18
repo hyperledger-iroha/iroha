@@ -1049,6 +1049,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Int32
     private typealias DecodeSignedFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
+        UInt8,
+        UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
+    private typealias TranscodeInstructionFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UInt8,
+        UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
@@ -1664,6 +1674,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernanceCastZkBallotFn: EncodeGovernanceCastZkBallotFn? = nil
     private var encodeGovernanceCastZkBallotWithAlgFn: EncodeGovernanceCastZkBallotWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
+    private var transcodeInstructionFn: TranscodeInstructionFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
     var freeFn: FreeFn? = nil
@@ -1794,6 +1805,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernanceCastZkBallotFn: Any? = nil
     private let encodeGovernanceCastZkBallotWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
+    private let transcodeInstructionFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
     private let freeFn: Any? = nil
     private let chainDiscriminantScopeFns: Any? = nil
@@ -2058,6 +2070,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferInstructionFrameFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_encode_transfer_instruction_frame_v1") }
             .map { unsafeBitCast($0, to: EncodeTransferInstructionBoxFn.self) }
+        self.decodeSignedFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_decode_signed_transaction_json_v1") }
+            .map { unsafeBitCast($0, to: DecodeSignedFn.self) }
+        self.transcodeInstructionFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_transcode_instruction_v1") }
+            .map { unsafeBitCast($0, to: TranscodeInstructionFn.self) }
         loadPrivacySymbols(from: staticHandle)
         self.detachedTransactionInspectFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_detached_transaction_scaffold_inspect_v1") }
@@ -2400,11 +2418,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.encodeGovernanceCastZkBallotWithAlgFn = nil
             }
-            if let decodeSymbol = dlsym(handle, "connect_norito_decode_signed_transaction_json") {
+            if let decodeSymbol = dlsym(handle, "connect_norito_decode_signed_transaction_json_v1") {
                 self.decodeSignedFn = unsafeBitCast(decodeSymbol, to: DecodeSignedFn.self)
             } else {
                 self.decodeSignedFn = nil
             }
+            self.transcodeInstructionFn = dlsym(handle, "connect_norito_transcode_instruction_v1")
+                .map { unsafeBitCast($0, to: TranscodeInstructionFn.self) }
             if let decodeReceiptSymbol = dlsym(handle, "connect_norito_decode_transaction_receipt_json") {
                 self.decodeReceiptFn = unsafeBitCast(decodeReceiptSymbol, to: DecodeReceiptFn.self)
             } else {
@@ -2886,6 +2906,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeGovernanceCastZkBallotFn = nil
             self.encodeGovernanceCastZkBallotWithAlgFn = nil
             self.decodeSignedFn = nil
+            self.transcodeInstructionFn = nil
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
             self.freeFn = nil
@@ -3328,6 +3349,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             literal: authority,
             expectedPrefix: AccountId.defaultNetworkPrefix
         )) != nil
+        #else
+        return false
+        #endif
+    }
+
+    /// Whether the native instruction layout transcoder is loaded.
+    var isInstructionTranscoderAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return transcodeInstructionFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -5409,15 +5440,33 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    func decodeSignedTransaction(_ data: Data) -> String? {
+    /// Typed JSON of one canonical signed transaction in an explicit layout and
+    /// framing (`connect_norito_decode_signed_transaction_json_v1`).
+    ///
+    /// `.versioned` is the governed submission wire and exists for the current
+    /// layout only; `.bare` and `.framed` name an offline archive. The layout is
+    /// the caller's selection and is never inferred from the bytes.
+    func decodeSignedTransaction(
+        _ data: Data,
+        layout: NoritoWireLayout = .compact,
+        archive: NativeTransactionArchive = .versioned
+    ) -> String? {
         #if canImport(Darwin)
-        guard let decodeSignedFn, let freeFn else { return nil }
+        guard let decodeSignedFn, let freeFn,
+              let layoutSelector = Self.layoutSelector(layout) else { return nil }
 
         var jsonPtr: UnsafeMutablePointer<UInt8>? = nil
         var jsonLen: UInt = 0
 
         let status = data.withUnsafeBytes { buffer -> Int32 in
-            decodeSignedFn(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &jsonPtr, &jsonLen)
+            decodeSignedFn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                UInt(data.count),
+                layoutSelector,
+                archive.rawValue,
+                &jsonPtr,
+                &jsonLen
+            )
         }
 
         guard status == 0, let jsonPtr else {
@@ -5430,6 +5479,77 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return String(data: jsonData, encoding: .utf8)
         #else
         return nil
+        #endif
+    }
+
+    /// Native selector of an instruction or transaction layout; the fixed
+    /// layout has none.
+    private static func layoutSelector(_ layout: NoritoWireLayout) -> UInt8? {
+        switch layout {
+        case .compact: return 0
+        case .dense: return 1
+        case .fixed: return nil
+        }
+    }
+
+    /// Transcode one instruction envelope payload between layouts by wire ID
+    /// (`connect_norito_transcode_instruction_v1`).
+    ///
+    /// The current layout carries the instruction's Norito frame; the dense
+    /// layout carries its bare dense payload. Returns `nil` when the bridge
+    /// registers no instruction under `wireName`, so the caller keeps that
+    /// envelope opaque in its own layout.
+    func transcodeInstruction(
+        wireName: String,
+        payload: Data,
+        from: NoritoWireLayout,
+        to: NoritoWireLayout
+    ) throws -> Data? {
+        guard let fromSelector = Self.layoutSelector(from),
+              let toSelector = Self.layoutSelector(to) else {
+            throw NativeInstructionLayoutError.invalidLayout
+        }
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime, let transcodeInstructionFn, let freeFn else {
+            throw NativeInstructionLayoutError.bridgeUnavailable
+        }
+        var outputPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outputLen: UInt = 0
+        let wireBytes = Array(wireName.utf8)
+        // A fieldless instruction's dense payload is empty; keep a valid base
+        // address so the bridge never receives a dangling pointer.
+        let payloadBytes = payload.isEmpty ? [UInt8(0)] : [UInt8](payload)
+        let status = wireBytes.withUnsafeBufferPointer { wireBuffer -> Int32 in
+            payloadBytes.withUnsafeBufferPointer { payloadBuffer -> Int32 in
+                wireBuffer.withMemoryRebound(to: CChar.self) { wireChars -> Int32 in
+                    transcodeInstructionFn(
+                        wireChars.baseAddress,
+                        UInt(wireBytes.count),
+                        payloadBuffer.baseAddress,
+                        UInt(payload.count),
+                        fromSelector,
+                        toSelector,
+                        &outputPtr,
+                        &outputLen
+                    )
+                }
+            }
+        }
+        defer { if let outputPtr { freeFn(outputPtr) } }
+        switch status {
+        case 0:
+            guard outputLen > 0 else { return Data() }
+            guard let outputPtr else { throw NativeInstructionLayoutError.bridgeUnavailable }
+            return Data(bytes: outputPtr, count: Int(outputLen))
+        case NativeInstructionLayoutError.unregisteredStatus:
+            return nil
+        case NativeInstructionLayoutError.payloadStatus:
+            throw NativeInstructionLayoutError.noncanonicalPayload(wireName: wireName, layout: from)
+        default:
+            throw NativeInstructionLayoutError.bridgeStatus(status)
+        }
+        #else
+        throw NativeInstructionLayoutError.bridgeUnavailable
         #endif
     }
 

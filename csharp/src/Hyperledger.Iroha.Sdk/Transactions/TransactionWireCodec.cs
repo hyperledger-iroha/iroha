@@ -728,7 +728,21 @@ internal static class TransactionWireCodec
             throw new ArgumentException($"{context}.wire_id is not a well-formed instruction wire id.", parameterName);
         }
 
-        return new WireInstruction(wireId, DecodeBytesVec(payloadField, $"{context}.payload", parameterName, layout));
+        var payload = DecodeBytesVec(payloadField, $"{context}.payload", parameterName, layout);
+        if (layout == NoritoWireLayout.Dense)
+        {
+            // A dense body has no self-describing header: a registered wire ID's payload must be
+            // exactly that instruction's canonical dense payload, which the native bridge decodes
+            // as the typed instruction. An unregistered wire ID stays an opaque envelope.
+            NoritoInstructionLayoutNative.Transcode(
+                wireId,
+                payload,
+                NoritoWireLayout.Dense,
+                NoritoWireLayout.Dense,
+                parameterName);
+        }
+
+        return new WireInstruction(wireId, payload);
     }
 
     private static WireContractInvocation DecodeContractInvocation(

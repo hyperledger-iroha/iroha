@@ -12,7 +12,6 @@ import org.hyperledger.iroha.sdk.core.model.ActionOperationV1
 import org.hyperledger.iroha.sdk.core.model.ActionPublicInputsDigestV1
 import org.hyperledger.iroha.sdk.core.model.ActionRoleV1
 import org.hyperledger.iroha.sdk.core.model.ActionStatementDigestV1
-import org.hyperledger.iroha.sdk.core.model.DenseWirePayload
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -47,8 +46,8 @@ import kotlin.test.assertTrue
  *
  * The same `TransactionPayload` codec that round-trips the current-layout fixtures
  * ([TransactionFixtureParityTest]) runs here with [WireLayout.DENSE]. Like that suite, it builds
- * account addresses and therefore needs the native bridge; [DenseTransactionWireTest] covers the
- * same fixtures without it.
+ * account addresses, and its instruction bodies are transcoded by the native bridge, so it needs
+ * the same-source bridge; [DenseTransactionWireTest] covers the same fixtures without it.
  */
 class TransactionDenseFixtureParityTest {
     private val compactAdapter = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -115,20 +114,20 @@ class TransactionDenseFixtureParityTest {
             val name = fixture.name
             val source = sources.getValue(name).materializePayload()
             val decoded = denseAdapter.decodeTransaction(payloadBytes(fixture))
-            // Every field comes from the fixture descriptor. Only instruction envelopes come from
-            // the dense fixture: the SDK keeps instruction payloads opaque and cannot transcode
-            // the descriptor's framed minor-0 instruction into its bare dense payload.
+            // Every field, including each typed instruction frame, comes from the fixture
+            // descriptor; the bridge transcodes the frames into their bare dense payloads.
             val payload = TransactionPayload(
                 networkId = source.networkId,
                 authority = source.authority,
                 creationTimeMs = source.creationTimeMs,
-                executable = withDenseEnvelopes(source.executable, decoded.executable),
+                executable = source.executable,
                 timeToLiveMs = source.timeToLiveMs,
                 nonce = source.nonce,
                 feePayment = source.feePayment,
                 metadata = source.metadata,
             )
-            if (payload.executable == source.executable) builtFromDescriptorAlone++
+            assertEquals(decoded, payload, "$name: decoded dense payload")
+            builtFromDescriptorAlone++
 
             val signed = TransactionBuilder(denseAdapter).encodeAndSign(payload, signer)
             assertContentEquals(payloadBytes(fixture), signed.encodedPayload(), "$name: built dense payload")
@@ -143,7 +142,7 @@ class TransactionDenseFixtureParityTest {
                 .signature()
             assertFalse(compactSignature.contentEquals(signed.signature()), "$name: layout-bound signature")
         }
-        assertTrue(builtFromDescriptorAlone > 0, "one fixture must be built from the descriptor alone")
+        assertEquals(dense.size, builtFromDescriptorAlone, "every fixture is built from its descriptor alone")
     }
 
     @Test
@@ -286,34 +285,66 @@ class TransactionDenseFixtureParityTest {
     }
 
     @Test
-    fun `an instruction envelope encodes only in the layout it was decoded from`() {
+    fun `typed instruction frames encode in both layouts`() {
         for (fixture in dense) {
             val name = fixture.name
             val source = sources.getValue(name).materializePayload()
             val decoded = denseAdapter.decodeTransaction(payloadBytes(fixture))
-            if (instructions(source.executable).isEmpty()) {
-                // Without instructions the descriptor alone determines the dense bytes.
-                assertContentEquals(payloadBytes(fixture), denseAdapter.encodeTransaction(source), name)
-                continue
-            }
-            val framed = assertFailsWith<NoritoException>("$name: framed instruction in a dense payload") {
-                denseAdapter.encodeTransaction(source)
-            }
-            assertTrue(framed.cause?.message.orEmpty().contains("not in the dense layout"), framed.cause?.message)
-            val bare = assertFailsWith<NoritoException>("$name: dense envelope in a compact payload") {
-                compactAdapter.encodeTransaction(decoded)
-            }
-            assertTrue(bare.cause?.message.orEmpty().contains("cannot be encoded in the current layout"), bare.cause?.message)
+            assertContentEquals(payloadBytes(fixture), denseAdapter.encodeTransaction(source), name)
+            assertContentEquals(
+                bare(manifest.getValue(name).payloadBase64, TRANSACTION_PAYLOAD_TYPE),
+                compactAdapter.encodeTransaction(decoded),
+                "$name: a dense decode re-encodes in the current layout",
+            )
         }
     }
 
     @Test
-    fun `dense envelopes of typed-check instructions are refused`() {
+    fun `only an unregistered wire ID stays an opaque dense envelope`() {
         val fixture = dense.single { it.name == "set_parameter_next_mode" }
-        val payloadBytes = payloadBytes(fixture)
-        val decoded = denseAdapter.decodeTransaction(payloadBytes)
-        val original = assertIs<DenseWirePayload>(instructions(decoded.executable).single().payload)
-        assertEquals("iroha.set_parameter", original.wireName)
+        val decoded = denseAdapter.decodeTransaction(payloadBytes(fixture))
+        val typed = assertIs<WirePayload>(instructions(decoded.executable).single().payload)
+        assertEquals("iroha.set_parameter", typed.wireName)
+        val compact = compactAdapter.encodeTransaction(decoded)
+        val densePayload = assertNotNull(NativeInstructionLayoutBridge.denseFromFrame(typed.wireName, typed.payloadBytes))
+
+        // An unregistered wire ID keeps its bytes and its layout.
+        val unregistered = "test.unreleased.instruction.v1"
+        val opaque = decoded.copy(
+            executable = Executable.instructions(
+                listOf(InstructionBox.fromDenseWirePayload(unregistered, densePayload)),
+            ),
+        )
+        val opaqueBytes = denseAdapter.encodeTransaction(opaque)
+        assertEquals(opaque, denseAdapter.decodeTransaction(opaqueBytes))
+        val inCurrent = assertFailsWith<NoritoException> { compactAdapter.encodeTransaction(opaque) }
+        assertTrue(inCurrent.cause?.message.orEmpty().contains("cannot be encoded in the current layout"), inCurrent.cause?.message)
+        val framedUnregistered = decoded.copy(
+            executable = Executable.instructions(
+                listOf(InstructionBox.fromWirePayload(unregistered, typed.payloadBytes)),
+            ),
+        )
+        compactAdapter.encodeTransaction(framedUnregistered)
+        val inDense = assertFailsWith<NoritoException> { denseAdapter.encodeTransaction(framedUnregistered) }
+        assertTrue(inDense.cause?.message.orEmpty().contains("no registered dense encoding"), inDense.cause?.message)
+
+        // A registered instruction is built from its typed frame, never as an opaque envelope.
+        val registered = decoded.copy(
+            executable = Executable.instructions(
+                listOf(InstructionBox.fromDenseWirePayload(typed.wireName, densePayload)),
+            ),
+        )
+        val refused = assertFailsWith<NoritoException> { denseAdapter.encodeTransaction(registered) }
+        assertTrue(refused.cause?.message.orEmpty().contains("is registered"), refused.cause?.message)
+        assertContentEquals(compact, compactAdapter.encodeTransaction(denseAdapter.decodeTransaction(payloadBytes(fixture))))
+    }
+
+    @Test
+    fun `a dense envelope is decoded as exactly the instruction its wire ID registers`() {
+        val fixture = dense.single { it.name == "set_parameter_next_mode" }
+        val decoded = denseAdapter.decodeTransaction(payloadBytes(fixture))
+        val typed = assertIs<WirePayload>(instructions(decoded.executable).single().payload)
+        val densePayload = assertNotNull(NativeInstructionLayoutBridge.denseFromFrame(typed.wireName, typed.payloadBytes))
 
         for (wireName in listOf(
             "iroha.privacy.submit_proof.v1",
@@ -321,13 +352,16 @@ class TransactionDenseFixtureParityTest {
             "iroha.instruction.v1::kaigi::CreateKaigi",
             UpdatePlainConvictionWirePayloadEncoder.WIRE_NAME,
         )) {
-            val refused = decoded.copy(
-                executable = Executable.instructions(
-                    listOf(InstructionBox.fromDenseWirePayload(wireName, original.payloadBytes)),
-                ),
-            )
-            val error = assertFailsWith<NoritoException>(wireName) { denseAdapter.encodeTransaction(refused) }
-            assertTrue(error.cause?.message.orEmpty().contains("not supported in the dense Norito layout"), error.cause?.message)
+            // Another instruction's payload under a typed-check wire ID is never accepted.
+            assertFailsWith<NoritoException>(wireName) {
+                denseAdapter.encodeTransaction(
+                    decoded.copy(
+                        executable = Executable.instructions(
+                            listOf(InstructionBox.fromDenseWirePayload(wireName, densePayload)),
+                        ),
+                    ),
+                )
+            }
 
             // The same envelope on the wire is refused by the decoder: a placeholder of equal
             // length keeps every length prefix exact, then the wire ID is patched in place.
@@ -335,7 +369,7 @@ class TransactionDenseFixtureParityTest {
             val encoded = denseAdapter.encodeTransaction(
                 decoded.copy(
                     executable = Executable.instructions(
-                        listOf(InstructionBox.fromDenseWirePayload(placeholder, original.payloadBytes)),
+                        listOf(InstructionBox.fromDenseWirePayload(placeholder, densePayload)),
                     ),
                 ),
             )
@@ -343,11 +377,34 @@ class TransactionDenseFixtureParityTest {
             assertTrue(offset > 0, "placeholder wire ID must be on the wire")
             val patched = encoded.copyOf()
             wireName.toByteArray(Charsets.US_ASCII).copyInto(patched, offset)
-            assertEquals(decoded.copy(executable = Executable.instructions(
-                listOf(InstructionBox.fromDenseWirePayload(placeholder, original.payloadBytes)),
-            )), denseAdapter.decodeTransaction(encoded))
             assertFailsWith<NoritoException>("$wireName on the wire") { denseAdapter.decodeTransaction(patched) }
         }
+
+        // The registered instruction's own body with a trailing byte is refused as well: the
+        // opaque placeholder carries it onto the wire, then the wire ID is patched in place.
+        val extended = densePayload + byteArrayOf(0)
+        assertFailsWith<NoritoException> {
+            denseAdapter.encodeTransaction(
+                decoded.copy(
+                    executable = Executable.instructions(
+                        listOf(InstructionBox.fromDenseWirePayload(typed.wireName, extended)),
+                    ),
+                ),
+            )
+        }
+        val placeholder = "x".repeat(typed.wireName.length)
+        val encoded = denseAdapter.encodeTransaction(
+            decoded.copy(
+                executable = Executable.instructions(
+                    listOf(InstructionBox.fromDenseWirePayload(placeholder, extended)),
+                ),
+            ),
+        )
+        val offset = indexOf(encoded, placeholder.toByteArray(Charsets.US_ASCII))
+        assertTrue(offset > 0, "placeholder wire ID must be on the wire")
+        val patched = encoded.copyOf()
+        typed.wireName.toByteArray(Charsets.US_ASCII).copyInto(patched, offset)
+        assertFailsWith<NoritoException> { denseAdapter.decodeTransaction(patched) }
     }
 
     @Test
@@ -413,48 +470,18 @@ class TransactionDenseFixtureParityTest {
         assertFailsWith<NoritoException> { SignedTransactionEncoder.decode(encoded) }
     }
 
-    /** Compare executables structurally; returns the number of instruction envelopes checked. */
+    /**
+     * The dense executable decodes into exactly the descriptor's typed executable: each instruction
+     * is the same framed `WirePayload` the current layout carries. Returns the instruction count.
+     */
     private fun assertSameExecutable(name: String, source: Executable, decoded: Executable): Int {
-        assertEquals(source::class, decoded::class, "$name: executable variant")
-        when (source) {
-            is Executable.Batch -> {
-                val entries = assertIs<Executable.Batch>(decoded).entries
-                assertEquals(source.entries.size, entries.size, "$name: batch size")
-                for ((index, entry) in source.entries.withIndex()) {
-                    if (entry is ExecutableBatchItem.ContractCall) assertEquals(entry, entries[index], "$name[$index]")
-                    else assertIs<ExecutableBatchItem.Instruction>(entries[index], "$name[$index]")
-                }
-            }
-            is Executable.Instructions -> Unit
-            else -> assertEquals(source, decoded, "$name: executable")
+        assertEquals(source, decoded, "$name: executable")
+        val typed = instructions(decoded)
+        for ((index, instruction) in typed.withIndex()) {
+            val frame = assertIs<WirePayload>(instruction.payload, "$name[$index]: typed instruction")
+            assertEquals(0, indexOf(frame.payloadBytes, NoritoHeader.MAGIC), "$name[$index]: framed")
         }
-        val framed = instructions(source)
-        val bare = instructions(decoded)
-        assertEquals(framed.size, bare.size, "$name: instruction count")
-        for ((index, instruction) in framed.withIndex()) {
-            val frame = assertIs<WirePayload>(instruction.payload, "$name[$index]: descriptor instruction")
-            val envelope = assertIs<DenseWirePayload>(bare[index].payload, "$name[$index]: dense envelope")
-            assertEquals(frame.wireName, envelope.wireName, "$name[$index]: wire ID")
-            // The current layout nests a complete frame; the dense payload is bare and no larger.
-            val nested = NoritoHeader.decode(frame.payloadBytes, null)
-            assertTrue(envelope.payloadBytes.size <= nested.payload.size, "$name[$index]: dense payload size")
-            assertEquals(-1, indexOf(envelope.payloadBytes, NoritoHeader.MAGIC), "$name[$index]: nested frame")
-        }
-        return framed.size
-    }
-
-    /** The descriptor's executable with each framed instruction replaced by its dense envelope. */
-    private fun withDenseEnvelopes(source: Executable, decoded: Executable): Executable = when (source) {
-        is Executable.Instructions -> Executable.instructions(instructions(decoded))
-        is Executable.Batch -> {
-            val envelopes = instructions(decoded).iterator()
-            Executable.batch(
-                source.entries.map { entry ->
-                    if (entry is ExecutableBatchItem.Instruction) ExecutableBatchItem.instruction(envelopes.next()) else entry
-                },
-            )
-        }
-        else -> source
+        return typed.size
     }
 
     private fun instructions(executable: Executable): List<InstructionBox> = when (executable) {

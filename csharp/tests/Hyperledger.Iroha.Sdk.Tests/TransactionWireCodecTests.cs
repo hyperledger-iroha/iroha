@@ -184,8 +184,17 @@ public sealed class TransactionWireCodecTests
         foreach (var wireId in new[] { "a", "iroha.instruction.v1::transparent::SetAssetKeyValue", "A_b-c@d/e:9", new string('a', 192) })
         {
             Assert.True(TransactionWireCodec.IsWellFormedWireId(wireId));
-            var accepted = valid with { Executable = new WireInstructionsExecutable([new WireInstruction(wireId, [1])]) };
-            _ = TransactionWireCodec.DecodePayload(TransactionWireCodec.EncodePayload(accepted), layout, "payload");
+            var envelope = valid with { Executable = new WireInstructionsExecutable([new WireInstruction(wireId, [1])]) };
+            var encoded = TransactionWireCodec.EncodePayload(envelope);
+            if (layout == NoritoWireLayout.Dense && wireId.StartsWith("iroha.", StringComparison.Ordinal))
+            {
+                // A dense body has no header: a registered wire id admits only its instruction's
+                // canonical dense payload, which `[1]` is not.
+                Assert.Throws<ArgumentException>(() => TransactionWireCodec.DecodePayload(encoded, layout, "payload"));
+                continue;
+            }
+
+            _ = TransactionWireCodec.DecodePayload(encoded, layout, "payload");
         }
 
         // A numeric mantissa has one encoding: minimal two's-complement bytes, none for zero.
