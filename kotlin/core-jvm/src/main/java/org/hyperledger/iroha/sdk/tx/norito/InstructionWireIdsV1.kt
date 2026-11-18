@@ -360,6 +360,7 @@ internal object InstructionWireIdsV1 {
         "iroha.runtime.obligation.register.v1",
         "iroha.runtime.retirement.finalize.v1",
         "iroha.runtime.support.attest.v1",
+        "iroha.runtime.taira_read_scope.schedule.v1",
         "iroha.runtime.taira_time_ironwood.schedule.v1",
         "iroha.rwa",
         "iroha.set_key_value",
