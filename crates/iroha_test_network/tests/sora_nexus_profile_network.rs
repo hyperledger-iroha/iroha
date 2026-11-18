@@ -14,7 +14,8 @@
 //!
 //! Genesis is today's Kagami Taira network re-targeted to the profile (the P2 genesis builder
 //! replaces this, TODO(P2)): content of the Taira catalog the profile omits (the Digital Shekel
-//! dataspace and validator seats on lanes the profile does not define) is removed, the protocol
+//! data space and validator seats on lanes the profile does not define) is removed. The short-epoch
+//! beacon fixture also omits Taira’s optional SCCP initialization, which requires hour-long epochs. The protocol
 //! custody account becomes the profile's keyless account, the `NPoS` epoch becomes the qual
 //! profile's, and Kagami signs it against the flattened profile render of validator 0.
 //!
@@ -283,6 +284,15 @@ fn taira_catalog_only(instruction: &Value, lanes: &BTreeSet<i64>) -> Result<bool
     Ok(false)
 }
 
+/// A short-epoch beacon network cannot initialize the Taira collateral protocol.
+fn profile_allows_instruction(profile: &Profile, instruction: &InstructionBox) -> bool {
+    use iroha_data_model::{isi::sccp::InitializeSccpV1, sccp::params::SCCP_MIN_EPOCH_MS_V1};
+    let recipe = profile.genesis_recipe();
+    !instruction.as_any().is::<InitializeSccpV1>()
+        || u128::from(recipe.epoch_length_blocks) * u128::from(recipe.block_cadence_ms)
+            >= u128::from(SCCP_MIN_EPOCH_MS_V1)
+}
+
 /// Re-target Kagami's Taira manifest to the profile (see the module documentation).
 fn profile_manifest(
     kagami: &Path,
@@ -300,15 +310,21 @@ fn profile_manifest(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| eyre!("Kagami manifest has no transactions"))?;
     let mut removed = 0;
-    for transaction in transactions.iter_mut() {
+    for (transaction, original) in transactions.iter_mut().zip(raw.transactions()) {
         if let Some(instructions) = transaction
             .get_mut("instructions")
             .and_then(Value::as_array_mut)
         {
             let before = instructions.len();
             let mut kept = Vec::with_capacity(before);
-            for instruction in instructions.drain(..) {
-                if !taira_catalog_only(&instruction, &lanes)? {
+            ensure!(
+                before == original.instructions().len(),
+                "genesis instruction count changed during serialization"
+            );
+            for (instruction, typed) in instructions.drain(..).zip(original.instructions()) {
+                if profile_allows_instruction(profile, typed)
+                    && !taira_catalog_only(&instruction, &lanes)?
+                {
                     kept.push(instruction);
                 }
             }
@@ -983,6 +999,21 @@ fn deep_merge_overlays_leaves_and_merges_tables() {
         base,
         toml::from_str::<toml::Table>("a = 1\nb = 2\n[t]\nx = 1\ny = 3\nz = 4\n").unwrap()
     );
+}
+
+#[test]
+fn short_epoch_qual_genesis_excludes_only_sccp_initialization_from_the_beacon_fixture() {
+    use iroha_data_model::{isi::sccp::InitializeSccpV1, sccp::params::SccpParametersV1};
+    let profile = Profile::compiled(PROFILE).unwrap();
+    let initialize = InitializeSccpV1 {
+        parameters: SccpParametersV1::taira_default(),
+        reset_nonce: [1; 32],
+    };
+    assert!(!profile_allows_instruction(&profile, &initialize.into()));
+    assert!(profile_allows_instruction(
+        &profile,
+        &Log::new(Level::INFO, "beacon fixture".to_owned()).into()
+    ));
 }
 
 #[test]
