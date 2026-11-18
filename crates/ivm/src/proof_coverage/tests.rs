@@ -1334,7 +1334,7 @@ fn producer_scope_files() -> Vec<String> {
 /// file never names the error type, which no construction can avoid.
 fn producer_code(file: &str) -> String {
     let text = scan::read(file);
-    if text.contains("VMError") {
+    if text.contains("VMError") || text.contains("VmDeferral") {
         scan::strip_line_comments(&scan::non_test_source(&text))
     } else {
         String::new()

@@ -221,7 +221,7 @@ fn borrowed_heap_state_payload_is_copied_and_invalid_envelopes_cannot_mutate_it(
     vm.set_register(11, value_ptr);
     let mut host = CoreHost::new();
     assert!(
-        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm)
+        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, vm.syscall_quote())
             .unwrap()
             > 0
     );
@@ -253,7 +253,7 @@ fn borrowed_heap_state_payload_is_copied_and_invalid_envelopes_cannot_mutate_it(
     assert_eq!(host.state_bytes("Counter"), Some(value.clone()));
     vm.set_register(10, Memory::STACK_START);
     assert!(matches!(
-        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm),
+        host.prepare_syscall(syscalls::SYSCALL_STATE_SET, vm.syscall_quote()),
         Err(VMError::NoritoInvalid)
     ));
     assert_eq!(host.state_bytes("Counter"), Some(value.clone()));

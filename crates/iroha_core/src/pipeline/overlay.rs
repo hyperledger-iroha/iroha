@@ -1296,7 +1296,7 @@ pub struct TxOverlay {
     entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     lifecycle_completion: Option<OverlayLifecycleCompletion>,
     ivm_gas_used: Option<u64>,
-    completed_axt: Vec<ivm::axt::HostAxtState>,
+    completed_axt: Vec<ivm_abi::axt::HostAxtState>,
     durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     durable_state_authorizations:
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
@@ -1638,7 +1638,7 @@ impl TxOverlay {
         instructions: Vec<InstructionBox>,
         execution_contexts: Vec<OverlayInstructionExecutionContext>,
         ivm_gas_used: u64,
-        completed_axt: Vec<ivm::axt::HostAxtState>,
+        completed_axt: Vec<ivm_abi::axt::HostAxtState>,
         durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
             StatePath,
@@ -1700,7 +1700,7 @@ impl TxOverlay {
     fn from_queued_execution(
         queued: Vec<crate::smartcontracts::ivm::host::QueuedEffect>,
         ivm_gas_used: u64,
-        completed_axt: Vec<ivm::axt::HostAxtState>,
+        completed_axt: Vec<ivm_abi::axt::HostAxtState>,
         durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
             StatePath,
@@ -1735,7 +1735,7 @@ impl TxOverlay {
     fn from_ivm_proved_execution(
         queued: Vec<crate::smartcontracts::ivm::host::QueuedEffect>,
         ivm_gas_used: u64,
-        completed_axt: Vec<ivm::axt::HostAxtState>,
+        completed_axt: Vec<ivm_abi::axt::HostAxtState>,
         durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
             StatePath,
@@ -2245,7 +2245,7 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
     state_ro: &R,
     queued: Vec<crate::smartcontracts::ivm::host::QueuedEffect>,
     ivm_gas_used: u64,
-    completed_axt: Vec<ivm::axt::HostAxtState>,
+    completed_axt: Vec<ivm_abi::axt::HostAxtState>,
     durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     durable_state_authorizations: BTreeMap<
         StatePath,
@@ -7391,15 +7391,15 @@ mod tests {
     fn ivm_proved_axt_only_replay_is_not_dropped() {
         use iroha_data_model::block::BlockHeader;
         use iroha_primitives::nonzero;
-        let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
+        let (descriptor, binding) = ivm_abi::axt::AxtDescriptor::builder()
             .dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
             .build_with_binding()
             .expect("AXT descriptor");
-        let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
+        let mut completed = ivm_abi::axt::HostAxtState::new(descriptor, binding);
         completed
             .record_proof(
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                Some(ivm::axt::ProofBlob {
+                Some(ivm_abi::axt::ProofBlob {
                     payload: vec![1],
                     expiry_slot: None,
                 }),
@@ -8321,7 +8321,8 @@ seiyaku AliasBoundArguments { permission CanInvokeOverlayFixture;
             transaction::Executable,
         };
         use iroha_model_base::topology::DataSpaceId;
-        use ivm::{axt, pointer_abi::PointerType, syscalls as ivm_sys};
+        use ivm::{pointer_abi::PointerType, syscalls as ivm_sys};
+        use ivm_abi::axt;
         use ivm_abi::baseline::encoding;
         use ivm_abi::baseline::instruction;
         use std::sync::Arc;
@@ -9256,7 +9257,7 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
 #[derive(Debug)]
 pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedEffect>,
-    pub(crate) completed_axt: Vec<ivm::axt::HostAxtState>,
+    pub(crate) completed_axt: Vec<ivm_abi::axt::HostAxtState>,
     pub(crate) durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     pub(crate) durable_state_authorizations:
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,

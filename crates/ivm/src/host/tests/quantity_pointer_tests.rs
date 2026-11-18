@@ -135,7 +135,7 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
     let expected_gas = DefaultHost::mutation_gas(canonical_payload.len());
     let mut scoped_host = DefaultHost::new();
     assert_eq!(
-        (scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm))
+        (scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()))
             .expect("expected successful fixture result"),
         expected_gas
     );
@@ -283,7 +283,7 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     let mut scoped_host = DefaultHost::new();
     vm.memory.clear_tracking();
     assert!(matches!(
-        scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+        scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
         Err(VMError::NoritoInvalid)
     ));
     assert!(

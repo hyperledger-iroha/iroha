@@ -264,14 +264,24 @@ fn time_row(output: &ExecutionOutputV1) -> Option<TimeRow<'_>> {
         ExecutionOutputV1::Time(row) => row,
         ExecutionOutputV1::TimeWithLifecycle(row) => &row.execution,
         ExecutionOutputV1::C10(row) => {
-            let ExecutionSourceC10V1::Time { invocation, failure_root } = &row.source else {
+            let ExecutionSourceC10V1::Time {
+                invocation,
+                failure_root,
+            } = &row.source
+            else {
                 return None;
             };
-            return Some(TimeRow { invocation, failure_root: failure_root.as_ref() });
+            return Some(TimeRow {
+                invocation,
+                failure_root: failure_root.as_ref(),
+            });
         }
         _ => return None,
     };
-    Some(TimeRow { invocation: &row.invocation, failure_root: row.failure_root.as_ref() })
+    Some(TimeRow {
+        invocation: &row.invocation,
+        failure_root: row.failure_root.as_ref(),
+    })
 }
 
 /// The certified model distinguishes a real execution failure from a healthy

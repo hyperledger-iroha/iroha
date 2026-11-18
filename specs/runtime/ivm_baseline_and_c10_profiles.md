@@ -819,8 +819,8 @@ needed no fixture repair: the step-0 gates below pass on the merged tree as it w
 
 - The baseline execution summary (`SYSCALL_EXECUTION_SUMMARY`) of a traced run hashes the delta
   log and counts its rows in the syscall's price, as at the anchor and as C10 does. Only hosts
-  that enable tracing (`koto test trace`, local debugging) see this; consensus execution never
-  traces.
+  that enable tracing (`koto test --trace`, `koto test trace`, or local debugging) see this.
+  Consensus execution never traces.
 - A delta row of a baseline program names registers 0–255, a C10 row 0–31. `koto`'s reports keep
   each program's capture apart (test projection and runtime artifact), and a combined runtime
   capture joins calls into one artifact, so no report mixes geometries; a consumer that combines

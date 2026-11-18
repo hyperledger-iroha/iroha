@@ -2415,6 +2415,22 @@ implemented and stays disabled.
   paths and the source index in the typed Network row. It reruns the ordinary
   ballot decision and compares the entire recorded result. Corpus completeness
   and closure verification require the full interval.
+- **Full-interval execution evidence.** The Rust example
+  `parliament_ballot_verify` reads the complete executed proof for every height
+  from its configured genesis through closure over the existing public SDK
+  finality route. The reader verifies each original certificate, the seal's
+  canonical credential list, the opening, the next-height casting clock, and the
+  closure at their certified positions. It locates every ballot by physical input
+  index and compares its complete recorded result before independent proof and
+  corpus replay. The result reports the outcome relative to the authenticated
+  board. Other scope contexts and voter eligibility require independent evidence.
+- **Rust seat registration.** The offline example `parliament_credential_draft`
+  accepts the selected network, account, authenticated body context and assignment.
+  It publishes a create-only enrollment and credential in the wallet's private
+  directory, then confirms the exact saved proof against that body, account and
+  assignment. Retries emit the same public instruction JSON for the credential
+  draft route. The voter uses the ordinary account signing flow after checking
+  the draft. The casting wallet uses the same credential after the board seals.
 - **Account-authenticated drafts.** The three POST routes under
   `/v1/gov/anonymous-parliament/{attempts,transitions,credentials}/draft`
   accept the strict JSON form of the corresponding V1 instruction. Each
@@ -2429,12 +2445,10 @@ implemented and stays disabled.
   reads both complete records and submits that envelope twice to the socket,
   requiring the same empty 202 and one queue resident.
 - **Open.**
-  - Native wallet bindings for Kotlin, Swift, JavaScript and Python, and
-    client integration for seat credential generation and registration.
+  - Native credential generation, registration and ballot-preparation bindings
+    for Kotlin, Swift, JavaScript and Python.
   - Swift, JavaScript and Python transports for the two whole-record reads
     and signerless submission.
-  - Retrieval and full-interval verification of the finalized seal, all
-    ballot inputs and the casting-clock and closure outputs.
   - Production enactment in G3, which executes the proposal the attempt
     stores (slice 3, "Attempt creation").
   - A qualified anonymity transport (section 6).

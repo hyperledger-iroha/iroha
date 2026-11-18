@@ -14,7 +14,7 @@ struct ExhaustAtTrap {
     error: Option<VMError>,
 }
 impl IVMHost for ExhaustAtTrap {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
     fn syscall(&mut self, _: u32, _: &mut IVM) -> Result<u64, VMError> {

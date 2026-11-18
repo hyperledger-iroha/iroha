@@ -356,7 +356,7 @@ fn zk_verify_batch_quote_and_actual_scale_with_every_proof() {
             u64::try_from(count).expect("bounded count"),
         );
         assert_eq!(
-            (host.prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm))
+            (host.prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             expected_quote
         );
@@ -396,7 +396,7 @@ fn unaffordable_zk_batch_stops_before_decode_allocation_or_backend_work() {
     vm.set_register(12, 0xbeef);
     let mut host = CoreHost::new(fixture_account("alice"));
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote())
         .expect("quote bounded ZK batch");
     vm.set_gas_limit(quote);
     assert!(matches!(
@@ -424,7 +424,7 @@ fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.zk_verify_limits.max_verify_batch = 1;
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote())
         .expect("count rejection must still reserve gas");
     assert_eq!(
         quote,

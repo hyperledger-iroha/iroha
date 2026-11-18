@@ -175,7 +175,7 @@ fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
     let vm = IVM::new(10_000);
     assert_eq!(
         DefaultHost::new()
-            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, &vm)
+            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, vm.syscall_quote())
             .expect("prepare quantity addition"),
         0,
         "numeric calls debit each bounded phase immediately and never reserve/refund a quote",

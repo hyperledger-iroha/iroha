@@ -283,14 +283,17 @@ fn abi_contains_exactly_the_61_numeric_calls_and_rejects_retired_numbers() {
         let metering = ivm::host::host_syscall_metering_spec(vm.syscall_policy(), number)
             .expect("numeric metering registration");
         assert_eq!(metering.metering, SyscallMetering::Staged);
-        assert!(matches!(host.prepare_syscall(number, &vm), Ok(0)));
+        assert!(matches!(
+            host.prepare_syscall(number, vm.syscall_quote()),
+            Ok(0)
+        ));
     }
     for retired in (0x69..=0x76)
         .chain(0xd2..=0xde)
         .chain(0x01_0040..=0x01_004d)
     {
         assert!(
-            matches!(host.prepare_syscall(retired, &vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (retired))
+            matches!(host.prepare_syscall(retired, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (retired))
         );
     }
 }
@@ -2643,6 +2646,108 @@ fn conversion_modes_and_reserved_registers_fail_after_authentication_before_arit
                     .unwrap()
                     .phase_charge(SyscallMeteringPhase::Arithmetic),
                 0
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_staged_syscalls_distinguish_semantic_traps_from_local_refusals() {
+    #[derive(Clone, Copy, Debug)]
+    enum Outcome {
+        Local,
+        WrongMeter,
+        Semantic,
+        PrivateOutput,
+        Unwind,
+    }
+
+    struct Host(Outcome);
+    impl IVMHost for Host {
+        fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
+            unreachable!("numeric syscalls use staged metering")
+        }
+
+        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            if number == syscalls::SYSCALL_QUANTITY_ADD {
+                return Ok(0);
+            }
+            match self.0 {
+                Outcome::Local => Err(VMError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+                )),
+                Outcome::WrongMeter => Ok(1),
+                Outcome::Semantic => Err(VMError::OutOfGas),
+                Outcome::PrivateOutput => {
+                    vm.registers.set_tag(10, true);
+                    Ok(0)
+                }
+                Outcome::Unwind => panic!("local host unwind"),
+            }
+        }
+
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    for earlier in [false, true] {
+        for outcome in [
+            Outcome::Local,
+            Outcome::WrongMeter,
+            Outcome::Semantic,
+            Outcome::PrivateOutput,
+            Outcome::Unwind,
+        ] {
+            let mut header = ProgramMetadata::default_for(1, 1, 1);
+            header.mode = ivm_mode::ZK;
+            header.max_cycles = 16;
+            let mut program = header.encode();
+            if earlier {
+                program.extend(
+                    encoding::wide::encode_scall(syscalls::SYSCALL_QUANTITY_ADD).to_le_bytes(),
+                );
+            }
+            program
+                .extend(encoding::wide::encode_scall(syscalls::SYSCALL_QUANTITY_SUB).to_le_bytes());
+            program.extend(encoding::wide::encode_halt().to_le_bytes());
+            let mut vm = IVM::new(10_000);
+            vm.load_program(&program).unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vm.run_with_host(&mut Host(outcome))
+            }));
+            match (outcome, result) {
+                (
+                    Outcome::Local,
+                    Ok(Err(VMError::ExecutionDeferred(
+                        ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+                    ))),
+                )
+                | (
+                    Outcome::WrongMeter,
+                    Ok(Err(VMError::SyscallMeteringModeMismatch {
+                        syscall: syscalls::SYSCALL_QUANTITY_SUB,
+                    })),
+                )
+                | (Outcome::Semantic, Ok(Err(VMError::OutOfGas)))
+                | (Outcome::PrivateOutput, Ok(Err(VMError::PrivacyViolation)))
+                | (Outcome::Unwind, Err(_)) => {}
+                _ => panic!("incorrect result for {outcome:?}"),
+            }
+            let expected = match outcome {
+                Outcome::Semantic | Outcome::PrivateOutput => {
+                    Some((syscalls::SYSCALL_QUANTITY_SUB, SyscallCompletion::Trap))
+                }
+                _ => {
+                    earlier.then_some((syscalls::SYSCALL_QUANTITY_ADD, SyscallCompletion::Success))
+                }
+            };
+            assert!(vm.staged_syscall_context().is_none());
+            assert_eq!(
+                vm.last_staged_syscall_context()
+                    .map(|ctx| (ctx.syscall(), ctx.completion().unwrap())),
+                expected,
+                "{earlier:?} {outcome:?}"
             );
         }
     }

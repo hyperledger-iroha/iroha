@@ -790,7 +790,10 @@ fn paid_payload_and_signed_body_refuse_semantic_replacement_without_changing_ori
 fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
     use crate::managed::native_operation::authorization::DispatchAuthorization;
     let _guard = crate::managed::native_test_guard();
-    let fixture = ready();
+    // The same signed body must outlive two real reads and request reservations
+    // before its expiry is allowed to close the outer body.
+    let fixture = Fixture::predecessor_with_renewal_validity(30_000);
+    fixture.wait_renewable();
     let history = retain_body(&fixture);
     let first = retain_request(&fixture, &history, 3_000);
     let account = fixture.owner.wallet().unwrap();
@@ -819,7 +822,7 @@ fn same_body_retired_wallet_prefix_finishes_before_outer_terminal_closure() {
             .is_none()
     );
     assert!(!second.wallet_path().exists());
-    wait_until(expiry(&history), Duration::from_secs(10));
+    wait_until(expiry(&history), Duration::from_secs(32));
     let mut body_turn = fixture.renewal_turn();
     let retained = reopen(&fixture);
     let live = body_turn

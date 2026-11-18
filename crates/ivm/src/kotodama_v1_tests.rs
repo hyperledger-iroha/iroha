@@ -329,7 +329,11 @@ fn bounded_transfer_lists_evaluate_before_begin_and_skip_empty_batches() {
         quantities: Vec<String>,
     }
     impl IVMHost for ObservedHost {
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.core.prepare_syscall(number, vm)
         }
         fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {

@@ -339,7 +339,11 @@ impl ivm::IVMHost for GasObservedHost {
         self.inner.allows_syscall(policy, number)
     }
 
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         if number == self.target {
             assert!(
                 self.prepared_remaining

@@ -8796,7 +8796,10 @@ def test_native_append_physical_state_refusal_keeps_actual_driver_release_owner(
                        "scheduler.next(u64::MAX - 1)", "Arc::ptr_eq(&original, &append)",
                        "drop(state.crypto.read())", "drop(blocker)", "worker.join()"):
         assert re.sub(r"\s+", "", obligation) in re.sub(r"\s+", "", controls)
-    assert "if !self.appended" in fixture and "self.appended = true" in fixture
+    publish = fixture.split("pub fn publish(&mut self, signers: Signers)", 1)[1]
+    retry = publish.index("while !self.appended {")
+    assert retry < publish.index("match self.append_prepared()", retry) < publish.index("self.chain.executor.commit", retry)
+    assert "self.chain.blocks.append(&self.block, qc)?;\n        self.appended = true;" in fixture
     assert "super::driver::run_original_append_for_test" in fixture
     assert "AllocationBudget::new" not in controls and "set_limit_bytes" not in controls
     rows = re.findall(r"^\| HC275 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)

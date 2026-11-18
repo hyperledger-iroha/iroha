@@ -73,7 +73,11 @@ impl IVMHost for InputHost {
         self.probes.set(self.probes.get() + 1);
         self.prepared.clone()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -324,7 +328,7 @@ struct AllRegisters {
     calls: usize,
 }
 impl IVMHost for AllRegisters {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         if self.reject_prepare {
             Err(VMError::AssertionFailed)
         } else {
@@ -669,12 +673,12 @@ struct ShrinkingShellHost {
     expected_peak: usize,
 }
 impl IVMHost for ShrinkingShellHost {
-    fn prepare_syscall(&self, _: u32, vm: &IVM) -> Result<u64, VMError> {
-        let detached = vm.reg_log.as_ref().unwrap();
-        assert!(detached.belongs_to(&self.original));
-        assert!(vm.host_trace_log_detached);
+    fn prepare_syscall(
+        &self,
+        _: u32,
+        _quote: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(self.original.reserved_bytes(), self.expected_peak);
-        *self.shell.borrow_mut() = Some(detached.clone());
         self.original.set_limit_bytes(0);
         assert!(matches!(
             self.original
@@ -685,11 +689,12 @@ impl IVMHost for ShrinkingShellHost {
         Ok(7)
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        assert!(zk::SharedRegLog::ptr_eq(
-            vm.reg_log.as_ref().unwrap(),
-            self.shell.borrow().as_ref().unwrap()
-        ));
+        let detached = vm.reg_log.as_ref().unwrap();
+        assert!(detached.belongs_to(&self.original));
         assert!(vm.host_trace_log_detached);
+        // The quote exhausted the pool. This shell must already have been
+        // funded during admission; replacing it in the body would refuse.
+        *self.shell.borrow_mut() = Some(detached.clone());
         self.calls += 1;
         for index in 1..crate::parallel::REGISTER_COUNT {
             vm.set_register(index, index as u64 + 100);

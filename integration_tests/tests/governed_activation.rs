@@ -25,6 +25,9 @@ use iroha_torii_shared::parliament_api::ParliamentDecisionModeProjectionV1;
 #[path = "support/governed_activation.rs"]
 pub(crate) mod harness;
 
+#[path = "support/anonymous_ballot_corridor.rs"]
+mod anonymous_ballot;
+
 /// Blocks between the tip at drafting and the effective height: room for the proposal and the
 /// attempt, which each take one carrier block.
 const LEAD_BLOCKS: u64 = 24;
@@ -187,9 +190,11 @@ fn governed_activation_reaches_parliament_and_schedules_nothing_without_it() -> 
 #[ignore = "Parliament cannot enact a runtime change set on this release: the baseline Policy Jury ballot is the retired timed-OVN ballot and the anonymous ballot family enacts nothing (support/governed_activation.rs, ParliamentApprovalUnavailable)"]
 fn four_validators_activate_the_anonymous_ballot_family_through_parliament() -> Result<()> {
     let context = "governed_activation_anonymous_family";
-    let (network, runtime) =
-        sandbox::start_network_blocking_or_skip(builder(context)?, context)?
-            .ok_or_else(|| eyre!("governed activation requires real localhost sockets"))?;
+    let (network, runtime) = sandbox::start_network_blocking_or_skip(
+        anonymous_ballot::genesis(builder(context)?)?,
+        context,
+    )?
+    .ok_or_else(|| eyre!("governed activation requires real localhost sockets"))?;
     runtime.block_on(network.ensure_blocks(1))?;
     let activated = harness::activate_addition(
         &network,
@@ -197,6 +202,7 @@ fn four_validators_activate_the_anonymous_ballot_family_through_parliament() -> 
         LEAD_BLOCKS,
         [0x53; 32],
     )?;
+    anonymous_ballot::exercise(&network, &runtime)?;
     eprintln!(
         "GOVERNED_ACTIVATION_COMPLETE validators=4 addition={} change_set={} height={}",
         harness::PARLIAMENT_ANONYMOUS,

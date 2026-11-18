@@ -65,7 +65,11 @@ where
     let vm = IVM::new(u64::MAX);
     for &number in syscalls::abi_syscall_list() {
         let host = make_host();
-        assert_not_unknown_syscall(host.prepare_syscall(number, &vm), host_name, number);
+        assert_not_unknown_syscall(
+            host.prepare_syscall(number, vm.syscall_quote()),
+            host_name,
+            number,
+        );
     }
 }
 fn assert_fastpq_scope_gas<H>(mut host: H)
@@ -110,7 +114,7 @@ where
         vm.set_register(10, source);
         let mut host = make_host();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm)
+            .prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote())
             .expect("normalization quote");
         let gas = host
             .syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm)
@@ -138,7 +142,7 @@ where
         }
         let mut host = make_host();
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         assert!(matches!(
@@ -155,7 +159,7 @@ where
     vm.set_register(10, malformed);
     let mut host = make_host();
     assert_eq!(
-        (host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm))
+        (host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote()))
             .expect("expected successful fixture result"),
         gas::HOST_BYTE_GAS_BASE.saturating_add(
             gas::SYSCALL_GAS_PER_BYTE.saturating_mul(b"corrupt digest".len() as u64)
@@ -172,7 +176,7 @@ where
     vm.set_register(10, ivm::Memory::STACK_START);
     let mut host = make_host();
     assert!(matches!(
-        host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm),
+        host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, vm.syscall_quote()),
         Err(VMError::NoritoInvalid)
     ));
     assert!(matches!(

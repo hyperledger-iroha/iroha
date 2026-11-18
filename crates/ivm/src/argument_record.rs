@@ -1677,7 +1677,10 @@ mod tests {
             .expect("allocate actual event input name");
         vm.set_register(10, name_pointer);
         let quote = host
-            .prepare_syscall(crate::syscalls::SYSCALL_GET_PUBLIC_INPUT, &vm)
+            .prepare_syscall(
+                crate::syscalls::SYSCALL_GET_PUBLIC_INPUT,
+                vm.syscall_quote(),
+            )
             .expect("quote event input independently of root preparation");
         let gas = host
             .syscall(crate::syscalls::SYSCALL_GET_PUBLIC_INPUT, &mut vm)

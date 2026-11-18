@@ -1,15 +1,8 @@
 #[cfg(test)]
 use crate::memory::Memory;
 use crate::{
-    VMError,
-    axt::{self, AxtPolicy, ProofBlob, TouchManifest},
-    gas,
-    host::{
-        IVMHost, common_syscall_gas_quote, conservative_syscall_gas_quote,
-        preflight_reserved_syscall_gas, quote_tlv_payload_len_at,
-        require_host_syscall_metering_spec, reserve_available_syscall_gas,
-        reserve_available_syscall_gas_at_least,
-    },
+    VMError, gas,
+    host::{IVMHost, preflight_reserved_syscall_gas, require_host_syscall_metering_spec},
     ivm::IVM,
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
@@ -17,6 +10,7 @@ use crate::{
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
 };
+use ivm_abi::axt::{self, AxtPolicy, ProofBlob, TouchManifest};
 #[cfg(test)]
 thread_local! {
     /// Payload bytes actually copied by owned mock-WSV reads on this test thread.
@@ -1674,71 +1668,40 @@ impl WsvHost {
     /// Quote response-producing WSV helpers from pointer headers and ABI
     /// region bounds only. No world-state lookup, schema call, proof walk, or
     /// guest allocation is allowed during preparation.
-    fn bounded_response_gas_quote(&self, number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
+    fn bounded_response_gas_quote(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<Option<u64>, VMError> {
         let maximum_output =
             usize::try_from(crate::memory::Memory::INPUT_SIZE).unwrap_or(usize::MAX);
         let quote = match number {
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
-                crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                    vm,
-                    10,
-                    PointerType::Name,
-                    false,
-                )?;
-                reserve_available_syscall_gas_at_least(vm, PUBLIC_INPUT_GAS_BASE)?
+                vm.quote_codec_tlv_payload_len(10, PointerType::Name, false)?;
+                vm.reserve_available_syscall_gas_at_least(PUBLIC_INPUT_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_SCHEMA_ENCODE
             | crate::syscalls::SYSCALL_SCHEMA_DECODE
             | crate::syscalls::SYSCALL_SCHEMA_INFO => {
-                let schema = crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                    vm,
-                    10,
-                    PointerType::Name,
-                    false,
-                )?;
+                let schema = vm.quote_codec_tlv_payload_len(10, PointerType::Name, false)?;
                 let value = match number {
                     crate::syscalls::SYSCALL_SCHEMA_ENCODE => {
-                        crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                            vm,
-                            11,
-                            PointerType::Json,
-                            false,
-                        )?
+                        vm.quote_codec_tlv_payload_len(11, PointerType::Json, false)?
                     }
                     crate::syscalls::SYSCALL_SCHEMA_DECODE => {
-                        crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                            vm,
-                            11,
-                            PointerType::NoritoBytes,
-                            false,
-                        )?
+                        vm.quote_codec_tlv_payload_len(11, PointerType::NoritoBytes, false)?
                     }
                     _ => 0,
                 };
                 Self::schema_gas(schema.saturating_add(value), maximum_output)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
-                let input = crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                    vm,
-                    10,
-                    PointerType::NoritoBytes,
-                    false,
-                )?;
-                reserve_available_syscall_gas_at_least(vm, Self::state_query_gas(input))?
+                let input = vm.quote_codec_tlv_payload_len(10, PointerType::NoritoBytes, false)?;
+                vm.reserve_available_syscall_gas_at_least(Self::state_query_gas(input))?
             }
             crate::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
-                crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                    vm,
-                    10,
-                    PointerType::AccountId,
-                    false,
-                )?;
-                crate::core_host::CoreHost::quote_codec_tlv_payload_len(
-                    vm,
-                    11,
-                    PointerType::AssetDefinitionId,
-                    false,
-                )?;
+                vm.quote_codec_tlv_payload_len(10, PointerType::AccountId, false)?;
+                vm.quote_codec_tlv_payload_len(11, PointerType::AssetDefinitionId, false)?;
                 Self::singular_query_gas(maximum_output)
             }
             crate::syscalls::SYSCALL_GET_AUTHORITY | crate::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
@@ -2872,32 +2835,39 @@ fn parse_permission_name_payload(bytes: &[u8]) -> Result<PermissionToken, VMErro
 // without requiring an allow attribute.
 /* tests moved to EOF */
 impl IVMHost for WsvHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         if number == syscalls::SYSCALL_VRF_EPOCH_SEED {
             vm.ensure_public_register(10)?;
             return Ok(crate::vrf::epoch_seed_gas(
-                self.wsv.vrf_epoch_seeds.contains_key(&vm.register(10)),
+                self.wsv
+                    .vrf_epoch_seeds
+                    .contains_key(&vm.public_register(10)?),
             ));
         }
         if number == syscalls::SYSCALL_CALL_CONTRACT {
             let bytes = Self::quote_contract_call(vm)?;
-            return reserve_available_syscall_gas_at_least(
-                vm,
-                gas::syscall_byte_gas(gas::G_CALL_CONTRACT, bytes, 0),
-            );
+            return vm.reserve_available_syscall_gas_at_least(gas::syscall_byte_gas(
+                gas::G_CALL_CONTRACT,
+                bytes,
+                0,
+            ));
         }
         if number == syscalls::SYSCALL_EMIT_CONTRACT_EVENT {
             for register in 10..=12 {
                 vm.ensure_public_register(register)?;
             }
-            return reserve_available_syscall_gas_at_least(vm, 32);
+            return vm.reserve_available_syscall_gas_at_least(32);
         }
 
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if metering.metering == crate::syscall_metering::SyscallMetering::Staged {
             return Ok(0);
         }
-        if let Some(quote) = common_syscall_gas_quote(number, vm)? {
+        if let Some(quote) = vm.common_syscall_gas_quote(number)? {
             return Ok(quote);
         }
         if matches!(
@@ -2918,41 +2888,42 @@ impl IVMHost for WsvHost {
         }
         let state_quote = match number {
             crate::syscalls::SYSCALL_STATE_GET => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(reserve_available_syscall_gas_at_least(
-                    vm,
-                    crate::host::state_path_gas(path_len),
-                )?)
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
+                Some(
+                    vm.reserve_available_syscall_gas_at_least(crate::host::state_path_gas(
+                        path_len,
+                    ))?,
+                )
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
                 Some(crate::host::state_path_gas(path_len))
             }
-            crate::syscalls::SYSCALL_STATE_SCAN => Some(reserve_available_syscall_gas_at_least(
-                vm,
-                crate::state_scan::prepare_minimum(vm)?,
-            )?),
+            crate::syscalls::SYSCALL_STATE_SCAN => {
+                Some(vm.reserve_available_syscall_gas_at_least(vm.state_scan_minimum()?)?)
+            }
             crate::syscalls::SYSCALL_STATE_COUNT => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(reserve_available_syscall_gas_at_least(
-                    vm,
-                    crate::host::state_path_gas(path_len),
-                )?)
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
+                Some(
+                    vm.reserve_available_syscall_gas_at_least(crate::host::state_path_gas(
+                        path_len,
+                    ))?,
+                )
             }
             crate::syscalls::SYSCALL_STATE_SET => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
                 let value_len =
-                    quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+                    vm.quote_tlv_payload_len_at(vm.public_register(11)?, PointerType::NoritoBytes)?;
                 crate::host::validate_state_value_payload_len(value_len)?;
                 Some(crate::host::state_value_gas(path_len, value_len))
             }
             crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
                 Some(crate::host::state_path_gas(path_len))
             }
-            crate::syscalls::SYSCALL_CORE_QUERY_GET => Some(
-                reserve_available_syscall_gas_at_least(vm, Self::state_query_gas(0))?,
-            ),
+            crate::syscalls::SYSCALL_CORE_QUERY_GET => {
+                Some(vm.reserve_available_syscall_gas_at_least(Self::state_query_gas(0))?)
+            }
             crate::syscalls::SYSCALL_CORE_QUERY_PAGE => Some(Self::state_query_gas(0)),
             _ => None,
         };
@@ -2962,9 +2933,9 @@ impl IVMHost for WsvHost {
         if number == crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY {
             // The query response is gas-budgeted while it is produced. Avoid
             // executing a potentially large WSV query twice merely to quote it.
-            return reserve_available_syscall_gas(vm);
+            return vm.reserve_available_syscall_gas();
         }
-        if let Some(quote) = crate::core_host::CoreHost::codec_gas_quote(number, vm)? {
+        if let Some(quote) = vm.codec_gas_quote(number)? {
             return Ok(quote);
         }
         if let Some(quote) = self.bounded_response_gas_quote(number, vm)? {
@@ -2973,7 +2944,7 @@ impl IVMHost for WsvHost {
         // Mutating ledger calls and proof verification retain the generic
         // deterministic bound; unlike response-producing reads they have no
         // host-cardinality-dependent output to estimate.
-        Ok(conservative_syscall_gas_quote(number, vm))
+        vm.conservative_syscall_gas_quote(number)
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
@@ -5646,7 +5617,7 @@ mod tests_null_decode {
                 .unwrap()
                 .downcast_mut::<WsvHost>()
                 .unwrap() as *mut WsvHost;
-            (*host_ptr).prepare_syscall(number, vm)
+            (*host_ptr).prepare_syscall(number, vm.syscall_quote())
         }
     }
     fn call_syscall_with_quote(vm: &mut IVM, number: u32) -> Result<u64, VMError> {
@@ -5725,7 +5696,7 @@ mod tests_null_decode {
             ),
         ] {
             let mut vm = IVM::new(1_000_000);
-            let quote = host.prepare_syscall(number, &vm).unwrap();
+            let quote = host.prepare_syscall(number, vm.syscall_quote()).unwrap();
             let used = host.syscall(number, &mut vm).unwrap();
             assert_eq!(quote, used);
             assert_eq!(used, WsvHost::sysvar_gas(expected.len()));
@@ -5741,7 +5712,7 @@ mod tests_null_decode {
         ] {
             let mut vm = IVM::new(1_000_000);
             assert_eq!(
-                host.prepare_syscall(number, &vm).unwrap(),
+                host.prepare_syscall(number, vm.syscall_quote()).unwrap(),
                 WsvHost::sysvar_gas(0)
             );
             assert_eq!(
@@ -5760,8 +5731,9 @@ mod tests_null_decode {
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone());
         host.set_current_time_ms(1_717_171_717_000);
         let mut vm = IVM::new(u64::MAX);
-        let quote = IVMHost::prepare_syscall(&host, syscalls::SYSCALL_CURRENT_TIME_MS, &vm)
-            .expect("quote current time");
+        let quote =
+            IVMHost::prepare_syscall(&host, syscalls::SYSCALL_CURRENT_TIME_MS, vm.syscall_quote())
+                .expect("quote current time");
         assert_eq!(
             (IVMHost::syscall(&mut host, syscalls::SYSCALL_CURRENT_TIME_MS, &mut vm))
                 .expect("expected successful fixture result"),
@@ -5784,7 +5756,7 @@ mod tests_null_decode {
             .expect("allocate debug log payload");
         vm.set_register(10, pointer);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote())
             .expect("quote debug log");
         let actual = host
             .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
@@ -5801,7 +5773,7 @@ mod tests_null_decode {
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
         let mut vm = IVM::new(1_000_000);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_GET_AUTHORITY, &vm)
+            .prepare_syscall(syscalls::SYSCALL_GET_AUTHORITY, vm.syscall_quote())
             .expect("quote authority response");
         let actual = host
             .syscall(syscalls::SYSCALL_GET_AUTHORITY, &mut vm)
@@ -7319,7 +7291,7 @@ mod tests_null_decode {
             .try_write_log_snapshot()
             .expect("allocate write-log snapshot");
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
             .expect("quote JSON_ENCODE");
         assert_eq!(
             vm.register(10),
@@ -7355,7 +7327,7 @@ mod tests_null_decode {
             .expect("allocate malformed JSON TLV");
         vm.set_register(10, ptr);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
             .expect("header-valid malformed JSON receives a conservative quote");
         assert!(quote > 3);
         assert_eq!(vm.register(10), ptr);
@@ -7387,7 +7359,7 @@ mod tests_null_decode {
             .try_write_log_snapshot()
             .expect("allocate write-log snapshot");
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            host.prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
                 .is_err()
         );
         assert_eq!(
@@ -7412,7 +7384,7 @@ mod tests_null_decode {
             .expect("allocate maximum codec input");
         vm.set_register(10, pointer);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
             .expect("header-only quote");
         assert!(quote > u64::try_from(payload.len()).expect("length fits"));
         assert!(quote <= 1_000_000);
@@ -7483,7 +7455,7 @@ mod tests_null_decode {
             .expect("allocate JSON");
         vm.set_register(10, pointer);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
             .expect("quote JSON encode");
         let before = vm.remaining_gas();
         vm.set_host(host);
@@ -7660,7 +7632,7 @@ mod tests_null_decode {
         vm.set_register(12, syscalls::STATE_SCAN_MAX_ITEMS_V1);
         let available = vm.remaining_gas();
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_STATE_COUNT, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_STATE_COUNT, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             available,
             "state cardinality is scanned once inside the reserved call"
@@ -7732,7 +7704,7 @@ mod tests_null_decode {
             .expect("allocate malformed StatePath TLV");
         vm.set_register(10, pointer);
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_STATE_COUNT, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_STATE_COUNT, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             vm.remaining_gas()
         );
@@ -7753,11 +7725,17 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_register(10, Memory::OUTPUT_START);
         vm.set_register(11, Memory::OUTPUT_START);
-        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err()
+        );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
         vm.set_register(10, 0);
         vm.set_register(11, Memory::OUTPUT_START);
-        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err()
+        );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
     }
 }
@@ -7810,7 +7788,7 @@ mod tests_core_asset_definition {
         vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
         vm.set_register(11, pointer);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_CORE_QUERY_GET, vm)
+            .prepare_syscall(syscalls::SYSCALL_CORE_QUERY_GET, vm.syscall_quote())
             .expect("query gas");
         let charged = host
             .syscall(syscalls::SYSCALL_CORE_QUERY_GET, vm)

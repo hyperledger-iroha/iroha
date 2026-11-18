@@ -380,23 +380,23 @@ impl WsvHost {
             .ok_or(VMError::PermissionDenied)?;
         Ok((address.clone(), entry.kind))
     }
-    pub(super) fn quote_contract_call(vm: &IVM) -> Result<usize, VMError> {
+    pub(super) fn quote_contract_call(vm: crate::host::SyscallQuote<'_>) -> Result<usize, VMError> {
         for register in 10..=15 {
             vm.ensure_public_register(register)?;
         }
-        let address = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)?;
-        let binding = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+        let address = vm.quote_tlv_payload_len_at(vm.public_register(10)?, PointerType::Blob)?;
+        let binding =
+            vm.quote_tlv_payload_len_at(vm.public_register(11)?, PointerType::NoritoBytes)?;
         if address != iroha_data_model::smart_contract::CONTRACT_ADDRESS_LITERAL_LEN_V1
             || binding > MAX_CONTRACT_CALL_BINDING_BYTES_V1
-            || vm.register(13) > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
-            || (vm.register(12) == 0) != (vm.register(13) == 0)
+            || vm.public_register(13)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
+            || (vm.public_register(12)? == 0) != (vm.public_register(13)? == 0)
         {
             return Err(VMError::DecodeError);
         }
-        value_record::validate_return_destination(
-            vm,
-            vm.register(14),
-            usize::try_from(vm.register(15)).map_err(|_| VMError::DecodeError)?,
+        vm.validate_return_destination(
+            vm.public_register(14)?,
+            usize::try_from(vm.public_register(15)?).map_err(|_| VMError::DecodeError)?,
         )?;
         address.checked_add(binding).ok_or(VMError::OutOfGas)
     }
@@ -466,7 +466,7 @@ impl WsvHost {
             return Err(VMError::CallDepthExceeded);
         }
         let (caller, caller_kind) = self.authenticated_caller(vm)?;
-        let request_bytes = Self::quote_contract_call(vm)?;
+        let request_bytes = Self::quote_contract_call(vm.syscall_quote())?;
         *boundary_gas = gas::syscall_byte_gas(gas::G_CALL_CONTRACT, request_bytes, 0);
         preflight_reserved_syscall_gas(vm, *boundary_gas)?;
         if vm.remaining_gas() < *boundary_gas {

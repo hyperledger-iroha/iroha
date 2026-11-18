@@ -13,7 +13,11 @@ struct CaptureHost {
     out: Arc<Mutex<Vec<u8>>>,
 }
 impl IVMHost for CaptureHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => Ok(0),
             _ => Err(VMError::UnknownSyscall(number)),

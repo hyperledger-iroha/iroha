@@ -35,12 +35,17 @@ fn test_register_events_logged() {
 fn replacing_vm_during_traced_host_callback_fails_closed() {
     struct ReplacingHost {
         retained_vm: Option<IVM>,
+        invocation_snapshot: ivm::zk::DiagnosticTraceSnapshot,
     }
 
     impl IVMHost for ReplacingHost {
-        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
-            let _ = vm.register(1);
-            let snapshot = common::diagnostic_snapshot(vm);
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
+            let _ = vm.public_register(1)?;
+            let snapshot = &self.invocation_snapshot;
             let content_digest = |snapshot: &ivm::zk::DiagnosticTraceSnapshot| -> [u8; 32] {
                 use sha2::Digest;
                 let mut digest = sha2::Sha256::new();
@@ -58,12 +63,12 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
                 }
                 digest.finalize().into()
             };
-            let expected = content_digest(&snapshot);
+            let expected = content_digest(snapshot);
             for index in 1..=64 {
-                let _ = vm.register((index % 8) + 1);
+                let _ = vm.public_register((index % 8) + 1)?;
             }
             assert!(
-                content_digest(&snapshot) == expected,
+                content_digest(snapshot) == expected,
                 "register-log snapshots must not alias the active logger"
             );
             Ok(0)
@@ -103,7 +108,10 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&program).expect("load ZK syscall program");
     vm.set_zk_trace_enabled(true);
-    let mut host = ReplacingHost { retained_vm: None };
+    let mut host = ReplacingHost {
+        retained_vm: None,
+        invocation_snapshot: common::diagnostic_snapshot(&vm),
+    };
 
     assert!(matches!(
         vm.run_with_host(&mut host),
@@ -143,7 +151,11 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
     struct NoopHost;
 
     impl IVMHost for NoopHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
 
@@ -162,7 +174,11 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
     }
 
     impl IVMHost for MovingHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
 
@@ -222,6 +238,57 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
 }
 
 #[test]
+fn trace_cleanup_retains_the_first_host_allocation_refusal_in_both_metering_modes() {
+    struct RefusingHost {
+        refusal: Option<ivm::error::AllocationRefusal>,
+    }
+    impl IVMHost for RefusingHost {
+        fn prepare_syscall(&self, _: u32, _: ivm::host::SyscallQuote<'_>) -> Result<u64, VMError> {
+            Ok(0)
+        }
+        fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            vm.set_max_cycles(0);
+            vm.set_max_cycles(8);
+            Err(VMError::AllocationDeferred(
+                self.refusal.take().expect("first host call"),
+            ))
+        }
+        fn as_any(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+    for syscall in [
+        ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
+        ivm::syscalls::SYSCALL_QUANTITY_ADD,
+    ] {
+        let code = [
+            encoding::wide::encode_scall(syscall),
+            encoding::wide::encode_halt(),
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&assemble_zk(&code, 8)).unwrap();
+        vm.set_zk_trace_enabled(true);
+        let pool = iroha_allocation::AllocationBudget::new(8);
+        let _active = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let mut host = RefusingHost {
+            refusal: Some(original.clone()),
+        };
+        let error = vm.run_with_host(&mut host).unwrap_err();
+        assert!(host.refusal.is_none());
+        assert!(
+            matches!(error, VMError::AllocationDeferred(ref owner) if owner == &original),
+            "syscall {syscall}: {error:?}"
+        );
+        assert!(vm.last_diagnostic().is_none());
+        assert_eq!(common::diagnostic_snapshot(&vm).register_event_count(), 0);
+    }
+}
+
+#[test]
 fn destructive_host_callback_lifecycle_changes_fail_closed() {
     #[derive(Clone, Copy, Debug)]
     enum Mutation {
@@ -237,7 +304,11 @@ fn destructive_host_callback_lifecycle_changes_fail_closed() {
     }
 
     impl IVMHost for MutatingHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
 
@@ -333,9 +404,13 @@ fn panicking_host_callbacks_scrub_detached_proof_state() {
             ivm::syscalls::is_syscall_allowed(policy, number)
         }
 
-        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             if matches!(self.0, PanicPhase::Prepare) {
-                assert!(!vm.step_log().is_empty());
+                assert_eq!(vm.public_register(5)?, 1);
                 panic!("intentional prepare panic");
             }
             Ok(0)
@@ -403,7 +478,11 @@ fn nested_untraced_vm_masks_the_outer_register_logger() {
     }
 
     impl IVMHost for NestedHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
 

@@ -358,21 +358,25 @@ fn the_release_advertises_dormant_profiles_while_each_root_requires_its_selectio
     let required = active_host_profiles(&catalog.baseline, &catalog.definitions);
     assert_eq!(required.len(), 1);
     assert!(required.iter().all(|id| implemented.contains(id)));
-    let named = catalog.definitions.iter().find_map(|(id, descriptor)| {
-        matches!(descriptor, DefinitionDescriptorV1::HostProfile(host)
-            if host.abi_hash == ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1RuntimeLifecycle))
-            .then_some(*id)
-    }).expect("named lifecycle host is compiled");
-    assert!(implemented.contains(&named));
-    assert!(!required.contains(&named));
-    let mut selected = catalog.baseline.clone();
-    selected.active.push(named);
-    selected.active.sort();
-    selected.active.dedup();
-    assert_eq!(
-        active_host_profiles(&selected, &catalog.definitions),
-        implemented
-    );
+    let definition =
+        |id| crate::smartcontracts::ivm::profile::ResolvedIvmProfile::of_id(id).definition_id();
+    let baseline = definition(ivm::IvmProfileId::BASELINE_ABI_V1);
+    let c10 = definition(ivm::IvmProfileId::C10_ABI_V1);
+    let lifecycle = definition(ivm::IvmProfileId::C10_RUNTIME_LIFECYCLE);
+    assert_eq!(required, [baseline]);
+    let mut all = [baseline, c10, lifecycle];
+    all.sort();
+    assert_eq!(implemented, all);
+    for (additional, absent) in [(c10, lifecycle), (lifecycle, c10)] {
+        let mut selected = catalog.baseline.clone();
+        selected.active.push(additional);
+        selected.active.sort();
+        let mut expected = [baseline, additional];
+        expected.sort();
+        let hosts = active_host_profiles(&selected, &catalog.definitions);
+        assert_eq!(hosts, expected);
+        assert!(!hosts.contains(&absent));
+    }
     let state = crate::state::State::new_for_testing(
         crate::state::World::default(),
         crate::kura::Kura::blank_kura_for_testing(),

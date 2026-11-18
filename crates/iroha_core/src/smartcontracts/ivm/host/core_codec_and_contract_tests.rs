@@ -364,7 +364,11 @@ fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
         fn as_any(&mut self) -> &mut dyn std::any::Any {
             self
         }
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, ivm::VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, ivm::VMError> {
             Ok(0)
         }
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {

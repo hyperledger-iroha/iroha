@@ -6,9 +6,13 @@
 //!
 //! The host also exposes basic hardware feature discovery and Merkle-proof
 //! helpers used by some tests.
+mod syscall_context;
+mod syscall_quote;
+pub use syscall_context::SyscallContext;
+pub use syscall_quote::SyscallQuote;
+
 use crate::{
     SyscallPolicy,
-    axt::{self, ProofBlob, TouchManifest},
     error::VMError,
     gas,
     ivm::IVM,
@@ -35,6 +39,7 @@ use iroha_primitives::{
     json::Json,
     numeric_abi::{MAX_QUANTITY_FRAME_BYTES_V1, QuantityValueV1},
 };
+use ivm_abi::axt::{self, ProofBlob, TouchManifest};
 use ivm_abi::{
     codec::{
         decode_canonical_norito, decode_canonical_norito_with_limits, encode_canonical_norito,
@@ -1775,7 +1780,11 @@ pub trait IVMHost {
     /// Preparation must be side-effect-free. For [`SyscallMetering::Reserved`] calls the VM debits
     /// this quote before invoking [`Self::syscall`] and refunds the unused portion afterwards. The
     /// VM does not invoke this method for registered staged syscalls.
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError>;
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError>;
     /// Handle a syscall invoked by the VM. `number` is the syscall ID and the
     /// mutable reference to the VM gives access to registers and memory.
     ///
@@ -1833,7 +1842,7 @@ pub trait IVMHost {
 // Compile-time signature guards keep the host lifecycle and syscall quote
 // contracts uniform across downstream implementations.
 type PrepareSyscallSignatureGuard =
-    for<'a, 'b> fn(&'a dyn IVMHost, u32, &'b IVM) -> Result<u64, VMError>;
+    for<'a, 'b> fn(&'a dyn IVMHost, u32, SyscallQuote<'b>) -> Result<u64, VMError>;
 type AllowsSyscallSignatureGuard = for<'a> fn(&'a dyn IVMHost, SyscallPolicy, u32) -> bool;
 type BeginTxSignatureGuard =
     for<'a, 'b> fn(&'a mut dyn IVMHost, &'b StateAccessSet) -> Result<(), VMError>;
@@ -1843,7 +1852,7 @@ type RestoreSignatureGuard =
 fn prepare_syscall_signature_guard(
     host: &dyn IVMHost,
     number: u32,
-    vm: &IVM,
+    vm: SyscallQuote<'_>,
 ) -> Result<u64, VMError> {
     IVMHost::prepare_syscall(host, number, vm)
 }
@@ -2607,29 +2616,31 @@ impl Default for DefaultHost {
     }
 }
 impl IVMHost for DefaultHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if metering.metering == SyscallMetering::Staged {
             return Ok(0);
         }
-        if let Some(quote) = common_syscall_gas_quote(number, vm)? {
+        if let Some(quote) = vm.common_syscall_gas_quote(number)? {
             return Ok(quote);
         }
-        if let Some(quote) = crate::core_host::CoreHost::codec_gas_quote(number, vm)? {
+        if let Some(quote) = vm.codec_gas_quote(number)? {
             return Ok(quote);
         }
-        if let Some(quote) = crate::core_host::CoreHost::schema_gas_quote(number, vm)? {
+        if let Some(quote) = vm.schema_gas_quote(number)? {
             return Ok(quote);
         }
         if crate::syscalls::is_json_getter_syscall(number) {
-            let json = quote_tlv_payload_len_at(
-                vm,
-                Self::resolve_code_tlv_addr(vm, vm.register(10)),
+            let json = vm.quote_tlv_payload_len_at(
+                vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 PointerType::Json,
             )?;
-            let key = quote_tlv_payload_len_at(
-                vm,
-                Self::resolve_code_tlv_addr(vm, vm.register(11)),
+            let key = vm.quote_tlv_payload_len_at(
+                vm.resolve_code_tlv_addr(vm.public_register(11)?),
                 PointerType::Name,
             )?;
             if json > gas::HOST_CODEC_MAX_INPUT_BYTES || key > gas::HOST_CODEC_MAX_INPUT_BYTES {
@@ -2643,8 +2654,9 @@ impl IVMHost for DefaultHost {
             ));
         }
         let tlv_len = |register: usize| -> Result<usize, VMError> {
-            let pointer = vm.register(register);
-            quote_any_tlv_at(vm, pointer).map(|(_, payload_len)| payload_len)
+            let pointer = vm.public_register(register)?;
+            vm.quote_any_tlv_at(pointer)
+                .map(|(_, payload_len)| payload_len)
         };
         let quote = match number {
             crate::syscalls::SYSCALL_VRF_EPOCH_SEED => {
@@ -2652,14 +2664,12 @@ impl IVMHost for DefaultHost {
                 crate::vrf::epoch_seed_gas(false)
             }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
-                let base_len = quote_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let base_len = vm.quote_tlv_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                     PointerType::Name,
                 )?;
-                let key_len = quote_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                let key_len = vm.quote_tlv_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(11)?),
                     PointerType::NoritoBytes,
                 )?;
                 let (input_len, output_bound) =
@@ -2668,8 +2678,9 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_STATE_MAP_KEY_AT => {
                 let page_len =
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
-                let base_len = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Name)?;
+                    vm.quote_tlv_payload_len_at(vm.public_register(10)?, PointerType::NoritoBytes)?;
+                let base_len =
+                    vm.quote_tlv_payload_len_at(vm.public_register(11)?, PointerType::Name)?;
                 if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
                     || base_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
                 {
@@ -2696,60 +2707,54 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => STATE_QUERY_GAS_BASE,
             crate::syscalls::SYSCALL_JSON_BUILD => {
-                reserve_available_syscall_gas_at_least(vm, STATE_QUERY_GAS_BASE)?
+                vm.reserve_available_syscall_gas_at_least(STATE_QUERY_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_STATE_GET => {
-                let path_len = quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                reserve_available_syscall_gas_at_least(vm, state_path_gas(path_len))?
+                vm.reserve_available_syscall_gas_at_least(state_path_gas(path_len))?
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
-                let path_len = quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
                 state_path_gas(path_len)
             }
             crate::syscalls::SYSCALL_STATE_COUNT => {
-                let path_len = quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                reserve_available_syscall_gas_at_least(vm, state_path_gas(path_len))?
+                vm.reserve_available_syscall_gas_at_least(state_path_gas(path_len))?
             }
             crate::syscalls::SYSCALL_STATE_SCAN => {
-                reserve_available_syscall_gas_at_least(vm, crate::state_scan::prepare_minimum(vm)?)?
+                vm.reserve_available_syscall_gas_at_least(vm.state_scan_minimum()?)?
             }
             crate::syscalls::SYSCALL_STATE_SET => {
-                let path_len = quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                let value_len = quote_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                let value_len = vm.quote_tlv_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(11)?),
                     PointerType::NoritoBytes,
                 )?;
                 validate_state_value_payload_len(value_len)?;
                 state_value_gas(path_len, value_len)
             }
             crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => {
-                let path_len = quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
                 state_path_gas(path_len)
             }
-            crate::syscalls::SYSCALL_GROW_HEAP => Self::grow_heap_gas(vm.register(10)),
+            crate::syscalls::SYSCALL_GROW_HEAP => Self::grow_heap_gas(vm.public_register(10)?),
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => GET_PRIVATE_INPUT_GAS,
             crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => PRIVATE_NUMERIC_VALCOM_GAS,
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
-                reserve_available_syscall_gas_at_least(vm, PUBLIC_INPUT_GAS_BASE)?
+                vm.reserve_available_syscall_gas_at_least(PUBLIC_INPUT_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_COMMIT_OUTPUT => gas::commit_output_gas(vm.output_used_len()),
-            crate::syscalls::SYSCALL_EXECUTION_SUMMARY => Self::execution_summary_gas_quote(vm)?,
+            crate::syscalls::SYSCALL_EXECUTION_SUMMARY => vm.execution_summary_gas_quote()?,
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
                 let payload_len = tlv_len(10)?;
                 if payload_len > gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
@@ -2757,20 +2762,18 @@ impl IVMHost for DefaultHost {
                 }
                 gas::zk_verify_gas(payload_len)
             }
-            crate::syscalls::SYSCALL_VERIFY_SIGNATURE => Self::signature_verify_gas_quote(vm)?,
+            crate::syscalls::SYSCALL_VERIFY_SIGNATURE => vm.signature_verify_gas_quote()?,
             crate::syscalls::SYSCALL_VRF_VERIFY => {
-                let payload_len = quote_bounded_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let payload_len = vm.bounded_payload_len(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                     PointerType::NoritoBytes,
                     crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
                 )?;
                 Self::vrf_verify_gas(1, payload_len)
             }
             crate::syscalls::SYSCALL_VRF_VERIFY_BATCH => {
-                let payload_len = quote_bounded_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let payload_len = vm.bounded_payload_len(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                     PointerType::NoritoBytes,
                     crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
                 )?;
@@ -2778,10 +2781,12 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1
+                vm.quote_zk_single_at(vm.public_register(10)?, self.zk_gas_schedule)?
+                    .1
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                quote_zk_batch_at(vm, vm.register(10), self.zk_gas_schedule)?.gas
+                vm.quote_zk_batch_at(vm.public_register(10)?, self.zk_gas_schedule)?
+                    .gas
             }
             crate::syscalls::SYSCALL_ADD_SIGNATORY
             | crate::syscalls::SYSCALL_REMOVE_SIGNATORY
@@ -2791,9 +2796,8 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_NFT_SET_METADATA
             | crate::syscalls::SYSCALL_NFT_BURN_ASSET => Self::mutation_gas(0),
             crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
-                let quantity_len = quote_bounded_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(13)),
+                let quantity_len = vm.bounded_payload_len(
+                    vm.resolve_code_tlv_addr(vm.public_register(13)?),
                     PointerType::Quantity,
                     MAX_QUANTITY_FRAME_BYTES_V1,
                 )?;
@@ -2801,60 +2805,64 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => Self::mutation_gas(tlv_len(12)?),
             crate::syscalls::SYSCALL_TRANSFER_V1 => {
-                reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
             }
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN
             | crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => gas::G_FASTPQ_BATCH,
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
-                reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
             }
             crate::syscalls::SYSCALL_GET_MERKLE_PATH => {
-                let address = vm.register(10);
-                let max_address = vm.memory.stack_top().saturating_add(Memory::STACK_SLOP);
+                let address = vm.public_register(10)?;
+                let max_address = vm.stack_top().saturating_add(Memory::STACK_SLOP);
                 if address >= max_address {
                     return Err(VMError::MemoryOutOfBounds);
                 }
-                Self::merkle_path_gas(Self::memory_merkle_path_depth(vm))
+                Self::merkle_path_gas(vm.merkle_depth())
             }
             crate::syscalls::SYSCALL_GET_MERKLE_COMPACT => {
-                let address = vm.register(10);
-                let max_address = vm.memory.stack_top().saturating_add(Memory::STACK_SLOP);
+                let address = vm.public_register(10)?;
+                let max_address = vm.stack_top().saturating_add(Memory::STACK_SLOP);
                 if address >= max_address {
                     return Err(VMError::MemoryOutOfBounds);
                 }
-                let depth =
-                    Self::compact_merkle_depth(Self::memory_merkle_path_depth(vm), vm.register(12));
+                let depth = Self::compact_merkle_depth(vm.merkle_depth(), vm.public_register(12)?);
                 Self::merkle_path_gas(depth)
             }
             crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => {
-                let index =
-                    usize::try_from(vm.register(10)).map_err(|_| VMError::RegisterOutOfBounds)?;
+                let index = usize::try_from(vm.public_register(10)?)
+                    .map_err(|_| VMError::RegisterOutOfBounds)?;
                 if index >= crate::parallel::REGISTER_COUNT {
                     return Err(VMError::RegisterOutOfBounds);
                 }
                 let full_depth = Self::complete_tree_depth(crate::parallel::REGISTER_COUNT);
-                Self::merkle_path_gas(Self::compact_merkle_depth(full_depth, vm.register(12)))
+                Self::merkle_path_gas(Self::compact_merkle_depth(
+                    full_depth,
+                    vm.public_register(12)?,
+                ))
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
                 let request_len =
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    vm.quote_tlv_payload_len_at(vm.public_register(10)?, PointerType::NoritoBytes)?;
                 let maximum_response = usize::try_from(Memory::INPUT_SIZE).unwrap_or(usize::MAX);
                 Self::state_query_gas(request_len.saturating_add(maximum_response))
             }
             crate::syscalls::SYSCALL_AXT_BEGIN => {
-                let payload_len =
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::AxtDescriptor)?;
+                let payload_len = vm.quote_tlv_payload_len_at(
+                    vm.public_register(10)?,
+                    PointerType::AxtDescriptor,
+                )?;
                 Self::axt_gas(payload_len)
             }
             crate::syscalls::SYSCALL_AXT_TOUCH
             | crate::syscalls::SYSCALL_AXT_COMMIT
             | crate::syscalls::SYSCALL_VERIFY_DS_PROOF
             | crate::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
-                reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
             }
             _ => {
                 if metering.quote_strategy == HostSyscallQuoteStrategy::ReserveAvailable {
-                    reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                    vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
                 } else {
                     MUTATION_GAS
                 }
@@ -4292,95 +4300,14 @@ impl IVMHost for DefaultHost {
                 Ok(Self::input_publish_gas(total))
             }
             crate::syscalls::SYSCALL_GET_MERKLE_PATH => {
-                let addr = vm.register(10);
-                let max_addr = vm
-                    .memory
-                    .stack_top()
-                    .saturating_add(crate::Memory::STACK_SLOP);
-                if addr >= max_addr {
-                    return Err(VMError::MemoryOutOfBounds);
-                }
-                let dest = vm.register(11);
-                let root_out = vm.register(12);
-                let (root, path) = vm.memory.merkle_root_and_path(addr)?;
-                for (i, node) in path.iter().enumerate() {
-                    vm.memory.store_bytes(dest + (i as u64) * 32, node)?;
-                }
-                if root_out != 0 {
-                    vm.memory.store_bytes(root_out, root.as_ref())?;
-                }
-                vm.set_register(10, path.len() as u64);
-                Ok(Self::merkle_path_gas(path.len()))
+                vm.write_memory_merkle_path().map(Self::merkle_path_gas)
             }
-            crate::syscalls::SYSCALL_GET_MERKLE_COMPACT => {
-                let addr = vm.register(10);
-                let max_addr = vm
-                    .memory
-                    .stack_top()
-                    .saturating_add(crate::Memory::STACK_SLOP);
-                if addr >= max_addr {
-                    return Err(VMError::MemoryOutOfBounds);
-                }
-                let dest = vm.register(11);
-                let depth_cap_raw = vm.register(12);
-                let depth_cap = if depth_cap_raw == 0 {
-                    None
-                } else {
-                    Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
-                };
-                let root_out = vm.register(13);
-                let (proof, root) = vm.memory.merkle_compact(addr, depth_cap)?;
-                let depth = proof.depth() as usize;
-                vm.memory.store_bytes(dest, &[proof.depth()])?;
-                vm.memory
-                    .store_bytes(dest + 1, &proof.dirs().to_le_bytes())?;
-                let count = depth as u32;
-                vm.memory.store_bytes(dest + 1 + 4, &count.to_le_bytes())?;
-                let mut off = dest + 1 + 4 + 4;
-                for sibling in proof.siblings() {
-                    let bytes = sibling.map(|hash| *hash.as_ref()).unwrap_or([0u8; 32]);
-                    vm.memory.store_bytes(off, &bytes)?;
-                    off += 32;
-                }
-                if root_out != 0 {
-                    vm.memory.store_bytes(root_out, root.as_ref())?;
-                }
-                vm.set_register(10, depth as u64);
-                Ok(Self::merkle_path_gas(depth))
-            }
-            crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => {
-                let idx_raw = vm.register(10);
-                let idx = usize::try_from(idx_raw).map_err(|_| VMError::RegisterOutOfBounds)?;
-                if idx >= crate::parallel::REGISTER_COUNT {
-                    return Err(VMError::RegisterOutOfBounds);
-                }
-                let dest = vm.register(11);
-                let depth_cap_raw = vm.register(12);
-                let depth_cap = if depth_cap_raw == 0 {
-                    None
-                } else {
-                    Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
-                };
-                let root_out = vm.register(13);
-                let (proof, root) = vm.registers.merkle_compact(idx, depth_cap)?;
-                let depth = proof.depth() as usize;
-                vm.memory.store_bytes(dest, &[proof.depth()])?;
-                vm.memory
-                    .store_bytes(dest + 1, &proof.dirs().to_le_bytes())?;
-                let count = depth as u32;
-                vm.memory.store_bytes(dest + 1 + 4, &count.to_le_bytes())?;
-                let mut off = dest + 1 + 4 + 4;
-                for sibling in proof.siblings() {
-                    let bytes = sibling.map(|hash| *hash.as_ref()).unwrap_or([0u8; 32]);
-                    vm.memory.store_bytes(off, &bytes)?;
-                    off += 32;
-                }
-                if root_out != 0 {
-                    vm.memory.store_bytes(root_out, root.as_ref())?;
-                }
-                vm.set_register(10, depth as u64);
-                Ok(Self::merkle_path_gas(depth))
-            }
+            crate::syscalls::SYSCALL_GET_MERKLE_COMPACT => vm
+                .write_compact_memory_merkle_path()
+                .map(Self::merkle_path_gas),
+            crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => vm
+                .write_compact_register_merkle_path()
+                .map(Self::merkle_path_gas),
             // --- ZK verify/state-read helpers ---
             crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
@@ -4761,7 +4688,7 @@ mod tests {
         vm.set_register(12, u64::MAX);
         let mut host = DefaultHost::new().with_network_id(test_network_id(0x71));
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote())
             .expect("quote VRF batch without decoding");
         let instruction_gas = gas::cost_of(scall).expect("SCALL is scheduled");
         vm.set_gas_limit(instruction_gas.saturating_add(quote));
@@ -4785,7 +4712,7 @@ mod tests {
         vm.set_register(12, u64::MAX);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote())
             .expect("quote ZK batch without decoding");
         let instruction_gas = gas::cost_of(scall).expect("SCALL is scheduled");
         vm.set_gas_limit(instruction_gas.saturating_add(quote));
@@ -5077,7 +5004,7 @@ mod tests {
         vm.set_register(10, pointer);
         let mut host = DefaultHost::new();
         let quoted = host
-            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote())
             .expect("quote debug log");
         let actual = host
             .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
@@ -5721,7 +5648,7 @@ mod tests {
         vm.set_register(10, wrong_type);
         let host = DefaultHost::new();
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         let oversized = vec![0_u8; crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 + 1];
@@ -5733,7 +5660,7 @@ mod tests {
             .expect("store oversized envelope");
         vm.set_register(10, pointer);
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         assert_eq!(
@@ -5761,7 +5688,7 @@ mod tests {
         vm.set_register(12, 0xbeef);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, vm.syscall_quote())
             .expect("quote VRF batch");
         vm.set_gas_limit(quote);
         assert!(matches!(
@@ -5888,7 +5815,7 @@ mod tests {
             .expect("allocate bounded ZK batch");
         vm.set_register(10, pointer);
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             gas::zk_verify_batch_gas(3, payload.len())
         );
@@ -5903,7 +5830,7 @@ mod tests {
             .expect("allocate oversized ZK batch");
         vm.set_register(10, pointer);
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             gas::zk_verify_batch_gas(gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS + 1, oversized.len())
         );
@@ -6097,7 +6024,7 @@ mod tests {
         vm.set_register(12, 0xbeef);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote())
             .expect("quote bounded ZK batch");
         vm.set_gas_limit(quote);
         assert!(matches!(
@@ -6136,7 +6063,7 @@ mod tests {
         vm.set_register(10, pointer);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm.syscall_quote())
             .expect("quote declared count without decoding");
         assert_eq!(quote, gas::zk_verify_batch_gas(1, payload.len()));
         vm.set_gas_limit(quote.saturating_add(16));
@@ -6168,7 +6095,7 @@ mod tests {
             .expect("alloc roots request");
         vm.set_register(10, roots_ptr);
         let roots_quote = host
-            .prepare_syscall(syscalls::SYSCALL_ZK_ROOTS_GET, &vm)
+            .prepare_syscall(syscalls::SYSCALL_ZK_ROOTS_GET, vm.syscall_quote())
             .expect("quote roots get");
         let roots_gas = host
             .syscall(syscalls::SYSCALL_ZK_ROOTS_GET, &mut vm)
@@ -6191,7 +6118,7 @@ mod tests {
             .expect("alloc tally request");
         vm.set_register(10, tally_ptr);
         let tally_quote = host
-            .prepare_syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &vm)
+            .prepare_syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, vm.syscall_quote())
             .expect("quote vote tally");
         let tally_gas = host
             .syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm)
@@ -6361,33 +6288,34 @@ mod tests {
             syscalls::SYSCALL_AXT_COMMIT,
         ] {
             assert_eq!(
-                (empty.prepare_syscall(syscall, &vm)).expect("expected successful fixture result"),
+                (empty.prepare_syscall(syscall, vm.syscall_quote()))
+                    .expect("expected successful fixture result"),
                 available
             );
             assert_eq!(
-                (populated.prepare_syscall(syscall, &vm))
+                (populated.prepare_syscall(syscall, vm.syscall_quote()))
                     .expect("expected successful fixture result"),
                 available
             );
         }
         let path_len = quote_state_path_payload_len_at(&vm, path).expect("quote state path");
         assert_eq!(
-            (empty.prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm))
+            (empty.prepare_syscall(syscalls::SYSCALL_STATE_GET, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             available
         );
         assert_eq!(
-            (populated.prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm))
+            (populated.prepare_syscall(syscalls::SYSCALL_STATE_GET, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             available
         );
         assert_eq!(
-            (empty.prepare_syscall(syscalls::SYSCALL_STATE_LEN, &vm))
+            (empty.prepare_syscall(syscalls::SYSCALL_STATE_LEN, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             state_path_gas(path_len)
         );
         assert_eq!(
-            (populated.prepare_syscall(syscalls::SYSCALL_STATE_LEN, &vm))
+            (populated.prepare_syscall(syscalls::SYSCALL_STATE_LEN, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             state_path_gas(path_len)
         );
@@ -6538,7 +6466,7 @@ mod tests {
             let registers_before = (vm.register(10), vm.register(11));
             vm.memory.clear_tracking();
             let quote = host
-                .prepare_syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &vm)
+                .prepare_syscall(syscalls::SYSCALL_POINTER_TO_NORITO, vm.syscall_quote())
                 .expect("quote pointer conversion");
             assert_eq!(
                 (vm.register(10), vm.register(11)),
@@ -6566,7 +6494,7 @@ mod tests {
         vm.set_register(10, left);
         vm.set_register(11, Memory::OUTPUT_START);
         let error = host
-            .prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm)
+            .prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
             .expect_err("invalid right pointer must fail strict pointer-ABI preparation");
         assert!(matches!(
             error,
@@ -6576,14 +6504,16 @@ mod tests {
         vm.set_register(10, Memory::OUTPUT_START);
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err(),
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err(),
             "equal raw addresses must not bypass pointer-ABI validation"
         );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
         vm.set_register(10, 0);
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err(),
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err(),
             "null comparison must still validate the non-null operand"
         );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
@@ -6612,7 +6542,7 @@ mod tests {
         vm.set_register(12, public_key);
         vm.set_register(13, u64::MAX);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, vm.syscall_quote())
             .expect("quote signature verification");
         let actual = host
             .syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &mut vm)
@@ -6632,7 +6562,7 @@ mod tests {
             vm.set_register(register, pointer);
         }
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_SM4_GCM_SEAL, &vm)
+            .prepare_syscall(syscalls::SYSCALL_SM4_GCM_SEAL, vm.syscall_quote())
             .expect("quote SM4");
         assert_eq!(quote, DefaultHost::sm4_gas(127, 128));
         assert_eq!(
@@ -6667,7 +6597,7 @@ mod tests {
             vm.set_register(13, u64::MAX);
             let mut host = DefaultHost::new();
             assert!(matches!(
-                host.prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm),
+                host.prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, vm.syscall_quote()),
                 Err(VMError::NoritoInvalid)
             ));
             assert!(matches!(
@@ -6707,7 +6637,7 @@ mod tests {
         vm.set_register(12, public_key);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, vm.syscall_quote())
             .expect("quote signature verification");
         vm.set_gas_limit(quote.saturating_add(4));
         let error = vm
@@ -6724,7 +6654,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
         let proof_quote = host
-            .prepare_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY, &vm)
+            .prepare_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY, vm.syscall_quote())
             .expect("quote proof");
         assert_eq!(
             host.syscall(syscalls::SYSCALL_EXECUTION_SUMMARY, &mut vm)
@@ -6742,7 +6672,7 @@ mod tests {
             vm.set_register(12, depth_cap);
             vm.set_register(13, 0);
             let quote = host
-                .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT, &vm)
+                .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT, vm.syscall_quote())
                 .expect("quote compact proof");
             assert_eq!(
                 host.syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT, &mut vm)
@@ -6754,12 +6684,16 @@ mod tests {
         let stack_top = vm.memory.stack_top();
         vm.set_register(10, stack_top);
         assert!(matches!(
-            DefaultHost::new().prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, &vm),
+            DefaultHost::new()
+                .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, vm.syscall_quote()),
             Err(VMError::MemoryOutOfBounds)
         ));
         vm.set_register(10, crate::parallel::REGISTER_COUNT as u64);
         assert!(matches!(
-            DefaultHost::new().prepare_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT, &vm),
+            DefaultHost::new().prepare_syscall(
+                syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT,
+                vm.syscall_quote()
+            ),
             Err(VMError::RegisterOutOfBounds)
         ));
     }
@@ -6776,7 +6710,7 @@ mod tests {
         vm.set_register(12, 0);
         let mut host = DefaultHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, vm.syscall_quote())
             .expect("quote full Merkle path");
         let actual = host
             .syscall(syscalls::SYSCALL_GET_MERKLE_PATH, &mut vm)
@@ -6789,16 +6723,16 @@ mod tests {
         let vm = IVM::new(u64::MAX);
         let host = DefaultHost::new();
         let error = host
-            .prepare_syscall(syscalls::SYSCALL_SM3_HASH, &vm)
+            .prepare_syscall(syscalls::SYSCALL_SM3_HASH, vm.syscall_quote())
             .expect_err("SM quoting validates the input even on a new host");
         assert!(!matches!(error, VMError::PermissionDenied));
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_REGISTER_DOMAIN, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             MUTATION_GAS
         );
         assert!(
-            matches!(host.prepare_syscall(0xffff_fffe, &vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xffff_fffe))
+            matches!(host.prepare_syscall(0xffff_fffe, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (0xffff_fffe))
         );
     }
     #[test]
@@ -6941,7 +6875,7 @@ mod tests {
             .expect("store public heap TLV");
         vm.set_register(10, pointer);
         assert_eq!(
-            (host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &vm))
+            (host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             DefaultHost::input_publish_gas(envelope.len())
         );
@@ -6974,7 +6908,7 @@ mod tests {
             .expect("memory permissions alone permit the adversarial write");
         vm.set_register(10, unowned_pointer);
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         assert_eq!(vm.register(10), unowned_pointer);
@@ -7093,7 +7027,7 @@ mod tests {
             );
             for _ in 0..3 {
                 let quote = host
-                    .prepare_syscall(syscalls::SYSCALL_COMMIT_OUTPUT, &vm)
+                    .prepare_syscall(syscalls::SYSCALL_COMMIT_OUTPUT, vm.syscall_quote())
                     .expect("quote output commit");
                 let actual = host
                     .syscall(syscalls::SYSCALL_COMMIT_OUTPUT, &mut vm)

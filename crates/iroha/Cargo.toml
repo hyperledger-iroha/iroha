@@ -120,6 +120,14 @@ rustls = { workspace = true, features = ["ring", "tls12"] }
 name = "parliament_ballot_wallet"
 test = true
 
+[[example]]
+name = "parliament_ballot_verify"
+test = true
+
+[[example]]
+name = "parliament_credential_draft"
+test = true
+
 [[test]]
 name = "tx_ttl"
 path = "tests/tx_ttl.rs"

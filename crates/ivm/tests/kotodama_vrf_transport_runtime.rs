@@ -39,7 +39,11 @@ struct ObservedVrfHost {
     status: Option<[u64; 3]>,
 }
 impl IVMHost for ObservedVrfHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {

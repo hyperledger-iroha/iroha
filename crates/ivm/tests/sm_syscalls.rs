@@ -1230,7 +1230,9 @@ fn mandatory_sm_results_and_gas_match_across_default_hosts() {
                 vm.set_register(10 + index, pointer);
             }
             vm.set_register(14, 16);
-            let quote = host.prepare_syscall(*number, &vm).expect("mandatory quote");
+            let quote = host
+                .prepare_syscall(*number, vm.syscall_quote())
+                .expect("mandatory quote");
             let actual = host
                 .syscall(*number, &mut vm)
                 .expect("mandatory SM execution");
@@ -1274,7 +1276,7 @@ fn mandatory_sm_results_and_gas_match_across_default_hosts() {
             }
             vm.set_register(14, 16);
             let quote = host
-                .prepare_syscall(number, &vm)
+                .prepare_syscall(number, vm.syscall_quote())
                 .expect("tag failure quote");
             let actual = host
                 .syscall(number, &mut vm)

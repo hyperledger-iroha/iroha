@@ -12807,13 +12807,14 @@ fn project_authenticated_committed_transaction(
             Ok::<_, PyErr>(hex_encode(bytes))
         })
         .transpose()?;
-    let (result_ok, rejection_code, rejection_message, contract_rejection, ivm_fault) = match committed.result().as_ref() {
-        Ok(_) => (true, None, None, None, None),
-        Err(reason) => {
-            let (code, message, contract, fault) = profiled_rejection(reason);
-            (false, Some(code), Some(message), contract, fault)
-        }
-    };
+    let (result_ok, rejection_code, rejection_message, contract_rejection, ivm_fault) =
+        match committed.result().as_ref() {
+            Ok(_) => (true, None, None, None, None),
+            Err(reason) => {
+                let (code, message, contract, fault) = profiled_rejection(reason);
+                (false, Some(code), Some(message), contract, fault)
+            }
+        };
     let batch_outcomes = committed
         .result()
         .batch_transfer_outcomes()

@@ -27780,8 +27780,8 @@
             {
               "path": "crates/iroha_core/src/smartcontracts/ivm/host/contract_calls.rs",
               "sites": {
-                "vm.register(13) > ivm_abi::call::MAX_CALL_WORDS_V1 as u64": 1,
-                "vm.register(15) > ivm_abi::call::MAX_CALL_WORDS_V1 as u64": 1
+                "vm.public_register(13)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64": 1,
+                "vm.public_register(15)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64": 1
               }
             },
             {

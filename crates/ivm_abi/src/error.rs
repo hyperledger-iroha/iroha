@@ -192,6 +192,118 @@ impl fmt::Display for ExecutionDeferral {
     }
 }
 impl StdError for ExecutionDeferral {}
+/// Original node-local cause of an unfinished invocation. This move-only type has no wire
+/// codec and cannot contain a deterministic trap, a metered result or a charged outcome.
+#[derive(Debug)]
+pub enum VmDeferral {
+    /// Local reason without a separately owned resource.
+    ExecutionDeferred(ExecutionDeferral),
+    /// The pool reservation and its exact wake source.
+    AllocationDeferred(AllocationRefusal),
+    /// The original physical allocator refusal.
+    AllocatorDeferred(AllocatorRefusal),
+    /// The original bounded decoder and enclosing scope.
+    DecodeDeferred(norito::core::DecodeLocalRefusal),
+    /// The original native verifier, including any decoder or scratch refusal.
+    VerificationDeferred(VerificationRefusal),
+    /// No host was present for this invocation.
+    HostUnavailable,
+    /// The host's reported actual cost exceeded its pre-execution quote.
+    SyscallGasQuoteExceeded {
+        /// Original cost quoted before dispatch.
+        quoted: u64,
+        /// Actual cost returned by the host.
+        actual: u64,
+    },
+    /// The host and VM used different metering conventions for this syscall.
+    SyscallMeteringModeMismatch {
+        /// Original dispatch selector.
+        syscall: u32,
+    },
+}
+
+fn decoder_reason(kind: norito::core::DecodeLocalRefusalKind) -> ExecutionDeferral {
+    use norito::core::DecodeLocalRefusalKind as Kind;
+    match kind {
+        Kind::Allocator => ExecutionDeferral::AllocationUnavailable,
+        Kind::EnclosingLimit => ExecutionDeferral::ActiveMemoryCapacity,
+    }
+}
+
+fn verifier_reason(original: &VerificationRefusal) -> ExecutionDeferral {
+    use iroha_plonk::verification_attempt::VerificationRefusalKind as Kind;
+    match original.kind() {
+        Kind::Decode(kind) => decoder_reason(kind),
+        Kind::NativeCancelled => ExecutionDeferral::VerificationCancelled,
+        Kind::NativeMemoryBudget => ExecutionDeferral::NativeVerificationMemoryUnavailable,
+        Kind::InitializationUnavailable => ExecutionDeferral::VerifierInitializationUnavailable,
+        Kind::LocalInvariantViolation => ExecutionDeferral::LocalInvariantViolation,
+    }
+}
+
+impl VmDeferral {
+    /// Borrow the scheduling category while the original cause remains owned here.
+    #[must_use]
+    pub fn reason(&self) -> ExecutionDeferral {
+        match self {
+            Self::ExecutionDeferred(reason) => *reason,
+            Self::AllocationDeferred(_) => ExecutionDeferral::ActiveMemoryCapacity,
+            Self::AllocatorDeferred(_) => ExecutionDeferral::AllocationUnavailable,
+            Self::DecodeDeferred(original) => decoder_reason(original.kind()),
+            Self::VerificationDeferred(original) => verifier_reason(original),
+            Self::HostUnavailable
+            | Self::SyscallGasQuoteExceeded { .. }
+            | Self::SyscallMeteringModeMismatch { .. } => {
+                ExecutionDeferral::LocalInvariantViolation
+            }
+        }
+    }
+}
+
+impl TryFrom<VMError> for VmDeferral {
+    type Error = VMError;
+
+    fn try_from(error: VMError) -> Result<Self, Self::Error> {
+        match error {
+            VMError::ExecutionDeferred(value) => Ok(Self::ExecutionDeferred(value)),
+            VMError::AllocationDeferred(value) => Ok(Self::AllocationDeferred(value)),
+            VMError::AllocatorDeferred(value) => Ok(Self::AllocatorDeferred(value)),
+            VMError::DecodeDeferred(value) => Ok(Self::DecodeDeferred(value)),
+            VMError::VerificationDeferred(value) => Ok(Self::VerificationDeferred(value)),
+            VMError::HostUnavailable => Ok(Self::HostUnavailable),
+            VMError::SyscallGasQuoteExceeded { quoted, actual } => {
+                Ok(Self::SyscallGasQuoteExceeded { quoted, actual })
+            }
+            VMError::SyscallMeteringModeMismatch { syscall } => {
+                Ok(Self::SyscallMeteringModeMismatch { syscall })
+            }
+            VMError::Metered { source, .. } if source.execution_deferral().is_some() => {
+                Self::try_from(*source)
+            }
+            completed => Err(completed),
+        }
+    }
+}
+
+impl From<VmDeferral> for VMError {
+    fn from(owner: VmDeferral) -> Self {
+        match owner {
+            VmDeferral::ExecutionDeferred(value) => Self::ExecutionDeferred(value),
+            VmDeferral::AllocationDeferred(value) => Self::AllocationDeferred(value),
+            VmDeferral::AllocatorDeferred(value) => Self::AllocatorDeferred(value),
+            VmDeferral::DecodeDeferred(value) => Self::DecodeDeferred(value),
+            VmDeferral::VerificationDeferred(value) => Self::VerificationDeferred(value),
+            VmDeferral::HostUnavailable => Self::HostUnavailable,
+            VmDeferral::SyscallGasQuoteExceeded { quoted, actual } => {
+                Self::SyscallGasQuoteExceeded { quoted, actual }
+            }
+            VmDeferral::SyscallMeteringModeMismatch { syscall } => {
+                Self::SyscallMeteringModeMismatch { syscall }
+            }
+        }
+    }
+}
+
 /// VM errors.
 #[derive(Debug)]
 pub enum VMError {
@@ -416,33 +528,8 @@ impl VMError {
             Self::ExecutionDeferred(reason) => Some(*reason),
             Self::AllocationDeferred(_) => Some(ExecutionDeferral::ActiveMemoryCapacity),
             Self::AllocatorDeferred(_) => Some(ExecutionDeferral::AllocationUnavailable),
-            Self::DecodeDeferred(original) => Some(match original.kind() {
-                norito::core::DecodeLocalRefusalKind::Allocator => {
-                    ExecutionDeferral::AllocationUnavailable
-                }
-                norito::core::DecodeLocalRefusalKind::EnclosingLimit => {
-                    ExecutionDeferral::ActiveMemoryCapacity
-                }
-            }),
-            Self::VerificationDeferred(original) => {
-                use iroha_plonk::verification_attempt::VerificationRefusalKind as Kind;
-                Some(match original.kind() {
-                    Kind::Decode(norito::core::DecodeLocalRefusalKind::Allocator) => {
-                        ExecutionDeferral::AllocationUnavailable
-                    }
-                    Kind::Decode(norito::core::DecodeLocalRefusalKind::EnclosingLimit) => {
-                        ExecutionDeferral::ActiveMemoryCapacity
-                    }
-                    Kind::NativeCancelled => ExecutionDeferral::VerificationCancelled,
-                    Kind::NativeMemoryBudget => {
-                        ExecutionDeferral::NativeVerificationMemoryUnavailable
-                    }
-                    Kind::InitializationUnavailable => {
-                        ExecutionDeferral::VerifierInitializationUnavailable
-                    }
-                    Kind::LocalInvariantViolation => ExecutionDeferral::LocalInvariantViolation,
-                })
-            }
+            Self::DecodeDeferred(original) => Some(decoder_reason(original.kind())),
+            Self::VerificationDeferred(original) => Some(verifier_reason(original)),
             Self::HostUnavailable
             | Self::SyscallGasQuoteExceeded { .. }
             | Self::SyscallMeteringModeMismatch { .. } => {

@@ -38,7 +38,11 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn prepared_entrypoint_arguments(&self) -> Option<crate::PreparedArgumentRecord> {
         self.inner.prepared_entrypoint_arguments()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -87,7 +91,11 @@ mod tests {
             Some(self.0.clone())
         }
 
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Err(VMError::PermissionDenied)
         }
 
@@ -156,7 +164,11 @@ mod tests {
         fn prepared_entrypoint_arguments(&self) -> Option<PreparedArgumentRecord> {
             Some(self.arguments.clone())
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.inner.prepare_syscall(number, vm)
         }
         fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {

@@ -362,17 +362,29 @@ fn private_input_syscall_requires_zk_execution_mode() {
 fn successful_hosts_cannot_declassify_unwritten_output_registers() {
     struct PartialOutputHost;
     impl IVMHost for PartialOutputHost {
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             match number {
                 syscalls::SYSCALL_CURRENT_TIME_MS => {
-                    assert_eq!(vm.register(10), 0);
-                    assert!(!vm.registers.tag(10));
+                    assert_eq!(vm.public_register(10)?, 0);
+                    vm.ensure_public_register(10)?;
                 }
                 syscalls::SYSCALL_VERIFY_PROOF => {
-                    assert_eq!(vm.register(10), 123, "declared input must be preserved");
-                    assert!(!vm.registers.tag(10));
-                    assert_eq!(vm.register(11), 0, "output-only r11 must be sanitized");
-                    assert!(!vm.registers.tag(11));
+                    assert_eq!(
+                        vm.public_register(10)?,
+                        123,
+                        "declared input must be preserved"
+                    );
+                    vm.ensure_public_register(10)?;
+                    assert_eq!(
+                        vm.public_register(11)?,
+                        0,
+                        "output-only r11 must be sanitized"
+                    );
+                    vm.ensure_public_register(11)?;
                 }
                 _ => panic!("unexpected syscall {number:#x}"),
             }
@@ -427,9 +439,13 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
 fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
     struct PrepareFailureHost;
     impl IVMHost for PrepareFailureHost {
-        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
-            assert_eq!(vm.register(10), 0);
-            assert!(!vm.registers.tag(10));
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
+            assert_eq!(vm.public_register(10)?, 0);
+            vm.ensure_public_register(10)?;
             Err(VMError::DecodeError)
         }
         fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
@@ -444,9 +460,13 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
     }
     struct UnaffordableHost;
     impl IVMHost for UnaffordableHost {
-        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
-            assert_eq!(vm.register(10), 0);
-            assert!(!vm.registers.tag(10));
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
+            assert_eq!(vm.public_register(10)?, 0);
+            vm.ensure_public_register(10)?;
             Ok(1_000_000)
         }
         fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
@@ -481,7 +501,11 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
 fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
     struct PrivateOutputHost;
     impl IVMHost for PrivateOutputHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
         fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -749,7 +773,11 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
         calls: Cell<u32>,
     }
     impl IVMHost for ExpensivePrepareHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.prepares.set(self.prepares.get() + 1);
             Ok(1_000_000)
         }

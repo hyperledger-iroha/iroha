@@ -160,7 +160,7 @@ seiyaku PreparedArgumentEventProbe {
     let name_ptr = store_tlv(&mut event_vm, PointerType::Name, &norito_blob(&name));
     event_vm.set_register(10, name_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &event_vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, event_vm.syscall_quote())
         .expect("quote actual firing event");
     let gas = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut event_vm)
@@ -203,7 +203,7 @@ seiyaku PreparedArgumentEventProbe {
     let name_ptr = store_tlv(&mut absent_vm, PointerType::Name, &norito_blob(&name));
     absent_vm.set_register(10, name_ptr);
     record_only_host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &absent_vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, absent_vm.syscall_quote())
         .expect("quote missing event");
     assert!(matches!(
         (

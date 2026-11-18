@@ -578,7 +578,7 @@ fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
         assert!(!host.allows_syscall(ivm::SyscallPolicy::AbiV1, syscall));
         let mut vm = IVM::new(u64::MAX);
         assert!(matches!(
-            host.prepare_syscall(syscall, &vm),
+            host.prepare_syscall(syscall, vm.syscall_quote()),
             Err(VMError::UnknownSyscall(actual)) if actual == syscall
         ));
         assert!(matches!(

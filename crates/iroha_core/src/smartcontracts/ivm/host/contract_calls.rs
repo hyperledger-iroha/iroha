@@ -7,26 +7,28 @@ use ivm_abi::contract_call::{ContractCallBindingV1, MAX_CONTRACT_CALL_BINDING_BY
 
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Check the fixed public descriptors before reserving the caller's gas escrow.
-    pub(super) fn quote_contract_call_descriptors(vm: &IVM) -> Result<usize, ivm::VMError> {
+    pub(super) fn quote_contract_call_descriptors(
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<usize, ivm::VMError> {
         for register in 10..=15 {
             vm.ensure_public_register(register)?;
         }
-        let address_bytes = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)?;
+        let address_bytes =
+            vm.quote_tlv_payload_len_at(vm.public_register(10)?, PointerType::Blob)?;
         let binding_bytes =
-            quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+            vm.quote_tlv_payload_len_at(vm.public_register(11)?, PointerType::NoritoBytes)?;
         if address_bytes != iroha_data_model::smart_contract::CONTRACT_ADDRESS_LITERAL_LEN_V1
             || binding_bytes > MAX_CONTRACT_CALL_BINDING_BYTES_V1
-            || vm.register(13) > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
-            || vm.register(15) > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
-            || vm.register(15) == 0
-            || (vm.register(12) == 0) != (vm.register(13) == 0)
+            || vm.public_register(13)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
+            || vm.public_register(15)? > ivm_abi::call::MAX_CALL_WORDS_V1 as u64
+            || vm.public_register(15)? == 0
+            || (vm.public_register(12)? == 0) != (vm.public_register(13)? == 0)
         {
             return Err(ivm::VMError::DecodeError);
         }
-        value_record::validate_return_destination(
-            vm,
-            vm.register(14),
-            usize::try_from(vm.register(15)).map_err(|_| ivm::VMError::DecodeError)?,
+        vm.validate_return_destination(
+            vm.public_register(14)?,
+            usize::try_from(vm.public_register(15)?).map_err(|_| ivm::VMError::DecodeError)?,
         )?;
         address_bytes
             .checked_add(binding_bytes)
@@ -62,7 +64,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         {
             return Err(meter(boundary_gas, ivm::VMError::PermissionDenied));
         }
-        let request_bytes = Self::quote_contract_call_descriptors(vm)
+        let request_bytes = Self::quote_contract_call_descriptors(vm.syscall_quote())
             .map_err(|error| meter(boundary_gas, error))?;
         boundary_gas = ivm::gas::syscall_byte_gas(boundary_gas, request_bytes, 0);
         ivm::host::preflight_reserved_syscall_gas(vm, boundary_gas)?;

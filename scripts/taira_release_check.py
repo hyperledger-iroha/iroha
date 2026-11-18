@@ -2170,7 +2170,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_capacity_refusal_retries_without_artifact_or_state_writes',
         'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_contention_preserves_exact_bytes_and_releases_for_retry',
         'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_moves_original_archive_to_worker_without_a_detached_producer',
-        'query::provider_ingest_finalized::tests::certified_capture_tests::certified_retention_waits_for_actual_index_owner_before_authority_or_file_mutation',
+        'query::provider_ingest_finalized::tests::certified_capture_tests::certified_retention_waits_for_actual_index_owner_before_changing_the_index_or_unlinking',
         'query::reputation_finalized::tests::certified_capture_contention_returns_release_without_mutation_and_retries_exactly',
         'query::reputation_finalized::tests::certified_capture_rebuilds_after_partial_io_with_identical_bytes_and_one_policy_charge',
     )),

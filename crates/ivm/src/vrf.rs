@@ -106,7 +106,7 @@ mod epoch_seed_tests {
         vm.set_register(11, 71);
         let number = crate::syscalls::SYSCALL_VRF_EPOCH_SEED;
         assert_eq!(
-            host.prepare_syscall(number, &vm).unwrap(),
+            host.prepare_syscall(number, vm.syscall_quote()).unwrap(),
             epoch_seed_gas(false)
         );
         let error = host

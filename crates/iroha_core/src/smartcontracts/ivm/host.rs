@@ -142,7 +142,6 @@ use ivm::codec::{decode_canonical_norito, encode_canonical_norito};
 use ivm::{
     self, CoreHost as IvmCodecHost, IVM, PointerType,
     analysis::{self, AmxLimits, ProgramAnalysis},
-    axt::{self, ProofBlob, TouchManifest},
     core_query::{
         AccountView, AssetDefinitionView, AssetView, CoreQueryEntityTagV1, DomainView, NftView,
         QUERY_PAGE_CAPACITY_V1, QuantityV1, QueryPageV1,
@@ -150,6 +149,7 @@ use ivm::{
     host::{IVMHost, quote_tlv_payload_len_at},
     is_type_allowed_for_policy, pointer_abi,
 };
+use ivm_abi::axt::{self, ProofBlob, TouchManifest};
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize,
@@ -969,10 +969,10 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     // Exact genesis-derived security domain for AXT issuer authentication.
     network_id: Option<NetworkId>,
     // Mandatory snapshot-derived policy for AXT validation.
-    axt_policy: Arc<dyn ivm::axt::AxtPolicy>,
+    axt_policy: Arc<dyn ivm_abi::axt::AxtPolicy>,
     // Optional supplemental policy hook. This can only restrict the mandatory
     // authenticated snapshot policy; either denial wins.
-    axt_policy_hook: Option<Arc<dyn ivm::axt::AxtPolicy>>,
+    axt_policy_hook: Option<Arc<dyn ivm_abi::axt::AxtPolicy>>,
     // AXT timing configuration sourced from `iroha_config`.
     axt_timing: iroha_config::parameters::actual::NexusAxt,
     // Current manifest id for namespace binding (None -> core/built-in).
@@ -3798,7 +3798,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -3929,7 +3929,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -4014,7 +4014,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             public_inputs: BTreeMap::new(),
             chain_id_bytes: Vec::new(),
             network_id: None,
-            axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy: Arc::new(ivm_abi::axt::AllowAllAxtPolicy),
             axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
@@ -4390,7 +4390,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .axt_policy_snapshot
             .as_ref()
             .map(|snapshot| {
-                ivm::axt::SnapshotAxtPolicy::new_with_timing(
+                ivm_abi::axt::SnapshotAxtPolicy::new_with_timing(
                     snapshot,
                     timing.slot_length_ms,
                     timing.max_clock_skew_ms,
@@ -4431,7 +4431,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// authorize an operation rejected by the mandatory policy. Installing a
     /// hook aborts any active AXT envelope.
     #[must_use]
-    pub fn with_axt_policy(mut self, policy_hook: Arc<dyn ivm::axt::AxtPolicy>) -> Self {
+    pub fn with_axt_policy(mut self, policy_hook: Arc<dyn ivm_abi::axt::AxtPolicy>) -> Self {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy_hook = Some(policy_hook);
         self.clear_axt_proof_cache();
@@ -4451,7 +4451,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         mut self,
         snapshot: &AxtPolicySnapshot,
     ) -> Result<Self, AxtPolicySnapshotValidationError> {
-        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
+        let policy = ivm_abi::axt::SnapshotAxtPolicy::new_with_timing(
             snapshot,
             self.axt_timing.slot_length_ms,
             self.axt_timing.max_clock_skew_ms,
@@ -4462,7 +4462,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn install_validated_axt_policy_snapshot(
         &mut self,
         snapshot: &AxtPolicySnapshot,
-        policy: ivm::axt::SnapshotAxtPolicy,
+        policy: ivm_abi::axt::SnapshotAxtPolicy,
     ) {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = Arc::new(policy);
@@ -4543,7 +4543,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         &mut self,
         snapshot: &AxtPolicySnapshot,
     ) -> Result<(), AxtPolicySnapshotValidationError> {
-        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
+        let policy = ivm_abi::axt::SnapshotAxtPolicy::new_with_timing(
             snapshot,
             self.axt_timing.slot_length_ms,
             self.axt_timing.max_clock_skew_ms,
@@ -6996,7 +6996,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .max()
     }
     fn axt_expiry_slot_with_skew(&self, expiry_slot: u64, override_ms: Option<u32>) -> u64 {
-        ivm::axt::expiry_slot_with_skew(
+        ivm_abi::axt::expiry_slot_with_skew(
             expiry_slot,
             self.axt_timing.slot_length_ms,
             self.axt_timing.max_clock_skew_ms,
@@ -7081,7 +7081,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         let snapshot = state
             .axt_execution_policy_snapshot()
             .unwrap_or_else(|| state.axt_policy_snapshot());
-        let policy = ivm::axt::SnapshotAxtPolicy::new_with_timing(
+        let policy = ivm_abi::axt::SnapshotAxtPolicy::new_with_timing(
             &snapshot,
             timing.slot_length_ms,
             timing.max_clock_skew_ms,
@@ -10097,7 +10097,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
     fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
         self.entrypoint_argument_record.clone()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
         // Consensus hosts never receive raw private witnesses. Keep this
@@ -10120,26 +10124,22 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             ivm::syscalls::SYSCALL_STATE_LEN
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_STATE_HAS => {
-                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
                 Some(ivm::host::state_path_gas(path_len))
             }
             ivm::syscalls::SYSCALL_STATE_GET | ivm::syscalls::SYSCALL_STATE_COUNT => {
-                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                Some(ivm::host::reserve_available_syscall_gas_at_least(
-                    vm,
-                    ivm::host::state_path_gas(path_len),
-                )?)
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
+                Some(
+                    vm.reserve_available_syscall_gas_at_least(ivm::host::state_path_gas(path_len))?,
+                )
             }
             ivm::syscalls::SYSCALL_STATE_SCAN => {
-                Some(ivm::host::reserve_available_syscall_gas_at_least(
-                    vm,
-                    ivm::state_scan::prepare_minimum(vm)?,
-                )?)
+                Some(vm.reserve_available_syscall_gas_at_least(vm.state_scan_minimum()?)?)
             }
             ivm::syscalls::SYSCALL_STATE_SET => {
-                let path_len = ivm::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let path_len = vm.quote_state_path_payload_len_at(vm.public_register(10)?)?;
                 let value_len =
-                    quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+                    vm.quote_tlv_payload_len_at(vm.public_register(11)?, PointerType::NoritoBytes)?;
                 ivm::host::validate_state_value_payload_len(value_len)?;
                 Some(ivm::host::state_value_gas(path_len, value_len))
             }
@@ -10180,7 +10180,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 {
                     Some(Self::sysvar_gas(payload_len))
                 } else {
-                    Some(ivm::host::reserve_available_syscall_gas(vm)?)
+                    Some(vm.reserve_available_syscall_gas()?)
                 }
             }
             ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
@@ -10191,7 +10191,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     {
                         Some(Self::sysvar_gas(payload_len))
                     } else {
-                        Some(ivm::host::reserve_available_syscall_gas(vm)?)
+                        Some(vm.reserve_available_syscall_gas()?)
                     }
                 } else {
                     return Err(ivm::VMError::PermissionDenied);
@@ -10230,26 +10230,26 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             | ivm::syscalls::SYSCALL_AXT_TOUCH
             | ivm::syscalls::SYSCALL_VERIFY_DS_PROOF
             | ivm::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND
-            | ivm::syscalls::SYSCALL_AXT_COMMIT => {
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
-            }
+            | ivm::syscalls::SYSCALL_AXT_COMMIT => Some(vm.reserve_available_syscall_gas()?),
             ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT => Some(self.quote_contract_event(vm)?),
             ivm::syscalls::SYSCALL_CALL_CONTRACT => {
                 Self::quote_contract_call_descriptors(vm)?;
-                Some(ivm::host::reserve_available_syscall_gas(vm)?)
+                Some(vm.reserve_available_syscall_gas()?)
             }
             ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
-            | ivm::syscalls::SYSCALL_VERIFY_PROOF => {
-                Some(ivm::host::quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1)
-            }
-            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                Some(ivm::host::quote_zk_batch_at(vm, vm.register(10), self.zk_gas_schedule)?.gas)
-            }
+            | ivm::syscalls::SYSCALL_VERIFY_PROOF => Some(
+                vm.quote_zk_single_at(vm.public_register(10)?, self.zk_gas_schedule)?
+                    .1,
+            ),
+            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => Some(
+                vm.quote_zk_batch_at(vm.public_register(10)?, self.zk_gas_schedule)?
+                    .gas,
+            ),
             ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
                 vm.ensure_public_register(10)?;
                 Some(ivm::vrf::epoch_seed_gas(
-                    self.vrf_epoch_seed(vm.register(10)).is_some(),
+                    self.vrf_epoch_seed(vm.public_register(10)?).is_some(),
                 ))
             }
             ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
@@ -10265,10 +10265,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 ] {
                     vm.ensure_public_register(register)?;
                     // r14 = 0 means the call named no dataspace scope.
-                    if register == 14 && vm.register(register) == 0 {
+                    if register == 14 && vm.public_register(register)? == 0 {
                         continue;
                     }
-                    quote_tlv_payload_len_at(vm, vm.register(register), pointer_type)?;
+                    vm.quote_tlv_payload_len_at(vm.public_register(register)?, pointer_type)?;
                 }
                 // Either balance policy queues one native asset transfer. It has
                 // a fixed instruction charge and publishes no VM return bytes;
@@ -10279,8 +10279,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN
             | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => Some(ivm::gas::G_FASTPQ_BATCH),
             ivm::syscalls::SYSCALL_AXT_BEGIN => {
-                let payload_len =
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::AxtDescriptor)?;
+                let payload_len = vm.quote_tlv_payload_len_at(
+                    vm.public_register(10)?,
+                    PointerType::AxtDescriptor,
+                )?;
                 Some(Self::axt_gas(payload_len))
             }
             ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
@@ -10290,8 +10292,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
             | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
             | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
-                let request_len =
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::SoracloudRequest)?;
+                let request_len = vm.quote_tlv_payload_len_at(
+                    vm.public_register(10)?,
+                    PointerType::SoracloudRequest,
+                )?;
                 Some(ivm::gas::syscall_byte_gas(
                     ivm::gas::G_SORACLOUD,
                     request_len,
@@ -10324,18 +10328,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
             // checks the encoded response cost before returning. Reserving that
             // entire budget is therefore a tight upper bound even when the
             // world-state cardinality is not available without running a query.
-            return ivm::host::reserve_available_syscall_gas_at_least(vm, metering.minimum_gas);
+            return vm.reserve_available_syscall_gas_at_least(metering.minimum_gas);
         }
         match metering.quote_strategy {
             ivm::host::HostSyscallQuoteStrategy::ReserveAvailable => {
-                ivm::host::reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)
+                vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)
             }
             ivm::host::HostSyscallQuoteStrategy::InputOutputBounded
             | ivm::host::HostSyscallQuoteStrategy::AllocationExtent => {
                 // Forwarded exact/allocation paths returned above. Remaining
                 // instruction-producing calls use the deterministic envelope
                 // bound and cannot silently inherit a reserve strategy.
-                Ok(ivm::host::conservative_syscall_gas_quote(number, vm))
+                vm.conservative_syscall_gas_quote(number)
             }
         }
     }
@@ -12263,7 +12267,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
             let vm = IVM::new(1_000_000);
             assert!(
                 matches!(
-                    host.prepare_syscall(syscall, &vm),
+                    host.prepare_syscall(syscall, vm.syscall_quote()),
                     Err(ivm::VMError::PermissionDenied)
                 ),
                 "view preparation must reject effect syscall 0x{syscall:02x} before pointer decoding"
@@ -12283,7 +12287,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         let missing_path: StatePath = "missing".parse().expect("valid state path");
         let path_ptr = store_state_path_tlv(&mut vm, &missing_path);
         vm.set_register(10, path_ptr);
-        host.prepare_syscall(ivm_sys::SYSCALL_STATE_GET, &vm)
+        host.prepare_syscall(ivm_sys::SYSCALL_STATE_GET, vm.syscall_quote())
             .expect("view preparation permits durable-state reads");
         host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)
             .expect("view dispatch permits durable-state reads");
@@ -14188,7 +14192,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
                 let gas_before = vm.remaining_gas();
                 assert!(
                     matches!(
-                        host.prepare_syscall(*syscall, &vm),
+                        host.prepare_syscall(*syscall, vm.syscall_quote()),
                         Err(ivm::VMError::PermissionDenied)
                     ),
                     "{entrypoint} must fail during syscall preparation"
@@ -14237,7 +14241,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             matches!(
                 exhausted_host.prepare_syscall(
                     ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-                    &exhausted_vm,
+                    exhausted_vm.syscall_quote(),
                 ),
                 Err(ivm::VMError::OutOfGas)
             ),
@@ -14258,8 +14262,11 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
             let gas_before = vm.remaining_gas();
             assert!(
-                host.prepare_syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &vm)
-                    .is_ok(),
+                host.prepare_syscall(
+                    ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                    vm.syscall_quote()
+                )
+                .is_ok(),
                 "opaque instruction quotation must not decode attacker-controlled payloads"
             );
             assert_eq!(vm.remaining_gas(), gas_before);
@@ -14833,7 +14840,10 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let request_ptr = store_tlv(&mut vm, PointerType::SoracloudRequest, &request_bytes);
         vm.set_register(10, request_ptr);
         let quote = host
-            .prepare_syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &vm)
+            .prepare_syscall(
+                ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+                vm.syscall_quote(),
+            )
             .expect("quote Soracloud runtime rejection");
         let err = host
             .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
@@ -14863,7 +14873,10 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&request));
         vm.set_register(10, request_ptr);
         assert!(matches!(
-            host.prepare_syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &vm),
+            host.prepare_syscall(
+                ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG,
+                vm.syscall_quote()
+            ),
             Err(ivm::VMError::NoritoInvalid)
         ));
         let err = host

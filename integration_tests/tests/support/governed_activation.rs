@@ -325,7 +325,7 @@ pub fn block_time_ms(network: &Network, client: &Client, height: u64) -> Result<
     )?)
 }
 
-fn submit_applied(client: &Client, instruction: InstructionBox) -> Result<u64> {
+pub(super) fn submit_applied(client: &Client, instruction: InstructionBox) -> Result<u64> {
     let hash = client.submit(instruction, fee())?;
     client
         .wait_for_transaction_applied(hash, TransactionWaitOptions::default())?

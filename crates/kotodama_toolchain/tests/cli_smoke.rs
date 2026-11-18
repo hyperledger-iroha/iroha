@@ -634,3 +634,48 @@ fn koto_build_named_runtime_profile_smoke() {
     assert_eq!(admitted.metadata.abi_version, 1);
     assert_eq!(admitted.manifest.abi_hash, Some(admitted.abi_hash));
 }
+
+#[test]
+fn trace_flag_and_subcommand_share_the_selected_baseline_execution() {
+    let source = build_dir("trace_switch").join("trace.ko");
+    fs::write(&source, "seiyaku TraceForms { #[test] fn smoke() { test::assert(true); } #[test] fn second() { test::assert(true); } }").unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_koto"))
+            .arg("test")
+            .args(args)
+            .arg(&source)
+            .output()
+            .expect("run the koto test driver")
+    };
+    let human = run(&["--trace"]);
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let report = String::from_utf8(human.stdout).unwrap();
+    assert!(report.contains("trace smoke") && report.contains("trace second"));
+    let options = ["--format", "json", "--filter", "smoke", "--exact"];
+    let named = run(&[&["trace"][..], &options].concat());
+    let flag = run(&[&["--trace"][..], &options].concat());
+    assert!(named.status.success() && flag.status.success());
+    assert_eq!(flag.stdout, named.stdout);
+    let lines = std::str::from_utf8(&flag.stdout).unwrap();
+    assert!(!lines.is_empty());
+    for line in lines.lines() {
+        let step: norito::json::Value = norito::json::from_str(line).unwrap();
+        assert_eq!(
+            step.get("test").and_then(norito::json::Value::as_str),
+            Some("smoke")
+        );
+        assert!(step.get("pc").is_some());
+    }
+    for args in [
+        &["--trace", "--exact"][..],
+        &["--trace", "--format", "junit"],
+        &["coverage", "--trace"],
+        &["--trace", "trace"],
+    ] {
+        assert_eq!(run(args).status.code(), Some(2), "{args:?}");
+    }
+}

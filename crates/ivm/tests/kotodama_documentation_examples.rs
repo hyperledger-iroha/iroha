@@ -138,7 +138,11 @@ impl LoggingCoreHost {
     }
 }
 impl IVMHost for LoggingCoreHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
             _ => self.inner.prepare_syscall(number, vm),

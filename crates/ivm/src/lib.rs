@@ -28,7 +28,6 @@ mod acceleration_cost;
 mod aes;
 pub mod analysis;
 mod argument_record;
-pub mod axt;
 #[cfg(feature = "beep")]
 mod beep;
 pub mod bn254_vec;

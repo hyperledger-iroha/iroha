@@ -565,7 +565,7 @@ mod tests {
         for limit in [0, 65] {
             arguments(&mut vm, "orders", None, limit);
             assert!(
-                host.prepare_syscall(syscalls::SYSCALL_STATE_SCAN, &vm)
+                host.prepare_syscall(syscalls::SYSCALL_STATE_SCAN, vm.syscall_quote())
                     .is_err()
             );
         }

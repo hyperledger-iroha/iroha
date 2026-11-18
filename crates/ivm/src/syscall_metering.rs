@@ -130,9 +130,10 @@ impl StagedSyscallContext {
         gas: u64,
     ) -> Result<(), VMError> {
         if self.completion.is_some() {
-            return Err(VMError::SyscallMeteringModeMismatch {
+            return Err(crate::error::VmDeferral::SyscallMeteringModeMismatch {
                 syscall: self.syscall,
-            });
+            }
+            .into());
         }
         let phase_index = phase as usize;
         let phase_total = self.phase_charges[phase_index]

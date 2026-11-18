@@ -1,7 +1,7 @@
 //! Non-serializable local attempt outcomes and the instruction-layer retry owner.
 
 use iroha_data_model::ValidationFail;
-use ivm::error::{ExecutionDeferral, VMError};
+use ivm::error::{ExecutionDeferral, VMError, VmDeferral};
 
 mod policy_decode;
 pub(crate) use policy_decode::PolicyDecodeControls;
@@ -28,17 +28,8 @@ pub enum ExecutionPhase {
 #[derive(Debug)]
 pub struct ExecutionDeferred {
     reason: ExecutionDeferral,
-    original: Option<OriginalRefusal>,
+    original: VmDeferral,
     phase: Option<ExecutionPhase>,
-}
-
-/// The actual non-wire cause, never reconstructed from diagnostic fields.
-#[derive(Debug)]
-enum OriginalRefusal {
-    Allocation(iroha_allocation::AllocationRefusal),
-    Allocator(iroha_allocation::AllocatorRefusal),
-    Decode(norito::core::DecodeLocalRefusal),
-    Verification(ivm::error::VerificationRefusal),
 }
 
 /// Publication remains forbidden after the original refusal moves to its caller.
@@ -131,16 +122,16 @@ impl ExecutionDeferred {
     /// refusal, arithmetic overflow, or demand exceeding the configured pool
     /// limit cannot be cured by waiting on an invented notification.
     pub fn allocation_refusal(&self) -> Option<&iroha_allocation::AllocationRefusal> {
-        match self.original.as_ref() {
-            Some(OriginalRefusal::Allocation(original)) => Some(original),
+        match &self.original {
+            VmDeferral::AllocationDeferred(original) => Some(original),
             _ => None,
         }
     }
 
     /// Borrow the original physical allocator failure, without inventing a pool wake.
     pub fn allocator_refusal(&self) -> Option<&iroha_allocation::AllocatorRefusal> {
-        match self.original.as_ref() {
-            Some(OriginalRefusal::Allocator(original)) => Some(original),
+        match &self.original {
+            VmDeferral::AllocatorDeferred(original) => Some(original),
             _ => None,
         }
     }
@@ -148,17 +139,17 @@ impl ExecutionDeferred {
     /// Borrow the captured decoder cause, including its original opaque scope identity.
     /// No pool release observation is created by retaining this decoder owner.
     pub fn decode_refusal(&self) -> Option<&norito::core::DecodeLocalRefusal> {
-        match self.original.as_ref() {
-            Some(OriginalRefusal::Decode(original)) => Some(original),
-            Some(OriginalRefusal::Verification(original)) => original.decode_refusal(),
+        match &self.original {
+            VmDeferral::DecodeDeferred(original) => Some(original),
+            VmDeferral::VerificationDeferred(original) => original.decode_refusal(),
             _ => None,
         }
     }
 
     /// Borrow the full native verifier cause without a second retry owner.
     pub fn verification_refusal(&self) -> Option<&ivm::error::VerificationRefusal> {
-        match self.original.as_ref() {
-            Some(OriginalRefusal::Verification(original)) => Some(original),
+        match &self.original {
+            VmDeferral::VerificationDeferred(original) => Some(original),
             _ => None,
         }
     }
@@ -169,92 +160,53 @@ impl ExecutionDeferred {
     /// # Errors
     /// Returns the complete original error unchanged when it is not an execution deferral.
     pub fn try_from_vm_error(error: VMError) -> Result<Self, VMError> {
-        let Some(reason) = error.execution_deferral() else {
-            return Err(error);
-        };
-        let original = match error.into_unmetered() {
-            VMError::AllocationDeferred(original) => Some(OriginalRefusal::Allocation(original)),
-            VMError::AllocatorDeferred(original) => Some(OriginalRefusal::Allocator(original)),
-            VMError::DecodeDeferred(original) => Some(OriginalRefusal::Decode(original)),
-            VMError::VerificationDeferred(original) => {
-                Some(OriginalRefusal::Verification(original))
-            }
-            _ => None,
-        };
-        Ok(Self {
-            reason,
-            original,
-            phase: None,
-        })
+        VmDeferral::try_from(error).map(Self::from)
     }
 
     /// Move this owner through a VM host boundary without losing its release source.
     /// Native finalizer provenance stays outside the VM error surface.
     pub fn into_vm_error(self) -> VMError {
-        match self.original {
-            Some(OriginalRefusal::Allocation(refusal)) => VMError::AllocationDeferred(refusal),
-            Some(OriginalRefusal::Allocator(original)) => VMError::AllocatorDeferred(original),
-            Some(OriginalRefusal::Decode(original)) => VMError::DecodeDeferred(original),
-            Some(OriginalRefusal::Verification(original)) => {
-                VMError::VerificationDeferred(original)
-            }
-            None => VMError::ExecutionDeferred(self.reason),
+        self.original.into()
+    }
+}
+
+impl From<VmDeferral> for ExecutionDeferred {
+    fn from(original: VmDeferral) -> Self {
+        Self {
+            reason: original.reason(),
+            original,
+            phase: None,
         }
     }
 }
 
 impl From<ExecutionDeferral> for ExecutionDeferred {
-    fn from(reason: ExecutionDeferral) -> Self {
-        Self {
-            reason,
-            original: None,
-            phase: None,
-        }
+    fn from(original: ExecutionDeferral) -> Self {
+        VmDeferral::ExecutionDeferred(original).into()
     }
 }
 
 impl From<iroha_allocation::AllocationRefusal> for ExecutionDeferred {
-    fn from(refusal: iroha_allocation::AllocationRefusal) -> Self {
-        Self {
-            reason: ExecutionDeferral::ActiveMemoryCapacity,
-            original: Some(OriginalRefusal::Allocation(refusal)),
-            phase: None,
-        }
+    fn from(original: iroha_allocation::AllocationRefusal) -> Self {
+        VmDeferral::AllocationDeferred(original).into()
     }
 }
 
 impl From<iroha_allocation::AllocatorRefusal> for ExecutionDeferred {
     fn from(original: iroha_allocation::AllocatorRefusal) -> Self {
-        Self {
-            reason: ExecutionDeferral::AllocationUnavailable,
-            original: Some(OriginalRefusal::Allocator(original)),
-            phase: None,
-        }
+        VmDeferral::AllocatorDeferred(original).into()
     }
 }
 
 impl From<norito::core::DecodeLocalRefusal> for ExecutionDeferred {
     fn from(original: norito::core::DecodeLocalRefusal) -> Self {
-        let reason = match original.kind() {
-            norito::core::DecodeLocalRefusalKind::Allocator => {
-                ExecutionDeferral::AllocationUnavailable
-            }
-            norito::core::DecodeLocalRefusalKind::EnclosingLimit => {
-                ExecutionDeferral::ActiveMemoryCapacity
-            }
-        };
-        Self {
-            reason,
-            original: Some(OriginalRefusal::Decode(original)),
-            phase: None,
-        }
+        VmDeferral::DecodeDeferred(original).into()
     }
 }
 
 impl From<ivm::error::VerificationRefusal> for ExecutionDeferred {
     fn from(original: ivm::error::VerificationRefusal) -> Self {
-        Self::try_from_vm_error(VMError::VerificationDeferred(original))
-            .expect("native verifier refusals are local execution outcomes")
+        VmDeferral::VerificationDeferred(original).into()
     }
 }
 
@@ -284,11 +236,19 @@ impl core::fmt::Display for ExecutionDeferred {
             formatter.write_str("native lane finalizer: ")?;
         }
         match &self.original {
-            Some(OriginalRefusal::Allocation(refusal)) => refusal.fmt(formatter),
-            Some(OriginalRefusal::Allocator(original)) => original.fmt(formatter),
-            Some(OriginalRefusal::Decode(original)) => original.fmt(formatter),
-            Some(OriginalRefusal::Verification(original)) => original.fmt(formatter),
-            None => self.reason.fmt(formatter),
+            VmDeferral::AllocationDeferred(refusal) => refusal.fmt(formatter),
+            VmDeferral::AllocatorDeferred(original) => original.fmt(formatter),
+            VmDeferral::DecodeDeferred(original) => original.fmt(formatter),
+            VmDeferral::VerificationDeferred(original) => original.fmt(formatter),
+            VmDeferral::ExecutionDeferred(reason) => reason.fmt(formatter),
+            VmDeferral::HostUnavailable => formatter.write_str("host unavailable"),
+            VmDeferral::SyscallGasQuoteExceeded { quoted, actual } => write!(
+                formatter,
+                "syscall gas quote exceeded: quoted {quoted}, actual {actual}"
+            ),
+            VmDeferral::SyscallMeteringModeMismatch { syscall } => {
+                write!(formatter, "syscall metering mode mismatch: {syscall}")
+            }
         }
     }
 }
@@ -296,11 +256,14 @@ impl core::fmt::Display for ExecutionDeferred {
 impl std::error::Error for ExecutionDeferred {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.original {
-            Some(OriginalRefusal::Allocation(original)) => Some(original),
-            Some(OriginalRefusal::Allocator(original)) => Some(original),
-            Some(OriginalRefusal::Decode(original)) => Some(original),
-            Some(OriginalRefusal::Verification(original)) => Some(original),
-            None => None,
+            VmDeferral::AllocationDeferred(original) => Some(original),
+            VmDeferral::AllocatorDeferred(original) => Some(original),
+            VmDeferral::DecodeDeferred(original) => Some(original),
+            VmDeferral::VerificationDeferred(original) => Some(original),
+            VmDeferral::ExecutionDeferred(_)
+            | VmDeferral::HostUnavailable
+            | VmDeferral::SyscallGasQuoteExceeded { .. }
+            | VmDeferral::SyscallMeteringModeMismatch { .. } => None,
         }
     }
 }
@@ -936,6 +899,39 @@ impl crate::state::StateTransaction<'_, '_> {
 mod tests {
     use ivm::error::VMError;
     include!("execution_attempt/json_scoped_tests.rs");
+    #[test]
+    fn structured_local_host_causes_survive_vm_and_core_custody() {
+        use super::{ExecutionAttemptState, ExecutionDeferred};
+        for original in [
+            VMError::HostUnavailable,
+            VMError::SyscallGasQuoteExceeded {
+                quoted: 7,
+                actual: 13,
+            },
+            VMError::SyscallMeteringModeMismatch { syscall: 57 },
+        ] {
+            let expected = original.to_string();
+            let mut state = ExecutionAttemptState::Ready;
+            let owner = ExecutionDeferred::try_from_vm_error(VMError::Metered {
+                gas: 81,
+                source: Box::new(original),
+            })
+            .unwrap();
+            state.record(owner);
+            state.record(ivm::error::ExecutionDeferral::CanonicalHistoryUnavailable);
+            let returned = state.take_owner().unwrap().into_vm_error();
+            assert_eq!(returned.to_string(), expected);
+            assert_eq!(returned.metered_gas(), None);
+            assert!(state.take_owner().is_none());
+        }
+        let metered = VMError::metered(19, VMError::InvalidOpcode(17));
+        let completed = ExecutionDeferred::try_from_vm_error(metered).unwrap_err();
+        assert!(matches!(
+            completed.split_metered(),
+            (Some(19), VMError::InvalidOpcode(17))
+        ));
+    }
+
     #[test]
     fn kura_storage_attempt_keeps_original_refusal_and_deterministic_source_error() {
         let pool = iroha_allocation::AllocationBudget::new(8);

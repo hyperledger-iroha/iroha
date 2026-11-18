@@ -514,7 +514,11 @@ mod tests {
             ordinal: u64,
         }
         impl IVMHost for QueueHost {
-            fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                number: u32,
+                vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 if number == syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION {
                     return Ok(0);
                 }

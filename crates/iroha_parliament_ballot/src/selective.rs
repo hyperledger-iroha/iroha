@@ -122,25 +122,15 @@ mod tests {
             output_budget::ExecutionOutputLimits,
         },
         governance::anonymous_ballot::{
-            BallotChoiceV1, BallotScopeV1, CastingClockEstablishedV1, GovernanceBlockStartEventV1,
-            GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1, NullifierV1, ProofProfileIdV1,
-            SealedCredentialListV1, digests::stamp_payload_digest_encoded_v1,
+            BallotScopeV1, CastingClockEstablishedV1, GovernanceBlockStartEventV1,
+            GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1, NullifierV1,
         },
         sumeragi_finality::{SumeragiCommitCertificateV1, SumeragiCommitVerifierV1},
         testing::native_finality::NativeFinalityFixture,
     };
 
     use super::*;
-    use crate::{
-        context::ScopedBallotContextV1,
-        fixtures::{fixture_authorization_v1, fixture_envelope_v1},
-        inputs::body_digest_v1,
-        test_support::{
-            body_context, body_instance_id, offset_nonce, policy, proposal_digest, secret_bytes,
-            tape,
-        },
-        wallet::CredentialHandleV1,
-    };
+    use crate::context::ScopedBallotContextV1;
 
     struct State {
         context: Arc<ScopedBallotContextV1>,
@@ -165,47 +155,7 @@ mod tests {
     #[test]
     fn verified_ballot_joins_its_certified_output_after_the_governance_prelude() {
         let mut fixture = NativeFinalityFixture::start_at("parliament-selective", 1000);
-        let body = iroha_data_model::governance::anonymous_ballot::BallotBodyContextV1 {
-            network_id: fixture.network_id(),
-            ..body_context()
-        };
-        let list = SealedCredentialListV1::from_unsorted(
-            ProofProfileIdV1::V1,
-            body_digest_v1(&body).unwrap(),
-            (0..3)
-                .map(|member| {
-                    *CredentialHandleV1::import_v1(body, &secret_bytes(member), None)
-                        .unwrap()
-                        .commitment()
-                })
-                .collect(),
-        )
-        .unwrap();
-        let context = Arc::new(
-            ScopedBallotContextV1::build(
-                body,
-                proposal_digest(),
-                body_instance_id(),
-                &list,
-                policy(),
-            )
-            .unwrap(),
-        );
-        let authorization =
-            fixture_authorization_v1(&context, &secret_bytes(0), BallotChoiceV1::Aye, &tape(0x15))
-                .unwrap();
-        let target =
-            stamp_payload_digest_encoded_v1(&authorization, context.encoded_context()).unwrap();
-        let envelope = fixture_envelope_v1(&authorization, offset_nonce(236_659_590)).unwrap();
-        assert!(
-            iroha_data_model::governance::anonymous_ballot::digests::verify_stamp_encoded_v1(
-                &authorization,
-                context.encoded_context(),
-                &envelope.envelope().unwrap().ballot.stamp.nonce
-            )
-            .unwrap(),
-            "re-mine fixture stamp for {target:?}"
-        );
+        let (context, envelope) = crate::test_support::signed_fixture_ballot(fixture.network_id());
         let header = fixture.next_header();
         let mut builder = BlockBuilder::new(header);
         builder.push_anonymous_ballot(envelope.clone());

@@ -138,7 +138,11 @@ fn dispatched_local_refusal_preserves_inputs_and_does_not_refund_unmetered_work(
         fn as_any(&mut self) -> &mut dyn std::any::Any {
             self
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.core.prepare_syscall(number, vm)
         }
         fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {

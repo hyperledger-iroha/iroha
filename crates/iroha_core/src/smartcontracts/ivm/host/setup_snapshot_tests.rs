@@ -84,10 +84,16 @@ fn create_nfts_recipient_prefix_reproduces_the_complete_account_snapshot() {
         let mut bounded_vm = IVM::new(u64::MAX);
         assert_eq!(
             eager
-                .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &eager_vm)
+                .prepare_syscall(
+                    ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+                    eager_vm.syscall_quote()
+                )
                 .expect("quote the complete snapshot"),
             bounded
-                .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &bounded_vm)
+                .prepare_syscall(
+                    ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+                    bounded_vm.syscall_quote()
+                )
                 .expect("quote the bounded snapshot"),
         );
         assert_eq!(
@@ -139,7 +145,10 @@ fn create_nfts_transfer_sources_match_effect_authority() {
         }
         let mut vm = IVM::new(1_000_000);
         let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+            .prepare_syscall(
+                ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+                vm.syscall_quote(),
+            )
             .expect("quote complete NFT effects");
         let expected_gas = host.create_nfts_for_all_gas_quote();
         assert_eq!(quote, 1_000_000, "preparation reserves the available gas");
@@ -469,7 +478,7 @@ fn read_vrf_epoch_seed<QS: QueryStateAccess + Default>(
     let mut vm = IVM::new(10_000);
     vm.set_register(10, epoch);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, vm.syscall_quote())
         .expect("quote VRF epoch seed");
     let gas = host
         .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
@@ -984,7 +993,7 @@ fn shared_election_hydration_preserves_tally_bytes_and_gas() {
             let ptr = super::tests::store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
             vm.set_register(10, ptr);
             let quote = host
-                .prepare_syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &vm)
+                .prepare_syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, vm.syscall_quote())
                 .unwrap();
             let gas = host
                 .syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm)
@@ -1010,7 +1019,7 @@ fn read_roots(host: &mut CoreHost, asset_id: &str, max: u32) -> RootsRead {
     let ptr = super::tests::store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, vm.syscall_quote())
         .map_err(|error| format!("{error:?}"));
     let gas = host
         .syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &mut vm)

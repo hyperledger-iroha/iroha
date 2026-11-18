@@ -273,6 +273,8 @@ use iroha_data_model::events::{
 };
 #[cfg(feature = "app_api")]
 use iroha_data_model::proof::ProofRecord;
+#[cfg(test)]
+use iroha_data_model::transaction::error::TransactionRejectionReason;
 use iroha_data_model::{
     account::{
         AccountId,
@@ -301,9 +303,7 @@ use iroha_data_model::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
-    transaction::{
-        SignedTransaction, error::TransactionRejectionReason, signed::TransactionEntrypoint,
-    },
+    transaction::{SignedTransaction, signed::TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanResolveAccountAlias,

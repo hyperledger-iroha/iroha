@@ -3030,7 +3030,7 @@ impl IVM {
             .allocation_budget()
             .is_some_and(|original| !original.same_pool(budget))
         {
-            return Err(VMError::HostUnavailable);
+            return Err(crate::error::VmDeferral::HostUnavailable.into());
         }
         budget.with_deferred_refund_notifications(|_| {
             let empty = zk::RegLog::new(self.memory.allocation_budget());
@@ -3426,7 +3426,7 @@ impl IVM {
             // Mask the invocation logger so those accesses cannot contaminate
             // or disclose values through this VM's proof log.
             let _host_logger_mask = zk::RegLoggerGuard::mask();
-            host.prepare_syscall(number, self)
+            host.prepare_syscall(number, self.syscall_quote())
         })) {
             Ok(prepared) => prepared,
             Err(payload) => {
@@ -3438,7 +3438,11 @@ impl IVM {
                 std::panic::resume_unwind(payload);
             }
         };
-        self.restore_host_register_log(prepare_isolation)?;
+        if let Err(restore) = self.restore_host_register_log(prepare_isolation) {
+            return Err(register_logging::first_local_host_refusal(
+                prepared, restore,
+            ));
+        }
         let quoted = match prepared {
             Ok(quoted) => quoted,
             Err(error) => {
@@ -3484,9 +3488,12 @@ impl IVM {
                 self.record_host_register_changes(&register_values_before, &register_tags_before);
             }
             Ok(false) => {}
-            Err(error) => {
+            Err(restore) => {
                 self.syscall_gas_reserve = 0;
-                return Err(error);
+                return Err(register_logging::first_local_host_refusal(
+                    host_result,
+                    restore,
+                ));
             }
         }
         let (actual, outcome) = match host_result {
@@ -3504,7 +3511,9 @@ impl IVM {
         self.syscall_gas_reserve = 0;
         if actual > quoted {
             self.gas_remaining = 0;
-            return Err(VMError::SyscallGasQuoteExceeded { quoted, actual });
+            return Err(
+                crate::error::VmDeferral::SyscallGasQuoteExceeded { quoted, actual }.into(),
+            );
         }
         self.gas_remaining = self
             .gas_remaining
@@ -3524,21 +3533,21 @@ impl IVM {
     ) -> Result<(), VMError> {
         debug_assert_eq!(self.syscall_gas_reserve, 0);
         if self.staged_syscall.is_some() {
-            return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
+            return Err(
+                crate::error::VmDeferral::SyscallMeteringModeMismatch { syscall: number }.into(),
+            );
         }
         self.staged_syscall = Some(StagedSyscallContext::new(number));
         if let Err(error) =
             self.charge_syscall_stage(SyscallMeteringPhase::Entry, STAGED_SYSCALL_ENTRY_GAS)
         {
-            self.finish_staged_syscall(SyscallCompletion::Trap);
-            return Err(error);
+            return Err(self.abort_staged_syscall(error));
         }
         // Privacy validation is bounded syscall-entry work. Debit the entry
         // phase first so a private or stack-backed pointer cannot trigger even
         // that validation for free or take precedence over entry-phase OOG.
         if let Err(error) = self.validate_syscall_privacy(number) {
-            self.finish_staged_syscall(SyscallCompletion::Trap);
-            return Err(error);
+            return Err(self.abort_staged_syscall(error));
         }
         self.sanitize_syscall_output_privacy(number);
         let register_values_before = self.registers.snapshot();
@@ -3546,8 +3555,7 @@ impl IVM {
         let syscall_isolation = match self.isolate_host_register_log(prepared_log) {
             Ok(isolation) => isolation,
             Err(error) => {
-                self.finish_staged_syscall(SyscallCompletion::Trap);
-                return Err(error);
+                return Err(self.abort_staged_syscall(error));
             }
         };
         let host_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3556,7 +3564,7 @@ impl IVM {
         })) {
             Ok(host_result) => host_result,
             Err(payload) => {
-                self.finish_staged_syscall(SyscallCompletion::Trap);
+                self.staged_syscall = None;
                 self.abort_host_register_log_isolation(syscall_isolation);
                 std::panic::resume_unwind(payload);
             }
@@ -3566,9 +3574,9 @@ impl IVM {
                 self.record_host_register_changes(&register_values_before, &register_tags_before);
             }
             Ok(false) => {}
-            Err(error) => {
-                self.finish_staged_syscall(SyscallCompletion::Trap);
-                return Err(error);
+            Err(restore) => {
+                let cause = register_logging::first_local_host_refusal(host_result, restore);
+                return Err(self.abort_staged_syscall(cause));
             }
         }
         match host_result {
@@ -3579,27 +3587,40 @@ impl IVM {
                     .and_then(StagedSyscallContext::completion)
                     .unwrap_or(SyscallCompletion::Success);
                 if completion == SyscallCompletion::Trap {
-                    self.finish_staged_syscall(SyscallCompletion::Trap);
-                    return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
+                    let error =
+                        crate::error::VmDeferral::SyscallMeteringModeMismatch { syscall: number };
+                    return Err(self.abort_staged_syscall(error.into()));
+                }
+                if let Err(error) = self.finalize_syscall_output_privacy(number) {
+                    return Err(self.abort_staged_syscall(error));
                 }
                 self.finish_staged_syscall(completion);
-                self.finalize_syscall_output_privacy(number)?;
                 Ok(())
             }
             Ok(_actual) => {
-                self.finish_staged_syscall(SyscallCompletion::Trap);
-                Err(VMError::SyscallMeteringModeMismatch { syscall: number })
+                let error =
+                    crate::error::VmDeferral::SyscallMeteringModeMismatch { syscall: number };
+                Err(self.abort_staged_syscall(error.into()))
             }
             Err(error) => {
                 let (metered_gas, source) = error.split_metered();
-                self.finish_staged_syscall(SyscallCompletion::Trap);
-                if metered_gas.is_some() {
-                    Err(VMError::SyscallMeteringModeMismatch { syscall: number })
+                let cause = if metered_gas.is_some() {
+                    crate::error::VmDeferral::SyscallMeteringModeMismatch { syscall: number }.into()
                 } else {
-                    Err(source)
-                }
+                    source
+                };
+                Err(self.abort_staged_syscall(cause))
             }
         }
+    }
+    /// Keep a node-local refusal out of the observable completed syscall history.
+    fn abort_staged_syscall(&mut self, error: VMError) -> VMError {
+        if error.execution_deferral().is_some() {
+            self.staged_syscall = None;
+        } else {
+            self.finish_staged_syscall(SyscallCompletion::Trap);
+        }
+        error
     }
     fn finish_staged_syscall(&mut self, completion: SyscallCompletion) {
         if let Some(mut context) = self.staged_syscall.take() {
@@ -3635,7 +3656,7 @@ impl IVM {
         self.last_diagnostic = None;
         self.ensure_complete_program_image()?;
         let Some(mut host) = self.host.take() else {
-            return Err(VMError::HostUnavailable);
+            return Err(crate::error::VmDeferral::HostUnavailable.into());
         };
         let outcome =
             std::panic::catch_unwind(AssertUnwindSafe(|| engine::run(self, host.as_mut(), None)));
@@ -5320,7 +5341,11 @@ mod tests {
             dispatched: bool,
         }
         impl IVMHost for ToolingHost {
-            fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 assert_eq!(number, 0x00FD_0001);
                 self.prepared.set(true);
                 Ok(0)
@@ -5413,7 +5438,11 @@ mod tests {
             dispatched: bool,
         }
         impl IVMHost for DispatchSpy {
-            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                _number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 self.prepared.set(true);
                 Ok(0)
             }
@@ -5465,7 +5494,11 @@ mod tests {
             dispatched: bool,
         }
         impl IVMHost for ToolingHost {
-            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                _number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 self.prepared.set(true);
                 Ok(0)
             }
@@ -5637,7 +5670,11 @@ mod tests {
     fn run_with_host_accepts_non_sync_host() {
         struct NonSyncHost(Cell<u64>);
         impl IVMHost for NonSyncHost {
-            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                _number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 Ok(0)
             }
             fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -6344,7 +6381,11 @@ mod tests {
             seen: Option<u32>,
         }
         impl IVMHost for RecordingHost {
-            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                _number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 Ok(0)
             }
             fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -6997,7 +7038,11 @@ mod failed_program_install_tests {
         calls: usize,
     }
     impl IVMHost for CountingHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             self.quotes.set(self.quotes.get() + 1);
             Ok(0)
         }
@@ -7078,7 +7123,11 @@ mod failed_program_install_tests {
     fn host_catching_failed_reload_cannot_resume_the_guest_loop() {
         struct ReloadingHost(usize);
         impl IVMHost for ReloadingHost {
-            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            fn prepare_syscall(
+                &self,
+                _number: u32,
+                _vm: crate::host::SyscallQuote<'_>,
+            ) -> Result<u64, VMError> {
                 Ok(0)
             }
             fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {

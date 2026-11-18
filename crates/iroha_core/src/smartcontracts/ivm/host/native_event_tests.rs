@@ -187,7 +187,7 @@ seiyaku GuardedNativeEvent {
     let before = budget.reserved_bytes();
     assert!(matches!(
         (
-            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)),
+            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
             &(ivm::VMError::DecodeError)
         ),
         (Err(ivm::VMError::DecodeError), ivm::VMError::DecodeError)
@@ -205,7 +205,7 @@ seiyaku GuardedNativeEvent {
     host.execution_class = HostExecutionClass::View;
     assert!(matches!(
         (
-            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)),
+            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
             &(ivm::VMError::PermissionDenied)
         ),
         (
@@ -217,7 +217,7 @@ seiyaku GuardedNativeEvent {
     host.current_entrypoint_authorization = None;
     assert!(matches!(
         (
-            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)),
+            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
             &(ivm::VMError::PermissionDenied)
         ),
         (
@@ -250,7 +250,7 @@ seiyaku PrivateEventOperands {
         vm.registers.set_tag(register, true);
         assert!(matches!(
             (
-                &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)),
+                &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
                 &(ivm::VMError::PrivacyViolation)
             ),
             (
@@ -267,7 +267,7 @@ seiyaku PrivateEventOperands {
     authorization.code_hash = Hash::new(b"different authenticated program");
     assert!(matches!(
         (
-            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)),
+            &(host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())),
             &(ivm::VMError::PermissionDenied)
         ),
         (
@@ -325,7 +325,7 @@ fn native_event_preparation_does_not_traverse_guest_values_before_gas_reservatio
     vm.set_register(12, 1);
     vm.set_gas_limit(32);
     assert_eq!(
-        host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, &vm)
+        host.prepare_syscall(ivm_sys::SYSCALL_EMIT_CONTRACT_EVENT, vm.syscall_quote())
             .unwrap(),
         32
     );

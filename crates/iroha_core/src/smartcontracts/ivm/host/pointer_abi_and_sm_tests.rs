@@ -393,7 +393,7 @@ fn sm_syscalls_ignore_local_crypto_preferences() {
             }
             vm.set_register(14, 16);
             let quote = host
-                .prepare_syscall(*number, &vm)
+                .prepare_syscall(*number, vm.syscall_quote())
                 .expect("mandatory SM quote");
             let actual = host
                 .syscall(*number, &mut vm)
@@ -447,7 +447,7 @@ fn sm_quotes_validate_pointer_types_without_node_opt_in() {
         );
         vm.set_register(10, pointer);
         assert!(matches!(
-            host.prepare_syscall(number, &vm),
+            host.prepare_syscall(number, vm.syscall_quote()),
             Err(ivm::VMError::NoritoInvalid)
         ));
         assert!(

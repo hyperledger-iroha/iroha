@@ -169,7 +169,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 636)
+        self.assertEqual(len(names), 645)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS
@@ -603,6 +603,7 @@ class NativeInventoryTests(unittest.TestCase):
             'funded_prefix_authority_rejects_invalid_frames_exactly_like_the_portable_authority',
             'one_shot_admitted_push_admits_both_slots_before_a_refusal_can_release_itself',
             'one_shot_admitted_push_funds_no_owner_that_could_release_its_own_wait',
+            'a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds',
         ))
 
     def test_reviewed_resume_restore_and_reader_additions_require_exact_source_owners(self):
@@ -713,6 +714,7 @@ class NativeInventoryTests(unittest.TestCase):
                 'certified_execution_skips_clock_guards',
                 'sccp_ct5_completion_resamples_clock_and_retains_original_for_certified_retry',
                 'sccp_ct5_prepare_signing_resamples_original_after_valid_and_binds_every_coordinate',
+                'deterministic_time_floor_rejects_before_local_clock_refusal',
             )),
             ('native original first Prepare admission', 'sumeragi/executor.rs', 'sumeragi/executor/prepare_admission_tests.rs', 'prepare_admission_tests', 'sumeragi::executor::prepare_admission_tests', (
                 'ct1_native_first_prepare_rechecks_original_clock_after_execution',

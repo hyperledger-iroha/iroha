@@ -341,7 +341,11 @@ mod koto_test_harness_tests {
     /// Host that accepts every syscall, so only the VM capability gate can refuse one.
     struct AcceptAllHost;
     impl IVMHost for AcceptAllHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
         fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {

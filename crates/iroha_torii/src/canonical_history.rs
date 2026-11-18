@@ -9,7 +9,7 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     query::error::QueryExecutionFail,
-    transaction::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 
 fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
@@ -296,7 +296,9 @@ mod tests {
             time::{TimeEvent, TimeInterval},
             trigger_completed::TriggerCompletedOutcome,
         },
-        transaction::{FeePaymentIntent, TransactionBuilder, signed::ExecutionStep},
+        transaction::{
+            FeePaymentIntent, TransactionBuilder, TransactionResult, signed::ExecutionStep,
+        },
         trigger::DataTriggerStep,
     };
 

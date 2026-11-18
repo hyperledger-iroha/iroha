@@ -42,7 +42,7 @@ impl IVMHost for UnreachedRootHost {
         self.metadata.set(self.metadata.get() + 1);
         None
     }
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         self.quotes.set(self.quotes.get() + 1);
         Err(VMError::AssertionFailed)
     }
@@ -183,7 +183,7 @@ fn ordinary_multicycle_overshoot_is_fully_admitted_before_the_first_effect() {
 
 struct NetChangesHost;
 impl IVMHost for NetChangesHost {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -246,7 +246,7 @@ fn actual_syscall_value_and_tag_only_net_changes_use_one_public_full_span() {
 
 struct TraceMutatingHost;
 impl IVMHost for TraceMutatingHost {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
@@ -313,7 +313,7 @@ struct ShrinkOriginalHost {
     calls: usize,
 }
 impl IVMHost for ShrinkOriginalHost {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         Ok(0)
     }
     fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {

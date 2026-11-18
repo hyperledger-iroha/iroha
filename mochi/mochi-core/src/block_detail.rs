@@ -10,7 +10,10 @@ use iroha::client::AccountClient;
 use iroha_data_model::{
     block::{
         SignedBlock,
-        execution_output::{ExecutionOutputV1, PipelineExecutionOutputV2, TimeExecutionOutputV2},
+        execution_output::{
+            ExecutionOutputV1, ExecutionSourceC10V1, PipelineExecutionOutputV2,
+            TimeExecutionOutputV2, TransactionRejectionRef, TransactionResultRef,
+        },
     },
     isi::{
         BurnBox, CustomInstruction, ExecuteTrigger, GrantBox, Instruction, InstructionBox, Log,
@@ -19,7 +22,7 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionDomain,
-        TransactionEntrypoint, TransactionResult,
+        TransactionEntrypoint,
     },
 };
 use norito::json;
@@ -75,17 +78,23 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    fn of(result: &TransactionResult) -> Self {
+    fn of(result: TransactionResultRef<'_>) -> Self {
         match result.as_ref() {
             Ok(steps) => Self::Applied {
                 trigger_steps: steps.len(),
                 transfer_receipts: result.batch_transfer_outcomes().len(),
                 fee_receipt: result.nexus_fee_receipt().is_some(),
             },
-            Err(reason) => Self::Rejected {
-                reason: error_chain(reason),
-                detail: format!("{reason:#?}"),
-            },
+            Err(reason) => {
+                let (error, detail): (&dyn std::error::Error, String) = match reason {
+                    TransactionRejectionRef::Baseline(reason) => (reason, format!("{reason:#?}")),
+                    TransactionRejectionRef::C10(reason) => (reason, format!("C10({reason:#?})")),
+                };
+                Self::Rejected {
+                    reason: error_chain(error),
+                    detail,
+                }
+            }
         }
     }
 
@@ -299,31 +308,37 @@ impl BlockDetail {
             .execution_outputs()
             .iter()
             .enumerate()
-            .filter_map(|(output_index, output)| match output {
-                // Network rows and governance block-start rows are not trigger invocations.
-                ExecutionOutputV1::Network(_)
-                | ExecutionOutputV1::NetworkWithLifecycle(_)
-                | ExecutionOutputV1::GovernanceBlockStart(_) => None,
-                ExecutionOutputV1::Pipeline(row)
-                | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
-                    execution: row,
-                    ..
-                }) => Some(InvocationRow {
+            .filter_map(|(output_index, output)| {
+                let (kind, trigger) = match output {
+                    ExecutionOutputV1::Network(_)
+                    | ExecutionOutputV1::NetworkWithLifecycle(_)
+                    | ExecutionOutputV1::GovernanceBlockStart(_) => return None,
+                    ExecutionOutputV1::Pipeline(row)
+                    | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                        execution: row,
+                        ..
+                    }) => ("Pipeline trigger", &row.invocation.trigger),
+                    ExecutionOutputV1::Time(row)
+                    | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                        execution: row,
+                        ..
+                    }) => ("Time trigger", &row.invocation.trigger),
+                    ExecutionOutputV1::C10(row) => match &row.source {
+                        ExecutionSourceC10V1::Network(_) => return None,
+                        ExecutionSourceC10V1::Pipeline { invocation, .. } => {
+                            ("Pipeline trigger", &invocation.trigger)
+                        }
+                        ExecutionSourceC10V1::Time { invocation, .. } => {
+                            ("Time trigger", &invocation.trigger)
+                        }
+                    },
+                };
+                Some(InvocationRow {
                     output_index,
-                    kind: "Pipeline trigger",
-                    trigger: row.invocation.trigger.trigger_id.to_string(),
-                    outcome: Outcome::of(&row.result),
-                }),
-                ExecutionOutputV1::Time(row)
-                | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
-                    execution: row,
-                    ..
-                }) => Some(InvocationRow {
-                    output_index,
-                    kind: "Time trigger",
-                    trigger: row.invocation.trigger.trigger_id.to_string(),
-                    outcome: Outcome::of(&row.result),
-                }),
+                    kind,
+                    trigger: trigger.trigger_id.to_string(),
+                    outcome: Outcome::of(output.result()),
+                })
             })
             .collect();
         Self {
@@ -389,8 +404,8 @@ fn transaction_row(
     };
     let output = u32::try_from(index)
         .ok()
-        .and_then(|input| block.network_output_at(input));
-    let outcome = output.map_or(Outcome::Missing, |(_, row)| Outcome::of(&row.result));
+        .and_then(|input| block.network_execution_output_at(input));
+    let outcome = output.map_or(Outcome::Missing, |(_, row)| Outcome::of(row.result()));
     let (executable, instructions) = signed.map_or_else(
         || (String::new(), Vec::new()),
         |tx| executable(tx.instructions()),
@@ -430,8 +445,8 @@ fn transaction_row(
         multisig_signatures: signed
             .and_then(SignedTransaction::multisig_signatures)
             .map_or(0, |bundle| bundle.signatures.len()),
-        // A network input's result is the output at its own position.
-        output_index: output.is_some().then_some(index),
+        // A governance prefix can shift the explicit Network output position.
+        output_index: output.and_then(|(position, _)| usize::try_from(position).ok()),
         outcome,
     }
 }

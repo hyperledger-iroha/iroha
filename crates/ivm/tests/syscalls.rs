@@ -249,7 +249,11 @@ fn set_account_quorum_rejects_zero() {
 }
 struct AddHost;
 impl ivm::IVMHost for AddHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         if number == 1 {
             Ok(0)
         } else {
@@ -352,7 +356,11 @@ fn traced_execution_summary_quotes_and_commits_the_invocation_register_log() {
     }
 
     impl IVMHost for RecordingSummaryHost {
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             let quote = self.inner.prepare_syscall(number, vm)?;
             self.quote.set(Some(quote));
             Ok(quote)

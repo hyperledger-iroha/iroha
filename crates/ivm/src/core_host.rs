@@ -4,15 +4,12 @@
 //! arguments and returns success. It is intended for end-to-end tests that
 //! exercise TLV validation from VM bytecode through host dispatch.
 use crate::{
-    VMError,
-    axt::{self, AxtPolicy},
-    gas,
+    VMError, gas,
     host::{
         AccessLog, IVMHost, TLV_ENVELOPE_OVERHEAD, canonical_state_map_key_at,
-        canonical_typed_state_map_path, common_syscall_gas_quote, conservative_syscall_gas_quote,
-        debug_log_gas, preflight_reserved_syscall_gas, quote_canonical_state_map_path_lengths,
-        quote_tlv_payload_len_at, require_host_syscall_metering_spec,
-        reserve_available_syscall_gas_at_least, validate_declared_state_map_base,
+        canonical_typed_state_map_path, debug_log_gas, preflight_reserved_syscall_gas,
+        quote_canonical_state_map_path_lengths, quote_tlv_payload_len_at,
+        require_host_syscall_metering_spec, validate_declared_state_map_base,
         validate_declared_state_map_key,
     },
     ivm::IVM,
@@ -38,6 +35,7 @@ use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};
+use ivm_abi::axt::{self, AxtPolicy};
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 use norito::{decode_from_bytes, json as njson};
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -970,7 +968,7 @@ impl CoreHost {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         MUTATION_GAS.saturating_add(MUTATION_GAS_PER_BYTE.saturating_mul(bytes))
     }
-    fn quote_canonical_state_map_path(vm: &IVM) -> Result<u64, VMError> {
+    pub(crate) fn quote_canonical_state_map_path(vm: &IVM) -> Result<u64, VMError> {
         let base_len = quote_tlv_payload_len_at(
             vm,
             Self::resolve_code_tlv_addr(vm, vm.register(10)),
@@ -984,7 +982,7 @@ impl CoreHost {
         let (input_len, output_bound) = quote_canonical_state_map_path_lengths(base_len, key_len)?;
         Ok(Self::path_gas(input_len, output_bound))
     }
-    fn quote_state_map_key_at(vm: &IVM) -> Result<u64, VMError> {
+    pub(crate) fn quote_state_map_key_at(vm: &IVM) -> Result<u64, VMError> {
         let page_len = quote_tlv_payload_len_at(
             vm,
             Self::resolve_code_tlv_addr(vm, vm.register(10)),
@@ -1013,17 +1011,20 @@ impl Default for CoreHost {
     }
 }
 impl IVMHost for CoreHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if metering.metering == crate::syscall_metering::SyscallMetering::Staged {
             return Ok(0);
         }
         let quote = match number {
-            syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => Self::quote_canonical_state_map_path(vm)?,
+            syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => vm.quote_canonical_state_map_path()?,
             syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
-                let input = quote_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let input = vm.quote_tlv_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                     PointerType::Name,
                 )?;
                 if input > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
@@ -1031,48 +1032,42 @@ impl IVMHost for CoreHost {
                 }
                 Self::path_gas(input, syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES)
             }
-            syscalls::SYSCALL_STATE_MAP_KEY_AT => Self::quote_state_map_key_at(vm)?,
+            syscalls::SYSCALL_STATE_MAP_KEY_AT => vm.quote_state_map_key_at()?,
             syscalls::SYSCALL_STATE_GET => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                reserve_available_syscall_gas_at_least(vm, crate::host::state_path_gas(path_len))?
+                vm.reserve_available_syscall_gas_at_least(crate::host::state_path_gas(path_len))?
             }
             syscalls::SYSCALL_STATE_LEN => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
                 crate::host::state_path_gas(path_len)
             }
             syscalls::SYSCALL_STATE_COUNT => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                reserve_available_syscall_gas_at_least(vm, crate::host::state_path_gas(path_len))?
+                vm.reserve_available_syscall_gas_at_least(crate::host::state_path_gas(path_len))?
             }
             syscalls::SYSCALL_STATE_SCAN => {
-                reserve_available_syscall_gas_at_least(vm, crate::state_scan::prepare_minimum(vm)?)?
+                vm.reserve_available_syscall_gas_at_least(vm.state_scan_minimum()?)?
             }
             syscalls::SYSCALL_STATE_SET => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
-                let value_len = quote_tlv_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                let value_len = vm.quote_tlv_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(11)?),
                     PointerType::NoritoBytes,
                 )?;
                 crate::host::validate_state_value_payload_len(value_len)?;
                 crate::host::state_value_gas(path_len, value_len)
             }
             syscalls::SYSCALL_STATE_DEL | syscalls::SYSCALL_STATE_HAS => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                let path_len = vm.quote_state_path_payload_len_at(
+                    vm.resolve_code_tlv_addr(vm.public_register(10)?),
                 )?;
                 crate::host::state_path_gas(path_len)
             }
@@ -1080,31 +1075,31 @@ impl IVMHost for CoreHost {
                 STATE_QUERY_GAS_BASE
             }
             syscalls::SYSCALL_JSON_BUILD => {
-                reserve_available_syscall_gas_at_least(vm, JSON_GAS_BASE)?
+                vm.reserve_available_syscall_gas_at_least(JSON_GAS_BASE)?
             }
             syscalls::SYSCALL_SCHEMA_ENCODE
             | syscalls::SYSCALL_SCHEMA_DECODE
-            | syscalls::SYSCALL_SCHEMA_INFO => {
-                Self::schema_gas_quote(number, vm)?.ok_or(VMError::UnknownSyscall(number))?
-            }
-            syscalls::SYSCALL_ALLOC => crate::host::allocation_gas(vm.register(10)),
+            | syscalls::SYSCALL_SCHEMA_INFO => vm
+                .schema_gas_quote(number)?
+                .ok_or(VMError::UnknownSyscall(number))?,
+            syscalls::SYSCALL_ALLOC => crate::host::allocation_gas(vm.public_register(10)?),
             syscalls::SYSCALL_AXT_COMMIT => {
-                reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
             }
             _ => {
-                if let Some(quote) = common_syscall_gas_quote(number, vm)? {
+                if let Some(quote) = vm.common_syscall_gas_quote(number)? {
                     quote
-                } else if let Some(quote) = Self::codec_gas_quote(number, vm)? {
+                } else if let Some(quote) = vm.codec_gas_quote(number)? {
                     quote
                 } else if metering.quote_strategy
                     == crate::host::HostSyscallQuoteStrategy::ReserveAvailable
                 {
-                    reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
+                    vm.reserve_available_syscall_gas_at_least(metering.minimum_gas)?
                 } else {
                     // Stateful policy hooks and proof paths keep the generic
                     // deterministic bound; response-producing codec helpers
                     // above use header-only payload bounds.
-                    conservative_syscall_gas_quote(number, vm)
+                    vm.conservative_syscall_gas_quote(number)?
                 }
             }
         };
@@ -2620,7 +2615,7 @@ mod tests {
             vm.set_register(10, base_ptr);
             vm.set_register(11, key_ptr);
             let quote = host
-                .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &vm)
+                .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm.syscall_quote())
                 .expect("quote Bool path");
             let gas = host
                 .syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
@@ -2750,7 +2745,7 @@ mod tests {
         vm.set_register(11, base_ptr);
         vm.set_register(12, 0);
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &vm)
+            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, vm.syscall_quote())
                 .is_ok(),
             "prepare must not decode the guest page"
         );
@@ -2787,7 +2782,7 @@ mod tests {
         vm.set_register(11, base_ptr);
         vm.set_register(12, 0);
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_STATE_MAP_KEY_AT, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
     }
@@ -3037,7 +3032,7 @@ mod tests {
         vm.set_register(11, 0);
         vm.set_register(12, syscalls::STATE_SCAN_MAX_ITEMS_V1);
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_STATE_SCAN, &vm)
+            host.prepare_syscall(syscalls::SYSCALL_STATE_SCAN, vm.syscall_quote())
                 .is_ok(),
             "the empty-page minimum must fit the V1 default"
         );
@@ -3362,7 +3357,7 @@ mod tests {
             .expect("load program");
         vm.set_register(10, key_ptr);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_STATE_LEN, &vm)
+            .prepare_syscall(syscalls::SYSCALL_STATE_LEN, vm.syscall_quote())
             .expect("quote state length");
         assert_eq!(quote, crate::host::state_path_gas(key_payload.len()));
         vm.set_gas_limit(quote);
@@ -3390,7 +3385,7 @@ mod tests {
         vm.set_register(11, value_ptr);
         let mut host = CoreHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_STATE_SET, &vm)
+            .prepare_syscall(syscalls::SYSCALL_STATE_SET, vm.syscall_quote())
             .expect("preparation must inspect headers only");
         vm.set_gas_limit(quote.saturating_sub(1));
         let error = vm
@@ -3510,7 +3505,7 @@ mod tests {
             .try_write_log_snapshot()
             .expect("allocate write-log snapshot");
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, vm.syscall_quote())
             .expect("quote schema encode");
         assert_eq!(
             vm.memory
@@ -3549,7 +3544,10 @@ mod tests {
         wrong_type_vm.set_register(10, schema_ptr);
         wrong_type_vm.set_register(11, value_ptr);
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &wrong_type_vm),
+            host.prepare_syscall(
+                syscalls::SYSCALL_SCHEMA_ENCODE,
+                wrong_type_vm.syscall_quote()
+            ),
             Err(VMError::NoritoInvalid)
         ));
         let mut malformed_vm = IVM::new(10_000);
@@ -3562,7 +3560,10 @@ mod tests {
         malformed_vm.set_register(10, schema_ptr);
         malformed_vm.set_register(11, value_ptr);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &malformed_vm)
+            .prepare_syscall(
+                syscalls::SYSCALL_SCHEMA_ENCODE,
+                malformed_vm.syscall_quote(),
+            )
             .expect("header-valid malformed payload receives a safe bound");
         assert!(quote > 3);
         assert!(quote > malformed_vm.remaining_gas());
@@ -3583,7 +3584,7 @@ mod tests {
             vm.set_register(10, pointer);
             assert!(
                 matches!(
-                    host.prepare_syscall(syscalls::SYSCALL_JSON_DECODE, &vm),
+                    host.prepare_syscall(syscalls::SYSCALL_JSON_DECODE, vm.syscall_quote()),
                     Err(VMError::NoritoInvalid)
                 ),
                 "{label} pointer types must fail closed before gas debit"
@@ -3612,7 +3613,7 @@ mod tests {
         vm.set_register(10, json_pointer);
         vm.set_register(11, key_pointer);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, vm.syscall_quote())
             .expect("quote JSON getter");
         let expected = CoreHost::json_gas(
             json_payload.len().saturating_add(key_payload.len()),
@@ -3700,7 +3701,8 @@ mod tests {
                 .expect("allocate write-log snapshot");
             assert!(
                 matches!(
-                    CoreHost::new().prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, &vm),
+                    CoreHost::new()
+                        .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, vm.syscall_quote()),
                     Err(VMError::NoritoInvalid)
                 ),
                 "{label} bytes must fail during quote preparation"
@@ -3738,7 +3740,8 @@ mod tests {
         partial_vm.set_register(10, partial_pointer);
         partial_vm.set_register(11, key_pointer);
         assert!(matches!(
-            CoreHost::new().prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, &partial_vm),
+            CoreHost::new()
+                .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, partial_vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         let mut corrupted_vm = IVM::new(u64::MAX);
@@ -3754,7 +3757,10 @@ mod tests {
         corrupted_vm.set_register(10, corrupted_pointer);
         corrupted_vm.set_register(11, key_pointer);
         CoreHost::new()
-            .prepare_syscall(syscalls::SYSCALL_JSON_GET_JSON, &corrupted_vm)
+            .prepare_syscall(
+                syscalls::SYSCALL_JSON_GET_JSON,
+                corrupted_vm.syscall_quote(),
+            )
             .expect("header-only quote remains bounded for a corrupted payload hash");
         let registers_before = [corrupted_vm.register(10), corrupted_vm.register(11)];
         assert!(matches!(
@@ -3815,7 +3821,7 @@ mod tests {
                 .expect("allocate write-log snapshot");
             assert!(
                 matches!(
-                    host.prepare_syscall(number, &vm),
+                    host.prepare_syscall(number, vm.syscall_quote()),
                     Err(VMError::NoritoInvalid)
                 ),
                 "oversized owned payload for syscall {number:#x} must fail before debit"
@@ -3852,7 +3858,7 @@ mod tests {
                 .expect("allocate write-log snapshot");
             assert!(
                 matches!(
-                    host.prepare_syscall(number, &vm),
+                    host.prepare_syscall(number, vm.syscall_quote()),
                     Err(VMError::NoritoInvalid)
                 ),
                 "oversized literal payload for syscall {number:#x} must fail before debit"
@@ -3924,7 +3930,7 @@ mod tests {
         vm.set_register(10, pointer);
         let mut host = CoreHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, &vm)
+            .prepare_syscall(syscalls::SYSCALL_JSON_ENCODE, vm.syscall_quote())
             .expect("quote near-cap JSON encode");
         let actual = host
             .syscall(syscalls::SYSCALL_JSON_ENCODE, &mut vm)
@@ -4232,7 +4238,7 @@ mod tests {
         vm.set_register(11, key_ptr);
         let mut host = CoreHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &vm)
+            .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm.syscall_quote())
             .expect("quote maximum path");
         let actual = host
             .syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
@@ -4275,7 +4281,7 @@ mod tests {
         vm.set_register(11, key_ptr);
         let mut host = CoreHost::new();
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &vm)
+            .prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm.syscall_quote())
             .expect("quote path");
         vm.set_gas_limit(quote - 1);
         assert!(matches!(
@@ -4302,7 +4308,7 @@ mod tests {
         vm.set_register(11, key_ptr);
         let host = CoreHost::new();
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
     }
@@ -4375,11 +4381,17 @@ mod tests {
         let mut host = CoreHost::new();
         vm.set_register(10, Memory::OUTPUT_START);
         vm.set_register(11, Memory::OUTPUT_START);
-        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err()
+        );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
         vm.set_register(10, 0);
         vm.set_register(11, Memory::OUTPUT_START);
-        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, vm.syscall_quote())
+                .is_err()
+        );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
     }
     #[test]
@@ -4391,7 +4403,7 @@ mod tests {
         vm.set_register(10, pointer);
         let mut host = CoreHost::new();
         let quoted = host
-            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote())
             .expect("quote debug log");
         let actual = host
             .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
@@ -4411,7 +4423,7 @@ mod tests {
         vm.set_register(10, heap_pointer);
         let mut host = CoreHost::new();
         let quoted = host
-            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote())
             .expect("quote owned heap debug message");
         let actual = host
             .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
@@ -4428,7 +4440,7 @@ mod tests {
             vm.set_register(10, forged);
             assert!(
                 matches!(
-                    host.prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm),
+                    host.prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, vm.syscall_quote()),
                     Err(VMError::NoritoInvalid)
                 ),
                 "quote accepted forged pointer 0x{forged:016x}"
@@ -4533,7 +4545,7 @@ mod tests {
         vm.set_register(10, retired_carrier_ptr);
         vm.set_register(11, PointerType::Name as u64);
         assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, vm.syscall_quote()),
             Err(VMError::NoritoInvalid)
         ));
         assert!(matches!(
@@ -4791,7 +4803,7 @@ mod tests {
             vm.set_register(10, json_ptr);
             vm.set_register(11, key_ptr);
             let quote = host
-                .prepare_syscall(syscall, &vm)
+                .prepare_syscall(syscall, vm.syscall_quote())
                 .expect("quote exact-number getter");
             let instruction_gas = gas::cost_of(scall).expect("SYSTEM is scheduled");
             vm.set_gas_limit(
@@ -4833,7 +4845,7 @@ mod tests {
             let heap_before = vm.memory.heap_allocated_len();
             let gas_before = vm.remaining_gas();
             assert!(
-                matches!(host.prepare_syscall(number, &vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+                matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
             );
             assert!(
                 matches!(host.syscall(number, &mut vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))

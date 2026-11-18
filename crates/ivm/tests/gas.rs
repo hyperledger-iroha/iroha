@@ -58,7 +58,11 @@ fn test_gas_accounting_multiple_ops() {
 }
 struct ExtraCostHost;
 impl ivm::IVMHost for ExtraCostHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
@@ -74,7 +78,11 @@ impl ivm::IVMHost for ExtraCostHost {
 }
 struct MeteredErrorHost;
 impl ivm::IVMHost for MeteredErrorHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Ok(7)
     }
@@ -90,7 +98,11 @@ struct UnmeteredErrorHost {
     calls: usize,
 }
 impl ivm::IVMHost for UnmeteredErrorHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(7)
     }
@@ -107,7 +119,11 @@ struct SideEffectHost {
     calls: usize,
 }
 impl ivm::IVMHost for SideEffectHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
@@ -124,7 +140,11 @@ struct RefundingHost {
     observed_remaining: u64,
 }
 impl ivm::IVMHost for RefundingHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(7)
     }
@@ -139,7 +159,11 @@ impl ivm::IVMHost for RefundingHost {
 }
 struct UnderquotingHost;
 impl ivm::IVMHost for UnderquotingHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(1)
     }
@@ -155,7 +179,11 @@ struct CompactProofHost {
     calls: usize,
 }
 impl ivm::IVMHost for CompactProofHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert!(matches!(
             number,
             ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT

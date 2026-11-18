@@ -10,6 +10,15 @@ pub(crate) struct PreparedHostRegisterLog {
     isolation: Option<HostRegisterLogIsolation>,
 }
 
+/// A trace restoration failure makes publication impossible. Retain a local
+/// cause already returned by the host, including its original pool observation.
+pub(super) fn first_local_host_refusal(host: Result<u64, VMError>, restore: VMError) -> VMError {
+    match host {
+        Err(error) if error.execution_deferral().is_some() => error.into_unmetered(),
+        Ok(_) | Err(_) => restore,
+    }
+}
+
 impl IVM {
     pub(crate) fn prepare_root_register_events(
         &self,

@@ -38,7 +38,11 @@ struct PermissiveHost {
     called: bool,
 }
 impl IVMHost for PermissiveHost {
-    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        _number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         Ok(0)
     }
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {

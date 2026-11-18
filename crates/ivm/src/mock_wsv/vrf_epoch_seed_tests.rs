@@ -99,7 +99,7 @@ fn mock_epoch_seed_quote_matches_fixed_output_and_preserves_r11() {
         vm.set_register(10, epoch);
         vm.set_register(11, 0xA5);
         let quote = host
-            .prepare_syscall(syscalls::SYSCALL_VRF_EPOCH_SEED, &vm)
+            .prepare_syscall(syscalls::SYSCALL_VRF_EPOCH_SEED, vm.syscall_quote())
             .unwrap();
         let gas = host
             .syscall(syscalls::SYSCALL_VRF_EPOCH_SEED, &mut vm)

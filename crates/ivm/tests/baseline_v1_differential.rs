@@ -273,7 +273,11 @@ impl<H: IVMHost + 'static> IVMHost for Recorder<H> {
     fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
         self.inner.prepared_entrypoint_arguments()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         let result = self.inner.prepare_syscall(number, vm);
         self.trace.push(obj([
             ("event", s("prepare")),

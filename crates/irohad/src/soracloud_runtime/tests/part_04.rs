@@ -1700,7 +1700,8 @@ fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
     let mut vm = IVM::new(u64::MAX);
     let request_ptr = vm.alloc_input_tlv(&request_tlv)?;
     vm.set_register(10, request_ptr);
-    let quoted = host.prepare_syscall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE, &vm)?;
+    let quoted =
+        host.prepare_syscall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE, vm.syscall_quote())?;
     assert!(
         host.local_read_bindings().is_empty(),
         "syscall preparation must not record a committed-state observation"

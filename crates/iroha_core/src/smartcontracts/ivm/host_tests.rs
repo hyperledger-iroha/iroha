@@ -89,17 +89,17 @@ fn remote_spend_asset_scope_respects_registered_balance_policy() {
     let global_scope =
         remote_spend_asset_scope_from_policy(AssetBalancePolicy::Global, DataSpaceId::UNIVERSAL);
     assert_eq!(global_scope, AssetBalanceScope::Global);
-    ivm::axt::validate_remote_spend_asset_scope(DataSpaceId::UNIVERSAL, global_scope)
+    ivm_abi::axt::validate_remote_spend_asset_scope(DataSpaceId::UNIVERSAL, global_scope)
         .expect("global balance is valid only in the universal dataspace");
     assert!(
-        ivm::axt::validate_remote_spend_asset_scope(private, global_scope).is_err(),
+        ivm_abi::axt::validate_remote_spend_asset_scope(private, global_scope).is_err(),
         "global balance must not be relabelled as private-dataspace state"
     );
 
     let restricted_scope =
         remote_spend_asset_scope_from_policy(AssetBalancePolicy::DataspaceRestricted, private);
     assert_eq!(restricted_scope, AssetBalanceScope::Dataspace(private));
-    ivm::axt::validate_remote_spend_asset_scope(private, restricted_scope)
+    ivm_abi::axt::validate_remote_spend_asset_scope(private, restricted_scope)
         .expect("restricted balance uses the exact signed intent dataspace");
 }
 
@@ -2790,7 +2790,10 @@ fn create_nfts_for_all_noop_syscall_charges_declared_gas() {
     let mut host = CoreHost::with_accounts(authority, Arc::new(Vec::new()));
     let mut vm = ivm::IVM::new(1_000);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+            vm.syscall_quote(),
+        )
         .expect("quote create nfts for all");
     let exact = host.create_nfts_for_all_gas_quote();
     let gas = host
@@ -2808,7 +2811,10 @@ fn create_nfts_for_all_syscall_charges_at_least_declared_gas() {
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
     let mut vm = ivm::IVM::new(1_000);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+            vm.syscall_quote(),
+        )
         .expect("quote create nfts for all");
     let exact = host.create_nfts_for_all_gas_quote();
     let gas = host
@@ -2867,7 +2873,10 @@ fn create_nfts_for_all_quote_caps_cardinality_and_handles_sequence_exhaustion() 
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(accounts));
     let mut vm = IVM::new(u64::MAX);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+            vm.syscall_quote(),
+        )
         .expect("quote capped NFT fan-out");
     let exact = host.create_nfts_for_all_gas_quote();
     let actual = host
@@ -2887,7 +2896,10 @@ fn create_nfts_for_all_quote_caps_cardinality_and_handles_sequence_exhaustion() 
     );
     exhausted.nft_seq = u64::MAX - 1;
     let quote = exhausted
-        .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+            vm.syscall_quote(),
+        )
         .expect("quote final sequence value");
     let exact = exhausted.create_nfts_for_all_gas_quote();
     let actual = exhausted
@@ -2899,7 +2911,10 @@ fn create_nfts_for_all_quote_caps_cardinality_and_handles_sequence_exhaustion() 
     assert_eq!(exhausted.next_nft_sequence(), u64::MAX);
     exhausted.queued.clear();
     let quote = exhausted
-        .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
+            vm.syscall_quote(),
+        )
         .expect("quote exhausted sequence");
     let exact = exhausted.create_nfts_for_all_gas_quote();
     let actual = exhausted
@@ -2917,7 +2932,10 @@ fn smartcontract_depth_noop_syscall_charges_declared_gas() {
     let mut vm = ivm::IVM::new(1_000);
     vm.set_register(10, 0);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
+            vm.syscall_quote(),
+        )
         .expect("quote depth syscall");
     let gas = host
         .syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm)
@@ -2933,7 +2951,10 @@ fn smartcontract_depth_update_syscall_charges_at_least_declared_gas() {
     let mut vm = ivm::IVM::new(1_000);
     vm.set_register(10, 3);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &vm)
+        .prepare_syscall(
+            ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
+            vm.syscall_quote(),
+        )
         .expect("quote depth syscall");
     let gas = host
         .syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm)
@@ -3169,7 +3190,7 @@ fn transfer_asset_scoped_vm_completes_below_generic_response_quote() {
             dataspace,
         );
         assert_eq!(
-            (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm))
+            (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             crate::gas::BASE_TRANSFER
         );
@@ -3304,20 +3325,20 @@ fn transfer_asset_scoped_quote_rejects_invalid_shapes_and_active_batch() {
         DataSpaceId::new(7),
     );
     assert_eq!(
-        (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm))
+        (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()))
             .expect("expected successful fixture result"),
         crate::gas::BASE_TRANSFER
     );
     host.fastpq_batch_entries = Some(Vec::new());
     assert!(matches!(
-        host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+        host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
         Err(ivm::VMError::PermissionDenied)
     ));
     host.fastpq_batch_entries = None;
     let pointer = store_tlv(&mut vm, PointerType::Name, b"not-a-dataspace");
     vm.set_register(14, pointer);
     assert!(matches!(
-        host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+        host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
         Err(ivm::VMError::NoritoInvalid)
     ));
     assert_eq!(vm.remaining_gas(), 1_000, "quote must not debit gas");
@@ -3475,7 +3496,7 @@ fn transfer_asset_scoped_syscall_without_dataspace_is_global_or_rejected() {
         );
         vm.set_register(14, 0);
         assert_eq!(
-            (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm))
+            (host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()))
                 .expect("expected successful fixture result"),
             crate::gas::BASE_TRANSFER,
             "an omitted scope is a valid quote for {asset_name}"
@@ -6405,7 +6426,7 @@ fn core_host_rejects_raw_private_witness_transport_without_mutation() {
     let memory_root_before = vm.memory.root().unwrap();
     assert!(
         matches!(
-            host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &vm),
+            host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, vm.syscall_quote()),
             Err(ivm::VMError::PermissionDenied)
         ),
         "consensus quote preparation must not expose the prover/test witness transport"
@@ -8728,8 +8749,11 @@ fn contract_address_bytes_roundtrip_through_typed_durable_state() {
     )
     .expect("load typed bytes contract");
     assert_eq!(
-        (host.prepare_syscall(ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS, &vm))
-            .expect("expected successful fixture result"),
+        (host.prepare_syscall(
+            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            vm.syscall_quote()
+        ))
+        .expect("expected successful fixture result"),
         CoreHost::sysvar_gas(contract_address.as_str().len())
     );
     vm.set_register(1, vm.memory.code_len());
@@ -9183,7 +9207,7 @@ fn unassigned_exact_json_getters_fail_before_ledger_host_work() {
         let queued_before = host.queued.len();
         let overlay_before = host.durable_state_overlay.len();
         assert!(
-            matches!(host.prepare_syscall(number, &vm), Err(ivm::VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+            matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(ivm::VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
         );
         assert!(
             matches!(host.syscall(number, &mut vm), Err(ivm::VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
@@ -10168,7 +10192,7 @@ fn vrf_epoch_seed_syscall_reads_only_the_exact_epoch() {
         vm.set_register(10, epoch);
         vm.set_register(11, 71);
         let quote = host
-            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
+            .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, vm.syscall_quote())
             .unwrap();
         let gas = host
             .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
@@ -10202,7 +10226,7 @@ fn vrf_epoch_seed_syscall_without_seed_snapshot_is_absent() {
     vm.set_register(10, 42);
     vm.set_register(11, 71);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, vm.syscall_quote())
         .unwrap();
     assert_eq!(
         host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
@@ -10257,7 +10281,7 @@ fn zk_vote_tally_syscall_reads_world_snapshot() {
     let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
     vm.set_register(10, req_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, vm.syscall_quote())
         .expect("quote vote tally");
     let gas = host
         .syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm)
@@ -10681,7 +10705,7 @@ fn from_state_hydrates_zk_snapshots() {
     let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
     vm.set_register(10, req_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, vm.syscall_quote())
         .expect("quote roots get");
     let gas = host
         .syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &mut vm)
@@ -10786,7 +10810,7 @@ fn zk_roots_prepare_reserves_gas_at_history_cap_and_maximal_request() {
     let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &request_payload);
     vm.set_register(10, request_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, vm.syscall_quote())
         .expect("quote maximal roots request");
     let actual = host
         .syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &mut vm)
@@ -11048,7 +11072,7 @@ fn get_public_input_uses_wsv_registry_and_charges_gas() {
     let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
     vm.set_register(10, name_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, vm.syscall_quote())
         .expect("quote public input");
     let gas = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
@@ -11078,7 +11102,7 @@ fn get_public_input_uses_programmatic_setters() {
     let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
     vm.set_register(10, name_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, vm.syscall_quote())
         .expect("quote programmatic public input");
     let gas = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
@@ -11112,7 +11136,7 @@ fn get_public_input_exposes_trigger_event_args() {
     let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
     vm.set_register(10, name_ptr);
     let quote = host
-        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &vm)
+        .prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, vm.syscall_quote())
         .expect("quote trigger event public input");
     let gas = host
         .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
@@ -11307,7 +11331,7 @@ fn get_public_input_missing_name_is_error() {
     let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
     vm.set_register(10, name_ptr);
     assert_eq!(
-        (host.prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &vm))
+        (host.prepare_syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, vm.syscall_quote()))
             .expect("expected successful fixture result"),
         vm.remaining_gas()
     );

@@ -3213,7 +3213,7 @@
     },
     {
      "path": "crates/ivm_abi/src/error.rs",
-     "contains": "Kind::InitializationUnavailable => {\n                        ExecutionDeferral::VerifierInitializationUnavailable"
+     "contains": "Kind::InitializationUnavailable => ExecutionDeferral::VerifierInitializationUnavailable"
     }
    ],
    "tests": [
@@ -3324,7 +3324,7 @@
    "decided_by": "Nothing in committed State: the failure is local. In a prover, wallet or key-generation call it fails that local call and nothing is submitted. On the validation path it defers the local attempt without a rejection or a vote (resource contract behavior `missing_local_resource_defers`) and never changes an accepted effect, gas or root; a validation site that turns it into a rejection is a defect of the owner.",
    "attribution": "path_rule",
    "sites": [
-    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "local_resource", 12],
+    ["crates/ivm/src/proof_coverage/traps.rs", "unavailable", "local_resource", 13],
     ["crates/ivm/src/zk.rs", "unavailable", "local_resource", 1],
     ["crates/ivm/src/zk/cycle_roots.rs", "unavailable", "local_resource", 2],
     ["crates/ivm/src/zk/cycle_roots.rs", "unavailable", "unavailable", 3],

@@ -4,11 +4,11 @@ use iroha_crypto::KeyPair;
 use iroha_model_base::topology::DataSpaceId;
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
-    axt::{self, TouchManifest},
     host::DefaultHost,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::axt::{self, TouchManifest};
 
 fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);

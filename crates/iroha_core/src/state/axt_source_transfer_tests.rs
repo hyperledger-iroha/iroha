@@ -155,6 +155,28 @@ fn source_claim(block: &SignedBlock) -> AxtSourceTransferOccurrenceV1 {
     }
 }
 
+impl State {
+    /// Check the AXT reader on an executed C10 transaction without any transfer transcripts.
+    pub(crate) fn assert_c10_source_without_transfer(&self, block: &SignedBlock, accepted: bool) {
+        let claim = source_claim(block);
+        let error = self
+            .resolve_finalized_axt_source_transfer_v1(
+                block.header().height().get(),
+                &claim,
+                MAX_WORK,
+                MAX_BYTES,
+            )
+            .expect_err("no transfer was executed");
+        assert!(
+            matches!(
+                (accepted, &error),
+                (true, Error::MissingTranscripts) | (false, Error::RejectedExecution)
+            ),
+            "{error:?}"
+        );
+    }
+}
+
 #[test]
 fn finalized_source_resolver_confirms_success_and_one_exact_transfer() {
     let fixture = finalized_fixture(false, true);

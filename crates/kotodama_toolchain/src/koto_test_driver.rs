@@ -3635,23 +3635,28 @@ impl KotoTestHost {
     }
 }
 impl IVMHost for KotoTestHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         if number == ivm::syscalls::SYSCALL_EMIT_CONTRACT_EVENT {
             let ordinal =
-                usize::try_from(vm.register(10)).map_err(|_| ivm::VMError::DecodeError)?;
-            let words = usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
+                usize::try_from(vm.public_register(10)?).map_err(|_| ivm::VMError::DecodeError)?;
+            let words =
+                usize::try_from(vm.public_register(12)?).map_err(|_| ivm::VMError::DecodeError)?;
             let event = vm
                 .contract_interface()
                 .and_then(|interface| interface.events.get(ordinal))
                 .ok_or(ivm::VMError::DecodeError)?;
-            return ivm::value_record::quote_value_record(
-                vm,
-                &event.payload_type,
-                vm.register(11),
-                words,
-                vm.remaining_gas(),
-            )
-            .map(|quote| quote.gas);
+            return vm
+                .quote_value_record(
+                    &event.payload_type,
+                    vm.public_register(11)?,
+                    words,
+                    vm.remaining_gas(),
+                )
+                .map(|quote| quote.gas);
         }
         if matches!(
             number,
@@ -3660,7 +3665,7 @@ impl IVMHost for KotoTestHost {
             // Argument and returned active values determine the exact copying
             // work. Reserve caller gas before any nested mutation; the helper
             // returns the actual funded capture/materialization cost.
-            return ivm::host::reserve_available_syscall_gas_at_least(vm, 0);
+            return vm.reserve_available_syscall_gas_at_least(0);
         }
         if ivm::syscalls::is_koto_test_syscall(number) {
             Ok(0)

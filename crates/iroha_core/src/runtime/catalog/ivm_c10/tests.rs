@@ -144,6 +144,9 @@ fn verify_certified_c10_registration(keyed: bool) {
     assert!(matches!(row, ExecutionOutputV1::C10(_)), "{row:?}");
     assert!(row.result().is_ok(), "{row:?}");
     assert_eq!(outcomes, [true]);
+    chain
+        .state()
+        .assert_c10_source_without_transfer(committed.block(), true);
     let c10_key = key;
     let state = chain.state().view();
     let world = state.world();
@@ -236,6 +239,9 @@ fn verify_certified_c10_registration(keyed: bool) {
         "{row:?}"
     );
     assert_eq!(outcomes, [false]);
+    chain
+        .state()
+        .assert_c10_source_without_transfer(tip.block(), false);
     assert!(
         chain
             .state()

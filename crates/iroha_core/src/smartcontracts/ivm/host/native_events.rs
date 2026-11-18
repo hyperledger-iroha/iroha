@@ -81,7 +81,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
 
     pub(super) fn emit_contract_event(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
-        let (_, _, _, _, definition) = self.event_context(vm)?;
+        let (_, _, _, _, definition) = self.event_context(vm.syscall_quote())?;
         let words = usize::try_from(vm.register(12)).map_err(|_| ivm::VMError::DecodeError)?;
         let gas = ivm::value_record::quote_value_record(
             vm,
@@ -98,7 +98,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             self.queued.try_reserve(1).map_err(|_| {
                 ivm::VMError::ExecutionDeferred(ivm::ExecutionDeferral::AllocationUnavailable)
             })?;
-            let (context, authorization, entrypoint, event, definition) = self.event_context(vm)?;
+            let (context, authorization, entrypoint, event, definition) =
+                self.event_context(vm.syscall_quote())?;
             let emission = contract_event::capture(
                 vm,
                 self.prepared_contract_cache.execution_budget(),

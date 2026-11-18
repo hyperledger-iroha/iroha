@@ -17,7 +17,7 @@ fn default_host_unknown_syscalls_return_unknown() {
         let heap_cursor_before = vm.memory.alloc(0).expect("read heap cursor");
         let gas_before = vm.remaining_gas();
         assert!(
-            matches!(host.prepare_syscall(number, &vm), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+            matches!(host.prepare_syscall(number, vm.syscall_quote()), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
         );
         match host.syscall(number, &mut vm) {
             Err(VMError::UnknownSyscall(actual)) => assert_eq!(actual, number),

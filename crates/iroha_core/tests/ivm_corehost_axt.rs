@@ -15,7 +15,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::topology::{DataSpaceId, LaneId};
-use ivm::{IVM, IVMHost, PointerType, VMError, axt, syscalls};
+use ivm::{IVM, IVMHost, PointerType, VMError, syscalls};
+use ivm_abi::axt;
 
 fn authority() -> AccountId {
     let key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"

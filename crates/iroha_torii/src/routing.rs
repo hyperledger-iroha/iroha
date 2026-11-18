@@ -231,7 +231,7 @@ use iroha_data_model::{
     smart_contract::manifest,
     transaction::{
         executable::Executable,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+        signed::{SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -39975,21 +39975,28 @@ fn native_contract_emission_source_is_visible(
     emission: &iroha_data_model::smart_contract::event::ContractEmissionV1,
 ) -> bool {
     use iroha_data_model::block::execution_output::{
-        ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
-        PipelineExecutionOutputV2,
+        ExecutionOutputV1, ExecutionSourceC10V1, NetworkExecutionOutputV2,
+        PipelineEventPositionV1, PipelineExecutionOutputV2,
     };
-    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) { return false; }
-    match output {
-        ExecutionOutputV1::Network(source)
-        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: source, .. }) => visibility.allows_external_entrypoint(block, source.input_index as usize),
-        ExecutionOutputV1::Pipeline(source)
-        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: source, .. }) => match source.invocation.event {
-            PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
-            PipelineEventPositionV1::BlockApproved => true,
+    if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) {
+        return false;
+    }
+    let position = match output {
+        ExecutionOutputV1::Network(row)
+        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => PipelineEventPositionV1::Network(row.input_index),
+        ExecutionOutputV1::Pipeline(row)
+        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => row.invocation.event,
+        ExecutionOutputV1::C10(row) => match &row.source {
+            ExecutionSourceC10V1::Network(index) => PipelineEventPositionV1::Network(*index),
+            ExecutionSourceC10V1::Pipeline { invocation, .. } => invocation.event,
+            ExecutionSourceC10V1::Time { .. } => return true,
         },
-        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
-        // A governance block-start output names no account, input or session.
-        ExecutionOutputV1::GovernanceBlockStart(_) => true,
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+        | ExecutionOutputV1::GovernanceBlockStart(_) => return true,
+    };
+    match position {
+        PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
+        PipelineEventPositionV1::BlockApproved => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -40021,7 +40028,7 @@ mod native_contract_emission_source_visibility_tests {
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
             ExternalExecutionRouteRole, builder::BlockBuilder,
             execution_output::{
-                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                ExecutionOutputV1, ExecutionOutputC10V1, ExecutionSourceC10V1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
                 PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineExecutionOutputV2,
                 PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2,
                 TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
@@ -40029,7 +40036,7 @@ mod native_contract_emission_source_visibility_tests {
         },
         events::time::{TimeEvent, TimeInterval},
         smart_contract::{ContractAddress, entrypoint::*, event::*},
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionResult},
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
@@ -40101,30 +40108,39 @@ mod native_contract_emission_source_visibility_tests {
         }
     }
 
-    fn network_outputs(index: u32) -> [ExecutionOutputV1; 2] {
+    fn c10_output(source: ExecutionSourceC10V1) -> ExecutionOutputV1 {
+        ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source,
+            result: iroha_data_model::ivm_c10::TransactionResultC10V1(Ok(Vec::new()), Vec::new(), None, Default::default()),
+            completions: Vec::new(),
+            trigger_lifecycle: None,
+        })
+    }
+
+    fn network_outputs(index: u32) -> [ExecutionOutputV1; 3] {
         let execution = NetworkExecutionOutputV1 {
             input_index: index, result: TransactionResult::new(Ok(Vec::new())),
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Network(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Network(index)), ExecutionOutputV1::Network(execution.clone()),
          ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 2] {
+    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 3] {
         let execution = PipelineExecutionOutputV1 {
             invocation: PipelineInvocationV1 { event, candidate_index: 0, trigger: trigger() },
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Pipeline(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Pipeline { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Pipeline(execution.clone()),
          ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
     }
 
-    fn time_outputs() -> [ExecutionOutputV1; 2] {
+    fn time_outputs() -> [ExecutionOutputV1; 3] {
         let execution = TimeExecutionOutputV1 {
             invocation: TimeInvocationV1 {
                 schedule_index: 0, trigger: trigger(),
@@ -40133,7 +40149,7 @@ mod native_contract_emission_source_visibility_tests {
             result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
             completions: Vec::new(),
         };
-        [ExecutionOutputV1::Time(execution.clone()),
+        [c10_output(ExecutionSourceC10V1::Time { invocation: execution.invocation.clone(), failure_root: None }), ExecutionOutputV1::Time(execution.clone()),
          ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
              execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
          })]
@@ -46892,7 +46908,7 @@ mod contract_feed_binding_tests {
     use iroha_data_model::{
         smart_contract::ContractAddress,
         transaction::{
-            FeePaymentIntent, TransactionBuilder,
+            FeePaymentIntent, TransactionBuilder, TransactionResult,
             error::TransactionRejectionReason,
             executable::{ContractArgumentRecord, ContractInvocation},
         },

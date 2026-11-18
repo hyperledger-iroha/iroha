@@ -143,12 +143,12 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
             let _: DataSpaceId = decode_canonical_norito(payload)?;
         }
         StateValueKindV1::AxtDescriptor => {
-            let value: crate::axt::AxtDescriptor = decode_canonical_norito(payload)?;
-            crate::axt::validate_descriptor(&value).map_err(|_| VMError::DecodeError)?;
+            let value: ivm_abi::axt::AxtDescriptor = decode_canonical_norito(payload)?;
+            ivm_abi::axt::validate_descriptor(&value).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::ProofBlob => {
-            let value: crate::axt::ProofBlob = decode_canonical_norito(payload)?;
-            crate::axt::validate_proof_blob(&value).map_err(|_| VMError::DecodeError)?;
+            let value: ivm_abi::axt::ProofBlob = decode_canonical_norito(payload)?;
+            ivm_abi::axt::validate_proof_blob(&value).map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::SoracloudRequest => {
             let value: SoracloudHostRequestEnvelopeV1 = decode_canonical_norito(payload)?;
@@ -1890,7 +1890,7 @@ mod tests {
     }
     #[test]
     fn capability_payload_validation_is_canonical_and_uses_decode_errors() {
-        use crate::axt::{AxtDescriptor, AxtTouchSpec, ProofBlob};
+        use ivm_abi::axt::{AxtDescriptor, AxtTouchSpec, ProofBlob};
         let dsid = DataSpaceId::new(7);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],

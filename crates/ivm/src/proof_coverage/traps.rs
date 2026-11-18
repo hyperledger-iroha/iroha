@@ -486,6 +486,14 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
         SyscallTrap: [NoritoInvalid],
         LocalDeferral: [AllocationDeferred, ExecutionDeferred],
     ),
+    producer!(
+        "crates/ivm/src/host/syscall_context.rs",
+        SyscallTrap: [MemoryOutOfBounds, RegisterOutOfBounds],
+    ),
+    producer!(
+        "crates/ivm/src/host/syscall_quote.rs",
+        SyscallTrap: [NoritoInvalid, RegisterOutOfBounds],
+    ),
     // The interpreter, program loading, syscall dispatch and the gas, heap and TLV helpers
     // they share. `debit_gas` and the heap preflight serve argument prepayment before the
     // run, root-call initialization and the opcodes or syscalls that call them. A non-ZK
@@ -802,6 +810,8 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/ivm_abi/src/error.rs",
         SyscallTrap: [Metered, NotImplemented, PointerAbiFault],
+        HostInvariant: [HostUnavailable, SyscallGasQuoteExceeded, SyscallMeteringModeMismatch],
+        LocalDeferral: [AllocationDeferred, AllocatorDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
     ),
     producer!(
         "crates/ivm_abi/src/metadata.rs",

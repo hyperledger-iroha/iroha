@@ -2852,8 +2852,12 @@ impl SoracloudIvmHost {
     fn metering_allocation_count(&self) -> u64 {
         self.metering_allocations.load(AtomicOrdering::Relaxed)
     }
-    fn quoted_request_payload_len(vm: &IVM, expected: PointerType) -> Result<usize, VMError> {
-        let (actual, request_bytes) = ivm::host::quote_any_tlv_at(vm, vm.register(10))
+    fn quoted_request_payload_len(
+        vm: ivm::host::SyscallQuote<'_>,
+        expected: PointerType,
+    ) -> Result<usize, VMError> {
+        let (actual, request_bytes) = vm
+            .quote_any_tlv_at(vm.public_register(10)?)
             .map_err(|error| VMError::metered(ivm::gas::G_SORACLOUD, error))?;
         let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         if actual != expected {
@@ -2889,9 +2893,12 @@ impl SoracloudIvmHost {
         };
         soracloud_response_encoded_len_bound(operation, shape)
     }
-    fn state_dependent_gas_quote(vm: &IVM, request_bytes: usize) -> Result<u64, VMError> {
+    fn state_dependent_gas_quote(
+        vm: ivm::host::SyscallQuote<'_>,
+        request_bytes: usize,
+    ) -> Result<u64, VMError> {
         let minimum = ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
-        let available = ivm::host::reserve_available_syscall_gas(vm)?;
+        let available = vm.reserve_available_syscall_gas()?;
         if available < minimum {
             return Err(VMError::metered(available, VMError::OutOfGas));
         }
@@ -3351,7 +3358,11 @@ impl IVMHost for SoracloudIvmHost {
     fn prepared_entrypoint_arguments(&self) -> Option<PreparedArgumentRecord> {
         self.prepared_arguments.clone()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         Self::ensure_syscall_available(number)?;
         if number == ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT {
             let request_bytes = Self::quoted_request_payload_len(vm, PointerType::Name)?;

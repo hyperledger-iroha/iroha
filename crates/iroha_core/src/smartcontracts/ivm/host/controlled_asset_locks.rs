@@ -680,7 +680,11 @@ seiyaku ControlledLock {
         fn allows_syscall(&self, policy: ivm::SyscallPolicy, number: u32) -> bool {
             self.inner.allows_syscall(policy, number)
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN {
                 assert!(self.before.replace(Some(vm.remaining_gas())).is_none());
             }

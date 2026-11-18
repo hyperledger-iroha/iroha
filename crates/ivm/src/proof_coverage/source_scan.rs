@@ -512,7 +512,7 @@ fn vm_error_impl_ranges(code: &str) -> Vec<(usize, usize)> {
         };
         let header = code[start..open].trim_end();
         let self_type = header.rsplit([' ', ':']).next().unwrap_or_default();
-        if header.contains([';', '(', ')']) || self_type != "VMError" {
+        if header.contains([';', '(', ')']) || !matches!(self_type, "VMError" | "VmDeferral") {
             continue;
         }
         if let Some(close) = matching_close(code, open) {
@@ -533,14 +533,18 @@ fn import_use_start(code: &str, start: usize) -> Option<usize> {
 
 /// Variants named by `use ...VMError::...;` imports, each with the byte range
 /// of the scope the import is visible in.
-fn variant_imports(code: &str, variants: &[&str]) -> Vec<(Vec<String>, (usize, usize))> {
+fn variant_imports(
+    code: &str,
+    variants: &[&str],
+    prefix: &str,
+) -> Vec<(Vec<String>, (usize, usize))> {
     let bytes = code.as_bytes();
     let mut out = Vec::new();
-    for start in boundary_matches(code, "VMError::") {
+    for start in boundary_matches(code, prefix) {
         let Some(use_start) = import_use_start(code, start) else {
             continue;
         };
-        let after = start + "VMError::".len();
+        let after = start + prefix.len();
         let statement_end = code[after..]
             .find(';')
             .map_or(code.len(), |index| after + index);
@@ -610,21 +614,29 @@ pub(super) fn constructed_vm_errors(code: &str, variants: &[&str]) -> BTreeSet<S
             out.insert(name.to_owned());
         }
     };
-    for start in boundary_matches(code, "VMError::") {
-        if import_use_start(code, start).is_none() {
-            record(start, start + "VMError::".len(), true);
-        }
-    }
     let mut aliases = BTreeSet::new();
-    for start in boundary_matches(code, "VMError as ") {
-        aliases.insert(identifier_at(code, start + "VMError as ".len()).to_owned());
+    for ty in ["VMError", "VmDeferral"] {
+        let prefix = format!("{ty}::");
+        for start in boundary_matches(code, &prefix) {
+            if import_use_start(code, start).is_none() {
+                // TryFrom moves an existing owner between boundaries.
+                if ty == "VmDeferral" && identifier_at(code, start + prefix.len()) == "try_from" {
+                    continue;
+                }
+                record(start, start + prefix.len(), true);
+            }
+        }
+        let alias = format!("{ty} as ");
+        for start in boundary_matches(code, &alias) {
+            aliases.insert(identifier_at(code, start + alias.len()).to_owned());
+        }
     }
     for start in boundary_matches(code, "type ") {
         let alias = identifier_at(code, start + 5);
         let rest = code[start + 5 + alias.len()..].trim_start();
         let aliases_the_type = rest.strip_prefix('=').is_some_and(|target| {
             let target = target.split(';').next().unwrap_or_default().trim();
-            target.rsplit("::").next() == Some("VMError")
+            matches!(target.rsplit("::").next(), Some("VMError" | "VmDeferral"))
         });
         if aliases_the_type {
             aliases.insert(alias.to_owned());
@@ -641,7 +653,10 @@ pub(super) fn constructed_vm_errors(code: &str, variants: &[&str]) -> BTreeSet<S
             record(open + start, open + start + "Self::".len(), false);
         }
     }
-    for (names, (from, to)) in variant_imports(code, variants) {
+    for (names, (from, to)) in ["VMError::", "VmDeferral::"]
+        .into_iter()
+        .flat_map(|prefix| variant_imports(code, variants, prefix))
+    {
         for name in names {
             for start in boundary_matches(&code[from..to], &name) {
                 let start = from + start;
@@ -1315,6 +1330,22 @@ Err(self.stored.clone())
         assert_eq!(
             err_arguments(code).into_iter().collect::<Vec<_>>(),
             ["payload", "self.stored.clone()"]
+        );
+    }
+
+    #[test]
+    fn local_owner_constructors_retain_their_origin_after_custody_migration() {
+        let got = constructed_vm_errors(
+            "use ivm::error::VmDeferral as Local; fn run() { let e = Local::HostUnavailable; let r = VmDeferral::SyscallGasQuoteExceeded { quoted, actual }; let _ = VmDeferral::try_from(other); matches!(r, VmDeferral::SyscallMeteringModeMismatch { .. }); }",
+            &[
+                "HostUnavailable",
+                "SyscallGasQuoteExceeded",
+                "SyscallMeteringModeMismatch",
+            ],
+        );
+        assert_eq!(
+            got.into_iter().collect::<Vec<_>>(),
+            ["HostUnavailable", "SyscallGasQuoteExceeded"]
         );
     }
 

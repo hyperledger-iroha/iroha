@@ -473,3 +473,53 @@ mod tests {
         }
     }
 }
+
+/// A legal fixed-tape vote whose pinned 28-bit nonce is bound to the native selective fixture.
+pub(crate) fn signed_fixture_ballot(
+    network_id: NetworkId,
+) -> (
+    std::sync::Arc<crate::context::ScopedBallotContextV1>,
+    iroha_data_model::governance::anonymous_ballot::CanonicalAnonymousBallotEnvelopeV1,
+) {
+    use crate::{
+        fixtures::{fixture_authorization_v1, fixture_envelope_v1},
+        wallet::CredentialHandleV1,
+    };
+    use iroha_data_model::governance::anonymous_ballot::digests::stamp_payload_digest_encoded_v1;
+    let body = iroha_data_model::governance::anonymous_ballot::BallotBodyContextV1 {
+        network_id,
+        ..body_context()
+    };
+    let list = SealedCredentialListV1::from_unsorted(
+        ProofProfileIdV1::V1,
+        body_digest_v1(&body).unwrap(),
+        (0..3)
+            .map(|member| {
+                *CredentialHandleV1::import_v1(body, &secret_bytes(member), None)
+                    .unwrap()
+                    .commitment()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let context = Arc::new(
+        ScopedBallotContextV1::build(body, proposal_digest(), body_instance_id(), &list, policy())
+            .unwrap(),
+    );
+    let authorization =
+        fixture_authorization_v1(&context, &secret_bytes(0), BallotChoiceV1::Aye, &tape(0x15))
+            .unwrap();
+    let target =
+        stamp_payload_digest_encoded_v1(&authorization, context.encoded_context()).unwrap();
+    let envelope = fixture_envelope_v1(&authorization, offset_nonce(236_659_590)).unwrap();
+    assert!(
+        iroha_data_model::governance::anonymous_ballot::digests::verify_stamp_encoded_v1(
+            &authorization,
+            context.encoded_context(),
+            &envelope.envelope().unwrap().ballot.stamp.nonce
+        )
+        .unwrap(),
+        "re-mine fixture stamp for {target:?}"
+    );
+    (context, envelope)
+}

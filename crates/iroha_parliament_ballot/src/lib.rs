@@ -75,6 +75,7 @@ pub mod board;
 pub mod context;
 pub mod corpus;
 mod entropy;
+pub mod finalized_interval;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 pub mod inputs;
