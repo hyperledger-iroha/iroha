@@ -8913,8 +8913,12 @@
       {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AnonymousBallotApiV1.kt", "via": ["route_path"]}
      ],
      "swift": [],
-     "javascript": [],
-     "python": [],
+     "javascript": [
+      {"path": "javascript/iroha_js/src/anonymousBallot.js", "via": ["route_path"]}
+     ],
+     "python": [
+      {"path": "python/iroha_torii_client/anonymous_ballot.py", "via": ["route_path"]}
+     ],
      "csharp": []
     }
    },
@@ -13691,6 +13695,12 @@
    },
    {
     "family": "swift",
+    "path": "IrohaSwift/Sources/IrohaSwift/AnonymousBallotClientV1.swift",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
+   },
+   {
+    "family": "swift",
     "path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift",
     "product": "soracloud_fhe",
     "symbols": ["decryptNote", "decryptNoteWithOwnerTag"]
@@ -13952,6 +13962,12 @@
    },
    {
     "family": "javascript",
+    "path": "javascript/iroha_js/anonymous-ballot.d.ts",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
+   },
+   {
+    "family": "javascript",
     "path": "javascript/iroha_js/index.d.ts",
     "product": "axt",
     "symbols": ["buildAxtDescriptor", "computeAxtBinding", "normalizeAxtRejectContext"]
@@ -14123,6 +14139,12 @@
     "path": "javascript/iroha_js/private-settlement.d.ts",
     "product": "atomic_settlement",
     "symbols": ["createPrivateSettlementHost"]
+   },
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/anonymousBallot.js",
+    "product": "voting",
+    "symbols": ["getAnonymousBallotBoard", "getAnonymousParliamentAttempt", "submitAnonymousBallot"]
    },
    {
     "family": "javascript",
@@ -15071,6 +15093,12 @@
     "path": "python/iroha_python/src/iroha_python/tx.py",
     "product": "zk_x509",
     "symbols": ["prepare_privacy_zk_x509_identity_presentation_action_v1"]
+   },
+   {
+    "family": "python",
+    "path": "python/iroha_torii_client/anonymous_ballot.py",
+    "product": "voting",
+    "symbols": ["get_anonymous_ballot_board", "get_anonymous_parliament_attempt", "submit_anonymous_ballot"]
    },
    {
     "family": "python",

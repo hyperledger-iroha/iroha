@@ -22,7 +22,7 @@ use iroha_data_model::{
     },
     prelude::{AccountId, DataTriggerSequence, InstructionBox, NetworkId, TransactionBuilder},
     transaction::{
-        FeePaymentIntent,
+        FeePaymentIntent, TransactionResult,
         error::TransactionRejectionReason,
         signed::{ExecutionStep, SealedTransactionReveal},
     },
