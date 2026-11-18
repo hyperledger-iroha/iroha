@@ -181,8 +181,7 @@ fn scalar_half<C: iroha_pasta::PastaCurve>(
     split: bool,
 ) -> Built<crate::ipa::F<C>>
 where
-    crate::ipa::F<C>:
-        Scalar + PoseidonField + ff::WithSmallOrderMulGroup<3> + zeroize::Zeroize,
+    crate::ipa::F<C>: Scalar + PoseidonField + ff::WithSmallOrderMulGroup<3> + zeroize::Zeroize,
 {
     type S<C> = crate::ipa::F<C>;
     let (circuit, inst, _) = program;
@@ -426,7 +425,14 @@ fn unbound_io_fold_leaves_are_pinned_in_both_halves() {
     );
     let altered = trace_p(&p, &gp, &pair, &[(64, Fp::ONE)]);
     assert_eq!(
-        total_points_p(&p, &gp, &pair.pp, &altered, &both(&altered, &tr_s, &pair), len_p),
+        total_points_p(
+            &p,
+            &gp,
+            &pair.pp,
+            &altered,
+            &both(&altered, &tr_s, &pair),
+            len_p
+        ),
         (true, Fq::ZERO),
         "the altered verification's points half holds with verdict 0"
     );
@@ -434,7 +440,10 @@ fn unbound_io_fold_leaves_are_pinned_in_both_halves() {
     let mut refused: Vec<(String, Vec<String>)> = Vec::new();
     for slot in [4, 64, 123, 128, 159] {
         let altered = trace_p(&p, &gp, &pair, &[(slot, Fp::ONE)]);
-        assert!(!altered.accepts, "slot {slot}: the altered verification refuses");
+        assert!(
+            !altered.accepts,
+            "slot {slot}: the altered verification refuses"
+        );
         let half = half_p(&altered, &tr_s, &pair);
         assert_eq!(half.0.layout(), layout_p, "the same circuit");
         let rows = failing(&half);
@@ -443,7 +452,10 @@ fn unbound_io_fold_leaves_are_pinned_in_both_halves() {
     }
     for slot in [4, 123, 125, 127, 159] {
         let altered = trace_s(&s, &gs, &pair, &[(slot, Fq::ONE)]);
-        assert!(!altered.accepts, "slot {slot}: the altered verification refuses");
+        assert!(
+            !altered.accepts,
+            "slot {slot}: the altered verification refuses"
+        );
         let half = half_s(&tr_p, &altered, &pair);
         assert_eq!(half.0.layout(), layout_s, "the same circuit");
         let rows = failing(&half);

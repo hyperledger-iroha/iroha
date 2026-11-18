@@ -810,7 +810,11 @@ pub fn scalar_side_with<C: PastaCurve>(
         .map(|n| bit(n >= leaves && !bound[n - leaves]))
         .collect();
     if pinned.iter().any(|c| !bool::from(c.is_zero())) {
-        rows_io.push([lin(Src::Own(0), pinned), constant(vec![one; n_io]), Vec::new()]);
+        rows_io.push([
+            lin(Src::Own(0), pinned),
+            constant(vec![one; n_io]),
+            Vec::new(),
+        ]);
     }
     let mut vio = vec![zero; n_io];
     vio[leaves..leaves + io_len].copy_from_slice(io_vals);

@@ -529,10 +529,8 @@ pub fn append_signature_total(
     let mut acc = a.identity();
     for step in (0..16).rev() {
         acc = a.add(&acc, &acc);
-        for (table, entries, digits) in [
-            (key.table, &qt, &b2),
-            (nonnative::POINT_TABLE, &gt, &b1),
-        ] {
+        for (table, entries, digits) in [(key.table, &qt, &b2), (nonnative::POINT_TABLE, &gt, &b1)]
+        {
             for half in 0..2 {
                 let selected = a.selected(table, entries, digits, half, step);
                 acc = a.add(&acc, &selected);

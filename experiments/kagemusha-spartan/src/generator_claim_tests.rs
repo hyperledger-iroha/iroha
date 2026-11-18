@@ -223,8 +223,9 @@ where
     }));
     let why = strict.expect_err("a strict builder refuses the generator fold");
     assert!(
-        why.downcast_ref::<String>()
-            .is_some_and(|m| m.contains("the private generator fold follows the native identity rule")),
+        why.downcast_ref::<String>().is_some_and(
+            |m| m.contains("the private generator fold follows the native identity rule")
+        ),
         "refused for its identity rule"
     );
     let mut fingerprint = None;
@@ -488,7 +489,8 @@ where
         let e_v = w.reserve();
         let e_zero = constant_entries(&mut w, family, "zero", &[vec![C::Base::ZERO]]);
         let mut pool = Pool::new(C::Base::from(NODE_DOMAIN));
-        let mut points = PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
+        let mut points =
+            PointsBuilder::<C>::new(&mut w, e_out, e_v, e_zero, IdentityPoints::Native);
         let output = points.generator_fold(&mut pool, &gens, fold, tr, 0);
         let mut shared_values = tr.shared.clone();
         push_point::<C>(&mut shared_values, fold.sources[0].g);

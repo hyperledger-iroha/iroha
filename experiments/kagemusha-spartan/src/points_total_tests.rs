@@ -305,7 +305,10 @@ where
     let mut proof = identity_proof(&shape, &gens, &inst);
     let id = C::identity().to_affine();
     let bytes = proof.to_bytes();
-    assert!(bytes[..32].iter().all(|b| *b == 0), "the identity encodes as zero bytes");
+    assert!(
+        bytes[..32].iter().all(|b| *b == 0),
+        "the identity encodes as zero bytes"
+    );
     assert_eq!(
         Proof::<C>::from_bytes(&shape, &bytes).map(|p| p.to_bytes()),
         Some(bytes.clone()),
@@ -422,7 +425,15 @@ fn canonical_limb_cases<S: Scalar + PoseidonField>() {
             canonical_limbs(&mut w, f, shared, &[(0, m.clone())]);
             let (a, p, n, t, c) = w.finish();
             let built = UniformCircuit::build_with_copies(
-                "canonical limbs", a, p, n, t, c, 11, 4, b"canonical limbs",
+                "canonical limbs",
+                a,
+                p,
+                n,
+                t,
+                c,
+                11,
+                4,
+                b"canonical limbs",
             );
             assert_eq!(holds(&built), canonical, "limbs of {x} below {m}");
         }
@@ -453,7 +464,14 @@ fn full_width_limbs_are_canonical_natively_and_in_circuit() {
         &mut SpikeRng::new(b"canonical limbs native proof"),
         &claims,
     );
-    let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &claims, &crate::spartan::Link::None);
+    let tr = crate::verifier::trace(
+        &shape,
+        &gens,
+        &inst,
+        &proof,
+        &claims,
+        &crate::spartan::Link::None,
+    );
     let values = crate::verifier::shared_values(&tr, &proof, &claims);
     let full_base = tr
         .challenges
@@ -475,7 +493,11 @@ fn full_width_limbs_are_canonical_natively_and_in_circuit() {
     for (i, v) in wanted.iter().enumerate() {
         let x = num_bigint::BigUint::from(values[full_base + 2 * i])
             + (num_bigint::BigUint::from(values[full_base + 2 * i + 1]) << 128);
-        assert_eq!(x, to_big(*v), "full-width value {i} is its canonical encoding");
+        assert_eq!(
+            x,
+            to_big(*v),
+            "full-width value {i} is its canonical encoding"
+        );
         assert!(x < modulus::<F<Vesta>>());
     }
     let bytes = proof.to_bytes();
@@ -533,10 +555,26 @@ where
             crate::spartan::verify(&shape, &gens, &inst, &forged.to_bytes()).is_err(),
             "{cheat:?}: native verification refuses"
         );
-        let tr = crate::verifier::trace(&shape, &gens, &inst, &forged, &[], &crate::spartan::Link::None);
+        let tr = crate::verifier::trace(
+            &shape,
+            &gens,
+            &inst,
+            &forged,
+            &[],
+            &crate::spartan::Link::None,
+        );
         assert!(!tr.accepts, "{cheat:?}: the native trace refuses");
         // The scalar side: holds, with the native values asserted at build.
-        let side = crate::scalar::scalar_side::<C>(0, 0, &shape, lean_schedule(), &inst, &forged, &[], &tr);
+        let side = crate::scalar::scalar_side::<C>(
+            0,
+            0,
+            &shape,
+            lean_schedule(),
+            &inst,
+            &forged,
+            &[],
+            &tr,
+        );
         let (sc, si, sw) = UniformCircuit::build(
             "uniform forgery scalar side",
             side.arrays,
@@ -554,7 +592,10 @@ where
         assert_eq!(built.1.io[4], C::Base::ZERO, "{cheat:?}: verdict 0");
         let (c, mut i, w) = built;
         i.io[4] = C::Base::ONE;
-        assert!(!holds(&(c, i, w)), "{cheat:?}: acceptance cannot be claimed");
+        assert!(
+            !holds(&(c, i, w)),
+            "{cheat:?}: acceptance cannot be claimed"
+        );
         // The hard points side refuses to build a verification of it.
         let hard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut w = Wiring::<C::Base>::default();
@@ -587,10 +628,7 @@ where
             );
         }));
         let why = hard.expect_err("the hard verifier has no witness");
-        let why = why
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap_or_default();
+        let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
         assert!(
             why.contains("the final Schnorr check"),
             "{cheat:?}: refused at the final Schnorr equality, not elsewhere: {why}"
@@ -693,9 +731,18 @@ where
         io: vec![F::<C>::ZERO; 8],
     };
     let mut proof = identity_proof(&shape, &gens, &inst);
-    assert_eq!(crate::spartan::verify(&shape, &gens, &inst, &proof.to_bytes()), Ok(()));
+    assert_eq!(
+        crate::spartan::verify(&shape, &gens, &inst, &proof.to_bytes()),
+        Ok(())
+    );
     assert!(
-        holds_any(&hard_build(&shape, &gens, &inst, &proof, IdentityPoints::Native)),
+        holds_any(&hard_build(
+            &shape,
+            &gens,
+            &inst,
+            &proof,
+            IdentityPoints::Native
+        )),
         "a native-rule hard slot verifies it without any generator fold"
     );
     let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -704,7 +751,14 @@ where
     let why = panic_text(strict.err().expect("hard-slot strictness refuses it"));
     assert!(why.contains("IdentityPoints::Refused"), "{why}");
     let total = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let tr = crate::verifier::trace(&shape, &gens, &inst, &proof, &[], &crate::spartan::Link::None);
+        let tr = crate::verifier::trace(
+            &shape,
+            &gens,
+            &inst,
+            &proof,
+            &[],
+            &crate::spartan::Link::None,
+        );
         let mut w = Wiring::<C::Base>::default();
         let f = w.family(0, 1);
         let e_out = w.reserve();
@@ -729,7 +783,10 @@ where
         );
     }));
     let why = panic_text(total.err().expect("a strict builder has no total slot"));
-    assert!(why.contains("a total slot follows the native identity rule"), "{why}");
+    assert!(
+        why.contains("a total slot follows the native identity rule"),
+        "{why}"
+    );
     proof.ipa.a = C::identity().to_affine();
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hard_build(&shape, &gens, &inst, &proof, IdentityPoints::Native)

@@ -924,7 +924,10 @@ pub(crate) fn append_signer_total(
     let (b1, v1) = byte(&c, 1);
     checks.push(zero_predicate(
         &mut c,
-        plus(&plus(&b0, &scaled(&b1, Fp::from(256))), &constant(vec![-Fp::ONE])),
+        plus(
+            &plus(&b0, &scaled(&b1, Fp::from(256))),
+            &constant(vec![-Fp::ONE]),
+        ),
         v0 + v1 * Fp::from(256) - Fp::ONE,
     ));
     for (k, v) in [(34, role as u64), (KEY_START, 4)] {
@@ -950,9 +953,8 @@ pub(crate) fn append_signer_total(
     let xc = c.value(&x, &xle);
     let yc = c.value(&y, &yle);
     let x2 = &x * &x % p256::p();
-    let residue = (&y * &y + &x * 3u32 + p256::p() * 4u32
-        - ((&x * &x2 + p256::b()) % p256::p()))
-        % p256::p();
+    let residue =
+        (&y * &y + &x * 3u32 + p256::p() * 4u32 - ((&x * &x2 + p256::b()) % p256::p())) % p256::p();
     let mut aux = |v: &BigUint| {
         let indices: Vec<_> = scalar_bytes(v).iter().rev().map(|b| c.byte(*b)).collect();
         c.value(v, &indices)
@@ -965,10 +967,7 @@ pub(crate) fn append_signer_total(
     let residue_value = rc.iter().map(|k| c.a.values[*k][0]).sum();
     checks.push(zero_predicate(&mut c, residue_sum, residue_value));
     // checks[2] is SEC1, then both canonical coordinates and the curve.
-    let key_valid = all(
-        &mut c,
-        &[checks[2], checks[5], checks[6], checks[7]],
-    );
+    let key_valid = all(&mut c, &[checks[2], checks[5], checks[6], checks[7]]);
     let certified = c.a.values[key_valid][0] == Fp::ONE
         && x < p256::p()
         && y < p256::p()
@@ -1039,7 +1038,15 @@ pub(crate) fn append_signer_total(
     );
     let mut rng = SpikeRng::new(b"total signer certificate hashes");
     hash_relation(w, family, local, SIGN_DOMAIN, &body_items, mstate, &mut rng);
-    hash_relation(w, family, local, OBJECT_DOMAIN, &obj_items, dstate, &mut rng);
+    hash_relation(
+        w,
+        family,
+        local,
+        OBJECT_DOMAIN,
+        &obj_items,
+        dstate,
+        &mut rng,
+    );
     let source = |cell| crate::send_arithmetic::Source {
         array: local,
         cell,
