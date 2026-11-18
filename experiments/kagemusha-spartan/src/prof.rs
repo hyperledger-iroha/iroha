@@ -97,6 +97,36 @@ pub fn release_free_memory() {
 #[cfg(not(target_os = "macos"))]
 pub fn release_free_memory() {}
 
+/// Bytes the allocator holds for live allocations now (macOS; 0 elsewhere).
+/// A fresh zeroed allocation counts whole, its untouched pages included.
+#[cfg(target_os = "macos")]
+pub fn heap_in_use() -> u64 {
+    #[repr(C)]
+    struct Statistics {
+        blocks_in_use: u32,
+        size_in_use: usize,
+        max_size_in_use: usize,
+        size_allocated: usize,
+    }
+    unsafe extern "C" {
+        fn malloc_zone_statistics(zone: *mut std::ffi::c_void, stats: *mut Statistics);
+    }
+    let mut stats = Statistics {
+        blocks_in_use: 0,
+        size_in_use: 0,
+        max_size_in_use: 0,
+        size_allocated: 0,
+    };
+    // SAFETY: a null zone sums every malloc zone into `stats`.
+    unsafe { malloc_zone_statistics(std::ptr::null_mut(), &mut stats) };
+    stats.size_in_use as u64
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn heap_in_use() -> u64 {
+    0
+}
+
 /// Peak resident memory per prover phase (`ZKS_PROF=1`, not `time`): a thread samples
 /// the process's resident set every millisecond; each [`MemTrace::mark`]
 /// closes a phase with the largest sample since the previous mark.
@@ -106,6 +136,13 @@ pub struct MemTrace {
         std::sync::atomic::AtomicU64,
         std::sync::atomic::AtomicBool,
     )>,
+    /// The smallest resident set and footprint sampled (the floor a phase
+    /// peak stands on, when memory left over from earlier work is freed
+    /// during the trace).
+    floor: std::sync::Arc<(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64)>,
+    /// The allocator's live bytes at the start and their largest sample
+    /// (every few milliseconds).
+    heap: (u64, std::sync::Arc<std::sync::atomic::AtomicU64>),
     sampler: Option<std::thread::JoinHandle<()>>,
     start: (u64, u64),
     clock: Instant,
@@ -126,16 +163,30 @@ impl MemTrace {
             AtomicBool::new(false),
         ));
         let shared = state.clone();
+        let floor = std::sync::Arc::new((AtomicU64::new(start.0), AtomicU64::new(start.1)));
+        let low = floor.clone();
+        let heap_start = heap_in_use();
+        let heap = std::sync::Arc::new(AtomicU64::new(heap_start));
+        let heap_peak = heap.clone();
         let sampler = std::thread::spawn(move || {
+            let mut tick = 0u32;
             while !shared.2.load(Ordering::Relaxed) {
+                if tick % 4 == 0 {
+                    heap_peak.fetch_max(heap_in_use(), Ordering::Relaxed);
+                }
+                tick = tick.wrapping_add(1);
                 let (rss, footprint) = resident_and_footprint();
                 shared.0.fetch_max(rss, Ordering::Relaxed);
                 shared.1.fetch_max(footprint, Ordering::Relaxed);
+                low.0.fetch_min(rss, Ordering::Relaxed);
+                low.1.fetch_min(footprint, Ordering::Relaxed);
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         });
         Some(MemTrace {
             state,
+            floor,
+            heap: (heap_start, heap),
             sampler: Some(sampler),
             start,
             clock: Instant::now(),
@@ -162,7 +213,12 @@ impl MemTrace {
 
     /// One line: start, overall peaks, and each phase's peak resident set /
     /// peak footprint (and end time).
-    pub fn finish(mut self, label: &str) -> String {
+    pub fn finish(self, label: &str) -> String {
+        self.finish_as("prover memory", label)
+    }
+
+    /// [`MemTrace::finish`] under its own line prefix.
+    pub fn finish_as(mut self, prefix: &str, label: &str) -> String {
         use std::sync::atomic::Ordering;
         self.state.2.store(true, Ordering::Relaxed);
         if let Some(s) = self.sampler.take() {
@@ -177,15 +233,71 @@ impl MemTrace {
             .map(|(n, p, f, t)| format!("{n} {:.0}/{:.0}@{t:.2}s", mb(*p), mb(*f)))
             .collect::<Vec<_>>()
             .join(", ");
+        let floor = (
+            self.floor.0.load(Ordering::Relaxed),
+            self.floor.1.load(Ordering::Relaxed),
+        );
         format!(
-            "prover memory {label}: start rss {:.0} MB footprint {:.0} MB; peak rss {:.0} MB (+{:.0}), footprint {:.0} MB (+{:.0}); total {:.3} s; phase peaks rss/footprint MB: {list}",
+            "{prefix} {label}: start rss {:.0} MB footprint {:.0} MB; peak rss {:.0} MB (+{:.0}), footprint {:.0} MB (+{:.0}); floor rss {:.0} footprint {:.0} (peak over floor rss +{:.0} footprint +{:.0}); heap in use start {:.0} MB peak +{:.0}; total {:.3} s; phase peaks rss/footprint MB: {list}",
             mb(self.start.0),
             mb(self.start.1),
             mb(peak),
             mb(peak.saturating_sub(self.start.0)),
             mb(peak_footprint),
             mb(peak_footprint.saturating_sub(self.start.1)),
+            mb(floor.0),
+            mb(floor.1),
+            mb(peak.saturating_sub(floor.0)),
+            mb(peak_footprint.saturating_sub(floor.1)),
+            mb(self.heap.0),
+            mb(self
+                .heap
+                .1
+                .load(Ordering::Relaxed)
+                .saturating_sub(self.heap.0)),
             self.clock.elapsed().as_secs_f64()
         )
+    }
+}
+
+impl Drop for MemTrace {
+    /// A trace left unfinished (an error path) stops its sampler.
+    fn drop(&mut self) {
+        self.state
+            .2
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A native operation stage's memory trace (`ZKS_PROF` memory): phase marks
+/// and one `native memory` line, with the allocator's live bytes at each
+/// mark; nothing when profiling is off.
+pub struct Stage(Option<(MemTrace, Mutex<Vec<(&'static str, u64)>>, u64)>);
+
+impl Stage {
+    pub fn start() -> Self {
+        Stage(MemTrace::start().map(|m| (m, Mutex::new(Vec::new()), heap_in_use())))
+    }
+    pub fn mark(&self, name: &'static str) {
+        if let Some((m, live, _)) = &self.0 {
+            m.mark(name);
+            live.lock().unwrap().push((name, heap_in_use()));
+        }
+    }
+    pub fn finish(self, label: &str) {
+        if let Some((m, live, start)) = self.0 {
+            let live = live
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(n, b)| format!("{n} {:.0}", *b as f64 / 1e6))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}; heap in use at marks MB: start {:.0}, {live}",
+                m.finish_as("native memory", label),
+                start as f64 / 1e6
+            );
+        }
     }
 }

@@ -186,48 +186,112 @@ impl<F: Copy> Cells<F> for [F] {
 
 /// The prover's witness as its Hyrax rows: every row is the caller's until
 /// the prover writes into it (masks, the link phase, the second phase), and
-/// only a written row is copied. The witness itself is never cloned.
+/// only a written row is copied. The witness itself is never cloned. Rows the
+/// circuit says the caller never wrote ([`crate::r1cs::RowFill`]) are never
+/// read from the caller's witness, so their pages are never allocated.
 pub struct Rows<'a, F> {
     shift: usize,
     rows: Vec<Row<'a, F>>,
+    /// A zero row and a padding row (1, 0, ...) for a reader that needs a
+    /// never-written row as a slice; allocated on such a read only.
+    zero: std::sync::OnceLock<Vec<F>>,
+    unit: std::sync::OnceLock<Vec<F>>,
 }
 
 enum Row<'a, F> {
     Shared(&'a [F]),
     Own(Vec<F>),
+    /// All zero.
+    Zero,
+    /// A padding fixed row: 1 in column 0, zero elsewhere.
+    Unit,
 }
 
-impl<'a, F: Copy> Rows<'a, F> {
-    /// `w` in rows of `cols` (a power of two) entries.
+impl<'a, F: Field> Rows<'a, F> {
+    /// `w` in rows of `cols` (a power of two) entries, every one read.
     pub fn new(w: &'a [F], cols: usize) -> Self {
+        let rows = w.len() / cols.max(1);
+        Self::with_fill(w, cols, &vec![crate::r1cs::RowFill::Values; rows])
+    }
+    /// `w` in rows of `cols` entries, of which those `fill` names zero or
+    /// unit rows are known without reading `w`.
+    pub fn with_fill(w: &'a [F], cols: usize, fill: &[crate::r1cs::RowFill]) -> Self {
+        use crate::r1cs::RowFill;
         assert!(cols.is_power_of_two() && w.len() % cols == 0, "whole rows");
+        assert_eq!(fill.len(), w.len() / cols, "a fill per row");
         Rows {
             shift: cols.trailing_zeros() as usize,
-            rows: w.chunks_exact(cols).map(Row::Shared).collect(),
+            rows: w
+                .chunks_exact(cols)
+                .zip(fill)
+                .map(|(row, f)| match f {
+                    RowFill::Values => Row::Shared(row),
+                    RowFill::Zero => Row::Zero,
+                    RowFill::Unit => Row::Unit,
+                })
+                .collect(),
+            zero: std::sync::OnceLock::new(),
+            unit: std::sync::OnceLock::new(),
         }
+    }
+    fn cols(&self) -> usize {
+        1 << self.shift
     }
     pub fn len(&self) -> usize {
         self.rows.len() << self.shift
+    }
+    /// Whether row `r` is zero without reading it (a row the caller never
+    /// wrote and the prover has not written).
+    pub fn is_zero_row(&self, r: usize) -> bool {
+        matches!(self.rows[r], Row::Zero)
+    }
+    /// Whether row `r` is a padding fixed row the caller never wrote beyond
+    /// its 1 in column 0.
+    pub fn is_unit_row(&self, r: usize) -> bool {
+        matches!(self.rows[r], Row::Unit)
     }
     pub fn row(&self, r: usize) -> &[F] {
         match &self.rows[r] {
             Row::Shared(row) => row,
             Row::Own(row) => row,
+            Row::Zero => self.zero.get_or_init(|| vec![F::ZERO; self.cols()]),
+            Row::Unit => self.unit.get_or_init(|| {
+                let mut row = vec![F::ZERO; self.cols()];
+                row[0] = F::ONE;
+                row
+            }),
         }
     }
-    /// Row `r`, copied first if it is still the caller's.
+    /// Row `r`, copied first if it is still the caller's (a never-written
+    /// row starts from fresh zero pages, without reading the caller's).
     pub fn row_mut(&mut self, r: usize) -> &mut [F] {
-        if let Row::Shared(row) = self.rows[r] {
-            self.rows[r] = Row::Own(row.to_vec());
+        let cols = self.cols();
+        match self.rows[r] {
+            Row::Shared(row) => self.rows[r] = Row::Own(row.to_vec()),
+            Row::Zero => self.rows[r] = Row::Own(zeroed(cols)),
+            Row::Unit => {
+                let mut row = zeroed(cols);
+                row[0] = F::ONE;
+                self.rows[r] = Row::Own(row);
+            }
+            Row::Own(_) => {}
         }
         match &mut self.rows[r] {
             Row::Own(row) => row,
-            Row::Shared(_) => unreachable!("an owned row"),
+            _ => unreachable!("an owned row"),
         }
     }
-    /// The rows as slices.
+    /// The rows as slices for the commitments: a never-written row is empty
+    /// (zero, or a padding fixed row, whose commitment is the key's).
     pub fn slices(&self) -> Vec<&[F]> {
-        (0..self.rows.len()).map(|r| self.row(r)).collect()
+        self.rows
+            .iter()
+            .map(|row| match row {
+                Row::Shared(row) => *row,
+                Row::Own(row) => row.as_slice(),
+                Row::Zero | Row::Unit => &[],
+            })
+            .collect()
     }
     /// How many rows the prover holds its own copy of.
     pub fn owned(&self) -> usize {
@@ -254,11 +318,8 @@ impl<'a, F: Copy> Rows<'a, F> {
             .collect()
     }
     /// Takes `full`'s values for every row where they differ.
-    pub fn write_back(&mut self, full: &[F])
-    where
-        F: PartialEq,
-    {
-        let cols = 1usize << self.shift;
+    pub fn write_back(&mut self, full: &[F]) {
+        let cols = self.cols();
         for r in 0..self.rows.len() {
             let new = &full[r * cols..(r + 1) * cols];
             if self.row(r) != new {
@@ -268,10 +329,17 @@ impl<'a, F: Copy> Rows<'a, F> {
     }
 }
 
-impl<F: Copy> Cells<F> for Rows<'_, F> {
+impl<F: Field> Cells<F> for Rows<'_, F> {
     #[inline]
     fn cell(&self, i: usize) -> F {
-        self.row(i >> self.shift)[i & ((1 << self.shift) - 1)]
+        let (r, c) = (i >> self.shift, i & ((1 << self.shift) - 1));
+        match &self.rows[r] {
+            Row::Shared(row) => row[c],
+            Row::Own(row) => row[c],
+            Row::Zero => F::ZERO,
+            Row::Unit if c == 0 => F::ONE,
+            Row::Unit => F::ZERO,
+        }
     }
     #[inline]
     fn set_cell(&mut self, i: usize, value: F) {
@@ -317,10 +385,13 @@ impl<F: Field> Table<F> for ZView<'_, '_, F> {
         while at < end {
             let (r, c) = (at >> self.rows.shift, at & (cols - 1));
             let n = (cols - c).min(end - at);
-            if !self.rows.row(r)[c..c + n]
-                .iter()
-                .all(|x| x.is_zero_vartime())
-            {
+            let zero = match &self.rows.rows[r] {
+                Row::Shared(row) => row[c..c + n].iter().all(|x| x.is_zero_vartime()),
+                Row::Own(row) => row[c..c + n].iter().all(|x| x.is_zero_vartime()),
+                Row::Zero => true,
+                Row::Unit => c != 0,
+            };
+            if !zero {
                 return false;
             }
             at += n;

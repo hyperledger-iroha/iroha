@@ -952,6 +952,15 @@ fn kind(w: &ExactOperationWitness) -> usize {
         ExactOperationWitness::Receive { .. } => full::RECEIVE,
     }
 }
+/// The kind's name in measurement lines.
+fn kind_name(k: usize) -> &'static str {
+    match k {
+        full::RECEIVE => "Receive",
+        full::SEND => "Send",
+        full::BOOTSTRAP => "Bootstrap",
+        _ => "Load",
+    }
+}
 fn freeze_witness(
     mut w: ExactOperationWitness,
     head: &VerifiedWalletHead,
@@ -971,10 +980,15 @@ fn build<S: Scalar>(
     target: &UniformCircuit<S>,
     entropy: &ProofEntropy,
     purpose: &[u8],
-) -> (UniformCircuit<S>, Instance<S>, Witness<S>) {
+) -> (
+    UniformCircuit<S>,
+    Instance<S>,
+    Witness<S>,
+    Vec<crate::r1cs::RowFill>,
+) {
     let (a, p, n, t, c) = w.finish();
     let seed = zeroize::Zeroizing::new(entropy.stream(purpose).scalar::<Fp>().to_repr());
-    UniformCircuit::build_with_copies_at(
+    UniformCircuit::build_rows(
         target.label,
         a,
         p,
@@ -986,15 +1000,6 @@ fn build<S: Scalar>(
         seed.as_ref(),
         Some(target.layout()),
     )
-}
-/// A vector whose first `.1` entries are secret, zeroized on drop. The rest
-/// is zero and never written, and stays untouched.
-struct ZeroizedPrefix<S: zeroize::Zeroize>(Vec<S>, usize);
-impl<S: zeroize::Zeroize> Drop for ZeroizedPrefix<S> {
-    fn drop(&mut self) {
-        let n = self.1.min(self.0.len());
-        self.0[..n].iter_mut().for_each(zeroize::Zeroize::zeroize);
-    }
 }
 struct PrivateCircuit<S: Scalar + zeroize::Zeroize>(UniformCircuit<S>);
 impl<S: Scalar + zeroize::Zeroize> std::ops::Deref for PrivateCircuit<S> {
@@ -1008,11 +1013,70 @@ impl<S: Scalar + zeroize::Zeroize> Drop for PrivateCircuit<S> {
         self.0.zeroize_witness_values();
     }
 }
+impl<S: Scalar + zeroize::Zeroize> PrivateCircuit<S> {
+    /// The built circuit without its builder's private values: provers and
+    /// the relation check read only the witness.
+    fn new(mut c: UniformCircuit<S>) -> Self {
+        c.release_private_values();
+        PrivateCircuit(c)
+    }
+}
+/// A witness exactly as its build wrote it, never changed, with the build's
+/// account of its rows ([`crate::r1cs::RowFill`]): the provers and the
+/// relation check never read the rows the build never wrote (zero rows,
+/// public padding rows), and only rows holding values are zeroized on drop,
+/// so those pages are never allocated.
+struct WrittenWitness<S: Scalar + zeroize::Zeroize> {
+    w: Witness<S>,
+    rows: Vec<crate::r1cs::RowFill>,
+}
+impl<S: Scalar + zeroize::Zeroize> WrittenWitness<S> {
+    fn new(w: Witness<S>, rows: Vec<crate::r1cs::RowFill>) -> Self {
+        WrittenWitness { w, rows }
+    }
+}
+impl<S: Scalar + zeroize::Zeroize> std::ops::Deref for WrittenWitness<S> {
+    type Target = Witness<S>;
+    fn deref(&self) -> &Witness<S> {
+        &self.w
+    }
+}
+impl<S: Scalar + zeroize::Zeroize> Drop for WrittenWitness<S> {
+    fn drop(&mut self) {
+        let cols = self.w.w.len() / self.rows.len().max(1);
+        for (row, fill) in self.w.w.chunks_mut(cols.max(1)).zip(&self.rows) {
+            if *fill == crate::r1cs::RowFill::Values {
+                row.iter_mut().for_each(zeroize::Zeroize::zeroize);
+            }
+        }
+    }
+}
+/// Whether a private circuit compiles to its authenticated program (the
+/// digest the manifest pins).
+fn same_program<S: Scalar + zeroize::Zeroize>(
+    private: &UniformCircuit<S>,
+    program: &UniformCircuit<S>,
+) -> Result<()> {
+    if private.program_digest() == program.program_digest() {
+        return Ok(());
+    }
+    if crate::prof::enabled() {
+        println!(
+            "native program mismatch {}:\n  private  {}\n  program  {}",
+            private.label,
+            private.digest_summary(),
+            program.digest_summary()
+        );
+    }
+    Err(Error::AuthorityMismatch("operation compiled program"))
+}
 fn check_constraints(
     w: full::Wiring<Fp>,
     columns: usize,
     source: Option<&dyn TimeSource>,
 ) -> Result<()> {
+    use rayon::prelude::*;
+    let stage = crate::prof::Stage::start();
     let (a, p, n, t, c) = w.finish();
     let entropy = ProofEntropy::fresh().map_err(|_| Error::Unavailable("OS proof entropy"))?;
     let seed = zeroize::Zeroizing::new(
@@ -1021,7 +1085,7 @@ fn check_constraints(
             .scalar::<Fp>()
             .to_repr(),
     );
-    let (c, i, wit) = UniformCircuit::build_with_copies(
+    let (c, i, wit, rows) = UniformCircuit::build_rows(
         "native preparation",
         a,
         p,
@@ -1031,8 +1095,20 @@ fn check_constraints(
         columns,
         192,
         seed.as_ref(),
+        None,
     );
-    let c = PrivateCircuit(c);
+    let c = PrivateCircuit::new(c);
+    let wit = WrittenWitness::new(wit, rows);
+    stage.mark("build");
+    if crate::prof::memory_enabled() {
+        println!(
+            "native preparation accounting sx {} sw {}: preparation {:.0} MB, retained {:.0} MB",
+            c.shape.sx,
+            c.shape.sw(),
+            c.preparation_memory_bytes() as f64 / 1e6,
+            c.proving_memory_accounting().retained_bytes as f64 / 1e6
+        );
+    }
     if let Some(source) = source {
         let required = c.preparation_memory_bytes();
         let available = source.available_memory_bytes()?;
@@ -1043,23 +1119,48 @@ fn check_constraints(
             });
         }
     }
-    let mut wit = zeroize::Zeroizing::new(wit);
     let mut rng = entropy.stream(b"preparation relation check");
     let ch = [rng.scalar(), rng.scalar()];
-    let rel = c.instantiate(&c.shape, &ch, Some(&mut wit.w));
-    // z's public half is zero beyond the io and never written (its pages
-    // stay unallocated); only the witness and io are zeroized.
-    let written = (1usize << c.shape.sw()) + i.io.len();
-    let z = ZeroizedPrefix(crate::r1cs::z_vector(&c.shape, &i, &wit), written);
-    let (a, b, products) = rel.abc(&c.shape, &z.0);
-    let a = zeroize::Zeroizing::new(a);
-    let b = zeroize::Zeroizing::new(b);
-    let products = zeroize::Zeroizing::new(products);
-    if a.iter()
-        .zip(b.iter())
-        .zip(products.iter())
-        .all(|((a, b), c)| *a * b == *c)
-    {
+    // The second phase writes its own copies of the rows it fills; the
+    // caller's rows are read in place, and rows it never wrote not at all.
+    let mut rows = crate::kern::Rows::with_fill(&wit.w.w, c.shape.cols(), &wit.rows);
+    let rel = c.instantiate_rows(&c.shape, &ch, &mut rows);
+    stage.mark("instantiate");
+    // A * B = C chunk by chunk of constraint rows: no z copy and no whole
+    // Az, Bz, Cz tables.
+    let zv = crate::kern::ZView {
+        rows: &rows,
+        tail: &i.io,
+    };
+    assert!(
+        rel.abc_ranges(&c.shape, &zv, &[], [false; 3], &mut Default::default()),
+        "a uniform relation streams its rows"
+    );
+    let total = 1usize << c.shape.sx;
+    let holds = (0..total.div_ceil(crate::uniform::PREPARATION_CHECK_ROWS))
+        .into_par_iter()
+        .all(|task| {
+            let range = task * crate::uniform::PREPARATION_CHECK_ROWS
+                ..((task + 1) * crate::uniform::PREPARATION_CHECK_ROWS).min(total);
+            let mut out: [Vec<Fp>; 3] = std::array::from_fn(|_| vec![Fp::ZERO; range.len()]);
+            rel.abc_ranges(&c.shape, &zv, &[range], [true; 3], &mut out);
+            let ok = out[0]
+                .iter()
+                .zip(&out[1])
+                .zip(&out[2])
+                .all(|((a, b), c)| *a * b == *c);
+            out.iter_mut()
+                .for_each(|v| v.iter_mut().for_each(zeroize::Zeroize::zeroize));
+            ok
+        });
+    stage.mark("check");
+    drop(rel);
+    rows.zeroize_owned();
+    drop(rows);
+    drop((wit, c));
+    stage.mark("drop");
+    stage.finish("preparation check");
+    if holds {
         Ok(())
     } else {
         Err(Error::Rejected(
@@ -1442,6 +1543,7 @@ impl NativeEngine {
         parameters: &AuthenticatedParameters,
     ) -> Result<PreparedOperation> {
         scope(parameters, &head.parameters_id)?;
+        let stage = crate::prof::Stage::start();
         if !matches!(witness, ExactOperationWitness::Bootstrap(_)) {
             if head.custody_digest == [0; 32] || head.enrollment_marker.is_some() {
                 return Err(Error::AuthorityMismatch("released predecessor custody"));
@@ -1485,7 +1587,10 @@ impl NativeEngine {
         };
         let digest = RecoveryCapsule::frame_digest(&capsule.encode()?);
         receipt_mut(&mut frozen).body[274..306].copy_from_slice(&digest);
+        stage.mark("head");
         self.check_preparation(&frozen, head, parameters)?;
+        stage.mark("preparation");
+        stage.finish(&format!("prepare {}", kind_name(kind(&frozen))));
         let body = receipt_mut(&mut frozen).body;
         Ok(PreparedOperation {
             parameters_id: parameters.id,
@@ -1652,6 +1757,7 @@ impl Engine for NativeEngine {
         parameters: &AuthenticatedParameters,
     ) -> Result<CompletedOperation> {
         scope(parameters, &prepared.parameters_id)?;
+        let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
             &prepared,
             &receipt.receipt.body,
@@ -1691,6 +1797,7 @@ impl Engine for NativeEngine {
                     .map_err(Error::Malformed)?,
             )
         };
+        stage.mark("folds");
         let (wp, ws) = match &witness {
             ExactOperationWitness::Bootstrap(input) => (
                 full::p_boot_from_inputs(&p.generators, &p.context(), &input.input)
@@ -1732,27 +1839,39 @@ impl Engine for NativeEngine {
                 full::s_operation(k, &p.generators, &pairs, folds.as_ref().unwrap()).0,
             ),
         };
-        let (cp, ip, wp) = build(
+        stage.mark("wiring");
+        // Each circuit gives up its builder's private values as soon as it
+        // is built (its witness holds them), before the next is built.
+        let (cp, ip, wp, rows_p) = build(
             wp,
             p.programs[k].primary.as_ref(),
             &entropy,
             b"primary witness",
         );
-        let (cs, is, ws) = build(
+        if crate::prof::enabled() {
+            println!(
+                "native circuits {} P: {}",
+                kind_name(k),
+                cp.template_census()
+            );
+        }
+        let cp = PrivateCircuit::new(cp);
+        let wp = WrittenWitness::new(wp, rows_p);
+        let (cs, is, ws, rows_s) = build(
             ws,
             p.programs[k].secondary.as_ref(),
             &entropy,
             b"secondary witness",
         );
-        let cp = PrivateCircuit(cp);
-        let cs = PrivateCircuit(cs);
-        let wp = zeroize::Zeroizing::new(wp);
-        let ws = zeroize::Zeroizing::new(ws);
-        if cp.program_digest() != p.programs[k].primary.program_digest()
-            || cs.program_digest() != p.programs[k].secondary.program_digest()
-        {
-            return Err(Error::AuthorityMismatch("operation compiled program"));
-        }
+        let cs = PrivateCircuit::new(cs);
+        let ws = WrittenWitness::new(ws, rows_s);
+        stage.mark("build");
+        // Each private circuit must compile to its authenticated program.
+        // The secondary's is small and checked now; the primary's is checked
+        // once its proof is made and its witness and prover tables are gone,
+        // before anything is verified or released.
+        same_program(&cs, &p.programs[k].secondary)?;
+        stage.mark("digest");
         // Caller witnesses and both builders are already resident. Admit the
         // actual next stage, then resample OS headroom before each full proof.
         // S is dropped before P, so its released storage is available to P.
@@ -1761,24 +1880,27 @@ impl Engine for NativeEngine {
             cp.phase_memory_accounting().phase1_bytes,
             p.generators.p.commitment_cache_bytes(&cp.shape, false),
         )?;
-        let d = spartan::prepare_linked_phase1(
+        let d = spartan::prepare_linked_phase1_built(
             &cp.shape,
             &p.generators.p,
             &ip,
             &wp,
+            &wp.rows,
             &mut entropy.stream(b"primary"),
             &*cp,
         );
+        stage.mark("phase1");
         let rlc = |_: &[u8; 32]| [0; 32];
         self.require_stage_memory(
             cs.phase_memory_accounting().additional_peak_bytes,
             p.generators.s.commitment_cache_bytes(&cs.shape, true),
         )?;
-        let (ps, rho, r) = spartan::prove_linked_circuit(
+        let (ps, rho, r) = spartan::prove_linked_built(
             &cs.shape,
             &p.generators.s,
             &is,
             &ws,
+            &ws.rows,
             &mut entropy.stream(b"secondary"),
             &Link::Second { d, rlc: &rlc },
             &*cs,
@@ -1788,15 +1910,17 @@ impl Engine for NativeEngine {
         // proof only increased memory; the completion needs its proof and IO.
         drop(ws);
         drop(cs);
+        stage.mark("s-proof");
         self.require_stage_memory(
             cp.phase_memory_accounting().additional_peak_bytes,
             p.generators.p.commitment_cache_bytes(&cp.shape, true),
         )?;
-        let (pp, d2, _) = spartan::prove_linked_circuit(
+        let (pp, d2, _) = spartan::prove_linked_built(
             &cp.shape,
             &p.generators.p,
             &ip,
             &wp,
+            &wp.rows,
             &mut entropy.stream(b"primary"),
             &Link::First { rho, r },
             &*cp,
@@ -1805,7 +1929,18 @@ impl Engine for NativeEngine {
             return Err(Error::Rejected("primary preparation replay".into()));
         }
         drop(wp);
+        stage.mark("p-proof");
+        same_program(&cp, &p.programs[k].primary)?;
         drop(cp);
+        stage.mark("p-digest");
+        if crate::prof::enabled() {
+            println!(
+                "native proofs {}: P {} S {}",
+                kind_name(k),
+                blake3::hash(&pp.to_bytes()).to_hex(),
+                blake3::hash(&ps.to_bytes()).to_hex()
+            );
+        }
         let u = verify_pair(
             p,
             k,
@@ -1819,6 +1954,7 @@ impl Engine for NativeEngine {
                 rho,
             },
         )?;
+        stage.mark("verify");
         let (c, _, _, _) = terms(&witness);
         let cert = &prepared.predecessor.certificate;
         let head_bytes = encode_head(parameters, &u, c, cert)?;
@@ -1878,6 +2014,8 @@ impl Engine for NativeEngine {
             },
         };
         completion.validate()?;
+        stage.mark("output");
+        stage.finish(&format!("finalize {}", kind_name(k)));
         Ok(CompletedOperation { completion, head })
     }
     fn verify_completion(
@@ -1888,7 +2026,9 @@ impl Engine for NativeEngine {
     ) -> Result<CompletedOperation> {
         scope(parameters, &record.frame.parameters_id)?;
         record.validate()?;
+        let stage = crate::prof::Stage::start();
         let prepared = self.resume(capsule, parameters)?;
+        stage.mark("resume");
         let receipt = HardwareAdvanceReceipt::verify_selected(
             &prepared,
             &record.frame.receipt[..338],
@@ -1912,6 +2052,11 @@ impl Engine for NativeEngine {
             ));
         }
         head.custody_digest = receipt.capsule_digest;
+        stage.mark("output");
+        stage.finish(&format!(
+            "completion {}",
+            kind_name(kind(&prepared.witness))
+        ));
         Ok(CompletedOperation {
             completion: record.clone(),
             head,

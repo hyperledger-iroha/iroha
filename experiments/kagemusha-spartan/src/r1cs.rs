@@ -107,6 +107,18 @@ pub struct Instance<F> {
     pub io: Vec<F>,
 }
 
+/// What a witness holds in a Hyrax row as its build wrote it
+/// (`UniformCircuit::build_rows`): values to read, nothing at all, or a
+/// padding fixed row's single 1 in column 0. Only a caller proving the
+/// witness exactly as built may tell the prover; the prover then never reads
+/// (nor brings into memory) the zero and padding rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowFill {
+    Values,
+    Zero,
+    Unit,
+}
+
 pub struct Witness<F> {
     /// `rows * cols`, row major, zero tail columns.
     pub w: Vec<F>,
@@ -121,6 +133,8 @@ impl<F: zeroize::Zeroize> zeroize::Zeroize for Witness<F> {
 /// `z = (w || io)` padded to `2^sz`.
 pub trait Rel<F: Scalar>: Sync {
     fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>);
+    /// The outer rounds are done: what only they read may go.
+    fn outer_done(&mut self) {}
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F>;
     /// `M(r_x, .)` as the prover holds it: the witness half dense, the public
     /// half only up to its last nonzero entry.

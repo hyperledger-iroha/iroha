@@ -9,6 +9,10 @@ use core::mem::size_of;
 #[path = "memory_plan_counts.rs"]
 mod memory_plan_counts;
 
+/// Constraint rows per task of the engine's preparation relation check (its
+/// per-task `A`, `B`, `C` tables).
+pub const PREPARATION_CHECK_ROWS: usize = 1 << 14;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProvingMemoryAccounting {
     pub construction_bytes: u64,
@@ -34,9 +38,9 @@ mod tests {
         let counts = c.memory_plan_counts();
         let before = c.proving_memory_accounting();
         let phases = c.phase_memory_accounting();
-        let w = 1u64 << c.shape.sw();
-        let x = 1u64 << c.shape.sx;
-        assert!(phases.preparation_bytes >= (w + 3 * x) * size_of::<F>() as u64);
+        let tasks = rayon::current_num_threads() as u64;
+        let rows = (PREPARATION_CHECK_ROWS as u64).min(1 << c.shape.sx);
+        assert!(phases.preparation_bytes >= tasks * 3 * rows * size_of::<F>() as u64);
         assert!(c.symbolic.get().is_none() && c.gather.get().is_none());
         assert!(c.readers.get().is_none() && c.m_plans.get().is_none());
         let _ = c.symbolic();
@@ -57,8 +61,8 @@ mod tests {
         );
         assert!(
             phases.preparation_bytes
-                >= prepared_phase.preparation_bytes + prepared.retained_bytes
-                    - before.retained_bytes
+                >= prepared_phase.preparation_bytes + prepared.symbolic_bytes
+                    - before.symbolic_bytes
         );
         let _ = c.readers();
         let _ = c.m_plans();
@@ -67,7 +71,7 @@ mod tests {
         let plans: Vec<_> = c
             .m_plans()
             .iter()
-            .map(|b| (b, c.m_plan(b.a2, b.k2)))
+            .map(|b| (b, c.m_plan(c.readers(), b.a2, b.k2)))
             .collect();
         assert_eq!(
             counts.entry_count,
@@ -125,9 +129,13 @@ mod tests {
             c.phase_memory_accounting().phase1_bytes,
             "prefix commitments never charge matrix plans"
         );
-        assert!(
-            planned.retained_bytes - before.retained_bytes
-                <= before.additional_peak_bytes - planned.additional_peak_bytes
+        // A proof builds its own gather, readers and block plans whatever
+        // the circuit retains: retained plans add to the retained bytes and
+        // leave the phases as they were (but for the symbolic rows).
+        assert!(planned.retained_bytes > prepared.retained_bytes);
+        assert_eq!(
+            planned.additional_peak_bytes,
+            prepared.additional_peak_bytes
         );
     }
 
@@ -381,8 +389,56 @@ impl<F: Scalar> UniformCircuit<F> {
         ]
     }
 
-    /// Workspace for `instantiate(..., Some(w))`, then `z_vector` and `abc`.
-    /// This path does not build a reader, M-table or matrix-evaluation tape.
+    /// Template storage by part (measurement lines): terms, coefficient and
+    /// link-map bytes by capacity and by length, and the term vectors'.
+    pub fn template_census(&self) -> String {
+        let (mut terms, mut coef_cap, mut coef_len, mut map_cap, mut map_len) =
+            (0u128, 0u128, 0u128, 0u128, 0u128);
+        let (mut lin_cap, mut lin_len, mut ones) = (0u128, 0u128, 0u128);
+        let mut count = |lin: &Lin<F>| {
+            lin_cap += bytes(lin);
+            lin_len += (lin.len() * size_of::<Term<F>>()) as u128;
+            for t in lin {
+                terms += 1;
+                coef_cap += bytes(&t.coef);
+                coef_len += (t.coef.len() * size_of::<F>()) as u128;
+                if t.coef.iter().all(|c| *c == F::ONE) {
+                    ones += 1;
+                }
+                if let Src::Link { map, .. } = &t.src {
+                    map_cap += bytes(map);
+                    map_len += (map.len() * size_of::<Option<usize>>()) as u128;
+                }
+            }
+        };
+        for a in &self.arrays {
+            for r in &a.rows {
+                for lin in r {
+                    count(lin);
+                }
+            }
+            for (_, tuple) in &a.lookups {
+                for lin in tuple {
+                    count(lin);
+                }
+            }
+        }
+        let mb = |b: u128| b as f64 / 1e6;
+        format!(
+            "templates: {terms} terms ({ones} all-one), coefficients {:.0} MB (length {:.0}), maps {:.0} MB (length {:.0}), term vectors {:.0} MB (length {:.0})",
+            mb(coef_cap),
+            mb(coef_len),
+            mb(map_cap),
+            mb(map_len),
+            mb(lin_cap),
+            mb(lin_len)
+        )
+    }
+
+    /// Workspace of the engine's relation check: the second phase filled into
+    /// the prover's own rows, then `A z * B z = C z` checked a task of
+    /// [`PREPARATION_CHECK_ROWS`] rows at a time (no `z` copy, no whole
+    /// tables). This path does not build a reader, M-table or matrix tape.
     pub fn preparation_memory_bytes(&self) -> u64 {
         self.phase_memory_accounting().preparation_bytes
     }
@@ -398,44 +454,36 @@ impl<F: Scalar> UniformCircuit<F> {
         let cols = 1u128
             .checked_shl(self.shape.col_bits as u32)
             .unwrap_or(u128::MAX);
+        // The symbolic rows are built on first use and stay with the circuit.
+        // A proof's other plans are its own, each dropped after its phase:
+        // the gather's jobs and index after the outer rounds, the readers and
+        // block plans after the M table (plans a caller built on the circuit
+        // are retained besides, and counted there).
         let symbolic = if self.symbolic.get().is_none() {
             p.symbolic
         } else {
             0
         };
-        let gather = if self.gather.get().is_none() {
-            p.gather
-        } else {
-            0
-        };
-        let readers = if self.readers.get().is_none() {
-            p.readers
-        } else {
-            0
-        };
-        let m_plans = if self.m_plans.get().is_none() {
-            p.m_plans
-        } else {
-            0
-        };
-        let before_outer = symbolic + gather;
-        let all_plans = before_outer + readers + m_plans;
-        // Preparation (the engine's relation check): z_vector's public half
-        // is never written beyond the io (`kern::zeroed`), so z holds w field
-        // elements while abc's three tables are written.
-        let preparation = p
-            .helpers
-            .max((w + 3 * x) * field + before_outer + p.gather_scratch);
+        let gather = p.gather;
+        let matrix_plans = p.readers + p.m_plans;
         // The prover reads its caller's witness in place and copies only the
         // rows it writes (`kern::Rows`): product masks, the link phase, the
         // second phase.
         let owned = p.owned_rows * cols * field;
+        // Preparation (the engine's relation check): the second phase's own
+        // rows and the gather plan, then either the helpers' fill or the
+        // job index with each worker's three tables of a task's rows.
+        let check_rows = (PREPARATION_CHECK_ROWS as u128).min(x);
+        let workers = rayon::current_num_threads() as u128;
+        let preparation = owned
+            + symbolic
+            + gather
+            + p.helpers
+                .max(p.gather_index + p.gather_scratch + workers * 3 * check_rows * field);
         let phase1 = owned
             + self.bounds.len() as u128 * size_of::<usize>() as u128
             + self.shape.rows() as u128 * field;
-        // Plans, once built, stay with the circuit: every later phase counts
-        // all of them (those not built yet at their projection).
-        let helper = phase1 + p.helpers + all_plans;
+        let helper = phase1 + p.helpers + symbolic;
         // Outer: the first round and its fold stream Az, Bz, Cz a chunk of
         // rows at a time (per worker: three tables of 2^k corners of a
         // chunk); the folded tables and eq_low remain, and each later fold
@@ -449,7 +497,8 @@ impl<F: Scalar> UniformCircuit<F> {
             + (3 * outer_low + outer_low) * field
             + chunk_tables
             + p.gather_index
-            + all_plans
+            + symbolic
+            + gather
             + p.gather_scratch;
         // Matrix: equality ex as its high and low tables (the low one over
         // the largest row block), the pages of M's dense half its plans write
@@ -470,20 +519,23 @@ impl<F: Scalar> UniformCircuit<F> {
             + eq_tables * field
             + m_dense
             + half_runs.div_ceil(8)
-            + all_plans
+            + symbolic
+            + matrix_plans
             + p.m_plan_group
             + p.matrix_scratch;
-        // Inner: M's written pages while its first fold and z's are
-        // allocated (the caller's rows are read in place).
+        // Inner: M's written pages while its first fold is allocated, then
+        // (M's pages dropped) the folds of M and z (the caller's rows are read
+        // in place).
         let inner_k = self.shape.inner_blocks().first().copied().unwrap_or(0);
         let inner_low = (2 * w) >> inner_k;
         let support = inner_low.div_ceil(crate::kern::SEGMENT as u128) * 4;
-        let inner = phase1 + m_dense + 2 * inner_low * field + all_plans + support;
+        let inner =
+            phase1 + symbolic + support + (m_dense + inner_low * field).max(2 * inner_low * field);
         // At opening only the folded tables remain; IPA x/b, generator copy
         // and two L/R scalar/base buffers overlap. Pasta affine points contain
         // two base-field elements on both supported curves. The matrix value
         // is the folded M table's (no program run).
-        let opening = phase1 + all_plans + (7 * cols) * field;
+        let opening = phase1 + symbolic + (7 * cols) * field;
         let additional = phase1
             .max(helper)
             .max(outer)

@@ -901,11 +901,13 @@ fn commit_row_slices<C: PastaCurve>(
 ) -> Vec<Aff<C>> {
     let active = shape.active_cols();
     let clock = Instant::now();
-    // Second-phase rows (LogUp helpers): a row of few distinct values is
-    // summed by value; the other rows go through the lanes as before.
-    // Secret equality patterns are not an admissible grouping index. Every
-    // native row follows the bounded secret-scalar API, including LogUp rows.
-    let grouped: Vec<Option<C>> = range.clone().map(|_| None).collect();
+    // A row given empty is one the caller never wrote (`kern::Rows`): zero,
+    // its sum the identity. Every other native row follows the bounded
+    // secret-scalar API, including LogUp rows.
+    let grouped: Vec<Option<C>> = range
+        .clone()
+        .map(|r| w[r].is_empty().then(C::identity))
+        .collect();
     crate::prof::add("c.grouped", clock.elapsed().as_secs_f64());
     let lanes: Vec<(usize, &[F<C>])> = range
         .clone()
@@ -1395,10 +1397,26 @@ pub fn prepare_linked_phase1<C: PastaCurve>(
     rng: &mut SpikeRng,
     circuit: &dyn Circuit<F<C>>,
 ) -> [u8; 32] {
+    let fill = vec![r1cs::RowFill::Values; shape.rows()];
+    prepare_linked_phase1_built(shape, gens, inst, wit, &fill, rng, circuit)
+}
+
+/// [`prepare_linked_phase1`] of a witness exactly as its build wrote it:
+/// `fill` ([`crate::uniform::UniformCircuit::build_rows`]) names the rows the
+/// build never wrote, which are never read.
+pub fn prepare_linked_phase1_built<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    wit: &Witness<F<C>>,
+    fill: &[r1cs::RowFill],
+    rng: &mut SpikeRng,
+    circuit: &dyn Circuit<F<C>>,
+) -> [u8; 32] {
     use zeroize::Zeroize as _;
     shape.check();
     // Only the rows holding product masks are copied (and zeroized).
-    let mut w = crate::kern::Rows::new(&wit.w, shape.cols());
+    let mut w = crate::kern::Rows::with_fill(&wit.w, shape.cols(), fill);
     circuit.randomize_masks_rows(&mut w, rng);
     let (mut blinds, _, rows) = commit_first_phase(shape, gens, &w.slices(), rng, circuit);
     w.zeroize_owned();
@@ -1426,13 +1444,46 @@ fn prove_inner<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
+    prove_rows(
+        shape, gens, inst, wit, None, rng, cheat, separated, claims, link, circuit, fixed,
+    )
+}
+
+/// [`prove_inner`] of a witness in which `fill` (when given) names the rows
+/// its build never wrote: the prover never reads those rows. Without it every
+/// row is read, so a witness changed after its build is proved as it is.
+#[allow(clippy::too_many_arguments)]
+fn prove_rows<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    wit: &Witness<F<C>>,
+    fill: Option<&[r1cs::RowFill]>,
+    rng: &mut SpikeRng,
+    cheat: Cheat,
+    separated: bool,
+    claims: &[Claim<C>],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    fixed: &[Aff<C>],
+) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     shape.check();
+    let fill: Vec<r1cs::RowFill> = match fill {
+        Some(fill) => fill.to_vec(),
+        None => vec![r1cs::RowFill::Values; shape.rows()],
+    };
     if crate::prof::memory_enabled() {
-        // Nonzero witness entries per Hyrax row.
+        // Nonzero witness entries per Hyrax row (rows the caller never wrote
+        // are not read).
         let per_row: Vec<usize> = wit
             .w
             .par_chunks(shape.cols())
-            .map(|row| row.iter().filter(|x| !bool::from(x.is_zero())).count())
+            .zip(&fill)
+            .map(|(row, f)| match f {
+                r1cs::RowFill::Values => row.iter().filter(|x| !bool::from(x.is_zero())).count(),
+                r1cs::RowFill::Zero => 0,
+                r1cs::RowFill::Unit => 1,
+            })
             .collect();
         println!(
             "prover accounting {} sx {} sw {}: {}; nonzero witness {} of {} by row {:?}",
@@ -1464,7 +1515,13 @@ fn prove_inner<C: PastaCurve>(
     // which it copies. The public half is the io, zero beyond it.
     let half = 1usize << shape.sw();
     assert_eq!(wit.w.len(), half, "witness length");
-    let mut zw = crate::kern::Rows::new(&wit.w, cols);
+    assert!(
+        fill.iter()
+            .enumerate()
+            .all(|(r, f)| *f != r1cs::RowFill::Unit || r >= rows_c),
+        "only fixed rows are padding rows"
+    );
+    let mut zw = crate::kern::Rows::with_fill(&wit.w, cols, &fill);
     crate::prof::time("c.masks", || circuit.randomize_masks_rows(&mut zw, rng));
     mark("z");
 
@@ -1519,7 +1576,7 @@ fn prove_inner<C: PastaCurve>(
         .collect();
     *crate::sparse::LAST_BUILD.lock().unwrap() = (0.0, 0.0);
     let clock_rel = Instant::now();
-    let rel = circuit.instantiate_rows(shape, &ch2, &mut zw);
+    let mut rel = circuit.instantiate_rows(shape, &ch2, &mut zw);
     timings.instantiate = clock_rel.elapsed().as_secs_f64();
     mark("instantiate");
     // Late io: fixed by the second phase, absorbed before its rows.
@@ -1663,6 +1720,8 @@ fn prove_inner<C: PastaCurve>(
         t.scalar(b"v", value);
     }
     let rabc: [F<C>; 3] = rabc_challenges(&mut t);
+    // The gather's plan and index served only the outer rounds.
+    rel.outer_done();
     timings.outer = clock.elapsed().as_secs_f64();
     mark("outer");
 
@@ -1744,16 +1803,23 @@ fn prove_inner<C: PastaCurve>(
     let powers = gamma_powers(gamma, tail_values.len());
     let x_clock = Instant::now();
     let mut x = vec![F::<C>::ZERO; cols];
+    // Rows the caller never wrote: a zero row adds nothing, a padding row its
+    // weight at column 0.
+    let read: Vec<(F<C>, &[F<C>])> = (0..rows_n)
+        .filter(|r| !zw.is_zero_row(*r) && !zw.is_unit_row(*r))
+        .map(|r| (eq_row[r], zw.row(r)))
+        .collect();
+    let unit: F<C> = (0..rows_n)
+        .filter(|r| zw.is_unit_row(*r))
+        .map(|r| eq_row[r])
+        .sum();
     x[..active]
         .par_iter_mut()
         .enumerate()
         .for_each(|(col, value)| {
-            *value = eq_row
-                .iter()
-                .enumerate()
-                .map(|(r, e)| *e * zw.row(r)[col])
-                .sum();
+            *value = read.iter().map(|(e, row)| *e * row[col]).sum();
         });
+    x[0] += unit;
     crate::prof::add("p.xrow", x_clock.elapsed().as_secs_f64());
     for ((offset, values), power) in outer_off
         .iter()
@@ -1898,6 +1964,40 @@ pub fn verify_with_claims<C: PastaCurve>(
         &[],
     )
     .map(|_| ())
+}
+
+/// [`prove_linked_circuit`] of a witness exactly as its build wrote it:
+/// `fill` ([`crate::uniform::UniformCircuit::build_rows`]) names the rows the
+/// build never wrote, which the prover never reads. The proof is the same as
+/// [`prove_linked_circuit`]'s of that witness.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_linked_built<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    wit: &Witness<F<C>>,
+    fill: &[r1cs::RowFill],
+    rng: &mut SpikeRng,
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+) -> (Proof<C>, [u8; 32], [u8; 32]) {
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
+    let (proof, _, out) = prove_rows(
+        shape,
+        gens,
+        inst,
+        wit,
+        Some(fill),
+        rng,
+        Cheat::Honest,
+        true,
+        &[],
+        link,
+        circuit,
+        &fixed,
+    );
+    let (word, r) = out.expect("linked proof");
+    (proof, word, r)
 }
 
 /// Verifies a linked proof; returns the link's squeezed word (d or rho).
